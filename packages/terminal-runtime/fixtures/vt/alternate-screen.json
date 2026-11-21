@@ -1,0 +1,118 @@
+[
+  {
+    "id": "1049-saves-and-restores-the-primary-screen",
+    "about": "?1049 switches buffers, the alternate starts blank, return restores text and cursor",
+    "cols": 12,
+    "rows": 4,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "primary\r\nline2"
+      },
+      {
+        "write": "\u001b[?1049h\u001b[2Jalt"
+      },
+      {
+        "write": "\u001b[?1049l"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "primary",
+        "line2",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 5,
+        "y": 1
+      }
+    }
+  },
+  {
+    "id": "1049-while-active",
+    "about": "state is reported while the alternate screen is active",
+    "cols": 12,
+    "rows": 4,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "p"
+      },
+      {
+        "write": "\u001b[?1049h\u001b[HALT\u001b[2;3Hx"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "ALT",
+        "  x",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 3,
+        "y": 1
+      },
+      "buffer": "alternate"
+    }
+  },
+  {
+    "id": "47-and-1047",
+    "about": "legacy alternate-screen modes",
+    "cols": 12,
+    "rows": 4,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "one"
+      },
+      {
+        "write": "\u001b[?47hA\u001b[?47l"
+      },
+      {
+        "write": "\u001b[?1047h\u001b[HB\u001b[?1047l"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "one",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 1,
+        "y": 0
+      }
+    }
+  },
+  {
+    "id": "alternate-screen-has-no-scrollback",
+    "about": "output scrolling in the alternate screen does not add history",
+    "cols": 8,
+    "rows": 3,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[?1049ha0\r\na1\r\na2\r\na3\r\na4\r\na5\r\na6\r\na7\r\na8\r\na9"
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "a7",
+        "a8",
+        "a9"
+      ],
+      "cursor": {
+        "x": 2,
+        "y": 2
+      },
+      "buffer": "alternate"
+    }
+  }
+]

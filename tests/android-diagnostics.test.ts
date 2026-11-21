@@ -101,7 +101,7 @@ test('native fixture namespaces are admitted without privilege changes before Li
 test('independent Android auxiliary owners have their own finite native job and unchanged prerequisites',()=>{
   const guarded=workflow.jobs['native-android-runtime'],auxiliary=workflow.jobs['native-android-auxiliary'];
   expect(auxiliary).toBeDefined();
-  expect(auxiliary['timeout-minutes']).toBe(30);
+  expect(auxiliary['timeout-minutes']).toBe(40);
   expect(auxiliary['runs-on']).toBe('ubuntu-24.04');
   // Only the documentation-only gate precedes it; no client or Herdr build prerequisite.
   expect(auxiliary.needs).toBe('changes');
@@ -230,7 +230,7 @@ test('Android and Linux share the guarded official Mosh producer before emulator
   expect(build).toBeGreaterThan(android.findIndex(step=>step.name==='Verify native GUI namespace prerequisites'));
   expect(android.findIndex(step=>step.name==='Run native Android instrumentation')).toBeGreaterThan(build);
   expect(producer['timeout-minutes']).toBe(10);
-  expect(workflow.jobs['native-android-runtime']['timeout-minutes']).toBe(40);
+  expect(workflow.jobs['native-android-runtime']['timeout-minutes']).toBe(75);
   expect(producer.run).toContain("--proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 2097152");
   expect(producer.run).toContain('872e4b134e5df29c8933dff12350785054d2fd2839b5ae6b5587b14db1465ddd');
   expect(producer.run).toContain('sha256sum --check --strict');
@@ -277,18 +277,22 @@ test.each([
   { owner:'auxiliary', mosh:0, instrumentation:0, qr:29, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
   { owner:'auxiliary', mosh:0, instrumentation:0, qr:0, fdroid:41, sdk:0, diagnosticFailure:true, overflow:false },
   { owner:'auxiliary', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:31, diagnosticFailure:true, overflow:false },
+  { owner:'auxiliary', mosh:0, instrumentation:0, qr:0, voice:53, fdroid:0, sdk:31, diagnosticFailure:true, overflow:false },
   { owner:'auxiliary', mosh:0, instrumentation:0, qr:29, fdroid:41, sdk:31, diagnosticFailure:false, overflow:true },
   { owner:'herdr-navigation', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
   { owner:'herdr-navigation', mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
   { owner:'tmux', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
   { owner:'tmux', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
+  { owner:'zellij', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
+  { owner:'zellij', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
   { owner:'ssh-parity', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
   { owner:'ssh-parity', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
   { owner:'appium', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
   { owner:'appium', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
   { owner:'unknown', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
   { owner:'', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
-])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, fdroid, sdk, diagnosticFailure, overflow }) => {
+  { owner:'tmux', mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false, adbServerLog:false },
+])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, voice = 0, fdroid, sdk, diagnosticFailure, overflow, adbServerLog = true }) => {
   expect(commands).toHaveLength(1);
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-android-diagnostics-'));
   temporary.push(directory);
@@ -299,6 +303,9 @@ test.each([
   const fakeBun = join(bin, 'bun');
   const fakeAdb = join(bin, 'adb');
   const fakeCargo = join(bin, 'cargo');
+  // The server's log outgrows the 1 MiB cap, so only its tail (the last transport event) can be retained.
+  const lastServerEvent = '10-24 23:56:30.414 381553 381561 I adb     : transport.cpp:1222 emulator-5580: connection terminated: read failed\n';
+  if (adbServerLog) await writeFile(join(directory, `adb.${process.getuid!()}.log`), `--- adb starting (pid 381553) ---\nOLDEST-SERVER-LINE\n${'10-24 23:39:16.686 381553 381553 I adb     : main.cpp:65 padding\n'.repeat(20_000)}${lastServerEvent}`);
   const sdkSerial = join(directory, 'sdk-serial.txt');
   const sdkArguments = join(directory, 'sdk-arguments.bin');
   const qrPidFile = join(directory, 'qr-pid-file.txt');
@@ -315,6 +322,7 @@ if [[ "$2" == test:android-qr ]]; then
   printf '%s\\n' "$LAZYSH_ANDROID_QR_EMULATOR_PID_FILE" > "$QR_PID_FILE"
   exit "$QR_EXIT"
 fi
+if [[ "$2" == test:android-voice ]]; then exit "$VOICE_EXIT"; fi
 exit "$INSTRUMENTATION_EXIT"
 `);
   await writeFile(fakeAdb, `#!/bin/bash
@@ -340,29 +348,31 @@ exit "$SDK_EXIT"
   const child = Bun.spawn(['sh', '-c', commands[0]], {
     cwd: directory,
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLECTOR_PID: marker, INVOCATIONS: invocations,
-      MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), QR_EXIT: String(qr), FDROID_EXIT: String(fdroid), SDK_EXIT: String(sdk),
+      MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), QR_EXIT: String(qr), VOICE_EXIT: String(voice), FDROID_EXIT: String(fdroid), SDK_EXIT: String(sdk),
       ANDROID_SERIAL: 'emulator-5580', LAZYSH_ANDROID_RUNTIME_OWNER: owner, SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
-      RUNNER_TEMP: directory, QR_PID_FILE: qrPidFile, LAZYSH_DIALOG_SETTLE_SECONDS: '0',
+      RUNNER_TEMP: directory, TMPDIR: directory, QR_PID_FILE: qrPidFile, LAZYSH_DIALOG_SETTLE_SECONDS: '0',
       DIAGNOSTIC_FAILURE: diagnosticFailure ? '1' : '0',
       DIAGNOSTIC_OVERFLOW: overflow ? '1' : '0' },
     stdout: 'pipe', stderr: 'pipe',
   });
   const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  const expectedExit = owner==='mosh' ? mosh : owner==='guarded' ? instrumentation : owner==='auxiliary' ? fdroid || qr || sdk : ['herdr-navigation','tmux','ssh-parity','appium'].includes(owner) ? instrumentation : 1;
+  const expectedExit = owner==='mosh' ? mosh : owner==='guarded' ? instrumentation : owner==='auxiliary' ? fdroid || qr || voice || sdk : ['herdr-navigation','tmux','zellij','ssh-parity','appium'].includes(owner) ? instrumentation : 1;
   expect(exit).toBe(expectedExit);
   // The fake device has no dialog to dismiss (or, with a failing adb, no readable hierarchy); the receipt is the only output.
   expect(stdout).toBe(`android error dialogs: focus unavailable\n${diagnosticFailure ? 'android error dialogs: view hierarchy unavailable' : 'android error dialogs: none present'}\n`);
-  if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation','tmux','ssh-parity','appium'].includes(owner)?'':'Unknown Android runtime owner\n');
-  // The video case runs only after the screenshot case has passed.
+  if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation','tmux','zellij','ssh-parity','appium'].includes(owner)?'':'Unknown Android runtime owner\n');
+  // The first failing case stops the run: the cases after it are not started.
   const sdkCases = ['devices::tests::android_owned_emulator_inventory_and_screenshot',
-    ...(sdk === 0 ? ['devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change'] : [])];
+    'devices::android::tests::owned_device::owned_emulator_video_delivers_frames_while_idle_and_after_a_change',
+    'devices::tests::android_owned_emulator_video_gestures_follow_the_display_size'].slice(0, sdk === 0 ? 3 : 1);
   const qrExpected = owner === 'auxiliary' && fdroid === 0;
-  const sdkExpected = qrExpected && qr === 0;
+  const voiceExpected = qrExpected && qr === 0;
+  const sdkExpected = voiceExpected && voice === 0;
   expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
   if (qrExpected) expect(await readFile(qrPidFile, 'utf8')).toBe(`${directory}/lazysh-qr-emulator.pid\n`);
   const actualInvocations=await Bun.file(invocations).exists()?(await readFile(invocations,'utf8')).trim().split('\n'):[];
-  expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='tmux'?['run test:android-tmux']:owner==='ssh-parity'?['run test:android-ssh-parity']:owner==='appium'?['run test:mobile-e2e:ci']:owner==='mosh'?['run test:android-mosh']:owner==='guarded'?['run test:android-ssh']:owner==='auxiliary'?[
-    'run test:android-fdroid',...(qrExpected?['run test:android-qr']:[]),
+  expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='tmux'?['run test:android-tmux']:owner==='zellij'?['run test:android-zellij']:owner==='ssh-parity'?['run test:android-ssh-parity']:owner==='appium'?['run test:mobile-e2e:ci']:owner==='mosh'?['run test:android-mosh']:owner==='guarded'?['run test:android-ssh']:owner==='auxiliary'?[
+    'run test:android-fdroid',...(qrExpected?['run test:android-qr']:[]),...(voiceExpected?['run test:android-voice']:[]),
     ...(sdkExpected?sdkCases.map(name=>`cargo test --locked -p lazysh-agent --lib ${name} -- --ignored --exact --nocapture`):[]),
   ]:[]);
   expect(await Bun.file(sdkSerial).exists()).toBe(sdkExpected);
@@ -380,11 +390,20 @@ exit "$SDK_EXIT"
   expect(() => process.kill(pid, 0)).toThrow();
   const diagnostics = join(directory, 'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/system-diagnostics');
   const files = await readdir(diagnostics);
-  expect(files.length).toBe(expectedExit ? 8 : 4);
+  expect(files.length).toBe(expectedExit ? 9 : 4);
   const status = await readFile(join(diagnostics, 'status.txt'), 'utf8');
   for (const name of files) expect((await stat(join(diagnostics, name))).size).toBeLessThanOrEqual(1024 * 1024);
   expect(status).toContain(`test exit=${expectedExit}`);
   expect(status).toContain('collector exit=143');
+  if (expectedExit) {
+    // A failed job keeps why the adb server dropped the emulator's transport; a passing job reads nothing.
+    expect(status).toContain(adbServerLog ? 'adb-server-log exit=0' : 'adb-server-log exit=1');
+    const serverLog = await readFile(join(diagnostics, 'adb-server-log.txt'), 'utf8');
+    if (adbServerLog) {
+      expect(serverLog.endsWith(lastServerEvent)).toBe(true);
+      expect(serverLog).not.toContain('OLDEST-SERVER-LINE');
+    } else expect(serverLog).not.toContain('connection terminated');
+  }
   if (diagnosticFailure) {
     for (const name of ['start-load', ...(expectedExit ? ['lastanr', 'lastanr-traces', 'cpu-load', 'kernel-load'] : [])]) {
       expect(status).toContain(`${name} exit=79`);

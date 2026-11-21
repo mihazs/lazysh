@@ -406,6 +406,267 @@ fn a_rollout_over_the_size_bound_is_reported_as_too_large() {
         assert_eq!(error.class(), "TooLarge");
     }
 }
+
+#[test]
+fn codex_large_opt_in_opens_a_bounded_tail_and_preserves_fork_validation() {
+    use lazysh_agent::transcript::{conversation_window_large, window::Window};
+    let dir = tempfile::tempdir().unwrap();
+    let (parent, child, mut records) = codex_fork(dir.path());
+    for ordinal in 7..12 {
+        let mut record = codex_record(
+            "response_item",
+            json!({"type":"hidden", "data":"x".repeat(4 * 1024 * 1024)}),
+        );
+        record["ordinal"] = json!(ordinal);
+        records.push(record);
+    }
+    let mut last = codex_item("latest", "UserMessage", "latest-user", "newest question");
+    last["payload"]["thread_id"] = json!("33333333-3333-4333-8333-333333333333");
+    last["ordinal"] = json!(12);
+    records.push(last);
+    write(&child, &records);
+    assert_eq!(
+        conversation(&child, TranscriptAgent::Codex, 100)
+            .unwrap_err()
+            .class(),
+        "TooLarge"
+    );
+    let page = conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        100,
+        false,
+        &Window::Tail,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        codex_text(&page),
+        "inherited|retained answer|fork question|newest question"
+    );
+    assert_eq!(page.next_offset, fs::metadata(&child).unwrap().len());
+    let tail = conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        2,
+        false,
+        &Window::Tail,
+        true,
+    )
+    .unwrap();
+    assert_eq!(codex_text(&tail), "fork question|newest question");
+    assert!(tail.truncated);
+    let first = tail.messages[0]["id"].as_str().unwrap().to_owned();
+    let older = conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        2,
+        false,
+        &Window::Before(first),
+        true,
+    )
+    .unwrap();
+    assert_eq!(codex_text(&older), "inherited|retained answer");
+    assert!(!older.truncated && older.has_newer);
+    let mut image = codex_event(
+        "item_completed",
+        json!({"thread_id":"33333333-3333-4333-8333-333333333333","turn_id":"latest","item":{"type":"UserMessage","id":"image-only","content":[{"type":"input_image","image_url":"https://example.invalid/image"}]}}),
+    );
+    image["ordinal"] = json!(13);
+    records.push(image);
+    write(&child, &records);
+    let with_images = conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        100,
+        true,
+        &Window::Tail,
+        true,
+    )
+    .unwrap();
+    assert!(with_images.messages.iter().any(|message| message["blocks"]
+        .as_array()
+        .is_some_and(|blocks| blocks.iter().any(|block| block["type"] == "image"))));
+    let without_images = conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        100,
+        false,
+        &Window::Tail,
+        true,
+    )
+    .unwrap();
+    assert!(!without_images
+        .messages
+        .iter()
+        .any(|message| message["blocks"]
+            .as_array()
+            .is_some_and(|blocks| blocks.iter().any(|block| block["type"] == "image"))));
+    records.pop();
+    let mut late = codex_item("child", "AgentMessage", "late", "late old turn");
+    late["payload"]["thread_id"] = json!("33333333-3333-4333-8333-333333333333");
+    late["ordinal"] = json!(13);
+    records.push(late);
+    write(&child, &records);
+    let updated = conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        100,
+        false,
+        &Window::Tail,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        codex_text(&updated),
+        "inherited|retained answer|fork question|late old turn|newest question"
+    );
+    records.pop();
+    records[2]["payload"]["thread_id"] = json!("99999999-9999-4999-8999-999999999999");
+    write(&child, &records);
+    assert!(conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        100,
+        false,
+        &Window::Tail,
+        true
+    )
+    .is_err());
+    records[2]["payload"]["thread_id"] = json!("33333333-3333-4333-8333-333333333333");
+    let mut rollback = codex_event("thread_rolled_back", json!({"num_turns":1}));
+    rollback["ordinal"] = json!(13);
+    records.push(rollback);
+    write(&child, &records);
+    let rolled_back = conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        100,
+        false,
+        &Window::Tail,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        codex_text(&rolled_back),
+        "inherited|retained answer|fork question"
+    );
+    records.pop();
+    write(&child, &records);
+    fs::remove_file(parent).unwrap();
+    assert!(conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        100,
+        false,
+        &Window::Tail,
+        true
+    )
+    .is_err());
+}
+
+#[test]
+fn codex_partial_accepts_a_bounded_fork_prefix_in_a_large_ancestor() {
+    use lazysh_agent::transcript::{conversation_window_large, window::Window};
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let (parent, child, mut child_records) = codex_fork(dir.path());
+    let mut file = fs::OpenOptions::new().append(true).open(&parent).unwrap();
+    for ordinal in 6..11 {
+        let mut record = codex_record(
+            "response_item",
+            json!({"type":"hidden", "data":"x".repeat(4 * 1024 * 1024)}),
+        );
+        record["ordinal"] = json!(ordinal);
+        serde_json::to_writer(&mut file, &record).unwrap();
+        writeln!(file).unwrap();
+    }
+    drop(file);
+    let page = conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        100,
+        false,
+        &Window::Tail,
+        true,
+    )
+    .unwrap();
+    assert_eq!(codex_text(&page), "inherited|retained answer|fork question");
+    let mut file = fs::OpenOptions::new().append(true).open(&parent).unwrap();
+    file.write_all(b"{\"type\":").unwrap();
+    drop(file);
+    child_records[0]["payload"]["history_base"]["end_ordinal_exclusive"] = json!(11);
+    child_records[0]["payload"]["history_base"]["end_byte_offset"] =
+        json!(fs::metadata(&parent).unwrap().len());
+    write(&child, &paginated(child_records, 11));
+    assert!(conversation_window_large(
+        &child,
+        TranscriptAgent::Codex,
+        100,
+        false,
+        &Window::Tail,
+        true
+    )
+    .is_err());
+}
+
+#[test]
+fn codex_partial_keeps_new_messages_after_an_older_nine_mib_record() {
+    use lazysh_agent::transcript::{conversation_window_large, window::Window};
+    let mut records = vec![
+        codex_meta("11111111-1111-4111-8111-111111111111", "legacy"),
+        codex_record("turn_context", json!({"model":"gpt-synthetic"})),
+        codex_turn("one"),
+        codex_event(
+            "item_completed",
+            json!({"turn_id":"one","item":{"type":"SubAgentActivity","id":"start","kind":"started","agent_thread_id":"child","agent_path":"/root/child"}}),
+        ),
+        codex_event(
+            "thread_goal_updated",
+            json!({"goal":{"objective":"Fix it","status":"active"}}),
+        ),
+        codex_event(
+            "user_message",
+            json!({"message":"x".repeat(9 * 1024 * 1024)}),
+        ),
+    ];
+    for _ in 0..5 {
+        records.push(codex_record(
+            "response_item",
+            json!({"type":"hidden","data":"x".repeat(2 * 1024 * 1024)}),
+        ));
+    }
+    records.push(codex_event(
+        "thread_goal_updated",
+        json!({"goal":{"objective":"Fix it","status":"active"}}),
+    ));
+    records.push(codex_record(
+        "response_item",
+        json!({"type":"function_call","name":"request_user_input","call_id":"question"}),
+    ));
+    records.push(codex_event("agent_message", json!({"message":"latest"})));
+    let (_dir, path) = codex_file(&records);
+    let page = conversation_window_large(
+        &path,
+        TranscriptAgent::Codex,
+        100,
+        false,
+        &Window::Tail,
+        true,
+    )
+    .unwrap();
+    assert!(codex_text(&page).ends_with("latest"));
+    assert_eq!(
+        page.messages
+            .iter()
+            .filter(|message| message["role"] == "event")
+            .count(),
+        1
+    );
+    assert_eq!(page.activity, Some("waiting"));
+    assert_eq!(page.session.as_ref().unwrap()["model"], "gpt-synthetic");
+    assert_eq!(page.work.as_ref().unwrap().len(), 1);
+}
 #[test]
 fn codex_paginated_upserts_canonical_items_and_ignores_compatibility_copies() {
     let directory = tempfile::tempdir().unwrap();

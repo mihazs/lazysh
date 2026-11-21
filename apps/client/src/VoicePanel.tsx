@@ -6,6 +6,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { MAX_VOICE_SECONDS, mono16k, validModelFile } from "./voice";
 import { useDictationHistory } from './voiceHistory';
 import VoiceHistoryPanel from './VoiceHistoryPanel';
+import ToolHelp from './ToolHelp';
 import type { DirectDictation } from './voiceDelivery';
 import CloudVoiceSettingsPanel from './CloudVoiceSettingsPanel';
 import { CLOUD_LANGUAGES, validateCloudQuota, type CloudSnapshot, type CloudQuota } from './cloudVoice';
@@ -583,9 +584,7 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
   return (
     <section className="tool-panel voice-panel" aria-label={t('voiceRegion')}>
       <h3>{t('voiceTitle')}</h3>
-      <p>
-        {t('voiceIntro')}
-      </p>
+      <ToolHelp label={t('voiceAbout')}>{t('voiceIntro')}</ToolHelp>
       {errors.length > 0 && (
         <p role="alert" className="inline-error">
           {errors.map(uiErrorText).join(' ')}
@@ -611,9 +610,8 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
       {!parakeet.available && <p>{t('voiceEngineReason',{engine:'Parakeet',reason:parakeetReceived.current?parakeet.reason:t('voiceParakeetInitial')})}</p>}
       {engine === "whisper" ? (
         <>
-          <p>
-            {t('voiceWhisperHint')}
-          </p>
+          <p>{t('voiceWhisperHint')}</p>
+          <ToolHelp label={t('voiceWhisperAbout')}>{t('voiceWhisperDetails')}</ToolHelp>
           {catalog.length>0 && <>
             <label>{t('voiceDownloadableModel')}<select value={catalogId} disabled={working || recording} onChange={event=>setCatalogId(event.target.value)}>
               {catalog.map(entry=><option key={entry.id} value={entry.id}>{t('voiceCatalogOption',{label:entry.label,size:formatNumber(entry.bytes/1024/1024,{minimumFractionDigits:1,maximumFractionDigits:1}),installed:models.some(item=>item.id===entry.file)?t('voiceInstalledSuffix'):''})}</option>)}
@@ -689,6 +687,7 @@ export default function VoicePanel({ sessionId, onDirectDictation }: {
       ) : engine === 'parakeet' ? (
         <>
           <p>{t('voiceParakeetHint')}</p>
+          <ToolHelp label={t('voiceParakeetAbout')}>{t('voiceParakeetDetails')}</ToolHelp>
           <p>{t('voiceParakeetWarning',{bytes:formatNumber(PARAKEET_BYTES),mib:formatNumber(PARAKEET_BYTES/1024/1024,{minimumFractionDigits:1,maximumFractionDigits:1}),diskBytes:formatNumber(1644999670),gib:formatNumber(1644999670/1024/1024/1024,{minimumFractionDigits:2,maximumFractionDigits:2})})}</p>
           <p>{parakeetReceived.current?parakeet.reason:t('voiceParakeetInitial')}</p>
           <p>{parakeet.installed ? (parakeet.ready ? t('voiceParakeetReady') : t('voiceParakeetInstalled')) : t('voiceParakeetNeedsModel')}</p>

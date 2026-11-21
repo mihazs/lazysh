@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { HostBrowserSession, pagePoint, parseEndpoint } from './cdp';
+import { HostBrowserSession, inputCommands, pagePoint, parseEndpoint } from './cdp';
+import type { InputMessage } from './input';
 
 type Sent = { id: number; method: string; params: any; sessionId?: string };
 
@@ -57,6 +58,37 @@ describe('pointer mapping', () => {
   });
 });
 
+describe('input commands', () => {
+  const commands = (message: InputMessage) => inputCommands(message).map(({ method, params }) => [method, params]);
+  const key = (name: string, modifiers = 0) => commands({ type: 'key', key: name, modifiers });
+
+  it('maps pointer messages to mouse events, with the buttons that are held', () => {
+    const at = { x: 12, y: 34 };
+    expect(commands({ type: 'pointer', kind: 'move', ...at, button: 'none', clickCount: 0 })).toEqual([
+      ['Input.dispatchMouseEvent', { type: 'mouseMoved', ...at, button: 'none', buttons: 0, clickCount: 0 }]]);
+    expect(commands({ type: 'pointer', kind: 'move', ...at, button: 'left', clickCount: 0 })[0][1]).toMatchObject({ type: 'mouseMoved', button: 'left', buttons: 1 });
+    expect(commands({ type: 'pointer', kind: 'press', ...at, button: 'right', clickCount: 1 })[0][1]).toMatchObject({ type: 'mousePressed', button: 'right', buttons: 2, clickCount: 1 });
+    expect(commands({ type: 'pointer', kind: 'release', ...at, button: 'left', clickCount: 2 })[0][1]).toMatchObject({ type: 'mouseReleased', button: 'left', buttons: 0, clickCount: 2 });
+  });
+
+  it('maps a wheel to a wheel event at its point, a pinch to the page scale and text to insertText', () => {
+    expect(commands({ type: 'wheel', x: 5, y: 6, deltaX: 0, deltaY: 120 })).toEqual([['Input.dispatchMouseEvent', { type: 'mouseWheel', x: 5, y: 6, deltaX: 0, deltaY: 120 }]]);
+    expect(commands({ type: 'pinch', scale: 2.5 })).toEqual([['Emulation.setPageScaleFactor', { pageScaleFactor: 2.5 }]]);
+    expect(commands({ type: 'text', text: 'héllo 😀' })).toEqual([['Input.insertText', { text: 'héllo 😀' }]]);
+  });
+
+  it('maps keys to a down and an up, with the modifiers, and only Enter types a character', () => {
+    expect(key('Enter')).toEqual([
+      ['Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 0, text: '\r' }],
+      ['Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 0 }]]);
+    expect(key('Backspace')[0][1]).toMatchObject({ type: 'rawKeyDown', windowsVirtualKeyCode: 8 });
+    expect(key('Backspace')[0][1]).not.toHaveProperty('text');
+    expect(key('a', 2)[0][1]).toEqual({ type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+    expect(key('7', 4)[0][1]).toMatchObject({ code: 'Digit7', windowsVirtualKeyCode: 55, modifiers: 4 });
+    expect(key('Enter', 2)[0][1]).toMatchObject({ type: 'rawKeyDown' });
+  });
+});
+
 describe('session', () => {
   it('attaches to the page, sizes it like a phone and starts a JPEG screencast', async () => {
     const { browser } = await started();
@@ -77,22 +109,15 @@ describe('session', () => {
     expect(browser.sent.at(-1)).toMatchObject({ method: 'Page.screencastFrameAck', params: { sessionId: 42 }, sessionId: 'session-1' });
   });
 
-  it('sends a tap as press and release at the same point, and typed text and special keys as input', async () => {
+  it('sends an input message as its browser commands, in order, on the page', async () => {
     const { session, browser } = await started();
     const before = browser.sent.length;
-    await session.tap({ x: 10, y: 20 });
-    await session.text('olá 世界');
-    await session.key('Enter');
-    await session.key('Backspace');
-    await session.key('a');
-    expect(browser.sent.slice(before).map(call => [call.method, call.params.type ?? call.params.text])).toEqual([
-      ['Input.dispatchMouseEvent', 'mousePressed'], ['Input.dispatchMouseEvent', 'mouseReleased'],
-      ['Input.insertText', 'olá 世界'],
-      ['Input.dispatchKeyEvent', 'keyDown'], ['Input.dispatchKeyEvent', 'keyUp'],
-      ['Input.dispatchKeyEvent', 'keyDown'], ['Input.dispatchKeyEvent', 'keyUp'],
+    await session.input({ type: 'pointer', kind: 'press', x: 10, y: 20, button: 'left', clickCount: 2 });
+    await session.input({ type: 'key', key: 'Enter', modifiers: 0 });
+    expect(browser.sent.slice(before).map(call => [call.method, call.sessionId, call.params.type])).toEqual([
+      ['Input.dispatchMouseEvent', 'session-1', 'mousePressed'],
+      ['Input.dispatchKeyEvent', 'session-1', 'keyDown'], ['Input.dispatchKeyEvent', 'session-1', 'keyUp'],
     ]);
-    expect(browser.sent[before]).toMatchObject({ params: { x: 10, y: 20, button: 'left', clickCount: 1 } });
-    expect(browser.sent[before + 3].params).toMatchObject({ key: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
   });
 
   it('refuses a DevTools method outside the allow list without sending it, and stops the stream on close', async () => {

@@ -4,8 +4,8 @@
 mod support;
 
 use lazysh_terminal_runtime::{
-    ffi, ActiveScreen, CellWide, CursorVisualStyle, KeyInput, MouseInput, Offer, RenderCursor,
-    RgbColor, Size, SizeAuthority, SizeOutcome, TerminalRuntime,
+    ffi, ActiveScreen, CellWide, Config, CursorVisualStyle, KeyInput, MouseInput, Offer,
+    RenderCursor, RgbColor, Size, SizeAuthority, SizeOutcome, TerminalRuntime, Theme,
 };
 use support::*;
 
@@ -247,6 +247,87 @@ fn mouse_reports_match_the_xterm_encodings_for_buttons_wheel_motion_and_modifier
         b"\x1b[<35;6;2M",
         "motion with no button is 3 plus 32"
     );
+}
+
+/// Regression for #1314: a pointer resting in one cell must not send a motion report per event.
+#[test]
+fn repeated_motion_in_one_cell_is_reported_once() {
+    let motion = |x: f32, y: f32, button| MouseInput {
+        action: ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_MOTION,
+        button,
+        mods: 0,
+        x,
+        y,
+    };
+    let left = Some(ffi::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_LEFT);
+    let mut rt = runtime(40, 10);
+    feed(&mut rt, b"\x1b[?1003h\x1b[?1006h");
+    assert_eq!(
+        rt.encode_mouse(motion(55.0, 30.0, None)).unwrap(),
+        b"\x1b[<35;6;2M"
+    );
+    // Same cell (10x20 pixels), still no button: nothing to say.
+    assert!(rt
+        .encode_mouse(motion(57.0, 31.0, None))
+        .unwrap()
+        .is_empty());
+    // Another cell, or the same cell with a button now held, is news.
+    assert_eq!(
+        rt.encode_mouse(motion(65.0, 30.0, None)).unwrap(),
+        b"\x1b[<35;7;2M"
+    );
+    assert_eq!(
+        rt.encode_mouse(motion(65.0, 30.0, left)).unwrap(),
+        b"\x1b[<32;7;2M"
+    );
+    // A press in between means the next motion in that cell is reported again.
+    let press = MouseInput {
+        action: ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS,
+        ..motion(65.0, 30.0, left)
+    };
+    assert_eq!(rt.encode_mouse(press).unwrap(), b"\x1b[<0;7;2M");
+    assert_eq!(
+        rt.encode_mouse(motion(65.0, 30.0, left)).unwrap(),
+        b"\x1b[<32;7;2M"
+    );
+    // SGR-pixels reports every distinct pixel and only drops exact repeats.
+    feed(&mut rt, b"\x1b[?1016h");
+    assert_eq!(
+        rt.encode_mouse(motion(51.0, 40.0, None)).unwrap(),
+        b"\x1b[<35;51;40M"
+    );
+    assert!(rt
+        .encode_mouse(motion(51.0, 40.0, None))
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        rt.encode_mouse(motion(52.0, 40.0, None)).unwrap(),
+        b"\x1b[<35;52;40M"
+    );
+}
+
+#[test]
+fn a_zero_cell_size_never_panics_the_mouse_path() {
+    let mut rt = TerminalRuntime::new(Config {
+        size: Size {
+            cols: 40,
+            rows: 10,
+            cell_width_px: 0,
+            cell_height_px: 0,
+        },
+        ..Config::default()
+    })
+    .unwrap();
+    feed(&mut rt, b"\x1b[?1003h\x1b[?1006h");
+    let motion = MouseInput {
+        action: ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_MOTION,
+        button: None,
+        mods: 0,
+        x: 5.0,
+        y: 5.0,
+    };
+    assert!(rt.encode_mouse(motion).is_ok());
+    assert!(rt.encode_mouse(motion).is_ok());
 }
 
 #[test]
@@ -735,4 +816,152 @@ fn a_runtime_moves_to_another_thread_and_keeps_running() {
         worker.join().unwrap(),
         ("ab".to_string(), b"\x1b[<0;1;1M".to_vec())
     );
+}
+
+/// A runtime whose theme has a distinct colour for every default and for palette entry 5.
+fn themed() -> TerminalRuntime {
+    let mut theme = Theme {
+        foreground: rgb(0x112233),
+        background: rgb(0x445566),
+        cursor: rgb(0x778899),
+        ..Theme::default()
+    };
+    theme.palette[5] = rgb(0xaabbcc);
+    TerminalRuntime::new(Config {
+        theme,
+        ..Config::default()
+    })
+    .unwrap()
+}
+
+/// Feed `stream` in pieces of each size and return what the terminal sent back.
+fn replies_to(stream: &[u8], sizes: &[usize]) -> Vec<(usize, Vec<u8>)> {
+    sizes
+        .iter()
+        .map(|&size| {
+            let mut rt = themed();
+            stream
+                .chunks(size)
+                .for_each(|piece| feed_chunk(&mut rt, piece));
+            (size, rt.take_replies().0)
+        })
+        .collect()
+}
+
+#[test]
+fn colour_queries_are_answered_from_the_theme_in_order_whatever_the_chunking() {
+    let stream =
+        b"\x1b[6n\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]12;?\x1b\\\x1b]4;5;?\x07\x1b[6n\x1b]11;?;?\x1b\\";
+    let expected = b"\x1b[1;1R\x1b]10;rgb:1111/2222/3333\x07\x1b]11;rgb:4444/5555/6666\x1b\\\
+        \x1b]12;rgb:7777/8888/9999\x1b\\\x1b]4;5;rgb:aaaa/bbbb/cccc\x07\x1b[1;1R\
+        \x1b]11;rgb:4444/5555/6666\x1b\\\x1b]12;rgb:7777/8888/9999\x1b\\";
+    for (size, sent) in replies_to(stream, &[stream.len(), 1, 2, 3, 7]) {
+        assert_eq!(
+            String::from_utf8_lossy(&sent),
+            String::from_utf8_lossy(expected),
+            "pieces of {size} bytes"
+        );
+    }
+}
+
+#[test]
+fn the_theme_palette_colours_the_cells() {
+    let mut rt = themed();
+    feed(&mut rt, b"\x1b[35mx");
+    assert_eq!(
+        rt.snapshot().unwrap().dirty[0].cells[0].fg,
+        Some(rgb(0xaabbcc))
+    );
+}
+
+#[test]
+fn a_theme_set_on_a_running_session_answers_the_next_queries_and_colours_the_next_cells() {
+    let query = b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07\x1b]4;5;?\x07\x1b]4;6;?\x07";
+    let mut rt = themed();
+    feed(&mut rt, query);
+    let before = rt.take_replies().0;
+    assert!(String::from_utf8_lossy(&before).contains("rgb:aaaa/bbbb/cccc"));
+
+    let mut theme = Theme {
+        foreground: rgb(0xfa0102),
+        background: rgb(0x030405),
+        cursor: rgb(0x060708),
+        ..Theme::default()
+    };
+    theme.palette[5] = rgb(0x0a0b0c);
+    // Palette 6 is one the program sets itself: the program's colour is reported, not the theme's.
+    feed(&mut rt, b"\x1b]4;6;rgb:11/22/33\x07");
+    rt.set_theme(&theme).unwrap();
+    feed(&mut rt, query);
+    assert_eq!(
+        String::from_utf8_lossy(&rt.take_replies().0),
+        "\x1b]10;rgb:fafa/0101/0202\x07\x1b]11;rgb:0303/0404/0505\x07\x1b]12;rgb:0606/0707/0808\x07\
+         \x1b]4;5;rgb:0a0a/0b0b/0c0c\x07\x1b]4;6;rgb:1111/2222/3333\x07"
+    );
+    feed(&mut rt, b"\x1b[35mx");
+    assert_eq!(
+        rt.snapshot().unwrap().dirty[0].cells[0].fg,
+        Some(rgb(0x0a0b0c)),
+        "the cells resolve against the new palette too"
+    );
+}
+
+#[test]
+fn a_query_split_across_a_theme_change_is_answered_with_the_theme_in_force_when_it_ends() {
+    let mut rt = themed();
+    feed_chunk(&mut rt, b"\x1b]11;?");
+    rt.set_theme(&Theme {
+        background: rgb(0xabcdef),
+        ..Theme::default()
+    })
+    .unwrap();
+    feed_chunk(&mut rt, b"\x07");
+    assert_eq!(
+        String::from_utf8_lossy(&rt.take_replies().0),
+        "\x1b]11;rgb:abab/cdcd/efef\x07"
+    );
+}
+
+#[test]
+fn a_colour_the_program_set_is_reported_once_wherever_the_query_is_split() {
+    let stream = b"\x1b]11;rgb:ff/00/00\x1b\\\x1b]11;?\x1b\\\x1b]111\x07\x1b]11;?\x07";
+    let expected = "\x1b]11;rgb:ffff/0000/0000\x1b\\\x1b]11;rgb:4444/5555/6666\x07";
+    for split in 0..=stream.len() {
+        let mut rt = themed();
+        feed_chunk(&mut rt, &stream[..split]);
+        feed_chunk(&mut rt, &stream[split..]);
+        assert_eq!(
+            String::from_utf8_lossy(&rt.take_replies().0),
+            expected,
+            "split at {split}"
+        );
+    }
+}
+
+#[test]
+fn only_a_complete_default_colour_query_is_answered_from_the_theme() {
+    for stream in [
+        &b"\x1b]11;?"[..],
+        b"\x1b]11;?\x18",
+        b"\x1b]11;?\x1a\x07",
+        b"]11;?\x07",
+        b"\x1b[11;?\x07",
+        b"\x1b]0;?\x07",
+        b"\x1b]13;?\x07",
+        b"\x1b]1;?\x07",
+        b"\x1b]110\x07",
+        b"\x1b]11;\x07",
+        b"\x1b]11;rgb:1/2/3\x07",
+        b"\x1b]11;?;rgb:1/2/3\x07",
+        b"\x1b]10;?;?;?;?;?;?;?;?;?;?;?;?;?;?;?\x07",
+    ] {
+        let mut rt = themed();
+        feed(&mut rt, stream);
+        assert_eq!(
+            rt.take_replies(),
+            (Vec::new(), 0),
+            "{}",
+            stream.escape_ascii()
+        );
+    }
 }

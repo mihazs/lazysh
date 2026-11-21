@@ -3,7 +3,8 @@
 Status: specification. Tracked by the epic [#1129](https://github.com/mihazs/lazysh/issues/1129) and its slice issues on the
 [GitHub Project](https://github.com/users/mihazs/projects/2). Nothing here is released
 until the slice that implements it ships. Today's behaviour is described in
-[Local desktop terminals](local-terminal.md).
+[Local desktop terminals](local-terminal.md), including the native multiplexer commands
+that already accept local session ids ahead of their interface.
 
 lazysh on the desktop (Linux and Windows; macOS follows Linux unless noted) must be
 the single place to run and supervise coding agents, on remote hosts **and** on the
@@ -124,14 +125,18 @@ install semaphore move from `ssh::Session` into a small `Bindings` struct embedd
 both session types. `TmuxServer::for_session`, `tmux_jump`, `tmux_chat` and
 `herdr_guard` take `&Bindings`. Their actors become generic over a byte stream plus a
 close signal, so a local `tmux -C attach-session` child or a local guarded `herdr`
-child drives the same parser, budgets and admission checks. Locally the tmux display
+child drives the same parser, budgets and admission checks. The Herdr guard splits
+that in two: the first frame comes off the display stream (the PTY locally, the
+channel over SSH) and each request runs through a `Route`, an SSH exec channel or a
+one-shot local `herdr api guarded` child. Locally the tmux display
 identity comes from the owned PTY (`child.process_id()`, `MasterPty::tty_name()`), so
 the printf handshake is not needed.
 
 ### Local companion
 
 The companion runs locally without SSH. The desktop bundle ships the matching
-`lazysh-agent` (`linux-agent-*`, `windows-agent-x64`, macOS) next to the app; the
+`lazysh-agent` (`linux-agent-x64`, `windows-agent-x64`, and macOS once macOS packages
+are released; see [bundled companion](release-artifacts.md#bundled-companion)) next to the app; the
 local arm resolves it by absolute path, falling back to a managed copy and then
 `PATH`. Calls are argv (`lazysh-agent <subcommand> …`), JSON on stdout, as remotely.
 Inside a WSL target the existing Linux install path is reused through `wsl.exe`.
@@ -148,6 +153,8 @@ other transport-only helpers. `session.attached` is set for local attaches, whic
 enables the multiplexer toolbar, gestures, Jump To and confirmed Chat input. Local
 sessions get a stable host key and label (`local:<target>`, **This device** or
 **This device · Ubuntu (WSL)**) so the board groups and archives them like a host.
+
+Shipped in #1667 (part of #1132): the host key is `local:default` and the label **This device**; the Agents, Transcript and Apple status views, the usage reports and the notification inbox follow the default target's `tools.companion` (hidden, with a reason in the session details, when it is not true); `NotificationMonitor` polls once per host key; the companion hook helpers in `bridge.ts` accept `local:` ids. The default target's `tools.companionSource` (`bundled`, `managed` or `path`, `null` when `tools.companion` is false) tells the companion panel which executable resolved, shown as **Bundled**, **Managed copy** or **On PATH**. Still to come: the Linux native GUI case.
 
 ## Capability table
 

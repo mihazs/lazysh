@@ -1,4 +1,4 @@
-//! Explicit companion installation and positive-Unix-only executable resolution.
+//! Explicit companion installation (Linux and macOS hosts) and executable resolution on positively identified Unix and Windows hosts.
 use crate::{
     app_lock::{AccessLease, Guarded, GuardedError},
     ssh::{self, AppState, Result, Session, SshError},
@@ -10,15 +10,16 @@ pub mod hooks;
 pub(crate) mod install;
 #[cfg(desktop)]
 pub(crate) mod local;
+mod powershell;
 mod release;
 mod resolve;
 mod transfer;
-/// A connection's positive-Unix probe result (see `resolve::detect`), shared by every companion command on it.
+/// A connection's host probe result (see `resolve::detect`), shared by every companion command on it.
 #[derive(Default)]
-pub(crate) struct HostProbe(tokio::sync::OnceCell<Option<resolve::Unix>>);
+pub(crate) struct HostProbe(tokio::sync::OnceCell<Option<resolve::Host>>);
 impl HostProbe {
     /// Runs `probe` unless this connection already has an answer. Concurrent first callers share one probe.
-    async fn resolve<F, Fut>(&self, probe: F) -> Result<Option<resolve::Unix>>
+    async fn resolve<F, Fut>(&self, probe: F) -> Result<Option<resolve::Host>>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<resolve::Probed>>,
@@ -41,7 +42,10 @@ impl HostProbe {
     }
 }
 pub(crate) async fn positive_unix(session: &Session, lease: &AccessLease) -> Result<bool> {
-    Ok(resolve::detect(session, lease).await?.is_some())
+    Ok(resolve::detect(session, lease)
+        .await?
+        .and_then(resolve::Host::unix)
+        .is_some())
 }
 fn error(kind: &'static str, message: &'static str) -> SshError {
     SshError::new(kind, message)
@@ -52,11 +56,11 @@ pub(crate) async fn command(
     lease: &AccessLease,
 ) -> Result<String> {
     match resolve::detect(session, lease).await? {
-        Some(unix) => unix.command(&command),
+        Some(host) => host.command(&command),
         None => Ok(command),
     }
 }
-// Only a positively identified Unix shell classifies absent/older companions.
+// Only a positively identified Unix or Windows host classifies absent/older companions.
 pub(crate) const USAGE_COMPANION_REQUIRED: &str = "lazysh-account-usage-companion-required-v1";
 pub(crate) async fn account_usage_command(
     session: &Session,
@@ -76,14 +80,56 @@ pub(crate) async fn required_command(
     marker: &str,
     lease: &AccessLease,
 ) -> Result<String> {
+    required_command_with_diagnostics(session, original, marker, lease, false).await
+}
+
+pub(crate) async fn required_command_with_diagnostics(
+    session: &Session,
+    original: String,
+    marker: &str,
+    lease: &AccessLease,
+    diagnostics: bool,
+) -> Result<String> {
     match resolve::detect(session, lease).await? {
-        Some(unix) => {
-            let resolved = unix.command(&original)?;
-            let script=format!("{resolved} 2>/dev/null; code=$?; case $code in 2|126|127) printf '%s\\n' {};; *) exit \"$code\";; esac",ssh::quote(marker));
-            Ok(format!("sh -c {}", ssh::quote(&script)))
-        }
+        Some(host) => host.required(&original, marker, diagnostics),
         None => Ok(original),
     }
+}
+/// A command line made only of bare safe words and `ssh::quote`d text, the form every companion
+/// builder writes, as the words it stands for. Anything a shell would interpret is refused.
+fn words(line: &str) -> Result<Vec<String>> {
+    let (mut words, mut word, mut started, mut quoted) = (Vec::new(), String::new(), false, false);
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match (quoted, c) {
+            (true, '\'') => quoted = false,
+            (true, c) => word.push(c),
+            (false, '\'') => (quoted, started) = (true, true),
+            // `quote` writes a literal single quote as `'\''`.
+            (false, '\\') if chars.as_str().starts_with('\'') => {
+                chars.next();
+                word.push('\'');
+                started = true;
+            }
+            (false, ' ') if started => {
+                words.push(std::mem::take(&mut word));
+                started = false;
+            }
+            (false, ' ') => {}
+            (false, c) if c.is_ascii_alphanumeric() || "-_./:,+@=".contains(c) => {
+                word.push(c);
+                started = true;
+            }
+            _ => return Err(error("companion_command", "Invalid companion command")),
+        }
+    }
+    if quoted {
+        return Err(error("companion_command", "Invalid companion command"));
+    }
+    if started {
+        words.push(word);
+    }
+    Ok(words)
 }
 
 pub(crate) async fn exec(
@@ -137,6 +183,14 @@ pub struct Installed {
     #[serde(skip_serializing_if = "Option::is_none")]
     cleanup_failure: Option<transfer::CleanupFailure>,
 }
+/// What a removal did: it deleted the managed Herdr binary, or found none. Nothing else is ever deleted.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Removed {
+    schema_version: u8,
+    status: &'static str,
+    path: String,
+}
 #[derive(Debug, Serialize)]
 pub struct InstallFailure {
     #[serde(flatten)]
@@ -175,6 +229,45 @@ pub async fn install_companion_from_device(
     state: State<'_, AppState>,
 ) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
     install_from(state, session_id, progress, access, install::Route::Device).await
+}
+/// Compares the installed companion with the latest verified release. Reads only; the phone fetches metadata.
+#[tauri::command]
+pub async fn check_companion_update(
+    state: State<'_, AppState>,
+    session_id: String,
+    access: AccessLease,
+) -> std::result::Result<Guarded<install::Checked>, GuardedError<SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            install::check(session, &access, &release::Publisher::new()?).await
+        })
+        .await
+}
+/// Installs the managed Herdr: the verified release file for this host is uploaded over this connection and published
+/// by one rename. The system Herdr, its configuration, its servers and the saved default are never touched.
+#[tauri::command]
+pub async fn install_managed_herdr(
+    session_id: String,
+    access: AccessLease,
+    state: State<'_, AppState>,
+    progress: Channel<Progress>,
+) -> std::result::Result<Guarded<Installed>, GuardedError<InstallFailure>> {
+    install_from(state, session_id, progress, access, install::Route::Herdr).await
+}
+/// Removes the managed Herdr binary only: never a server, a session, a configuration or the system Herdr.
+#[tauri::command]
+pub async fn remove_managed_herdr(
+    state: State<'_, AppState>,
+    session_id: String,
+    access: AccessLease,
+) -> std::result::Result<Guarded<Removed>, GuardedError<SshError>> {
+    access
+        .run(async {
+            let session = state.session(&session_id).await?;
+            install::remove_herdr(session, &access).await
+        })
+        .await
 }
 async fn install_from(
     state: State<'_, AppState>,
@@ -231,6 +324,17 @@ impl Owned {
     }
 }
 #[cfg(all(test, unix))]
+impl Owned {
+    /// **Check for updates** against this fixture's release.
+    pub(crate) async fn check(
+        &self,
+        session: Arc<Session>,
+        lease: &AccessLease,
+    ) -> Result<install::Checked> {
+        install::check(session, lease, &self.0).await
+    }
+}
+#[cfg(all(test, unix))]
 impl InstallFailure {
     pub(crate) fn kind(&self) -> &str {
         self.error.kind()
@@ -243,16 +347,16 @@ impl InstallFailure {
 mod probe_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    fn linux() -> resolve::Unix {
-        resolve::Unix {
+    fn linux() -> resolve::Host {
+        resolve::Host::Unix(resolve::Unix {
             os: "linux",
             arch: "x64",
             uid: 1000,
             home: "/home/owner".into(),
             data: "/home/owner/.local/share".into(),
-        }
+        })
     }
-    async fn known(asked: &AtomicUsize, host: Option<resolve::Unix>) -> Result<resolve::Probed> {
+    async fn known(asked: &AtomicUsize, host: Option<resolve::Host>) -> Result<resolve::Probed> {
         asked.fetch_add(1, Ordering::SeqCst);
         tokio::task::yield_now().await;
         Ok(resolve::Probed::Known(host))
@@ -266,16 +370,11 @@ mod probe_tests {
             probe.resolve(|| known(&asked, Some(linux())))
         );
         for answer in [a, b, c] {
-            assert_eq!(answer.unwrap().unwrap().uid, 1000);
+            assert_eq!(answer.unwrap(), Some(linux()));
         }
         assert_eq!(
-            probe
-                .resolve(|| known(&asked, None))
-                .await
-                .unwrap()
-                .unwrap()
-                .home,
-            "/home/owner"
+            probe.resolve(|| known(&asked, None)).await.unwrap(),
+            Some(linux())
         );
         assert_eq!(asked.load(Ordering::SeqCst), 1);
     }

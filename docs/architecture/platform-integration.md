@@ -6,10 +6,10 @@ Status: **proposed reference**. The "Verified today" column was read from the re
 
 | Platform | Verified today | Native surface strategy (to be proven) | Required before native is offered | Issues |
 | --- | --- | --- | --- | --- |
-| Android (P0) | `minSdkVersion` 24; `MainActivity : TauriActivity` with Kotlin plugins (clipboard, edge gestures, app icon, session background, vault, display idle); insets applied as content padding; instrumentation tests under `gen/android/app/src/androidTest` incl. an owned IME service; `SessionForegroundService` and `session_background.rs` own background execution; Mosh transport crate targets Android | `SurfaceView` first, `TextureView` if clipping, z-order or transitions demand it | Composition PoC, IME on Gboard and SwiftKey, hardware keyboard, touch and selection handles, TalkBack, lifecycle (pause/resume, recreation), GPU loss, thermal and battery data | [#1310](https://github.com/mihazs/lazysh/issues/1310), [#1327](https://github.com/mihazs/lazysh/issues/1327), [#1328](https://github.com/mihazs/lazysh/issues/1328), [#1329](https://github.com/mihazs/lazysh/issues/1329), [#1340](https://github.com/mihazs/lazysh/issues/1340) |
+| Android (P0) | `minSdkVersion` 24; `MainActivity : TauriActivity` with Kotlin plugins (clipboard, edge gestures, app icon, session background, vault, display idle); insets applied as content padding; instrumentation tests under `gen/android/app/src/androidTest` incl. an owned IME service; `SessionForegroundService` and `session_background.rs` own background execution; Mosh transport crate targets Android | `SurfaceView` first, `TextureView` if clipping, z-order or transitions demand it | Composition PoC (done on an emulator), surface host and lifecycle ([developer-only, no renderer](android-native-surface-host.md)), IME on Gboard and SwiftKey, hardware keyboard, touch and selection handles, TalkBack, lifecycle (pause/resume, recreation), GPU loss, thermal and battery data | [#1310](https://github.com/mihazs/lazysh/issues/1310), [#1327](https://github.com/mihazs/lazysh/issues/1327), [#1328](https://github.com/mihazs/lazysh/issues/1328), [#1329](https://github.com/mihazs/lazysh/issues/1329), [#1340](https://github.com/mihazs/lazysh/issues/1340) |
 | iOS (P1) | Minimum 16.0; template `apple/project.yml.hbs`; Swift sources are Live Activity, Watch and test targets only; Mosh transport crate targets iOS; simulator CI job `native-ios-simulator` | Swift Tauri plugin with `MTKView` relative to the WKWebView (desk study: [strategies](windows-macos-ios-surface-strategies.md)) | Composition PoC, safe areas and Dynamic Island, IME, VoiceOver | [#1311](https://github.com/mihazs/lazysh/issues/1311), [#1330](https://github.com/mihazs/lazysh/issues/1330) |
 | Linux (P1) | WebKitGTK via Tauri; GUI test pattern in [native GUI testing](../native-gui-testing.md); local PTY via portable-pty; Mosh | Wayland: `wl_subsurface` below a transparent toplevel (passes the [PoC](linux-surface-composition-poc.md) on KWin with a Vulkan swapchain); X11 and Xwayland: a child window covers DOM overlays, so xterm.js stays | A second compositor and GPU, fractional scale, real input, IME, Orca | [#1331](https://github.com/mihazs/lazysh/issues/1331) |
-| Windows (P1) | WebView2 via Tauri; local PTY via ConPTY (portable-pty); no Mosh transport target | Child HWND with Direct3D 12; wry hosts WebView2 in a window, so whether a sibling HWND can sit below it is the open question ([strategies](windows-macos-ios-surface-strategies.md)) | PoC, per-monitor DPI, TSF/IME, device-reset recovery, Narrator/NVDA | [#1332](https://github.com/mihazs/lazysh/issues/1332) |
+| Windows (P1) | WebView2 via Tauri; local PTY via ConPTY (portable-pty); no Mosh transport target | Child HWND with Direct3D 12, created without `WS_CLIPSIBLINGS` and put below wry's web view window; passes the [probe](windows-surface-composition-poc.md) on a hosted runner (WARP) with an opaque or a transparent tao window, and a `SetWindowRgn` cut-out above is the fallback; xterm.js stays until the rest passes | A real GPU, the app's own window, per-monitor DPI, TSF/IME, device-reset recovery, Narrator/NVDA | [#1332](https://github.com/mihazs/lazysh/issues/1332) |
 | macOS (P1) | Minimum 13.0; WKWebView via Tauri; local PTY; Mosh | `CAMetalLayer` view below the web view in wry's content view ([strategies](windows-macos-ios-surface-strategies.md)) | PoC, Retina scale, IME, VoiceOver | [#1333](https://github.com/mihazs/lazysh/issues/1333) |
 
 Versions in `Cargo.lock`: tauri 2.12.5, wry 0.57.1, tao 0.37.2. Native CI jobs in `checks.yml`: `native-linux`, `native-desktop` (macOS and Windows), `native-android`, `native-android-runtime` (emulator), `native-ios-simulator`.
@@ -26,7 +26,7 @@ From `packages/herdr-upstream/crates/ghostty-vt/build.rs`:
 | macOS x86_64 and aarch64 | yes | no |
 | iOS device and simulator (aarch64) | yes | no |
 | Windows x86_64 and aarch64 (MSVC) | yes, optional `--libc` file | no |
-| Android | **no; the build script panics for an unmapped target** | no |
+| Android arm64 and x86_64 | yes ([#2098](https://github.com/mihazs/lazysh/issues/2098)) | checked and linked with the pinned NDK in `herdr-native`; not run |
 
 Closing these gaps, without relaxing source integrity checks, is [#1312](https://github.com/mihazs/lazysh/issues/1312) (and #384 for acquisition reliability).
 
@@ -38,12 +38,12 @@ Closing these gaps, without relaxing source integrity checks, is [#1312](https:/
 
 ### Platform parity checklist ([#1334](https://github.com/mihazs/lazysh/issues/1334))
 
-A platform stays on xterm.js until every row below is verified for it, with evidence in the pull request that ticks it. "Modelled" means the behaviour is checked on one host with the platform's rules emulated, which is not the platform: no native surface exists on any platform yet (#1327, #1330 to #1333), so nothing is verified on a device or a real OS.
+A platform stays on xterm.js until every row below is verified for it, with evidence in the pull request that ticks it. "Modelled" means the behaviour is checked on one host with the platform's rules emulated, which is not the platform: no native surface exists on any platform yet (#1327, #1330 to #1333), so nothing is verified on a device or a real OS. "Editor tested on Chromium" means the DOM input editor of a native session ([adapter](terminal-adapter.md#native-backend-1321), #1334 slice 1334a) is driven by Playwright in Chromium on the Linux host, over the headless stand-in core, with the platform's keyboard rules emulated: the recorded key matrix, the history-scroll keys, composition in both browsers' orders and through Chromium's input method, and paste. It is not the platform's browser engine or input method, and the Rust core's bytes for the keys are held to the same fixtures by `tests/platform_keys.rs`.
 
 | Area | Android | iOS | Linux | Windows | macOS |
 | --- | --- | --- | --- | --- | --- |
-| Keyboard: typed characters, Alt and Meta chords | not started (#1328) | not started | modelled | modelled | modelled |
-| IME composition | not started (#1328) | not started | not started (#982) | not started | not started |
+| Keyboard: typed characters, Alt and Meta chords | not started (#1328) | editor built, Chromium only | modelled, editor tested on Chromium | modelled, editor tested on Chromium | modelled, editor tested on Chromium |
+| IME composition | not started (#1328) | editor built, no iOS keyboard run | editor tested on Chromium, no IBus (#982) | editor tested on Chromium, no Windows IME | editor tested on Chromium, no macOS input method |
 | Mouse reporting and wheel | not started | not started | not started | not started | not started |
 | Touch and gestures | not started (#1328) | not started | n/a | n/a | n/a |
 | Selection and clipboard | not started | not started | not started | not started | not started |
@@ -55,7 +55,7 @@ Keyboard, as modelled. The events a platform's keyboard fires are not what the c
 
 | Platform | Service | Status |
 | --- | --- | --- |
-| Android | TalkBack | xterm path uses `screenReaderMode`; native path unproven ([#1329](https://github.com/mihazs/lazysh/issues/1329)) |
+| Android | TalkBack | xterm path uses `screenReaderMode`; native path: row mirror and selection rule built and unit-tested, TalkBack reading unproven ([#1329](https://github.com/mihazs/lazysh/issues/1329), [native rendering](native-rendering.md#accessibility)) |
 | iOS, macOS | VoiceOver | unproven ([#1335](https://github.com/mihazs/lazysh/issues/1335)) |
 | Windows | Narrator, NVDA | unproven (#1335) |
 | Linux | Orca | unproven (#1335) |
@@ -68,7 +68,7 @@ Surface destroy and recreate; pause and resume; Activity recreation; keyboard sh
 
 ## Validation gaps (authoring environment)
 
-The session that wrote these documents had no physical Android device, no Android emulator, no iOS device, no Windows or macOS host, and no Zig toolchain. Therefore: no device claim, no device or native-candidate benchmark (the only measurements are the desktop xterm.js baseline in [benchmarks](terminal-benchmarks.md#measured-baseline)), no build of libghostty-vt on any target and no composition PoC result is asserted anywhere in this directory. Every such item is an open acceptance criterion on its issue.
+The session that wrote these documents had no physical Android device, no Android emulator, no iOS device, no Windows or macOS host, and no Zig toolchain. Therefore: no device claim, no device or native-candidate benchmark (the only measurements are the desktop xterm.js baseline in [benchmarks](terminal-benchmarks.md#measured-baseline)), no build of libghostty-vt on any target (except the Android arm64 and x86_64 compile and link check of [#2098](https://github.com/mihazs/lazysh/issues/2098), which runs nothing, and the Windows x86_64 build and test run of [#1332](https://github.com/mihazs/lazysh/issues/1332) on a hosted runner) and no composition PoC result is asserted anywhere in this directory. Every such item is an open acceptance criterion on its issue.
 
 ## Risks
 

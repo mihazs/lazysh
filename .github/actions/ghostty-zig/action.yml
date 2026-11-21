@@ -1,0 +1,98 @@
+name: Provision Zig 0.16.0 and the admitted Ghostty archives
+description: Checksum-verified Zig outside the checkout, its package cache, and the pinned libghostty-vt archives admitted by Zig package hash
+inputs:
+  zig-target:
+    description: Zig release platform of the runner
+    default: x86_64-linux
+  zig-sha256:
+    description: Official SHA-256 of that platform's Zig 0.16.0 tarball (https://ziglang.org/download/index.json)
+    default: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+  link-source:
+    description: Link the checkout's packages/herdr-upstream into the provisioning root, for jobs that build in the checkout
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Set task-owned Zig paths
+      shell: bash
+      env:
+        ZIG_TARGET: ${{ inputs.zig-target }}
+        LINK_SOURCE: ${{ inputs.link-source }}
+      run: |
+        root="$RUNNER_TEMP/lazysh-herdr-native"
+        mkdir -p "$root"
+        # The admission steps run in $root/herdr-upstream/vendor/libghostty-vt; the link puts that directory in the checkout.
+        if [ "$LINK_SOURCE" = true ]; then ln -s "$GITHUB_WORKSPACE/packages/herdr-upstream" "$root/herdr-upstream"; fi
+        printf '%s\n' \
+          "HERDR_CI_ROOT=$root" \
+          "ZIG_LOCAL_CACHE_DIR=$root/zig-local" \
+          "ZIG_GLOBAL_CACHE_DIR=$root/zig-global" \
+          "ZIG=$root/zig-$ZIG_TARGET-0.16.0/zig" >> "$GITHUB_ENV"
+    # Only Zig's compressed package tarballs (zig-global/p), never compiled objects. Zig checks
+    # every package against its pinned hash each time it unpacks one, so a changed entry fails
+    # the build, and an unreadable one is dropped here so Zig downloads it again.
+    - name: Restore Herdr's hash-addressed Zig package downloads
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/lazysh-herdr-native/zig-global/p
+        key: herdr-zig-packages-v1-${{ runner.os }}-zig0.16.0-${{ hashFiles('packages/herdr-upstream/vendor/libghostty-vt/build.zig.zon', 'packages/herdr-upstream/vendor/libghostty-vt/pkg/*/build.zig.zon') }}
+    - name: Drop unreadable cached Zig packages
+      id: zig-package-scrub
+      shell: bash
+      run: |
+        for package in "$ZIG_GLOBAL_CACHE_DIR"/p/*; do
+          if [ -e "$package" ] && ! gzip --test "$package" 2>/dev/null; then rm -f "$package"; fi
+        done
+    - name: Provision checksum-verified Zig 0.16.0 outside the checkout
+      shell: bash
+      env:
+        ZIG_TARGET: ${{ inputs.zig-target }}
+        ZIG_SHA256: ${{ inputs.zig-sha256 }}
+      run: |
+        tarball="$HERDR_CI_ROOT/zig-$ZIG_TARGET-0.16.0.tar.xz"
+        sh "$GITHUB_WORKSPACE/.github/scripts/pinned-download.sh" "$ZIG_SHA256" "$tarball" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 180 "https://ziglang.org/download/0.16.0/zig-$ZIG_TARGET-0.16.0.tar.xz"
+        printf '%s  %s\n' "$ZIG_SHA256" "$tarball" | sha256sum --check --strict
+        tar -xJf "$tarball" -C "$HERDR_CI_ROOT"
+        "$ZIG" version
+    - name: Download the pinned uucode archive once before local admission
+      shell: bash
+      env:
+        HERDR_ARCHIVE_NAME: uucode
+        HERDR_ARCHIVE_URL: https://deps.files.ghostty.org/uucode-2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz
+      run: sh "$GITHUB_WORKSPACE/.github/scripts/herdr-archive.sh" download
+    - name: Admit local uucode only with the unchanged Zig package hash
+      id: uucode-admission
+      shell: bash
+      working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream/vendor/libghostty-vt
+      env:
+        HERDR_ARCHIVE_NAME: uucode
+        HERDR_PACKAGE_HASH: uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA
+      run: sh "$GITHUB_WORKSPACE/.github/scripts/herdr-archive.sh" admit
+    - name: Download the pinned highway archive once before local admission
+      shell: bash
+      env:
+        HERDR_ARCHIVE_NAME: highway
+        HERDR_ARCHIVE_URL: https://deps.files.ghostty.org/highway-66486a10623fa0d72fe91260f96c892e41aceb06.tar.gz
+      run: sh "$GITHUB_WORKSPACE/.github/scripts/herdr-archive.sh" download
+    - name: Admit local highway only with the unchanged Zig package hash
+      id: highway-admission
+      shell: bash
+      working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream/vendor/libghostty-vt
+      env:
+        HERDR_ARCHIVE_NAME: highway
+        HERDR_PACKAGE_HASH: N-V-__8AAGmZhABbsPJLfbqrh6JTHsXhY6qCaLAQyx25e0XE
+      run: sh "$GITHUB_WORKSPACE/.github/scripts/herdr-archive.sh" admit
+    - name: Download the pinned pixels archive once before local admission
+      shell: bash
+      env:
+        HERDR_ARCHIVE_NAME: pixels
+        HERDR_ARCHIVE_URL: https://deps.files.ghostty.org/pixels-12207ff340169c7d40c570b4b6a97db614fe47e0d83b5801a932dcd44917424c8806.tar.gz
+      run: sh "$GITHUB_WORKSPACE/.github/scripts/herdr-archive.sh" download
+    - name: Admit local pixels only with the unchanged Zig package hash
+      id: pixels-admission
+      shell: bash
+      working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream/vendor/libghostty-vt
+      env:
+        HERDR_ARCHIVE_NAME: pixels
+        HERDR_PACKAGE_HASH: N-V-__8AADYiAAB_80AWnH1AxXC0tql9thT-R-DYO1gBqTLc
+      run: sh "$GITHUB_WORKSPACE/.github/scripts/herdr-archive.sh" admit

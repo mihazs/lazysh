@@ -3,6 +3,8 @@ import { createReadStream } from 'node:fs';
 import { copyFile, lstat, mkdir, readdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { verifyRelease } from './bun-lock';
+import { parseEntries, renderGrouped } from './changelog-model.mjs';
+import { packageSections } from './changelog-rotate';
 
 export const companionTargets = {
   'linux-agent-x64': { triple: 'x86_64-unknown-linux-musl', os: 'linux', arch: 'x64' },
@@ -28,9 +30,29 @@ export const artifactTargets = {
   'windows-agent-x64': ['exe'],
 } as const;
 export type ArtifactTarget = keyof typeof artifactTargets;
+const MiB = 1024 * 1024;
+/**
+ * Per-package size ceilings in MiB: 1.5 times the sizes measured on v1.62.0, rounded up (docs/release-artifacts.md,
+ * "Measured release size"). Raise one only with a new measurement. Targets with no published build keep the 2 GiB bound.
+ */
+export const packageBudgetsMiB: { [T in ArtifactTarget]?: { [extension: string]: number } } = {
+  // Desktop packages bundle their platform's companion: the 1.5x ceiling plus that companion's own ceiling, until a release measures them.
+  'linux-x64': { deb: 51, AppImage: 161 },
+  'windows-x64': { exe: 28 },
+  // 1.5x the 54,082,206-byte Google APK measured with the Parakeet runtime linked (#1819); the FOSS flavor does not link it.
+  'android-google-arm64': { apk: 78 },
+  'android-foss-arm64': { apk: 47 },
+  'linux-agent-x64': { bin: 18 },
+  'linux-agent-arm64': { bin: 15 },
+  'macos-agent-x64': { bin: 16 },
+  'macos-agent-arm64': { bin: 14 },
+  'windows-agent-x64': { exe: 16 },
+};
+export const packageMaximumBytes = (target: ArtifactTarget, extension: string) =>
+  (packageBudgetsMiB[target]?.[extension] ?? 2048) * MiB;
 export const releaseTargets: ArtifactTarget[] = ['linux-x64', 'windows-x64', 'android-google-arm64', 'android-foss-arm64',
   ...Object.keys(companionTargets) as CompanionTarget[]];
-type Identity = { sha: string; version: string };
+export type Identity = { sha: string; version: string };
 type Signing = 'unsigned' | 'ad-hoc' | 'signed';
 type ArtifactFile = { name: string; bytes: number; sha256: string };
 export type ArtifactReceipt = Identity & {
@@ -65,7 +87,7 @@ export function validateReceipt(value: unknown, identity: Identity): ArtifactRec
     const file = data.files[index];
     requireArtifact(file && file.name === artifactName(identity, data.target, extension)
       && Number.isSafeInteger(file.bytes) && file.bytes > 0
-      && file.bytes <= (Object.hasOwn(companionTargets, data.target) ? companionMaximumBytes : 2_147_483_648)
+      && file.bytes <= packageMaximumBytes(data.target, extension)
       && whole(/^[a-f0-9]{64}$/, file.sha256), 'malformed package receipt');
   }
   return data;
@@ -92,7 +114,7 @@ export async function stagePackages(identity: Identity, target: ArtifactTarget, 
   const files: ArtifactFile[] = [];
   for (const [index, extension] of extensions.entries()) {
     const name = artifactName(identity, target, extension);
-    const maximum = Object.hasOwn(companionTargets, target) ? companionMaximumBytes : 2_147_483_648;
+    const maximum = packageMaximumBytes(target, extension);
     const original = await digestFile(sources[index], maximum);
     const destination = join(directory, name);
     await copyFile(sources[index], destination);
@@ -175,8 +197,6 @@ export async function buildIdentity(root: string): Promise<Identity> {
 }
 
 const stableVersion = /^\d+\.\d+\.\d+$/;
-const changelogSection = (changelog: string, version: string) =>
-  changelog.split(new RegExp(`^## ${version.replaceAll('.', '\\.')}\\s*$`, 'm'))[1]?.split(/^## /m)[0];
 
 /** Stable versions prepared after the latest published version below `version` but never published themselves. */
 export function skippedVersions(changelog: string, version: string, published: string[]) {
@@ -197,14 +217,16 @@ export function publishedTagVersions(root: string) {
 
 export async function releaseNotes(root: string, version: string, initial = false, published: string[] = []) {
   const changelog = await Bun.file(join(root, 'apps/client/CHANGELOG.md')).text();
-  const section = changelogSection(changelog, version);
-  requireArtifact(section?.trim(), 'missing version changelog');
-  let notes = section.trim();
+  const sections = await packageSections(root, version);
+  const section = sections[0];
+  requireArtifact(section.trim(), 'missing version changelog');
   // A prepared version whose publication never happened still shipped to users through this release.
-  for (const skipped of skippedVersions(changelog, version, published)) {
-    const body = changelogSection(changelog, skipped)?.trim();
-    if (body) notes += `\n\n## Also included from ${skipped} (prepared but not published separately)\n\n${body}`;
-  }
+  const skipped = skippedVersions(changelog, version, published);
+  const entries = [sections, ...await Promise.all(skipped.map(item => packageSections(root, item)))].flat().flatMap(parseEntries);
+  const included = [...skipped].reverse();
+  let notes = [included.length ? `Includes the unpublished version${included.length > 1 ? 's' : ''} ${
+    [included.slice(0, -1).join(', '), included.at(-1)].filter(Boolean).join(' and ')}.` : '', renderGrouped(entries, '##') || section.trim()]
+    .filter(Boolean).join('\n\n');
   if (initial) {
     const policy = await Bun.file(join(root, '.changeset/release-policy.json')).json();
     requireArtifact(policy.initialPublication?.version === version, 'initial notes version not allowlisted');

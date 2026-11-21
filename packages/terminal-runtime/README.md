@@ -6,7 +6,7 @@ Design: [docs/architecture/terminal-runtime.md](../../docs/architecture/terminal
 
 It owns VT state for one session: bounded byte ingress with credits, incremental dirty-row frames,
 snapshots for a recreated surface, UI size intent versus transport-authoritative size (including Mosh's OSC 7777 frames as a top-anchored resize without reflow, `Config::canonical_frames`), terminal
-replies, key/mouse/paste encoding, and text inspection (`read_rows`, `viewport`). A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
+replies, key/mouse/paste encoding, text inspection (`read_rows`, `viewport`), selection, copy, word, find, URL and path detection and the OSC 52 consent policy in absolute cell coordinates, and the control plane of [#1321](https://github.com/mihazs/lazysh/issues/1321) (`control_snapshot`, `control_scroll`, `control_resize`, `take_control_events` and the `Doorbell`: the state and the text of a bounded window of rows, never cells, and what the program reported, as the JSON the app's `terminal_core_*` commands and the stdio harness share). A `TerminalRuntime` has no transport or thread and draws nothing itself; it is `Send` (a test moves a live one to another thread) but not `Sync`.
 
 `Hub` and `Session` ([#1315](https://github.com/mihazs/lazysh/issues/1315),
 [#1316](https://github.com/mihazs/lazysh/issues/1316), [#1319](https://github.com/mihazs/lazysh/issues/1319))
@@ -33,7 +33,8 @@ The production wgpu implementation is the sibling crate [`terminal-renderer-wgpu
 `ghostty-vt` is a path dependency on `../herdr-upstream/crates/ghostty-vt`. Nothing is copied,
 patched or forked, and Herdr's integrity manifest is untouched. This crate is a nested workspace
 (like `herdr-upstream`) because the dependency's build script runs Zig 0.16.0; the root Cargo
-workspace and default builds never need Zig.
+workspace and default builds never need Zig. The only other production dependency is `regex`
+(no default features) for the link patterns of `links.rs`.
 
 ## Build and test
 
@@ -52,6 +53,10 @@ cargo +1.96.1 run --release --example parse_bench   # host throughput, see docs/
 cargo +1.96.1 run --release --example session_bench # pooled data path, input latency, memory
 cargo +1.96.1 run --release --example mosh_bench    # one Mosh display update: canonical resize plus repaint
 cargo +1.96.1 run --release --example inspect_bench # text queries: Herdr's tap check, a screen read
+cargo +1.96.1 run --release --example scrollback_budget # rows kept per byte budget by width and content (History lines mapping)
+cargo +1.96.1 run --release --example perf_gate     # the CI regression gate (`terminal-perf` job); --inject slow|allocs|nocompaction must fail it
+cargo +1.96.1 run --release --example selection_bench # selection and search on a large scrollback
+cargo +1.96.1 build --example control_stdio        # the stdio JSON-RPC harness of the client's adapter contract suite (LAZYSH_CONTROL_STDIO=<binary> in apps/client)
 ```
 
 ## Target status
@@ -61,11 +66,15 @@ Checked with `cargo check --target` from a Linux x86_64 host, Zig 0.16.0:
 | Target | Result |
 | --- | --- |
 | `x86_64-unknown-linux-gnu` | builds, tests pass |
-| `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-musl`, `aarch64-apple-darwin` | build script and crates compile |
+| `aarch64-unknown-linux-musl`, `x86_64-unknown-linux-musl` | build script and crates compile |
+| `aarch64-apple-darwin` | the build script, the crates, their tests and examples compile and clippy is clean from the Linux host; on a Mac, the report-only `terminal-macos` job of `checks.yml` (pushes to `main`) builds libghostty-vt against the runner's Apple SDK with Zig 0.16.0 for Apple silicon and runs this crate's and the renderer's tests on `macos-latest`. A pull-request run of it on macOS 26.7 (Xcode 26.6, macOS 26.5 SDK) passed: [run 44387474497](https://github.com/mihazs/lazysh/actions/runs/44387474497) |
 | `aarch64-apple-ios` | fails: libghostty-vt's Apple SDK package needs a macOS SDK (`pkg/apple-sdk/build.zig`), unavailable on this host |
-| `x86_64-pc-windows-msvc` | fails: Zig has no MSVC libc headers here; Herdr's build accepts `LIBGHOSTTY_VT_WINDOWS_LIBC`, not provided |
-| `aarch64-linux-android` | fails before Zig: the binding's `build.rs` has no mapping for Android triples and panics (`unsupported target for libghostty-vt build`). Probe, not in the repo: with NDK r29 in `ANDROID_NDK_HOME`, the vendored `zig build -Demit-lib-vt -Dtarget=aarch64-linux-android` produced an aarch64 ELF with 16 KiB segment alignment, and `cargo check --target aarch64-linux-android` of this crate passed once a one-line triple mapping was added to a private copy of `build.rs`. Nothing was linked or run on Android |
+| `x86_64-pc-windows-msvc` | not from this host (Zig has no MSVC libc headers on Linux), but built and tested on `windows-latest` by the `terminal-windows` job ([#1332](https://github.com/mihazs/lazysh/issues/1332)): Zig 0.16.0 compiles libghostty-vt against the runner's Visual Studio C++ tools and Windows SDK, which `zig libc` writes to the file `LIBGHOSTTY_VT_WINDOWS_LIBC` names, and this crate's tests pass (all of them but `process.rs`, which reads `/proc` and is Linux-only). The renderer's tests run there on Direct3D 12 with the WARP software adapter. Debug profile, x86_64 only: no `aarch64-pc-windows-msvc` build, no release build, no real GPU |
+| `aarch64-linux-android`, `x86_64-linux-android` | `cargo check` and a link of the library and every test executable pass, with Zig 0.16.0 and NDK r29.0.14206865 (`ANDROID_NDK_HOME`; the Rust linker is the NDK's `<triple>24-clang`, API 24 being the app's `minSdkVersion`). The binding's `build.rs` maps both triples ([#2098](https://github.com/mihazs/lazysh/issues/2098), a documented local modification in `herdr-upstream/PROVENANCE.md`), the `herdr-native` job runs them, and the vendored `libghostty-vt` build already selects the NDK with 16 KiB page alignment. The static archive is about 18 MiB per ABI in the debug profile. The app library built with the `native-terminal` feature also compiles for both ABIs, and the `native-android-terminal-core` job runs the core inside the app on the x86_64 CI emulator ([#2145](https://github.com/mihazs/lazysh/issues/2145), [sizes](../../docs/architecture/terminal-runtime.md#size-of-the-app-library-on-android)); that run counts as evidence once the job has passed on `main`. Not run on Waydroid (its session cannot start without root) and never on arm64 |
 
-Android and iOS builds belong to [#1312](https://github.com/mihazs/lazysh/issues/1312), blocked by
+The iOS build belongs to [#1312](https://github.com/mihazs/lazysh/issues/1312), blocked by
 [#384](https://github.com/mihazs/lazysh/issues/384); none of those checks may be relaxed to pass.
-Compiling is not running: no target other than the Linux host has executed a test.
+Compiling is not running: apart from the Linux host, the macOS job above and the hosted Windows x86_64 runner, no target has executed a test.
+That run found one real difference between hosts: libghostty-vt built for macOS sends no ESC prefix for Alt unless
+its `macos_option_as_alt` option is set (Option composes text there), and `setopt_from_terminal` resets it, so the
+runtime sets it on every key encode and an Alt it is given is Alt on every host.

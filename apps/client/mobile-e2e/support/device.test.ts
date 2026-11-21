@@ -42,6 +42,16 @@ test('the baseline of every managed setting is restored, and the lock and journa
   expect(await exists(join(stateDir, `lazysh-mobile-e2e-fake_5555.lock`))).toBe(false);
 });
 
+test('lost emulator ownership releases the local lock without restoring device state', async () => {
+  const session = await acquireDevice(SERIAL, options());
+  await changed(session.adb);
+  const calls = (await fake.read()).calls;
+  await session.release({restore: false});
+  expect((await fake.read()).calls).toEqual(calls);
+  expect(await exists(session.journal)).toBe(true);
+  expect(await exists(join(stateDir, 'lazysh-mobile-e2e-fake_5555.lock'))).toBe(false);
+});
+
 test('a second run waits for the first, names its owner, and proceeds once it is released', async () => {
   const first = await acquireDevice(SERIAL, options());
   const messages: string[] = [];

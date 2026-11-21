@@ -44,11 +44,12 @@ test('the verdict plans only the client build and the companion compile checks, 
       targets.push(...match[1].split(/\s+/).map(token => token.replaceAll("'", '')).filter(token => token.includes(':')));
     }
   }
-  expect(targets.sort()).toEqual(['#companion:check-rust', 'client:build']);
+  expect(targets.sort()).toEqual(['#companion:check-rust', 'client:build', 'client:check']);
   const planned = await plannedTargets(...targets);
   expect(planned).toContain('client:build');
+  expect(planned).toContain('client:check');
   expect(planned).toContain('agent:check-rust');
-  for (const target of planned) expect(target).toMatch(/^[\w-]+:(build|check-rust|sources)$/);
+  for (const target of planned) expect(target).toMatch(/^[\w-]+:(build|check|check-rust|sources)$/);
 });
 
 test('the release-tools verdict runs the same commands as the version workflow job that guards the version PR', async () => {

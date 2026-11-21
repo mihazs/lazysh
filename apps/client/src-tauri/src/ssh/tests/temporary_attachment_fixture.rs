@@ -16,6 +16,7 @@ async fn upload(
     let reserved = crate::attachment_upload::upload_reserve(
         access_lease(),
         app.state(),
+        app.state(),
         id.into(),
         data.len(),
     )
@@ -25,6 +26,7 @@ async fn upload(
     .unwrap();
     match crate::attachment_upload::upload_file(
         access_lease(),
+        app.state(),
         app.state(),
         id.into(),
         reserved.upload_id,

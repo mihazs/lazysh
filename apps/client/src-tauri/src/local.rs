@@ -7,6 +7,13 @@ type AccessResult<T> = Result<Guarded<T>, GuardedError<String>>;
 use serde::Serialize;
 use tauri::{ipc::Channel, State};
 
+#[cfg(desktop)]
+mod targets;
+#[cfg(desktop)]
+mod wsl;
+#[cfg(desktop)]
+pub(crate) use wsl::{Located, Wsl};
+
 #[derive(Serialize)]
 pub struct Capability {
     available: bool,
@@ -17,39 +24,67 @@ pub struct Capability {
 #[derive(Serialize)]
 #[cfg_attr(not(desktop), allow(dead_code))]
 pub struct Target {
-    id: &'static str,
+    id: String,
     label: String,
     kind: &'static str,
     tools: Tools,
 }
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(not(desktop), allow(dead_code))]
 pub struct Tools {
     files: bool,
     repository: bool,
     /// A `lazysh-agent` is bundled, managed or on the PATH: the Agents board and approvals work.
     companion: bool,
+    attachments: bool,
+    previews: bool,
+    /// Which of those it is, for the companion panel; `None` exactly when `companion` is false.
+    #[cfg(desktop)]
+    companion_source: Option<crate::companion::local::Source>,
 }
+/// The login shell (`%ComSpec%` on Windows): what **Open local terminal** starts.
+#[cfg(desktop)]
+const DEFAULT_TARGET: &str = "default";
 #[tauri::command]
 pub async fn local_capability() -> Capability {
     #[cfg(desktop)]
     {
         let shell = portable_pty::CommandBuilder::new_default_prog().get_shell();
+        let companion_source = crate::companion::local::source().await;
+        let tools = Tools {
+            files: true,
+            repository: crate::host::local_program("git").await,
+            companion: companion_source.is_some(),
+            companion_source,
+            // Uploads write files and previews connect to loopback ports from this device.
+            attachments: true,
+            previews: true,
+        };
+        let mut targets = vec![Target {
+            id: DEFAULT_TARGET.into(),
+            label: std::path::Path::new(&shell)
+                .file_stem()
+                .map_or(shell.clone(), |name| name.to_string_lossy().into_owned()),
+            kind: if cfg!(windows) { "windows" } else { "posix" },
+            tools: tools.clone(),
+        }];
+        // A distribution reports the host tools that start inside it; every other shell shares this device's.
+        let detected = targets::detect(true).await;
+        targets.extend(
+            futures_util::future::join_all(detected.iter().map(|found| async {
+                let tools = match found.wsl() {
+                    Some(wsl) => wsl.tools().await,
+                    None => tools.clone(),
+                };
+                found.target(tools)
+            }))
+            .await,
+        );
         Capability {
             available: true,
             reason: "Local shell runs on this desktop device.",
-            targets: vec![Target {
-                id: "default",
-                label: std::path::Path::new(&shell)
-                    .file_stem()
-                    .map_or(shell.clone(), |name| name.to_string_lossy().into_owned()),
-                kind: if cfg!(windows) { "windows" } else { "posix" },
-                tools: Tools {
-                    files: true,
-                    repository: crate::host::local_program("git").await,
-                    companion: crate::companion::local::available().await,
-                },
-            }],
+            targets,
         }
     }
     #[cfg(not(desktop))]
@@ -92,6 +127,7 @@ pub async fn local_connect(
     launch: State<'_, crate::desktop_launch::LaunchState>,
     launch_receipt: Option<String>,
     attach: Option<crate::multiplexer::Entry>,
+    target: Option<String>,
     cols: u32,
     rows: u32,
     events: Channel<SshEvent>,
@@ -104,11 +140,30 @@ pub async fn local_connect(
                     Some(receipt) => Some(launch.claim(&receipt, &lease)?),
                     None => None,
                 };
-                desktop::connect(&state, lease.clone(), directory, attach, cols, rows, events).await
+                desktop::connect(
+                    &state,
+                    lease.clone(),
+                    directory,
+                    attach,
+                    target.as_deref(),
+                    cols,
+                    rows,
+                    events,
+                )
+                .await
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             {
-                let _ = (state, launch, launch_receipt, attach, cols, rows, events);
+                let _ = (
+                    state,
+                    launch,
+                    launch_receipt,
+                    attach,
+                    target,
+                    cols,
+                    rows,
+                    events,
+                );
                 Err("Local terminals require the desktop app".into())
             }
         })
@@ -197,13 +252,22 @@ pub(crate) fn usage_session(
 ) -> Result<tokio::sync::watch::Receiver<bool>, String> {
     #[cfg(desktop)]
     {
-        desktop::usage_session(state, id, lease)
+        desktop::host_session(state, id, lease).map(|(cancel, _)| cancel)
     }
     #[cfg(not(desktop))]
     {
         let _ = (state, id, lease);
         Err("Local terminals are unavailable".into())
     }
+}
+/// The close signal of an adopted local terminal and the WSL distribution its host tools run in.
+#[cfg(desktop)]
+pub(crate) fn host_session(
+    state: &LocalState,
+    id: &str,
+    lease: &AccessLease,
+) -> Result<(tokio::sync::watch::Receiver<bool>, Option<Wsl>), String> {
+    desktop::host_session(state, id, lease)
 }
 /// The tmux navigation binding of an adopted local terminal and its close signal.
 pub(crate) fn tmux_binding(
@@ -220,6 +284,37 @@ pub(crate) fn tmux_binding(
     #[cfg(desktop)]
     {
         desktop::tmux_binding(state, id, lease)
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (state, id, lease);
+        Err("Local terminals are unavailable".into())
+    }
+}
+/// The tmux server an adopted local terminal is attached to, when it is attached to one.
+#[cfg(desktop)]
+pub(crate) fn tmux_server(
+    state: &LocalState,
+    id: &str,
+    lease: &AccessLease,
+) -> Result<Option<crate::tmux_server::TmuxServer>, String> {
+    desktop::tmux_server(state, id, lease)
+}
+/// The guarded Herdr binding of an adopted local terminal, if it has one, and its close signal.
+pub(crate) fn herdr_binding(
+    state: &LocalState,
+    id: &str,
+    lease: &AccessLease,
+) -> Result<
+    (
+        Option<crate::herdr_guard::Binding>,
+        tokio::sync::watch::Receiver<bool>,
+    ),
+    String,
+> {
+    #[cfg(desktop)]
+    {
+        desktop::binding(state, id, lease, |bindings| &bindings.herdr)
     }
     #[cfg(not(desktop))]
     {
@@ -247,6 +342,7 @@ pub(crate) async fn adopted_test_session(state: &LocalState, lease: AccessLease)
     let connected = desktop::connect(
         state,
         lease.clone(),
+        None,
         None,
         None,
         80,
@@ -363,6 +459,8 @@ mod desktop {
         wake: UnixStream,
         renderer_gone: watch::Sender<bool>,
         bindings: crate::bindings::Bindings,
+        /// The distribution of a WSL target, set once before the renderer can adopt the session.
+        wsl: std::sync::OnceLock<Wsl>,
     }
     impl Session {
         /// Return `bytes` of consumed output credit (a forged or repeated credit is refused).
@@ -516,6 +614,11 @@ mod desktop {
         #[cfg(test)]
         pub(crate) fn test_env(&self) -> Vec<(String, String)> {
             self.0.test_env.lock().unwrap().clone()
+        }
+        /// Runs the host tools of session `id` in `wsl`, as a connected WSL target does.
+        #[cfg(test)]
+        pub(crate) fn bind_wsl(&self, id: &str, wsl: Wsl) {
+            let _ = self.0.session(id).unwrap().wsl.set(wsl);
         }
         pub(super) fn clone_inner(&self) -> Arc<Inner> {
             self.0.clone()
@@ -685,30 +788,89 @@ mod desktop {
         let writer = master.take_writer().map_err(|e| e.to_string())?;
         Ok((process, reader, writer))
     }
+    /// Starts the default shell, or the detected target the renderer chose by id.
+    #[allow(clippy::too_many_arguments)]
     pub async fn connect(
         state: &LocalState,
         creation: AccessLease,
         directory: Option<std::path::PathBuf>,
         attach: Option<crate::multiplexer::Entry>,
+        target: Option<&str>,
         cols: u32,
         rows: u32,
         events: Channel<SshEvent>,
     ) -> Result<Connected, String> {
         let Some(entry) = attach else {
-            let command = shell_command(directory)?;
-            return start_with_access(state, creation, command, cols, rows, events).await;
+            let found = match target.filter(|id| *id != DEFAULT_TARGET) {
+                Some(id) => Some(targets::resolve(id).await?),
+                None => None,
+            };
+            let command = match &found {
+                None => shell_command(directory)?,
+                Some(found) => target_command(found, directory)?,
+            };
+            let connected = start_with_access(state, creation, command, cols, rows, events).await?;
+            if let Some(wsl) = found.and_then(|found| found.wsl()) {
+                // Before the renderer can adopt the session, so its host tools run in the distribution.
+                let _ = state.0.session(&connected.session_id)?.wsl.set(wsl);
+            }
+            return Ok(connected);
         };
         if directory.is_some() {
             return Err("Choose a folder or a multiplexer session, not both".into());
         }
+        if target.is_some_and(|id| id != DEFAULT_TARGET) {
+            return Err("Multiplexer sessions attach on this device's own shell".into());
+        }
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut command = attach_command(&entry).await?;
+        // As over SSH, a Herdr that does not positively admit the guard stays an ordinary attach.
+        let guard = crate::herdr_guard::Local {
+            #[cfg(test)]
+            env: state.test_env(),
+        };
+        let guarded = matches!(entry.kind, crate::multiplexer::MultiplexerKind::Herdr) && {
+            let (_open, mut cancel) = watch::channel(false);
+            crate::herdr_guard::available_local(guard.clone(), &entry.name, &creation, &mut cancel)
+                .await
+        };
+        creation.check()?;
+        if guarded {
+            command.arg(crate::herdr_guard::GUARDED_ATTACH);
+        }
         #[cfg(test)]
         for (name, value) in state.test_env() {
             command.env(name, value);
         }
-        let connected =
-            start_with_access(state, creation.clone(), command, cols, rows, events).await?;
+        let (ticket, tickets) = oneshot::channel();
+        let connected = start_with_launcher(
+            state,
+            creation.clone(),
+            command,
+            cols,
+            rows,
+            events,
+            launch,
+            guarded.then_some(ticket),
+        )
+        .await?;
+        if guarded {
+            // A failed or uncertain private start closes this terminal; it never falls back
+            // to an ordinary attach.
+            if let Err(error) = bind_herdr(
+                state,
+                &connected.session_id,
+                guard,
+                &entry.name,
+                tickets,
+                &creation,
+            )
+            .await
+            {
+                disconnect(state, &connected.session_id);
+                return Err(error);
+            }
+        }
         if matches!(entry.kind, crate::multiplexer::MultiplexerKind::Tmux) {
             // As over SSH, a client that cannot be verified leaves the terminal without
             // navigation; the attach itself stands.
@@ -717,16 +879,37 @@ mod desktop {
         }
         Ok(connected)
     }
+    /// The program an attach starts. Unix leaves the name to the PTY, which searches the login
+    /// PATH. Native Windows has no tmux; it finds Zellij and Herdr itself, so that a missing one
+    /// is named instead of ending in a bare `CreateProcess` failure.
+    pub(super) fn attach_program(
+        program: &str,
+        windows: bool,
+        path: &std::ffi::OsStr,
+        pathext: Option<&std::ffi::OsStr>,
+    ) -> Result<std::ffi::OsString, String> {
+        if !windows {
+            return Ok(program.into());
+        }
+        if program == "tmux" {
+            return Err("tmux has no native Windows build; use a WSL target for tmux".into());
+        }
+        crate::native_program::resolve(path, pathext, program)
+            .map(std::path::PathBuf::into_os_string)
+            .ok_or_else(|| {
+                format!("{program} was not found on the PATH; install its Windows build")
+            })
+    }
     /// The PTY command that attaches `entry` directly: a typed argv, never a shell string.
     async fn attach_command(entry: &crate::multiplexer::Entry) -> Result<CommandBuilder, String> {
-        // tmux has no native Windows build, and native Zellij and Herdr need their own slice.
-        if cfg!(windows) {
-            return Err(
-                "Multiplexer sessions in local terminals are not available on Windows yet".into(),
-            );
-        }
         let argv = entry.argv().map_err(|error| error.message().to_owned())?;
-        let mut command = CommandBuilder::new(&argv[0]);
+        let program = attach_program(
+            &argv[0],
+            cfg!(windows),
+            &std::env::var_os("PATH").unwrap_or_default(),
+            std::env::var_os("PATHEXT").as_deref(),
+        )?;
+        let mut command = CommandBuilder::new(program);
         command.args(&argv[1..]);
         command.env("TERM", "xterm-256color");
         // A lazysh started inside a multiplexer must not hit its nested-session refusal.
@@ -741,11 +924,34 @@ mod desktop {
         }
         Ok(command)
     }
+    fn target_command(
+        found: &targets::Found,
+        directory: Option<std::path::PathBuf>,
+    ) -> Result<CommandBuilder, String> {
+        let start = start_directory(directory.clone())?;
+        let mut command = CommandBuilder::new(found.program());
+        // Only a WSL target takes the folder as an argument; it starts in `~` without one.
+        command.args(found.arguments(directory.and(start.as_deref())));
+        command.env("TERM", "xterm-256color");
+        if let Some(start) = start {
+            command.cwd(start);
+        }
+        Ok(command)
+    }
     pub(super) fn shell_command(
         directory: Option<std::path::PathBuf>,
     ) -> Result<CommandBuilder, String> {
         let mut command = CommandBuilder::new_default_prog();
         command.env("TERM", "xterm-256color");
+        if let Some(directory) = start_directory(directory)? {
+            command.cwd(directory);
+        }
+        Ok(command)
+    }
+    /// Where a local shell starts: the validated `directory`, else the home directory.
+    fn start_directory(
+        directory: Option<std::path::PathBuf>,
+    ) -> Result<Option<std::path::PathBuf>, String> {
         if let Some(directory) = directory {
             #[cfg(windows)]
             let directory = {
@@ -768,11 +974,9 @@ mod desktop {
                 }
                 compatible.to_owned()
             };
-            command.cwd(directory);
-        } else if let Some(home) = super::home_dir() {
-            command.cwd(home);
+            return Ok(Some(directory));
         }
-        Ok(command)
+        Ok(super::home_dir())
     }
     #[cfg(test)]
     pub(super) async fn start(
@@ -800,7 +1004,7 @@ mod desktop {
         rows: u32,
         events: Channel<SshEvent>,
     ) -> Result<Connected, String> {
-        start_with_launcher(state, creation, command, cols, rows, events, launch).await
+        start_with_launcher(state, creation, command, cols, rows, events, launch, None).await
     }
     #[cfg(all(test, unix))]
     pub(super) async fn start_with_held_launch(
@@ -822,9 +1026,11 @@ mod desktop {
                 held(parts.0.child.as_ref().unwrap().process_id().unwrap());
                 Ok(parts)
             },
+            None,
         )
         .await
     }
+    #[allow(clippy::too_many_arguments)]
     async fn start_with_launcher(
         state: &LocalState,
         creation: AccessLease,
@@ -833,6 +1039,8 @@ mod desktop {
         rows: u32,
         events: Channel<SshEvent>,
         launcher: impl FnOnce(CommandBuilder, u32, u32) -> Result<PtyParts, String> + Send + 'static,
+        // The guarded Herdr's private first frame is taken off the display and sent here.
+        startup: Option<oneshot::Sender<crate::herdr_guard::Ticket>>,
     ) -> Result<Connected, String> {
         size(cols, rows)?;
         if state.0.stopped.load(Ordering::SeqCst) {
@@ -845,7 +1053,7 @@ mod desktop {
             .map_err(|_| "At most 20 local terminals may be open")?;
         let launch_access = creation.clone();
         let owner = state.0.clone();
-        let (process, mut reader, mut writer) =
+        let (process, reader, mut writer) =
             tauri::async_runtime::spawn_blocking(move || -> Result<PtyParts, String> {
                 launch_access.check()?;
                 if owner.stopped.load(Ordering::SeqCst) {
@@ -863,6 +1071,10 @@ mod desktop {
             })
             .await
             .map_err(|_| "Local terminal worker failed")??;
+        let mut reader: Box<dyn Read + Send> = match startup {
+            Some(ticket) => Box::new(crate::herdr_guard::StartupReader::new(reader, ticket)),
+            None => reader,
+        };
         if state.0.stopped.load(Ordering::SeqCst) {
             tauri::async_runtime::spawn_blocking(move || drop(process));
             return Err("Local terminals are shutting down".into());
@@ -900,6 +1112,7 @@ mod desktop {
             wake,
             renderer_gone: watch::channel(false).0,
             bindings: crate::bindings::Bindings::default(),
+            wsl: std::sync::OnceLock::new(),
         });
         let id = format!("local:{}", uuid::Uuid::new_v4());
         let registration = session
@@ -1167,12 +1380,14 @@ mod desktop {
             })
             .map_err(String::from)?
     }
-    pub(super) fn usage_session(
+    pub(super) fn host_session(
         state: &LocalState,
         id: &str,
         lease: &AccessLease,
-    ) -> Result<watch::Receiver<bool>, String> {
-        live_session(state, id, lease, |session| Ok(session.cancel.subscribe()))
+    ) -> Result<(watch::Receiver<bool>, Option<Wsl>), String> {
+        live_session(state, id, lease, |session| {
+            Ok((session.cancel.subscribe(), session.wsl.get().cloned()))
+        })
     }
     #[cfg(all(test, unix))]
     pub(super) fn display_identity(
@@ -1183,20 +1398,44 @@ mod desktop {
         let process = session.process.lock().ok()?;
         process.as_ref()?.display_identity()
     }
+    /// One of an adopted, live terminal's bindings, if it has one, and its close signal.
+    pub(super) fn binding<T: Clone>(
+        state: &LocalState,
+        id: &str,
+        lease: &AccessLease,
+        slot: impl FnOnce(&crate::bindings::Bindings) -> &Mutex<Option<T>>,
+    ) -> Result<(Option<T>, watch::Receiver<bool>), String> {
+        live_session(state, id, lease, |session| {
+            let bound = slot(&session.bindings)
+                .lock()
+                .map_err(|_| "Local terminal lock failed")?
+                .clone();
+            Ok((bound, session.cancel.subscribe()))
+        })
+    }
     pub(super) fn tmux_binding(
         state: &LocalState,
         id: &str,
         lease: &AccessLease,
     ) -> Result<(crate::tmux_jump::Binding, watch::Receiver<bool>), String> {
+        let (binding, cancel) = binding(state, id, lease, |bindings| &bindings.tmux)?;
+        Ok((
+            binding.ok_or("This terminal has no tmux navigation binding")?,
+            cancel,
+        ))
+    }
+    pub(super) fn tmux_server(
+        state: &LocalState,
+        id: &str,
+        lease: &AccessLease,
+    ) -> Result<Option<crate::tmux_server::TmuxServer>, String> {
         live_session(state, id, lease, |session| {
-            let binding = session
+            Ok(session
                 .bindings
-                .tmux
+                .tmux_server
                 .lock()
                 .map_err(|_| "Local terminal lock failed")?
-                .clone()
-                .ok_or("This terminal has no tmux navigation binding")?;
-            Ok((binding, session.cancel.subscribe()))
+                .clone())
         })
     }
     async fn bind_tmux(
@@ -1233,6 +1472,37 @@ mod desktop {
             .lock()
             .map_err(|_| "Local terminal lock failed")? =
             Some(crate::tmux_jump::start(control, session.cancel.subscribe()));
+        Ok(())
+    }
+    /// Claims the guard of the Herdr client that runs in this terminal and keeps it for chat.
+    async fn bind_herdr(
+        state: &LocalState,
+        id: &str,
+        guard: crate::herdr_guard::Local,
+        name: &str,
+        tickets: oneshot::Receiver<crate::herdr_guard::Ticket>,
+        lease: &AccessLease,
+    ) -> Result<(), String> {
+        let session = state.0.session(id)?;
+        let startup = crate::herdr_guard::acquire_local(
+            guard.clone(),
+            lease,
+            name,
+            tickets,
+            &mut session.cancel.subscribe(),
+        )
+        .await
+        .map_err(|error| error.message().to_owned())?;
+        lease.check()?;
+        *session
+            .bindings
+            .herdr
+            .lock()
+            .map_err(|_| "Local terminal lock failed")? = Some(crate::herdr_guard::start(
+            startup,
+            crate::herdr_guard::Route::Local(guard),
+            session.cancel.subscribe(),
+        ));
         Ok(())
     }
     pub(super) fn adopt(
@@ -1389,7 +1659,14 @@ mod tests {
         rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
         needle: &str,
     ) -> String {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        until_within(rx, needle, Duration::from_secs(5)).await
+    }
+    pub(super) async fn until_within(
+        rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+        needle: &str,
+        deadline: Duration,
+    ) -> String {
+        tokio::time::timeout(deadline, async {
             let mut bytes = Vec::new();
             loop {
                 let event = rx.recv().await.expect("local event stream ended");
@@ -2090,16 +2367,23 @@ mod tests {
                 .unwrap();
         (core, connected)
     }
-    /// The real core's screen text, read as the current renderer.
-    #[cfg(all(unix, feature = "native-terminal"))]
-    async fn real_core_text(id: &str) -> Result<String, String> {
-        match crate::terminal_core::terminal_core_text(access_lease(), id.to_owned()).await {
-            Ok(text) => Ok(text.into_inner().unwrap()),
+    /// What a core command answered the current renderer: its value or its error message.
+    #[cfg(all(unix, native_terminal_core))]
+    fn answered<T>(
+        result: Result<crate::app_lock::Guarded<T>, crate::app_lock::GuardedError<String>>,
+    ) -> Result<T, String> {
+        match result {
+            Ok(value) => Ok(value.into_inner().unwrap()),
             Err(error) => Err(error.into_inner().unwrap()),
         }
     }
+    /// The real core's screen text, read as the current renderer.
+    #[cfg(all(unix, native_terminal_core))]
+    async fn real_core_text(id: &str) -> Result<String, String> {
+        answered(crate::terminal_core::terminal_core_text(access_lease(), id.to_owned()).await)
+    }
     /// The real core's screen text once it contains `marker`.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     async fn real_core_text_with(id: &str, marker: &str) -> String {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -2127,8 +2411,8 @@ mod tests {
         desktop::disconnect(&state, &id);
         terminal_core::close(&id);
     }
-    /// Needs the `native-terminal` feature (Zig); the CI jobs that build the app do not enable it.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    /// Needs the `native-terminal` feature (Zig); only the `native-terminal-bridge` CI job enables it.
+    #[cfg(all(unix, native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn local_pty_output_is_parsed_by_the_real_core_and_readable_as_text() {
@@ -2137,7 +2421,7 @@ mod tests {
         use portable_pty::CommandBuilder;
         let state = LocalState::default();
         let (event, mut rx) = events();
-        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 6, None)
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 6, None, None)
             .await
             .unwrap();
         let mut command = CommandBuilder::new("sh");
@@ -2163,7 +2447,7 @@ mod tests {
         assert!(real_core_text(&id).await.is_err());
     }
     /// Needs the `native-terminal` feature (Zig).
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn the_real_core_follows_the_size_the_renderer_resized_to() {
@@ -2171,7 +2455,7 @@ mod tests {
         let _kept = terminal_core::tests_keeping_cores().read();
         let state = LocalState::default();
         let (event, _rx) = events();
-        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 10, None)
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 10, None, None)
             .await
             .unwrap();
         // Column 40 is clamped to the last column of the grid, so where the Y lands shows the width.
@@ -2188,8 +2472,215 @@ mod tests {
         assert_eq!(row.chars().count(), 25, "{text:?}");
         terminal_core::close(&id);
     }
+    /// A local state and a core opened for a terminal of this size, with the Channel the session starts with.
+    #[cfg(all(unix, native_terminal_core))]
+    async fn open_core(
+        cols: u32,
+        rows: u32,
+    ) -> (
+        LocalState,
+        Channel<SshEvent>,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) {
+        let (event, rx) = events();
+        crate::terminal_core::terminal_core_open(
+            access_lease(),
+            event.clone(),
+            cols,
+            rows,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        (LocalState::default(), event, rx)
+    }
+    /// The events the core's Channel has delivered so far. The core's output never travels on it.
+    #[cfg(all(unix, native_terminal_core))]
+    fn queued(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) -> Vec<serde_json::Value> {
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            events.iter().all(|event| event["type"] != "data"),
+            "{events:?}"
+        );
+        events
+    }
+    /// The events up to and including the next `changed`. A chunk is announced just after it is parsed, so the
+    /// screen can show it a moment before its ring has gone out.
+    #[cfg(all(unix, native_terminal_core))]
+    async fn until_ring(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) -> Vec<serde_json::Value> {
+        let mut events = queued(rx);
+        while !events.iter().any(|event| event["type"] == "changed") {
+            let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("a ring");
+            events.push(event.unwrap());
+        }
+        events
+    }
+    #[cfg(all(unix, native_terminal_core))]
+    fn kinds(events: &[serde_json::Value]) -> Vec<&str> {
+        events
+            .iter()
+            .map(|event| event["type"].as_str().unwrap())
+            .collect()
+    }
+    /// Needs the `native-terminal` feature (Zig). The control plane over a real PTY: a program the shell runs
+    /// prints, the reader asks for the state, scrolls, resizes and stops looking, and the core's event stream on the
+    /// session's Channel says what the program reported and rings once per read, however much output arrives.
+    #[cfg(all(unix, native_terminal_core))]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn the_control_commands_answer_for_a_real_pty_core_and_its_events_follow_the_reader() {
+        use crate::terminal_core::{self, fake::assert_no_cells};
+        use serde_json::json;
+        let _kept = terminal_core::tests_keeping_cores().read();
+        let (state, event, mut rx) = open_core(40, 6).await;
+        let program = concat!(
+            r"stty -echo; read a; printf '\a\033]0;build\a\033]7;file://host/tmp/a%%20b\a\033]52;c;aGVsbG8=\a'; seq 1 3000; echo first; ",
+            r"read b; seq 1 3000; echo second; read c; seq 1 5000; echo third; sleep 5",
+        );
+        let connected =
+            desktop::start_with_access(&state, access_lease(), shell(program), 40, 6, event)
+                .await
+                .unwrap();
+        let id = connected.session_id;
+        let id = id.as_str();
+        let go = || desktop::write(&state, id, "go\n".into(), access_lease()).unwrap();
+        let snapshot = |window| async move {
+            answered(
+                terminal_core::terminal_core_snapshot(access_lease(), id.to_owned(), window).await,
+            )
+        };
+        let scroll = |action| async move {
+            answered(
+                terminal_core::terminal_core_scroll(access_lease(), id.to_owned(), action, Some(8))
+                    .await,
+            )
+        };
+        let size = |cols, rows| async move {
+            answered(
+                terminal_core::terminal_core_resize(
+                    access_lease(),
+                    id.to_owned(),
+                    cols,
+                    rows,
+                    Some(8),
+                )
+                .await,
+            )
+        };
+        let active = |active| async move {
+            answered(
+                terminal_core::terminal_core_set_active(access_lease(), id.to_owned(), active)
+                    .await,
+            )
+        };
+
+        go();
+        let first = real_core_text_with(id, "first").await;
+        assert!(first.contains("3000"), "{first:?}");
+        // 3,000 lines arrived in many chunks and the reader has not read: one ring.
+        let mut events = until_ring(&mut rx).await;
+        assert_eq!(
+            kinds(&events)
+                .iter()
+                .filter(|kind| **kind == "changed")
+                .count(),
+            1,
+            "{events:?}"
+        );
+        // The reader reads: the state, the last rows, nothing that is a cell.
+        let live = snapshot(Some(8)).await.unwrap();
+        assert_no_cells(&live);
+        assert_eq!(live["state"]["columns"], 40);
+        assert_eq!(live["state"]["rows"], 6);
+        assert_eq!(live["state"]["viewport"]["following"], true);
+        let rows = live["window"]["rows"].as_array().unwrap();
+        assert!(rows.len() <= 8);
+        assert_eq!(
+            &rows[rows.len() - 4..],
+            [json!("2999"), json!("3000"), json!("first"), json!("")]
+        );
+        // What the program reported came out once, decoded, ahead of the ring or with the read.
+        events.extend(queued(&mut rx));
+        let of = |kind: &str| {
+            events
+                .iter()
+                .filter(|event| event["type"] == kind)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            (
+                of("title").len(),
+                of("bell").len(),
+                of("cwd").len(),
+                of("clipboard").len()
+            ),
+            (1, 1, 1, 1),
+            "{events:?}"
+        );
+        assert_eq!(of("title")[0]["title"], "build");
+        assert_eq!(of("cwd")[0]["path"], "/tmp/a b");
+        assert_eq!(of("clipboard")[0]["text"], "hello");
+
+        // Scrolling and sizing answer with the new state.
+        let top = scroll(json!({"kind": "toTop"})).await.unwrap();
+        assert_no_cells(&top);
+        assert_eq!(top["state"]["viewport"]["top"], 0);
+        assert_eq!(top["state"]["viewport"]["following"], false);
+        assert_eq!(top["window"]["first"], 0);
+        let bottom = scroll(json!({"kind": "toBottom"})).await.unwrap();
+        assert_eq!(bottom["state"]["viewport"]["following"], true);
+        let resized = size(30, 8).await.unwrap();
+        assert_no_cells(&resized);
+        assert_eq!(
+            (
+                resized["state"]["columns"].as_u64(),
+                resized["state"]["rows"].as_u64()
+            ),
+            (Some(30), Some(8))
+        );
+        assert!(size(0, 8).await.unwrap_err().contains("between 1 and 1000"));
+
+        // A reader that stopped looking is told nothing while the program keeps printing, and is caught up once.
+        queued(&mut rx);
+        active(false).await.unwrap();
+        go();
+        real_core_text_with(id, "second").await;
+        assert_eq!(
+            kinds(&queued(&mut rx)),
+            Vec::<&str>::new(),
+            "an inactive session wakes nobody"
+        );
+        active(true).await.unwrap();
+        assert_eq!(
+            kinds(&queued(&mut rx)),
+            ["changed"],
+            "and rings once when looked at again"
+        );
+        // Reading rearms it: the next burst of 5,000 lines rings once more.
+        let seen = snapshot(None).await.unwrap();
+        assert!(seen["window"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row == "second"));
+        go();
+        real_core_text_with(id, "third").await;
+        assert_eq!(
+            kinds(&until_ring(&mut rx).await),
+            ["changed"],
+            "5,000 lines, one ring"
+        );
+        terminal_core::close(id);
+    }
     /// Needs the `native-terminal` feature (Zig). `cat -v` makes the bytes the program receives visible.
-    #[cfg(all(unix, feature = "native-terminal"))]
+    #[cfg(all(unix, native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn the_real_core_answers_queries_and_encodes_paste_and_mouse_into_the_pty() {
@@ -2197,7 +2688,7 @@ mod tests {
         let _kept = terminal_core::tests_keeping_cores().read();
         let state = LocalState::default();
         let (event, _rx) = events();
-        terminal_core::terminal_core_open(access_lease(), event.clone(), 120, 24, None)
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 120, 24, None, None)
             .await
             .unwrap();
         // Bracketed paste and mouse tracking on, then a device attributes query: the core answers it
@@ -2235,9 +2726,43 @@ mod tests {
         }
         terminal_core::close(&id);
     }
+    /// Needs the `native-terminal` feature (Zig). It reads the process-wide hub, so it takes the cores
+    /// exclusively: no other test's core is alive while it counts.
+    #[cfg(all(unix, native_terminal_core))]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' cores away
+    async fn history_lines_set_the_scrollback_the_real_core_reserves_for_a_session() {
+        use crate::terminal_core;
+        use lazysh_terminal_runtime::scrollback_bytes_for_lines;
+        let _exclusive = terminal_core::tests_keeping_cores().write();
+        let state = LocalState::default();
+        let (event, _rx) = events();
+        terminal_core::terminal_core_open(
+            access_lease(),
+            event.clone(),
+            120,
+            24,
+            Some(5_000),
+            None,
+        )
+        .await
+        .unwrap();
+        let connected =
+            desktop::start_with_access(&state, access_lease(), shell("echo done"), 120, 24, event)
+                .await
+                .unwrap();
+        let id = connected.session_id;
+        real_core_text_with(&id, "done").await;
+        assert_eq!(
+            terminal_core::hub_usage(),
+            (1, scrollback_bytes_for_lines(5_000, 120))
+        );
+        terminal_core::close(&id);
+        assert_eq!(terminal_core::hub_usage(), (0, 0));
+    }
     /// Needs the `native-terminal` feature (Zig) and a Linux `/proc`; run alone (`--test-threads=1`)
     /// with `--nocapture` to see the measured resident set.
-    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    #[cfg(all(target_os = "linux", native_terminal_core))]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
     async fn a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget() {
@@ -2260,9 +2785,16 @@ mod tests {
                 baseline = resident_kib(); // after warm-up: allocator pools and thread stacks exist
             }
             let (event, mut rx) = events();
-            terminal_core::terminal_core_open(access_lease(), event.clone(), 80, 24, Some(1 << 20))
-                .await
-                .unwrap();
+            terminal_core::terminal_core_open(
+                access_lease(),
+                event.clone(),
+                80,
+                24,
+                Some(1_000),
+                None,
+            )
+            .await
+            .unwrap();
             let connected = desktop::start_with_access(
                 &state,
                 access_lease(),
@@ -2275,8 +2807,8 @@ mod tests {
             .unwrap();
             let id = connected.session_id;
             closed(&mut rx).await;
-            let text = real_core_text(&id).await.unwrap();
-            assert!(text.contains("30000"), "round {round}: {text:?}");
+            // The session ends when the PTY does; the core's worker may still be parsing what it was fed.
+            real_core_text_with(&id, "30000").await;
             terminal_core::terminal_core_close(id).unwrap();
         }
         let grown = resident_kib().saturating_sub(baseline);
@@ -2288,7 +2820,7 @@ mod tests {
         );
         assert!(
             grown < 32 * 1024,
-            "{grown} KiB growth over 100 sessions of 1 MiB scrollback"
+            "{grown} KiB growth over 100 sessions of 1000 lines of scrollback"
         );
     }
     #[cfg(unix)]
@@ -2333,7 +2865,7 @@ mod tests {
     async fn windows_conpty_executes_utf8_resizes_and_closes() {
         let state = LocalState::default();
         let (event, mut rx) = events();
-        let connected = desktop::connect(&state, access_lease(), None, 80, 24, event)
+        let connected = desktop::connect(&state, access_lease(), None, None, None, 80, 24, event)
             .await
             .expect("ConPTY startup failed on this Windows runner");
         let pid = desktop::process_id(&state, &connected.session_id);
@@ -2363,6 +2895,213 @@ mod tests {
             !String::from_utf8_lossy(&processes.stdout).contains(&format!(",\"{pid}\",")),
             "owned ConPTY shell survived disconnect"
         );
+    }
+    /// Opens `target` as a real local terminal, runs `input` and waits for `needle`.
+    async fn run_in_target(target: &str, input: &str, needle: &str) -> String {
+        let state = LocalState::default();
+        let (event, mut rx) = events();
+        let connected = desktop::connect(
+            &state,
+            access_lease(),
+            None,
+            None,
+            Some(target),
+            100,
+            30,
+            event,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("target {target} did not start: {error}"));
+        desktop::write(&state, &connected.session_id, input.into(), access_lease()).unwrap();
+        // Shell startup, profiles included, is slower than the 5 seconds a bare shell needs.
+        let output = until_within(&mut rx, needle, Duration::from_secs(60)).await;
+        desktop::disconnect(&state, &connected.session_id);
+        closed(&mut rx).await;
+        output
+    }
+    #[tokio::test]
+    async fn a_target_that_was_not_detected_is_refused_before_any_process_starts() {
+        let state = LocalState::default();
+        let slots = state.available_slots();
+        for target in [
+            "wsl:definitely-not-installed",
+            "../x",
+            "C:\\Windows\\System32\\cmd.exe",
+            "",
+        ] {
+            let (event, _rx) = events();
+            let error = desktop::connect(
+                &state,
+                access_lease(),
+                None,
+                None,
+                Some(target),
+                80,
+                24,
+                event,
+            )
+            .await
+            .err()
+            .expect("an undetected target must be refused");
+            assert!(error.contains("not available"), "{target:?}: {error}");
+        }
+        assert_eq!(state.available_slots(), slots);
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn linux_offers_the_login_shell_as_its_only_target_and_opens_it_by_id() {
+        let capability = local_capability().await;
+        let ids: Vec<_> = capability
+            .targets
+            .iter()
+            .map(|target| target.id.as_str())
+            .collect();
+        assert_eq!(ids, ["default"]);
+        assert_eq!(capability.targets[0].kind, "posix");
+        let output =
+            run_in_target("default", "printf '__TARGET_%s__\\n' ok\n", "__TARGET_ok__").await;
+        assert!(output.contains("__TARGET_ok__"));
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_lists_cmd_first_then_every_installed_powershell() {
+        let capability = local_capability().await;
+        let targets: Vec<_> = capability
+            .targets
+            .iter()
+            .map(|target| (target.id.as_str(), target.label.as_str()))
+            .collect();
+        assert_eq!(targets[0].0, "default");
+        assert!(targets[0].1.eq_ignore_ascii_case("cmd"), "{targets:?}");
+        // Windows PowerShell ships with Windows; PowerShell 7 is listed when its pwsh.exe is installed.
+        assert!(
+            targets.contains(&("powershell", "Windows PowerShell")),
+            "{targets:?}"
+        );
+        let pwsh_installed = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .any(|directory| directory.join("pwsh.exe").is_file());
+        assert_eq!(
+            targets.iter().any(|(id, _)| *id == "pwsh"),
+            pwsh_installed,
+            "{targets:?}"
+        );
+        assert!(capability
+            .targets
+            .iter()
+            .all(|target| target.kind == "windows"));
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn every_detected_powershell_prints_its_version_in_conpty() {
+        for target in targets::detect(false)
+            .await
+            .iter()
+            .filter(|found| found.is_powershell())
+        {
+            let output = run_in_target(target.id(), "$PSVersionTable.PSVersion\r\n", "Major").await;
+            assert!(output.contains("Major"), "{}: {output}", target.id());
+        }
+    }
+    /// Needs a WSL distribution, which hosted Windows runners lack: run it where one is installed.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "needs a WSL distribution"]
+    async fn real_wsl_target_runs_a_linux_shell_in_the_chosen_distribution() {
+        let distro = targets::detect(true)
+            .await
+            .into_iter()
+            .find(|found| found.is_wsl())
+            .expect("no WSL distribution is installed");
+        let output =
+            run_in_target(distro.id(), "echo __WSL_$(uname -s)__\n", "__WSL_Linux__").await;
+        assert!(output.contains("__WSL_Linux__"));
+    }
+    /// Starts a real WSL target and runs its host tools: makes a repository in the distribution,
+    /// reads a file through `\\wsl.localhost\<distro>\` and shows a diff. Needs a distribution
+    /// with `git`, which hosted Windows runners lack; it compiles everywhere and runs only there.
+    #[tokio::test]
+    #[ignore = "needs a WSL distribution with git"]
+    async fn real_wsl_target_reads_a_file_and_shows_a_diff_through_the_host_context() {
+        use crate::host::{Cmd, Host};
+        async fn run(
+            host: &Host,
+            lease: &AccessLease,
+            argv: &[&str],
+        ) -> crate::ssh::Result<String> {
+            host.run(lease, &Cmd::new(&[], argv)).await
+        }
+        let distro = targets::detect(true)
+            .await
+            .into_iter()
+            .find(|found| found.is_wsl())
+            .expect("no WSL distribution is installed");
+        let state = LocalState::default();
+        let lease = access_lease();
+        let (event, _rx) = events();
+        let connected = desktop::connect(
+            &state,
+            lease.clone(),
+            None,
+            None,
+            Some(distro.id()),
+            100,
+            30,
+            event,
+        )
+        .await
+        .unwrap();
+        desktop::adopt(&state, &connected.session_id, &lease).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let app = crate::ssh::AppState::new(temp.path().join("state")).unwrap();
+        let host = Host::resolve(&app, &state, &connected.session_id, &lease)
+            .await
+            .unwrap();
+        let home = host.home(&lease).await.unwrap();
+        assert!(home.starts_with('/'), "{home}");
+        let work = format!("{home}/lazysh-wsl-{}", uuid::Uuid::new_v4());
+        run(&host, &lease, &["mkdir", &work]).await.unwrap();
+        let write = |text: &str| format!("printf '{text}\\n' > '{work}/a.txt'");
+        run(&host, &lease, &["sh", "-c", &write("before")])
+            .await
+            .unwrap();
+        run(&host, &lease, &["git", "-C", &work, "init", "-q"])
+            .await
+            .unwrap();
+        run(&host, &lease, &["git", "-C", &work, "add", "--", "a.txt"])
+            .await
+            .unwrap();
+        run(
+            &host,
+            &lease,
+            &[
+                "git",
+                "-C",
+                &work,
+                "-c",
+                "user.name=Lazysh Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-qm",
+                "first",
+            ],
+        )
+        .await
+        .unwrap();
+        run(&host, &lease, &["sh", "-c", &write("after")])
+            .await
+            .unwrap();
+        let read = host.read_text(&lease, format!("{work}/a.txt")).await;
+        let diff = run(
+            &host,
+            &lease,
+            &["git", "-C", &work, "diff", "--no-ext-diff"],
+        )
+        .await;
+        let _ = run(&host, &lease, &["rm", "-rf", &work]).await;
+        desktop::disconnect(&state, &connected.session_id);
+        assert_eq!(read.unwrap(), "after\n");
+        assert!(diff.unwrap().contains("+after"));
     }
     #[cfg(unix)]
     #[tokio::test]

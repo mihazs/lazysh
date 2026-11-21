@@ -141,6 +141,18 @@ background-delivery acceptance. After a pause, replayed challenge and event wire
 must restore neither enrollment nor the notification; the fixture then disables its
 relay destination.
 
+When the original 15-second challenge confirmation fails, the same failure also
+retains the closed `challengeDelivery` receipt field. The app counts, in memory
+only and never with any value from the message, what became of each pushed message
+as `zero`, `one` or `many`: `other` (not a challenge), `error` (private storage
+failed), `gate` (registration not current for that instance), `state`, `binding`
+(another device, generation or instance), `phase`, `buffered` (arrived before the
+subscription answer and replayed afterwards), `busy`, `challenge` (not the awaited
+challenge) or `confirming`. Every count `zero` means no message reached the app,
+which places the loss at the distributor or the relay's push; a non-zero drop
+outcome places it in the app. This observation does not change the deadline,
+confirm or retry anything, and a successful run does not execute it.
+
 Framework reports/logcat may contain upstream registration metadata. They remain
 in the private temporary directory and are removed during owned cleanup. Only
 finite JSON stage/exit/pass/ownership/provenance receipts are uploaded; raw

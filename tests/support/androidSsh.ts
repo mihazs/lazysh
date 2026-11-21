@@ -1,5 +1,5 @@
 import {OwnedProcess, OUTPUT_LIMIT, identity} from './ownedProcess';
-import {SshFixture, sshCommand} from './sshFixture';
+import {SshFixture, listening, sshCommand} from './sshFixture';
 export {SshFixture, listening, stopOwnedTree, type HerdrTools} from './sshFixture';
 export {OwnedProcess, identity, type OwnedPid} from './ownedProcess';
 import {chmod, copyFile, lstat, mkdir, open, readdir, readFile, readlink, realpath, stat, writeFile} from 'node:fs/promises';
@@ -9,9 +9,12 @@ import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import type {HerdrFixture} from './androidHerdr';
 import type {TmuxFixture} from './androidTmux';
+import type {ZellijFixture} from './androidZellij';
 import {OwnedCaseCrashParser} from './androidCaseCrash';
 import {installedCompanion,publishedCompanion} from '../../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './androidMoshBackground';
+import {observeAndroidUploadRecovery} from './androidUploadRecovery';
+import {OwnedSshRelay} from '../../apps/client/native-e2e/sshRelay';
 import {agentBoardDecisions,prepareAgentBoardHooks} from './androidAgentBoard';
 import {recordedCompanionBytes,prepareRecordedConversation} from './recordedConversation';
 export {recordedCompanionBytes,prepareRecordedConversation} from './recordedConversation';
@@ -247,18 +250,18 @@ export async function reportInstrumentationFailures(directory:string) {
   } catch {/* The report never replaces the primary failure, and absent results are not an error. */}
 }
 
-type AndroidCleanupStage='reverse'|'control'|'fixture-file'|'Herdr'|'tmux'|'SSH'|'app-package'|'test-package'|'software-keyboard';
+type AndroidCleanupStage='reverse'|'control'|'relay'|'fixture-file'|'Herdr'|'tmux'|'Zellij'|'SSH'|'ET'|'app-package'|'test-package'|'software-keyboard';
 export async function androidSshCleanup(primary:boolean,steps:readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[]) {
   let failed=false;
   for(const [stage,cleanup] of steps)try{await cleanup();}catch{failed=true;console.error(`Owned Android SSH cleanup stage failed: ${stage}`);}
   if(failed){if(primary)console.error('Owned Android SSH cleanup failed after original failure');else throw new Error('Owned Android SSH cleanup failed');}
 }
 
-/** The one explicitly selected owned emulator and an adb bound to it; any other device is refused. */
-export function ownedEmulator(acceptance:string) {
+/** The one explicitly selected owned emulator, or the Waydroid guest when the acceptance opts in, and an adb bound to it; any other device is refused. */
+export function ownedEmulator(acceptance:string,waydroid=false) {
   if(process.platform!=='linux')throw new Error(`Owned Android ${acceptance} requires Linux`);
   const serial=process.env.ANDROID_SERIAL;
-  if(!serial || !/^emulator-[0-9]{4,5}$/.test(serial))throw new Error('Use an explicitly selected owned emulator');
+  if(!serial || !(/^emulator-[0-9]{4,5}$/.test(serial) || waydroid && serial===(process.env.LAZYSH_WAYDROID_SERIAL??'192.168.240.112:5555')))throw new Error('Use an explicitly selected owned emulator');
   const adb=process.env.ANDROID_HOME?join(process.env.ANDROID_HOME,'platform-tools/adb'):'adb';
   return {serial,adb,device:(args:string[])=>sshCommand('owned emulator command',adb,['-s',serial,...args])};
 }
@@ -269,6 +272,31 @@ export function ownedDeviceCleanup(device:(args:string[])=>Promise<unknown>,owne
     ...owned.reverses.map(port=>['reverse',()=>device(['reverse','--remove',`tcp:${port}`])] as const),
     ['fixture-file',()=>owned.remote?device(['shell','rm','-rf','--',owned.remote]):Promise.resolve()],
   ] as const satisfies readonly (readonly [AndroidCleanupStage,()=>Promise<unknown>])[];
+}
+
+/**
+ * The device side of an owned-emulator case: reverses each host port, selects the AOSP software keyboard and pushes `fixture`
+ * (private, at most 16 KiB) to a private device directory. Everything allocated is recorded in `state` as it happens, so
+ * `ownedDeviceCleanup` also undoes a setup that failed halfway. Returns the fixture's device path.
+ */
+export type OwnedDeviceState={keyboard?:{restore():Promise<unknown>};reverses:number[];remote?:string};
+export async function prepareOwnedDevice(emulator:ReturnType<typeof ownedEmulator>,state:OwnedDeviceState,
+  ports:readonly number[],ssh:{nonce:string;directory:string},fixture:object) {
+  const {adb,serial,device}=emulator;
+  for(const port of ports) {
+    await device(['reverse','--no-rebind',`tcp:${port}`,`tcp:${port}`]);
+    state.reverses.push(port);
+  }
+  state.keyboard=await ownedSoftwareKeyboard(adb,serial,5000,'aosp-latin');
+  const remote=`/data/local/tmp/lazysh-ui-ssh-${ssh.nonce}`;
+  await device(['shell','mkdir','-m','700',remote]);
+  state.remote=remote;
+  const data=join(ssh.directory,'android-owned-fixture.json');
+  await writeFile(data,JSON.stringify(fixture),{mode:0o600});
+  if((await stat(data)).size>16*1024)throw new Error('Owned Android fixture exceeds native bound');
+  await device(['push',data,`${remote}/fixture.json`]);
+  await device(['shell','chmod','600',`${remote}/fixture.json`]);
+  return `${remote}/fixture.json`;
 }
 
 // No raw crash output enters OwnedProcess's retained output windows. This is a
@@ -454,9 +482,11 @@ export async function checkRawReceiverIdentity(current:Awaited<ReturnType<typeof
 /**
  * The fixed OwnedImeService transactions, in order: correction, extension, ASCII erase, repeated word, then the
  * SwiftKey-shaped predictive word, gesture word, composing Backspace, erase-and-commit autocorrect, a Backspace
- * after the toolbar Esc key, and a word typed as letter commits and rewritten through a composing region. A lost, repeated or skipped edit changes these bytes.
+ * after the toolbar Esc key, a word typed as letter commits and rewritten through a composing region, and a composing word
+ * the keyboard erases whole before it types on (Chromium sends no compositionend). A lost, repeated or skipped edit changes these bytes.
+ * The receiver binary (apps/agent/examples/owned_terminal_receiver.rs) holds the same stream.
  */
-export const IME_TRANSACTION_WIRE='there\x7f\x7fthe'+'owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7f'+'web ';
+export const IME_TRANSACTION_WIRE='there\x7f\x7fthe'+'owned swipe ten \x7f\x7f\x7f\x7ftan \x1b\x7f'+'web '+'ls. ';
 /** Deliberately raw wire bytes: DEL erases only committed ASCII characters. */
 export function verifyImeReceiverBytes(bytes:Uint8Array,nonce:string) {
   const expected=imeExpectedWire(nonce);
@@ -509,9 +539,10 @@ export function verifyDpadReceiverBytes(bytes:Uint8Array,nonce:string,counts:num
 }
 
 // Test data only: these records are independently authored, not official CLI captures.
-export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,sharedHerdr=false,attachments=false,ime=false,dpad=false,recorded=false,tmux?:TmuxFixture,deniedNotification=false) {
+export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,sharedHerdr=false,attachments=false,ime=false,dpad=false,recorded=false,tmux?:TmuxFixture,deniedNotification=false,zellij?:ZellijFixture) {
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
   if(tmux && (herdr || companion || moshBackground || herdrMosh || sharedHerdr || attachments || ime || dpad || recorded))throw new Error('Owned tmux mode must be isolated');
+  if(zellij && (tmux || herdr || companion || moshBackground || herdrMosh || sharedHerdr || attachments || ime || dpad || recorded))throw new Error('Owned Zellij mode must be isolated');
   if(recorded && (herdr || companion || moshBackground || herdrMosh || sharedHerdr || attachments || ime || dpad))throw new Error('Recorded conversation mode must be isolated');
   const recordedImage=recorded?await recordedCompanionBytes(process.env.LAZYSH_TEST_AGENT_BIN):undefined;
   if(dpad && (herdr || companion || moshBackground || herdrMosh || sharedHerdr || attachments || ime))throw new Error('Owned D-pad mode must be isolated');
@@ -527,8 +558,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
   const evidence=companion?await publishedCompanion():undefined;
   const moshBinary=(moshBackground || attachments)?await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Android Mosh server','sh',['-c','command -v mosh-server'])).trim()):undefined;
   const rawInput=ime || dpad,rawKind=ime?'ime':'dpad';
-  const fixture=herdr?.ssh??tmux?.ssh??await SshFixture.start(undefined,rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}:(companion || recorded)?{companion:true}:moshBinary?{privateTtyGroup:true,moshBinary,observeMoshBootstraps:true}:{});
-  const attachmentNames={newName:`owned-upload-${fixture.nonce}.png`,collisionName:`owned-collision-${fixture.nonce}.png`};
+  const fixture=herdr?.ssh??tmux?.ssh??zellij?.ssh??await SshFixture.start(undefined,rawInput?{privateTtyGroup:true,ownedReceiverRoot:true}:(companion || recorded)?{companion:true}:moshBinary?{privateTtyGroup:true,moshBinary,observeMoshBootstraps:true}:{});
+  const attachmentNames={newName:`owned-upload-${fixture.nonce}.png`,collisionName:`owned-collision-${fixture.nonce}.png`,recoveryName:`owned-recovery-${fixture.nonce}.png`};
+  // The device reaches the SSH daemon only through this relay, so the host can close exactly the app's SSH stream (#1523).
+  let relay:OwnedSshRelay|undefined,relayPort:number|undefined,recovery:ReturnType<typeof observeAndroidUploadRecovery>|undefined;
   let recordedFixture:Awaited<ReturnType<typeof prepareRecordedConversation>>|undefined;
   let imeObserved:Awaited<ReturnType<typeof identity>>|undefined;
   let imeImageHash:string|undefined;
@@ -569,7 +602,8 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     if(attachments) {
       await writeFile(join(fixture.directory,attachmentNames.collisionName),Buffer.from(`OWNED-COLLISION:${fixture.nonce}`),{mode:0o600,flag:'wx'});
       collisionBefore=await attachmentIdentity(join(fixture.directory,attachmentNames.collisionName));
-      await lstat(join(fixture.directory,attachmentNames.newName)).then(()=>{throw new Error('Owned upload destination must initially be absent');},error=>{if(error.code!=='ENOENT')throw error;});
+      for(const destination of [attachmentNames.newName,attachmentNames.recoveryName])await lstat(join(fixture.directory,destination)).then(()=>{throw new Error('Owned upload destination must initially be absent');},error=>{if(error.code!=='ENOENT')throw error;});
+      relay=await OwnedSshRelay.start(fixture.port);relayPort=relay.port;
     }
     if(moshBackground || herdrMosh || attachments) {
       const server=join(fixture.directory,'bin/mosh-server');
@@ -599,11 +633,12 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     keyboard=await ownedSoftwareKeyboard(adb,serial,5000,keyboardProfile);
     await shell(['shell','mkdir','-m','700',remote]);remoteCreated=true;
     const data=join(fixture.directory,'android-fixture.json');
-    await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:fixture.port,username:fixture.username,
-      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(recordedFixture?{recorded:recordedFixture.metadata}:{}),...(rawInput?{[rawKind]:{directory:imeDirectory}}:{}),...(attachments?{attachments:attachmentNames}:{}),...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(tmux?{tmux:tmux.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
+    await writeFile(data,JSON.stringify({name:`Android SSH ${fixture.nonce}`,port:relayPort??fixture.port,username:fixture.username,
+      privateKey:fixture.privateKey,fingerprint:fixture.fingerprint,prompt:fixture.prompt,challenge:fixture.challenge,expected:fixture.expected,nonce:fixture.nonce,...(recordedFixture?{recorded:recordedFixture.metadata}:{}),...(rawInput?{[rawKind]:{directory:imeDirectory}}:{}),...(attachments?{attachments:{...attachmentNames,directory:fixture.directory}}:{}),...(herdr?{herdr:herdr.metadata(),herdrMosh}:{}),...(tmux?{tmux:tmux.metadata()}:{}),...(zellij?{zellij:zellij.metadata()}:{}),...(evidence?{companion:{version:evidence.version,path:managed}}:{}),...(moshBackground?{moshBackground:{host:'10.0.2.2',directory:fixture.directory}}:{})}),{mode:0o600});
     if(moshBackground) {
       moshWitness=observeAndroidMoshBackground(fixture);
     }
+    if(relay)recovery=observeAndroidUploadRecovery(fixture,relay,attachmentNames.recoveryName);
     if((await stat(data)).size>32*1024)throw new Error('Owned Android fixture exceeds native bound');
     await shell(['push',data,`${remote}/fixture.json`]);
     await shell(['shell','chmod','600',`${remote}/fixture.json`]);
@@ -617,17 +652,19 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     timing.gradleStartMs=crashes?.elapsedMs()??null;
     gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
-      recorded?'-PlazyshRecordedConversationAcceptance=true':tmux?'-PlazyshTmuxAcceptance=true':herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):dpad?'-PlazyshSshDpadAcceptance=true':ime?'-PlazyshSshImeAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':attachments?'-PlazyshAttachmentAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':deniedNotification?'-PlazyshDeniedNotificationAcceptance=true':'-PlazyshSshAcceptance=true',
+      recorded?'-PlazyshRecordedConversationAcceptance=true':tmux?'-PlazyshTmuxAcceptance=true':zellij?'-PlazyshZellijAcceptance=true':herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):dpad?'-PlazyshSshDpadAcceptance=true':ime?'-PlazyshSshImeAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':attachments?'-PlazyshAttachmentAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':deniedNotification?'-PlazyshDeniedNotificationAcceptance=true':'-PlazyshSshAcceptance=true',
       ...((herdr || attachments || dpad)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(recorded?'ownedRecordedConversationsThroughRealUi':tmux?'ownedTmuxThroughRealUi':herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):dpad?'ownedSshDpadPanThroughRealUi':ime?'ownedSshImeTransactionsThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':deniedNotification?'ownedSshSurvivesDeniedNotificationPermission':'ownedOpenSshConnectsThroughRealUi'),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(recorded?'ownedRecordedConversationsThroughRealUi':tmux?'ownedTmuxThroughRealUi':zellij?'ownedZellijThroughRealUi':herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):dpad?'ownedSshDpadPanThroughRealUi':ime?'ownedSshImeTransactionsThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':deniedNotification?'ownedSshSurvivesDeniedNotificationPermission':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     retainedPackages=!!herdr || attachments || dpad;
-    let monitoring=sharedHerdr || rawInput || !!tmux,byteFailure:unknown;
+    let monitoring=sharedHerdr || rawInput || !!tmux || !!zellij,byteFailure:unknown;
     const byteWitness=(async()=>{while(monitoring){
       try{
         if(sharedHerdr)await herdr!.expectNavigationBytes();
         // The original server and pane processes must survive every app detach.
         if(tmux)await tmux.observe();
+        // The session's own active tab, read from the host while the app attaches, switches tabs and detaches.
+        if(zellij)await zellij.observe();
         if(rawInput) {
           const text=await readFile(join(imeDirectory,'receiver-pid'),'utf8').catch(error=>{if(error.code==='ENOENT')return '';throw error;});
           if(text) {
@@ -684,20 +721,39 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     }
     if(attachments) {
       const expected=attachmentReceipt(await shell(['shell','run-as','app.lazysh.client','cat',`files/owned-attachment-${fixture.nonce}.json`]),fixture.nonce);
-      const actual=await attachmentIdentity(join(fixture.directory,attachmentNames.newName));
-      if(actual.bytes!==expected.bytes || actual.sha256!==expected.sha256)throw new Error('Manual native attachment bytes differ from the valid provider PNG');
+      for(const destination of [attachmentNames.newName,attachmentNames.recoveryName]) {
+        const actual=await attachmentIdentity(join(fixture.directory,destination));
+        if(actual.bytes!==expected.bytes || actual.sha256!==expected.sha256)throw new Error('Manual native attachment bytes differ from the valid provider PNG');
+      }
+      await recovery!.assertVerified(expected.bytes);
       const collisionAfter=await attachmentIdentity(join(fixture.directory,attachmentNames.collisionName));
       if(JSON.stringify(collisionBefore)!==JSON.stringify(collisionAfter))throw new Error('Existing attachment inode, size, mtime or hash changed');
-      const attachmentFiles=(await readdir(fixture.directory)).filter(name=>/^owned-(?:upload|collision)-/.test(name)).sort();
+      const attachmentFiles=(await readdir(fixture.directory)).filter(name=>/^owned-(?:upload|collision|recovery)-/.test(name)).sort();
       if(JSON.stringify(attachmentFiles)!==JSON.stringify(Object.values(attachmentNames).sort()))throw new Error('Unexpected owned attachment destination created');
       console.log('Owned manual Mosh attachment: valid PNG size/hash exact; pre-existing collision inode/size/mtime/hash unchanged');
     }
     if(tmux) {
       await tmux.verifyWindowLifecycle();
+      await tmux.verifySplitAndZoom();
+      await tmux.verifyCopied();
+      await tmux.verifyGestures();
       await tmux.verifyDetachedAndReattached();
-      console.log('Owned packaged tmux: discovery, numbered window, Jump To, a created, renamed and closed window, detach and reattach verified against the original server and pane processes');
+      console.log('Owned packaged tmux: discovery, numbered window, Jump To, copy mode and copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom and two-finger window swipes, detach and reattach verified against the original server and pane processes');
+      await tmux.verifyDefaultSession();
+      console.log('Owned packaged tmux default: the saved create-if-missing session was created once in the login directory, attached, detached and attached again, with the original session and panes untouched');
+      if(tmux.metadata().chat) {
+        await tmux.verifyChatInput();
+        console.log('Owned packaged tmux Chat: the confirmed draft reached the original pane once, with no extra display client');
+      }
     }
-    if(sharedHerdr)await herdr!.expectNavigationBytes();
+    if(zellij) {
+      await zellij.verifyDetachedAndReattached();
+      console.log('Owned packaged Zellij: discovery, list, attach, numbered tabs, detach and reattach verified against the original session and command panes');
+    }
+    if(sharedHerdr){
+      await herdr!.verifyPanelActions('ANDROID_CREATED_'+fixture.nonce,'ANDROID_RENAMED_'+fixture.nonce);
+      await herdr!.expectNavigationBytes();
+    }
     else if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}
     if((herdrMosh || attachments) && await readFile(join(fixture.directory,'mosh-bootstraps'),'utf8')!=='bootstrap\n')throw new Error('Owned Mosh entry must bootstrap exactly once');
     console.log(sharedHerdr?'Owned stock Herdr shared navigation: all three receiver identities alive and zero bytes verified':herdr?'Owned packaged Herdr Chat: exact receiver bytes and original receiver identity verified':'Owned packaged SSH: native instrumentation completed');
@@ -708,6 +764,8 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     if(herdrHistory)console.error('Owned Herdr failure history '+JSON.stringify(herdrHistory));
     const tmuxHistory=tmux?.diagnostic();
     if(tmuxHistory)console.error('Owned tmux failure history '+JSON.stringify(tmuxHistory));
+    const zellijHistory=zellij?.diagnostic();
+    if(zellijHistory)console.error('Owned Zellij failure history '+JSON.stringify(zellijHistory));
     // Preserve the existing witness's closed stage before removing its owned host.
     // The instrumentation error remains primary, including if observation fails.
     let moshBackgroundObservation:ReturnType<ReturnType<typeof observeAndroidMoshBackground>['diagnostic']>|{state:'unavailable'}|undefined;
@@ -718,7 +776,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     } catch {moshBackgroundObservation={state:'unavailable'};}
     if(sharedHerdr)try{await navigationScreenshots();}catch{console.error('Owned navigation screenshots unavailable');}
     try {
-      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',recorded?'recorded-conversation-ui':tmux?'tmux-ui':herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):dpad?'ssh-dpad-ui':ime?'ssh-ime-ui':companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':deniedNotification?'denied-notification-ui':'ssh-ui');
+      const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',recorded?'recorded-conversation-ui':tmux?'tmux-ui':zellij?'zellij-ui':herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):dpad?'ssh-dpad-ui':ime?'ssh-ime-ui':companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':deniedNotification?'denied-notification-ui':'ssh-ui');
       await reportInstrumentationFailures(directory);
       const crash=await crashes?.stop();
       const imeWire=ime?await observeImeReceiverWire(join(imeDirectory,'received-bytes'),fixture.nonce):undefined;
@@ -726,13 +784,15 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       const hostServerAfter=await hostAdbServerIdentity(adb);
       const persistedCrash={scope:'persisted-crash-buffer-sample',...await crashes?.recover()??{state:'ineligible',exceptions:[]}};
       const [exitInfo,continuity,packages]=await Promise.all([packageExitInfo(adb,serial),emulatorContinuity(adb,serial,reverse,fixture.port),retainedPackages?ownedAndroidPackagePresence(adb,serial):Promise.resolve(undefined)]);
-      const summary={...exitInfo,...(imeWire?{imeWire}:{}),...(moshBackgroundObservation?{moshBackground:moshBackgroundObservation}:{}),...(herdrHistory?{herdrHistory}:{}),...(tmuxHistory?{tmuxHistory}:{}),...(packages?{packages}:{}),softwareKeyboard:keyboard?.observation??{state:'unavailable'},timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
+      const summary={...exitInfo,...(imeWire?{imeWire}:{}),...(moshBackgroundObservation?{moshBackground:moshBackgroundObservation}:{}),...(herdrHistory?{herdrHistory}:{}),...(tmuxHistory?{tmuxHistory}:{}),...(zellijHistory?{zellijHistory}:{}),...(packages?{packages}:{}),softwareKeyboard:keyboard?.observation??{state:'unavailable'},timing,crash:crash??{stream:'unavailable'},persistedCrash,gradle:gradleFailureClasses(gradle?.stdout??'',gradle?.stderr??''),continuity:{before:before??null,after:continuity,comparison:compareEmulatorContinuity(before,continuity)},hostAdbServer:{before:hostServerBefore??null,after:hostServerAfter,comparison:compareHostAdbServer(hostServerBefore,hostServerAfter)}};
       await mkdir(directory,{recursive:true});
       await writeFile(join(directory,'package-exit.json'),JSON.stringify(summary)+'\n',{mode:0o600});
     } catch {console.error('Owned Android SSH exit diagnostics unavailable');}
     throw error;
   } finally {
     await moshWitness?.stop();
+    await recovery?.stop();
+    try{recovery?.check();}catch{console.error('Owned upload recovery witness failure');}
     await crashes?.stop();
     await androidSshCleanup(primary,[
       ...(recordedFixture?[['recorded-corpus',()=>recordedFixture!.verify()]] as const:[]),
@@ -743,7 +803,8 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
         ['test-package',()=>shell(['uninstall',ownedAndroidPackages[1]])] as const,
         ['app-package',()=>shell(['uninstall',ownedAndroidPackages[0]])] as const,
       ]:[]),
-      [herdr?'Herdr':tmux?'tmux':'SSH',()=>herdr?herdr.stop():tmux?tmux.stop():fixture.stop()],
+      ['relay',async()=>{await relay?.stop();if(relayPort!==undefined && await listening(relayPort))throw new Error('Owned SSH relay listener survived teardown');}],
+      [herdr?'Herdr':tmux?'tmux':zellij?'Zellij':'SSH',()=>herdr?herdr.stop():tmux?tmux.stop():zellij?zellij.stop():fixture.stop()],
     ]);
   }
 }

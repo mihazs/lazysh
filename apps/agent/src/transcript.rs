@@ -13,6 +13,7 @@ mod anchored_listing;
 mod antigravity;
 mod atif;
 mod codex_conversation;
+mod codex_large;
 mod codex_lineage;
 mod conversation;
 mod cursor;
@@ -25,12 +26,15 @@ mod gemini_conversation;
 mod grok_acp;
 mod grok_checkpoint;
 mod grok_conversation;
+mod grok_work;
 mod herdr_session;
 mod history;
 mod inline_image;
 mod work;
 mod workflow;
-pub use herdr_session::{read_herdr_conversation, read_herdr_conversation_window};
+pub use herdr_session::{
+    read_herdr_conversation, read_herdr_conversation_window, read_herdr_conversation_window_large,
+};
 mod interaction;
 pub use grok_checkpoint::read_page as read_checkpointed_grok;
 mod jcode;
@@ -49,13 +53,14 @@ pub mod watch;
 pub mod window;
 pub use conversation::{
     claude_conversation_images, codex_conversation_images, conversation, conversation_window,
+    conversation_window_large,
 };
 pub use database::read_database_page;
 pub use discovery::discover;
 pub use history::history;
 pub(crate) use source_snapshot::SourceSnapshot;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn anchored_codex(
     root: &crate::managed_directory::Directory,
     path: &Path,
@@ -63,7 +68,19 @@ pub(crate) fn anchored_codex(
     expected: &SourceSnapshot,
     window: &window::Window,
 ) -> Result<TranscriptPage> {
-    codex_conversation::anchored(root, path, limit, expected, window)
+    codex_conversation::anchored(root, path, limit, expected, window, false)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn anchored_codex_large(
+    root: &crate::managed_directory::Directory,
+    path: &Path,
+    limit: u8,
+    expected: &SourceSnapshot,
+    window: &window::Window,
+    allow_large: bool,
+) -> Result<TranscriptPage> {
+    codex_conversation::anchored(root, path, limit, expected, window, allow_large)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

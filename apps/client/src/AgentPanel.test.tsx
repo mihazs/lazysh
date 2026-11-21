@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import {StrictMode} from 'react';
+import {StrictMode,useState} from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AgentPanel, parseReportedHistory, parseSnapshot,type ReportedHistorySource } from './AgentPanel';
@@ -67,7 +67,7 @@ describe('agent activity', () => {
 });
 
 const reported={schemaVersion:1,status:'available',sessionId:'a',path:'/work/Claude 世界.jsonl ',reportedAt:'2026-10-24T19:30:00Z',paneId:'%1'};
-async function historyFixture(result:unknown, rows=[session]) {
+async function historyFixture(result:unknown, rows:object[]=[session]) {
   const {invoke}=await import('@tauri-apps/api/core');
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:rows};
@@ -201,6 +201,24 @@ it('keeps selected reported context, search focus and draft through locale updat
     fireEvent.change(search,{target:{value:'Codex'}});expect(screen.queryByRole('region',{name:'Relato selecionado'})).toBeNull();
     fireEvent.change(search,{target:{value:''}});expect(screen.queryByRole('region',{name:'Relato selecionado'})).toBeNull();
   } finally {await act(async()=>{await uiI18n.changeLanguage('en');});}
+});
+it.each([
+  ['en','Reported multiplexer server'],['pt-BR','Servidor do multiplexador reportado'],['es','Servidor del multiplexor reportado'],
+])('names the tmux server of a reported pane in %s and omits it for a companion that does not record it',async(locale,label)=>{
+  await historyFixture(reported,[{...session,paneServer:'tmux:work'},{...session,sessionId:'older',project:'/old'}]);render(<AgentPanel sessionId="pane-server"/>);
+  const open=async(name:string)=>{fireEvent.click(await screen.findByRole('button',{name}));const region=screen.getByRole('region',{name:/Selected report|Relato selecionado|Informe seleccionado/});fireEvent.click(within(region).getByText(/Report details|Detalhes do relato|Detalles del informe/));return region;};
+  try {
+    await act(async()=>{await uiI18n.changeLanguage(locale);});
+    const named=await open(t('agentsSelectReport',{agent:'Claude Code',project:'/work'}));
+    expect(within(named).getByText(label)).toBeTruthy();expect(within(named).getByText('tmux:work')).toBeTruthy();
+    fireEvent.click(within(named).getByRole('button',{name:t('agentsClearSelection')}));
+    const older=await open(t('agentsSelectReport',{agent:'Claude Code',project:'/old'}));
+    expect(within(older).queryByText(label)).toBeNull();expect(within(older).getByText('%1')).toBeTruthy();
+  } finally {await act(async()=>{await uiI18n.changeLanguage('en');});}
+});
+it('accepts a snapshot that names a pane server and rejects one that is not text',()=>{
+  expect(parseSnapshot({schemaVersion:1,sessions:[{...session,paneServer:'rmux:work'}]})[0].paneServer).toBe('rmux:work');
+  for(const paneServer of [7,null,'x'.repeat(257)]) expect(()=>parseSnapshot({schemaVersion:1,sessions:[{...session,paneServer}]})).toThrow();
 });
 it('retires selection across host changes while preserving the search draft',async()=>{
   await historyFixture(reported);const view=render(<AgentPanel sessionId="source-a"/>);
@@ -493,7 +511,8 @@ describe('live Herdr discovery',()=>{
   }));
   it('keeps loaded navigation rows enabled during passive reads and blocks only the explicit action',()=>pollingClock(async invoke=>{
     let reads=0;const poll=deferredRead(),action=deferredRead();
-    vi.mocked(invoke).mockImplementation(command=>command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):++reads===1?Promise.resolve(tree):poll.promise);
+    // `reads` counts snapshot reads only; stock Herdr has no guard to ask where the client is.
+    vi.mocked(invoke).mockImplementation(command=>command==='herdr_chat'?Promise.reject({kind:'herdr_chat_unavailable'}):command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):++reads===1?Promise.resolve(tree):poll.promise);
     const navigate=vi.fn(()=>action.promise.then(()=>{})),close=vi.fn();
     render(<HerdrNavigation sessionId="steady-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={navigate} onAttach={vi.fn(async()=>{})} onClose={close}/>);
     await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
@@ -529,6 +548,49 @@ describe('live Herdr discovery',()=>{
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(browser.getByRole('button',{name:/^builder/}).textContent).toBe(row.textContent);
     expect(vi.mocked(invoke).mock.calls).toHaveLength(reads);expect(navigate).not.toHaveBeenCalled();
+  });
+  it('starts Done collapsed, preserves its choice on refresh, and reveals matches while searching',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    const snapshot={...tree,panes:[...tree.panes,{...tree.panes[0],terminal_id:'term-done',pane_id:'w2E:pD',focused:false,agent_status:'done'}],agents:[...tree.agents,{...tree.agents[0],terminal_id:'term-done',pane_id:'w2E:pD',name:'finished',agent_status:'done'}]};
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:snapshot);
+    render(<HerdrNavigation sessionId="done-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/>);
+    const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
+    const done=within(await browser.findByRole('region',{name:t('herdrAgentDone')})).getByRole('button');
+    expect(done.getAttribute('aria-expanded')).toBe('false');
+    expect(browser.getByRole('button',{name:/^builder/})).toBeTruthy();
+    const search=browser.getByRole('searchbox');
+    fireEvent.change(search,{target:{value:'finished'}});
+    expect(browser.getByRole('button',{name:/^finished/})).toBeTruthy();
+    expect(done).toHaveProperty('disabled',true);
+    fireEvent.click(done);
+    fireEvent.change(search,{target:{value:''}});
+    expect(browser.queryByRole('button',{name:/^finished/})).toBeNull();
+    fireEvent.click(done);
+    const reads=vi.mocked(invoke).mock.calls.length;
+    fireEvent.click(browser.getByRole('button',{name:t('herdrRefresh')}));
+    await waitFor(()=>expect(vi.mocked(invoke).mock.calls.length).toBeGreaterThan(reads));
+    await waitFor(()=>expect(browser.getByRole('button',{name:/^finished/})).toBeTruthy());
+    expect(done.getAttribute('aria-expanded')).toBe('true');
+  });
+  it('retains status choices across session remounts without sharing them between sessions or servers',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'},{name:'other'}]:tree);
+    function Harness() {
+      const groups=useState<Set<string>>(()=>new Set());
+      const [target,setTarget]=useState(['one','default','host-one']);
+      return <><button onClick={()=>setTarget(['one','default','host-one'])}>one default</button><button onClick={()=>setTarget(['two','default','host-two'])}>two default</button><button onClick={()=>setTarget(['one','other','host-one'])}>one other</button><HerdrNavigation key={target.join('/')} sessionId={target[0]} herdrSession={target[1]} hostLabel="Owned host" mode="agents" visible statusHostId={target[2]} statusGroups={groups} onNavigate={vi.fn()} onAttach={vi.fn()} onClose={vi.fn()}/></>;
+    }
+    render(<Harness/>);
+    const working=async()=>within(await screen.findByRole('region',{name:t('herdrAgentWorking')})).getByRole('button',{name:`${t('herdrAgentWorking')} · 1`});
+    fireEvent.click(await working());
+    expect(screen.queryByRole('button',{name:/^builder/})).toBeNull();
+    for(const target of ['two default','one other']) {
+      fireEvent.click(screen.getByRole('button',{name:target}));
+      expect((await working()).getAttribute('aria-expanded')).toBe('true');
+    }
+    fireEvent.click(screen.getByRole('button',{name:'one default'}));
+    expect((await working()).getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('button',{name:/^builder/})).toBeNull();
   });
   it.each(['hide','mode','unmount'] as const)('revokes a pending navigation action after %s without stealing focus or closing its replacement',async change=>{
     const {invoke}=await import('@tauri-apps/api/core');
@@ -990,4 +1052,24 @@ describe('project groups and archive', () => {
     expect(await screen.findByText('API one')).toBeTruthy();
     expect(within(screen.getByRole('region',{name:'Working'})).getByRole('region',{name:'api'})).toBeTruthy();
   });
+});
+it('tells a local session to place lazysh-agent on this device instead of offering an SSH install',async()=>{
+  const {invoke}=await import('@tauri-apps/api/core');
+  vi.mocked(invoke).mockImplementation(async command=>{
+    if(command==='agent_snapshot')throw new Error('lazysh-agent is not available on this device');
+    if(command==='get_companion_settings')throw new Error('lazysh-agent is not available on this device');
+    return undefined;
+  });
+  render(<AgentPanel sessionId="local:one" hostKey="local:default" hostLabel="This device" local />);
+  expect(await screen.findByText(t('agentsSetupLocal'))).toBeTruthy();
+  expect(screen.getByText(t('companionLocalNote'))).toBeTruthy();
+  expect(screen.queryByText(t('companionInstallTitle'))).toBeNull();
+  expect(screen.queryByText(t('agentsSetup'))).toBeNull();
+});
+it.each([['bundled','Bundled'],['managed','Managed copy'],['path','On PATH']] as const)('names the %s companion a local session runs',async(source,label)=>{
+  const {invoke}=await import('@tauri-apps/api/core');
+  vi.mocked(invoke).mockResolvedValue({schemaVersion:1,sessions:[]});
+  render(<AgentPanel sessionId="local:one" hostKey="local:default" hostLabel="This device" local companionSource={source}/>);
+  expect(await screen.findByText(`The companion runs on this device, with no SSH install. Source: ${label}.`)).toBeTruthy();
+  expect(screen.queryByText(t('companionInstallTitle'))).toBeNull();
 });

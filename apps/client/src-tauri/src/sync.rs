@@ -8,6 +8,9 @@ use reqwest::{
     header::{ETAG, IF_MATCH, IF_NONE_MATCH},
     Client, StatusCode, Url,
 };
+// Only the loopback trust hook (tests and the owned emulator build) names these.
+#[cfg(any(test, feature = "sync-tls-acceptance"))]
+use reqwest::{Certificate, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::{
@@ -262,6 +265,50 @@ fn etag(value: &str) -> Result<String> {
     }
     Ok(value.into())
 }
+/// The owned emulator build (`sync-tls-acceptance`) trusts one more root, for the literal `127.0.0.1` only, so an acceptance
+/// run can serve HTTPS from an owned WebDAV fixture it reaches through `adb reverse`. Product builds do not compile this and
+/// every real endpoint keeps the web PKI roots.
+#[cfg(any(test, feature = "sync-tls-acceptance"))]
+fn trust_loopback_root(
+    builder: ClientBuilder,
+    endpoint: &Url,
+    root: Option<Certificate>,
+) -> ClientBuilder {
+    match root {
+        Some(root) if endpoint.host_str() == Some("127.0.0.1") => {
+            builder.add_root_certificate(root)
+        }
+        _ => builder,
+    }
+}
+#[cfg(feature = "sync-tls-acceptance")]
+const ACCEPTANCE_ROOT: &str = "sync-test-ca.pem";
+#[cfg(feature = "sync-tls-acceptance")]
+static ACCEPTANCE_ROOT_FILES: std::sync::OnceLock<Vec<std::path::PathBuf>> =
+    std::sync::OnceLock::new();
+/// The acceptance fixture leaves its root in the app config directory of its disposable emulator.
+#[cfg(feature = "sync-tls-acceptance")]
+pub fn install_acceptance_root(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::Manager;
+    let files = vec![app.path().app_config_dir()?.join(ACCEPTANCE_ROOT)];
+    let _ = ACCEPTANCE_ROOT_FILES.set(files);
+    Ok(())
+}
+#[cfg(feature = "sync-tls-acceptance")]
+fn acceptance_root() -> Result<Option<Certificate>> {
+    // An unreadable candidate is the same as an absent one: the build then behaves like a product build.
+    match ACCEPTANCE_ROOT_FILES
+        .get()
+        .into_iter()
+        .flatten()
+        .find_map(|file| std::fs::read(file).ok())
+    {
+        Some(pem) => Certificate::from_pem(&pem)
+            .map(Some)
+            .map_err(|_| "Invalid sync test CA".into()),
+        None => Ok(None),
+    }
+}
 struct Remote {
     client: Client,
     endpoint: Url,
@@ -271,10 +318,13 @@ impl Remote {
         Self::with_url(endpoint(value)?)
     }
     fn with_url(endpoint: Url) -> Result<Self> {
-        let client = Client::builder()
+        let builder = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(30));
+        #[cfg(feature = "sync-tls-acceptance")]
+        let builder = trust_loopback_root(builder, &endpoint, acceptance_root()?);
+        let client = builder
             .build()
             .map_err(|_| "Cannot initialize sync transport")?;
         Ok(Self { client, endpoint })
@@ -1907,5 +1957,48 @@ mod tests {
             b"next"
         );
         fixture.await.unwrap();
+    }
+    #[tokio::test]
+    async fn an_extra_root_is_trusted_for_the_loopback_literal_only() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let front =
+            crate::share::test_support::tls_front_for(vec!["127.0.0.1".into(), "localhost".into()])
+                .await;
+        let (port, root) = (front.address.port(), front.root);
+        let (listener, acceptor) = (front.listener, front.acceptor);
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    if let Ok(mut tls) = acceptor.accept(socket).await {
+                        let _ = tls.read(&mut [0; 2048]).await;
+                        let _ = tls
+                            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .await;
+                        let _ = tls.shutdown().await;
+                    }
+                });
+            }
+        });
+        let enrollment = enrollment(&generate_recovery());
+        let fetch = |host: &str, root: Option<Certificate>| {
+            let endpoint = Url::parse(&format!("https://{host}:{port}/dav/")).unwrap();
+            let client = trust_loopback_root(
+                Client::builder().timeout(Duration::from_secs(5)),
+                &endpoint,
+                root,
+            )
+            .build()
+            .unwrap();
+            let remote = Remote { client, endpoint };
+            let enrollment = &enrollment;
+            async move { remote.fetch(enrollment, Scope::Settings).await }
+        };
+        assert!(fetch("127.0.0.1", Some(root.clone()))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(fetch("127.0.0.1", None).await.is_err());
+        assert!(fetch("localhost", Some(root)).await.is_err());
     }
 }

@@ -1,0 +1,486 @@
+//! The control plane (`TerminalRuntime::control_*` and `take_control_events`, #1321) against what headless xterm.js
+//! 5.5.0 answers for the same bytes and scrolls: `fixtures/control-plane.json`, written by
+//! `apps/client/src/xterm/controlPlaneFixture.test.ts` (`UPDATE_CONTROL_PLANE=1` rewrites it) and replayed
+//! here. The adapter's synchronous readers (modes, viewport, cursor, rows) are served from exactly these answers.
+
+mod replay;
+mod support;
+
+use lazysh_terminal_runtime::{
+    control_window, CellPos, CellRange, ControlEvent, ControlQuery, Doorbell, Hooks, Hub,
+    HubConfig, Offer, ScrollAction, Selection, SelectionKind, Session, TerminalRuntime,
+    CONTROL_WINDOW_DEFAULT, CONTROL_WINDOW_MAX, MAX_READ_ROWS,
+};
+use replay::*;
+use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
+use std::sync::{Arc, Mutex};
+use support::*;
+
+#[test]
+fn every_answer_matches_what_xterm_js_gives() {
+    for case in fixture_cases("control-plane") {
+        let id = case["id"].as_str().unwrap();
+        let window = case["window"].as_u64().unwrap() as usize;
+        let mut rt = replay(&case);
+        let mut answers = vec![rt.control_snapshot(window).unwrap()];
+        for step in case["steps"].as_array().unwrap() {
+            let action: ScrollAction = serde_json::from_value(step.clone()).unwrap();
+            answers.push(rt.control_scroll(action, window).unwrap());
+        }
+        let expected = case["snapshots"].as_array().unwrap();
+        assert_eq!(answers.len(), expected.len(), "{id}");
+        for (at, (answer, expected)) in answers.iter().zip(expected).enumerate() {
+            assert_eq!(
+                &serde_json::to_value(answer).unwrap(),
+                expected,
+                "{id}, answer {at}"
+            );
+        }
+    }
+}
+
+fn numbered_rows(rt: &mut lazysh_terminal_runtime::TerminalRuntime, count: usize) {
+    let text: Vec<_> = (0..count).map(|i| format!("row {i}")).collect();
+    feed(rt, text.join("\r\n").as_bytes());
+}
+
+#[test]
+fn reading_the_cursor_of_a_scrolled_reader_leaves_them_where_they_were() {
+    let mut rt = runtime(20, 5);
+    numbered_rows(&mut rt, 40);
+    rt.control_scroll(ScrollAction::ToRow { row: 12 }, 8)
+        .unwrap();
+    let before = rt.viewport().unwrap();
+    let answer = rt.control_snapshot(8).unwrap();
+    assert_eq!(rt.viewport().unwrap(), before);
+    assert_eq!(answer.state.viewport, before);
+    assert!(!answer.state.viewport.following);
+}
+
+#[test]
+fn a_window_is_bounded_and_always_holds_the_viewport() {
+    let mut rt = runtime(20, 5);
+    numbered_rows(&mut rt, 200);
+    for action in [
+        ScrollAction::ToBottom,
+        ScrollAction::ToTop,
+        ScrollAction::ToRow { row: 97 },
+        ScrollAction::Pages { delta: -1 },
+    ] {
+        let answer = rt.control_scroll(action, 16).unwrap();
+        let (viewport, window) = (answer.state.viewport, answer.window);
+        assert!(window.rows.len() <= 16);
+        assert!(
+            window.first <= viewport.top
+                && viewport.top + viewport.rows <= window.first + window.rows.len()
+        );
+        assert_eq!(
+            window.rows[viewport.top - window.first],
+            format!("row {}", viewport.top)
+        );
+    }
+    // A window smaller than the screen still covers it, and a huge one is cut to what a text read may return.
+    assert_eq!(rt.control_snapshot(0).unwrap().window.rows.len(), 5);
+    let huge = rt.control_snapshot(usize::MAX).unwrap();
+    assert!(huge.window.rows.len() <= MAX_READ_ROWS);
+    // What a reader asks for becomes a bounded count before it reaches the core.
+    assert_eq!(control_window(None), CONTROL_WINDOW_DEFAULT);
+    assert_eq!(control_window(Some(0)), 1);
+    assert_eq!(control_window(Some(40)), 40);
+    assert_eq!(control_window(Some(usize::MAX)), CONTROL_WINDOW_MAX);
+}
+
+#[test]
+fn a_resize_answers_with_the_size_the_core_has() {
+    let mut rt = runtime(20, 5);
+    numbered_rows(&mut rt, 10);
+    let answer = rt.control_resize(30, 8, 16).unwrap();
+    assert_eq!((answer.state.columns, answer.state.rows), (30, 8));
+    assert_eq!(answer.state.viewport.rows, 8);
+    for refused in [(0, 8), (30, 0), (u16::MAX, u16::MAX)] {
+        assert!(rt.control_resize(refused.0, refused.1, 16).is_err());
+    }
+    // A transport that owns the size (Mosh) keeps it: the request is intent, and the answer says so.
+    rt.apply_transport_size(lazysh_terminal_runtime::Size::new(25, 6))
+        .unwrap();
+    let answer = rt.control_resize(40, 10, 16).unwrap();
+    assert_eq!((answer.state.columns, answer.state.rows), (25, 6));
+}
+
+#[test]
+fn what_the_program_reports_comes_out_once_decoded_and_bounded() {
+    let mut rt = runtime(20, 5);
+    assert!(rt.take_control_events().is_empty());
+    let reports = concat!(
+        "\x07\x1b]0;build\x07\x1b]2;done \u{2713}\x1b\\",
+        "\x1b]7;file://host/tmp/a%20b\x07\x1b]7;http://host/no\x07\x1b]7;nonsense\x07",
+        "\x1b]52;c;aGVsbG8=\x07\x1b]52;c;?\x07\x1b]52;c;/w==\x07",
+    );
+    feed(&mut rt, reports.as_bytes());
+    let title = |title: &str| ControlEvent::Title {
+        title: title.into(),
+    };
+    assert_eq!(
+        rt.take_control_events(),
+        [
+            title("done \u{2713}"),
+            ControlEvent::Bell,
+            ControlEvent::Cwd { path: "/tmp/a b".into() },
+            ControlEvent::Clipboard { text: "hello".into() },
+        ],
+        "the latest title, then bells, directories and clipboard writes; a query, an escape and invalid UTF-8 are not offered"
+    );
+    assert!(rt.take_control_events().is_empty());
+    // A flood of bells is one burst, and what the control plane does not report stays for `take_events`.
+    feed(&mut rt, &b"\x07".repeat(500));
+    assert_eq!(rt.take_control_events(), vec![ControlEvent::Bell; 8]);
+    rt.control_resize(30, 8, 8).unwrap();
+    assert_eq!(rt.take_events().geometry.map(|g| g.size.cols), Some(30));
+}
+
+#[test]
+fn a_clipboard_write_is_offered_only_up_to_what_the_xterm_backend_accepts() {
+    use base64::Engine;
+    let mut rt = runtime(20, 5);
+    for (size, offered) in [(64 * 1024, true), (64 * 1024 + 1, false)] {
+        let text = "a".repeat(size);
+        let payload = base64::engine::general_purpose::STANDARD.encode(&text);
+        feed(&mut rt, format!("\x1b]52;c;{payload}\x07").as_bytes());
+        let events = rt.take_control_events();
+        assert_eq!(events.len(), usize::from(offered), "{size} bytes");
+        if offered {
+            assert_eq!(events, [ControlEvent::Clipboard { text }]);
+        }
+    }
+}
+
+#[test]
+fn the_events_are_the_adapters_event_shapes() {
+    let events = [
+        (ControlEvent::Changed, json!({"type": "changed"})),
+        (ControlEvent::Bell, json!({"type": "bell"})),
+        (
+            ControlEvent::Title { title: "t".into() },
+            json!({"type": "title", "title": "t"}),
+        ),
+        (
+            ControlEvent::Cwd { path: "/a".into() },
+            json!({"type": "cwd", "path": "/a"}),
+        ),
+        (
+            ControlEvent::Clipboard { text: "x".into() },
+            json!({"type": "clipboard", "text": "x"}),
+        ),
+    ];
+    for (event, wire) in events {
+        assert_eq!(serde_json::to_value(&event).unwrap(), wire);
+    }
+}
+
+/// A session whose output rings a doorbell that records what it sends.
+struct Ringing {
+    _hub: Hub,
+    session: Session,
+    bell: Arc<Doorbell>,
+    sent: Arc<Mutex<Vec<ControlEvent>>>,
+    /// Whether the host lets events leave (the app is not locked).
+    open: Arc<AtomicBool>,
+    /// Calls of the `changed` hook that ran to the end.
+    hooked: Arc<AtomicU64>,
+    active: bool,
+    total: u64,
+}
+
+impl Ringing {
+    /// Active, like the app's cores: it has been opened to be looked at.
+    fn new() -> Self {
+        let hub = Hub::new(HubConfig::default());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let log = sent.clone();
+        let open = Arc::new(AtomicBool::new(true));
+        let permitted = open.clone();
+        let bell = Arc::new(Doorbell::new(
+            move |event| log.lock().unwrap().push(event),
+            move || permitted.load(SeqCst),
+        ));
+        let hooked = Arc::new(AtomicU64::new(0));
+        let (ring, done) = (bell.hook(), hooked.clone());
+        let hooks = Hooks {
+            changed: Some(Box::new(move || {
+                ring();
+                done.fetch_add(1, SeqCst);
+            })),
+            ..quiet_hooks()
+        };
+        let session = hub
+            .create("doorbell", config(40, 5, 1 << 20), hooks)
+            .unwrap();
+        bell.bind(session.clone());
+        session.set_active(true);
+        Self {
+            _hub: hub,
+            session,
+            bell,
+            sent,
+            open,
+            hooked,
+            active: true,
+            total: 0,
+        }
+    }
+
+    fn set_active(&mut self, active: bool) {
+        self.session.set_active(active);
+        self.active = active;
+    }
+
+    /// Feed `chunks` transport chunks of `text`, one at a time, each parsed (and, while active, announced) before
+    /// the next: the order the worker runs them in is the order of the test.
+    fn print(&mut self, text: &str, chunks: usize) {
+        for _ in 0..chunks {
+            let hooked = self.hooked.load(SeqCst);
+            let offer = self.session.feed(text.as_bytes().to_vec()).unwrap();
+            assert_eq!(offer, Offer::Accepted);
+            self.total += text.len() as u64;
+            wait_until(|| self.session.stats().unwrap().processed == self.total);
+            if self.active {
+                wait_until(|| self.hooked.load(SeqCst) > hooked);
+            }
+        }
+    }
+
+    /// What the doorbell sent since the last call.
+    fn take(&self) -> Vec<ControlEvent> {
+        std::mem::take(&mut *self.sent.lock().unwrap())
+    }
+}
+
+#[test]
+fn the_doorbell_rings_once_per_read_however_much_output_arrives() {
+    let mut ringing = Ringing::new();
+    ringing.print("line\r\n", 500);
+    assert_eq!(
+        ringing.take(),
+        [ControlEvent::Changed],
+        "500 chunks, one message"
+    );
+    ringing.bell.read();
+    ringing.print("more\r\n", 50);
+    assert_eq!(
+        ringing.take(),
+        [ControlEvent::Changed],
+        "a read rearms it, and 50 chunks make one"
+    );
+}
+
+#[test]
+fn reports_leave_ahead_of_the_change_that_carries_them_and_none_waits_for_more_output() {
+    let mut ringing = Ringing::new();
+    ringing.bell.read();
+    ringing.print("\x07\x1b]0;t\x07x\r\n", 1);
+    let title = ControlEvent::Title { title: "t".into() };
+    assert_eq!(
+        ringing.take(),
+        [title, ControlEvent::Bell, ControlEvent::Changed]
+    );
+    // A report that lands while a ring is unanswered waits for the read, which sends it without ringing again.
+    ringing.print("\x07", 1);
+    assert_eq!(ringing.take(), []);
+    ringing.bell.read();
+    assert_eq!(ringing.take(), [ControlEvent::Bell]);
+    // Nothing is taken twice.
+    ringing.bell.read();
+    assert_eq!(ringing.take(), []);
+}
+
+#[test]
+fn an_inactive_session_wakes_nobody_and_rings_once_to_catch_up_when_it_is_looked_at_again() {
+    let mut ringing = Ringing::new();
+    ringing.set_active(false);
+    ringing.bell.read();
+    ringing.print("hidden\x07\r\n", 20);
+    assert_eq!(ringing.take(), [], "an inactive session wakes nobody");
+    let text = ringing
+        .session
+        .with(|rt| rt.viewport_text().unwrap())
+        .unwrap();
+    assert!(text.contains("hidden"), "it kept parsing");
+    ringing.set_active(true);
+    ringing.bell.wake();
+    let mut catch_up = vec![ControlEvent::Bell; 8];
+    catch_up.push(ControlEvent::Changed);
+    assert_eq!(ringing.take(), catch_up, "what it missed, once");
+}
+
+#[test]
+fn nothing_leaves_while_the_host_refuses_and_nothing_is_lost_by_it() {
+    let mut ringing = Ringing::new();
+    ringing.open.store(false, SeqCst);
+    ringing.print("\x07locked\r\n", 3);
+    assert_eq!(
+        ringing.take(),
+        [],
+        "nothing is sent while the app is locked"
+    );
+    ringing.open.store(true, SeqCst);
+    // The refused ring was not counted as answered, so the next change rings and brings what was held.
+    ringing.print("x", 1);
+    assert_eq!(
+        ringing.take(),
+        [
+            ControlEvent::Bell,
+            ControlEvent::Bell,
+            ControlEvent::Bell,
+            ControlEvent::Changed
+        ]
+    );
+}
+
+/// One query in the JSON the client sends, answered in the JSON it receives.
+fn ask(rt: &TerminalRuntime, query: Value) -> Value {
+    let query: ControlQuery = serde_json::from_value(query).unwrap();
+    serde_json::to_value(rt.control_query(query).unwrap()).unwrap()
+}
+
+/// A fixture's `[x, y]` as the adapter's cell.
+fn cell(at: &Value) -> Value {
+    json!({"x": at[0], "y": at[1]})
+}
+
+fn range(start: &Value, end: &Value) -> Value {
+    json!({"start": cell(start), "end": cell(end)})
+}
+
+#[test]
+fn the_buffer_queries_answer_the_client_as_the_xterm_backend_does() {
+    for case in fixture_cases("selection") {
+        let (rt, id) = (replay(&case), &case["id"]);
+        let each = |key: &str| case[key].as_array().unwrap().iter();
+        for s in each("selections") {
+            let query = json!({"kind": "selectionText", "range": range(&s["start"], &s["end"])});
+            assert_eq!(ask(&rt, query), s["text"], "{id}: {s}");
+        }
+        for w in each("words") {
+            assert_eq!(
+                ask(&rt, json!({"kind": "wordAt", "cell": cell(&w["at"])})),
+                range(&w["range"][0], &w["range"][1]),
+                "{id}: {w}"
+            );
+        }
+        for q in each("searches") {
+            let direction = if q["direction"] == 1 {
+                "forward"
+            } else {
+                "backward"
+            };
+            let query = json!({"kind": "search", "query": q["query"], "direction": direction, "from": q["from"]});
+            assert_eq!(ask(&rt, query), q["hit"], "{id}: {q}");
+        }
+        let all = ask(&rt, json!({"kind": "bufferRange"}));
+        assert_eq!(
+            ask(&rt, json!({"kind": "selectionText", "range": all})),
+            case["all"],
+            "{id}: select all"
+        );
+        assert_eq!(
+            ask(&rt, json!({"kind": "copyScreen"})),
+            case["screen"],
+            "{id}: copy screen"
+        );
+    }
+}
+
+#[test]
+fn a_line_query_answers_the_whole_wrapped_line_and_a_malformed_query_is_refused() {
+    let mut rt = runtime(10, 5);
+    feed(&mut rt, b"first\r\n0123456789ABCDEFGHIJklm\r\nlast");
+    assert_eq!(
+        ask(&rt, json!({"kind": "lineAt", "row": 2})),
+        json!({"start": {"x": 0, "y": 1}, "end": {"x": 9, "y": 3}})
+    );
+    for refused in [
+        json!({"kind": "cells"}),
+        json!({"kind": "wordAt", "cell": {"x": -1, "y": 0}}),
+        json!({"kind": "search", "query": "a", "direction": "sideways"}),
+    ] {
+        assert!(
+            serde_json::from_value::<ControlQuery>(refused.clone()).is_err(),
+            "{refused}"
+        );
+    }
+}
+
+#[test]
+fn osc52_writes_reach_the_reader_as_the_consent_policy_offers_them() {
+    for case in fixture_cases("osc52") {
+        let (id, data) = (case["id"].as_str().unwrap(), case["data"].as_str().unwrap());
+        let mut rt = runtime(20, 3);
+        feed(&mut rt, format!("\x1b]52;{data}\x07").as_bytes());
+        // Where libghostty-vt decides before the policy runs, the fixture records the core's answer.
+        let text = if case["core"].is_object() {
+            &case["core"]["text"]
+        } else {
+            &case["text"]
+        };
+        let expected: Vec<_> = text
+            .as_str()
+            .map(|text| ControlEvent::Clipboard { text: text.into() })
+            .into_iter()
+            .collect();
+        assert_eq!(rt.take_control_events(), expected, "{id}");
+    }
+}
+
+#[test]
+fn a_session_holds_the_selection_and_its_view_draws_the_visible_part() {
+    let hub = Hub::new(HubConfig::default());
+    let (fixture, changes) = session_watched(&hub, "selected", config(10, 4, 64 * 1024));
+    let session = &fixture.session;
+    let output = numbered_lines(20);
+    fixture.send(&output);
+    fixture.settle(output.len() as u64);
+    assert_eq!(session.selection_overlay().unwrap(), None);
+    let top = session.with(|rt| rt.viewport().unwrap().top).unwrap();
+    let cells = |x, y| CellPos { x, y };
+    let linear = |anchor, head| {
+        Some(Selection {
+            kind: SelectionKind::Linear,
+            anchor,
+            head,
+        })
+    };
+    session.set_active(true);
+    let before = changes.load(SeqCst);
+    // From the row above the screen to the middle of its second row, past the last column.
+    session.set_selection(Some(CellRange {
+        start: cells(3, top - 1),
+        end: cells(99, top + 1),
+    }));
+    assert_eq!(changes.load(SeqCst), before + 1, "the view is woken");
+    assert_eq!(session.selection_overlay().unwrap(), linear((0, 0), (9, 1)));
+    // The reader scrolls two rows back: the highlight stays on its rows.
+    session
+        .with(|rt| rt.control_scroll(ScrollAction::Lines { delta: -2 }, 8))
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.selection_overlay().unwrap(), linear((3, 1), (9, 3)));
+    session
+        .with(|rt| rt.control_scroll(ScrollAction::ToTop, 8))
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.selection_overlay().unwrap(), None, "out of view");
+    session.set_selection(Some(CellRange {
+        start: cells(4, 2),
+        end: cells(1, 2),
+    }));
+    assert_eq!(session.selection_overlay().unwrap(), None, "ends first");
+    session.set_selection(Some(CellRange {
+        start: cells(2, 1),
+        end: cells(5, 30),
+    }));
+    assert_eq!(session.selection_overlay().unwrap(), linear((2, 1), (9, 3)));
+    session.set_selection(None);
+    assert_eq!(session.selection_overlay().unwrap(), None);
+    session.close();
+}

@@ -24,6 +24,19 @@ pub struct Selected {
     pub has_newer: bool,
 }
 
+pub(super) fn position(
+    window: &Window,
+    len: usize,
+    find: impl Fn(&str) -> Result<usize>,
+) -> Result<(bool, usize)> {
+    Ok(match window {
+        Window::Tail => (false, len),
+        Window::Start => (true, 0),
+        Window::Before(id) => (false, find(id)?),
+        Window::After(id) => (true, find(id)? + 1),
+    })
+}
+
 /// `all` is ordered oldest first. A page that cannot take even the next message (it alone exceeds
 /// the 512 KiB budget) is an error: a reader that pages on would otherwise stop at a silent dead end.
 pub fn select(all: Vec<Value>, window: &Window, limit: u8) -> Result<Selected> {
@@ -32,13 +45,8 @@ pub fn select(all: Vec<Value>, window: &Window, limit: u8) -> Result<Selected> {
             .position(|message| message["id"].as_str() == Some(id))
             .ok_or(Error::InvalidArgument)
     };
-    let forward = matches!(window, Window::Start | Window::After(_));
-    let (mut lo, mut hi) = match window {
-        Window::Tail => (all.len(), all.len()),
-        Window::Start => (0, 0),
-        Window::Before(id) => (find(id)?, find(id)?),
-        Window::After(id) => (find(id)? + 1, find(id)? + 1),
-    };
+    let (forward, at) = position(window, all.len(), find)?;
+    let (mut lo, mut hi) = (at, at);
     let mut bytes = 0;
     while hi - lo < usize::from(limit) {
         let Some(next) = (if forward {

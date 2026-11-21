@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 use lazysh_terminal_runtime::{
-    ffi, CellWide, Config, Frame, Hooks, Hub, KeyInput, Offer, Origin, PtyWriter, Refused, Session,
-    Size, TerminalRuntime,
+    ffi, Appearance, CellWide, Config, Frame, Hooks, Hub, HubConfig, Image, KeyInput, Offer,
+    Origin, PtyWriter, ReferenceRenderer, Refused, RgbColor, Session, Size, TerminalRenderer,
+    TerminalRuntime, Theme,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::*};
 use std::sync::{Arc, Condvar, Mutex};
@@ -9,6 +10,31 @@ use std::time::{Duration, Instant};
 
 pub const CELL_W: u32 = 10;
 pub const CELL_H: u32 = 20;
+
+/// xterm.js 5.5.0's default theme, the one its colour-query replies in `fixtures/` were recorded
+/// with: white on black, a white cursor, the Tango ANSI colours, and (like libghostty-vt) the
+/// xterm 6x6x6 cube and grey ramp above them.
+pub fn xterm_theme() -> Theme {
+    let tango = [
+        0x2e3436, 0xcc0000, 0x4e9a06, 0xc4a000, 0x3465a4, 0x75507b, 0x06989a, 0xd3d7cf, 0x555753,
+        0xef2929, 0x8ae234, 0xfce94f, 0x729fcf, 0xad7fa8, 0x34e2e2, 0xeeeeec,
+    ];
+    let mut theme = Theme::default();
+    for (entry, hex) in theme.palette.iter_mut().zip(tango) {
+        *entry = rgb(hex);
+    }
+    theme.cursor = theme.foreground;
+    theme
+}
+
+/// `0xRRGGBB` as a colour.
+pub fn rgb(hex: u32) -> RgbColor {
+    RgbColor {
+        r: (hex >> 16) as u8,
+        g: (hex >> 8) as u8,
+        b: hex as u8,
+    }
+}
 
 pub fn runtime(cols: u16, rows: u16) -> TerminalRuntime {
     TerminalRuntime::new(Config {
@@ -218,7 +244,9 @@ impl Fixture {
     }
 
     pub fn settle(&self, total: u64) {
-        wait_until(|| self.session.stats().unwrap().processed == total);
+        wait_until(|| {
+            self.session.stats().unwrap().processed == total && self.credited.load(SeqCst) == total
+        });
     }
 }
 
@@ -237,6 +265,116 @@ pub fn numbered_lines(count: usize) -> Vec<u8> {
             format!("line {n:07} the quick brown fox jumps over the lazy dog\r\n").into_bytes()
         })
         .collect()
+}
+
+/// A CPU reference renderer on an 8x16 pixel cell surface for `size`.
+pub fn reference_renderer(size: Size) -> ReferenceRenderer {
+    let (w, h) = (u32::from(size.cols) * 8, u32::from(size.rows) * 16);
+    let surface = Image::new(w, h, Theme::default().background).unwrap();
+    ReferenceRenderer::create(surface, Appearance::default()).unwrap()
+}
+
+/// What a renderer does with a frame: apply it, draw the dirty rows, present.
+pub fn draw_frame(renderer: &mut ReferenceRenderer, frame: &Frame) {
+    renderer.apply(frame).expect("apply");
+    renderer.draw().expect("draw");
+    renderer.present().expect("present");
+}
+
+/// One pass of `data` through a fresh 80x24 runtime in transport-sized chunks, calling `after_chunk`
+/// (a frame per chunk, for example) after each one; MiB/s of the whole pass.
+pub fn pass(data: &[u8], mut after_chunk: Option<&mut dyn FnMut(&mut TerminalRuntime)>) -> f64 {
+    let mut rt = runtime(80, 24);
+    let start = Instant::now();
+    for chunk in data.chunks(CHUNK) {
+        feed_chunk(&mut rt, chunk);
+        if let Some(after_chunk) = after_chunk.as_deref_mut() {
+            after_chunk(&mut rt);
+        }
+    }
+    data.len() as f64 / (1024.0 * 1024.0) / start.elapsed().as_secs_f64()
+}
+
+pub fn with_scrollback(cols: u16, bytes: usize) -> TerminalRuntime {
+    TerminalRuntime::new(Config {
+        size: Size::new(cols, 24),
+        scrollback_bytes: bytes,
+        ..Config::default()
+    })
+    .expect("runtime")
+}
+
+/// Numbered lines that exactly fill `cols` minus one column, so none wraps.
+pub fn fit_lines(total: usize, cols: usize) -> Vec<u8> {
+    (0..)
+        .flat_map(|n| format!("{n:0>w$}\r\n", w = cols - 1).into_bytes())
+        .take(total)
+        .collect()
+}
+
+/// Scrollback rows kept after feeding `data` at a byte budget (libghostty-vt budgets bytes, lazysh lines).
+pub fn rows_kept(cols: u16, budget: usize, data: &[u8]) -> usize {
+    let mut rt = with_scrollback(cols, budget);
+    feed(&mut rt, data);
+    rt.scrollback_rows().unwrap()
+}
+
+/// Resident growth in KiB for `count` sessions that each received `data` at the default budget;
+/// `None` where /proc is unavailable. The sessions are dropped before returning.
+pub fn sessions_rss_growth(count: usize, data: &[u8]) -> Option<u64> {
+    let before = rss_kib()?;
+    let mut sessions: Vec<TerminalRuntime> = (0..count).map(|_| runtime(80, 24)).collect();
+    for session in &mut sessions {
+        feed(session, data);
+    }
+    Some(rss_kib()?.saturating_sub(before))
+}
+
+/// Returns once every session has compacted at least once and none has stepped for 300 ms
+/// (steps follow each other at once, so a quiet 300 ms means every session is done).
+pub fn settle_compaction(fixtures: &[Fixture]) {
+    let steps = || -> u64 {
+        fixtures
+            .iter()
+            .map(|f| f.session.stats().unwrap().compactions)
+            .sum()
+    };
+    wait_until(|| {
+        fixtures
+            .iter()
+            .all(|f| f.session.stats().unwrap().compactions > 0)
+    });
+    loop {
+        let seen = steps();
+        std::thread::sleep(Duration::from_millis(300));
+        if steps() == seen {
+            break;
+        }
+    }
+}
+
+/// Resident growth in KiB per session for `count` detached sessions (4 MiB scrollback) that each
+/// received `data` and then sat idle: past `compress_after` their workers compact the history
+/// (`None` never compacts, so the figure is the filled one). The figure is the settled one.
+pub fn idle_sessions_rss_per_session(
+    count: usize,
+    data: &[u8],
+    compress_after: Option<Duration>,
+) -> Option<u64> {
+    let before = rss_kib()?;
+    let hub = Hub::new(HubConfig {
+        compress_after,
+        ..HubConfig::default()
+    });
+    let fixtures: Vec<_> = (0..count)
+        .map(|n| session(&hub, &format!("idle{n}"), config(80, 24, 4 << 20)))
+        .collect();
+    fixtures.iter().for_each(|f| f.send(data));
+    fixtures.iter().for_each(|f| f.settle(data.len() as u64));
+    if compress_after.is_some() {
+        settle_compaction(&fixtures);
+    }
+    Some(rss_kib()?.saturating_sub(before) / count as u64)
 }
 
 /// Resident set in KiB (Linux), for memory measurements.
@@ -270,12 +408,12 @@ pub fn plain(total: usize) -> Vec<u8> {
         .collect()
 }
 
-pub fn ansi_color() -> Vec<u8> {
-    (0..).flat_map(|n| format!("\x1b[{}m word{n}\x1b[0m \x1b[1;38;2;{};{};200mtruecolor\x1b[0m \x1b[48;5;{}m  \x1b[0m\r\n", 31 + n % 7, n % 256, (n * 7) % 256, n % 256).into_bytes()).take(TOTAL).collect()
+pub fn ansi_color(total: usize) -> Vec<u8> {
+    (0..).flat_map(|n| format!("\x1b[{}m word{n}\x1b[0m \x1b[1;38;2;{};{};200mtruecolor\x1b[0m \x1b[48;5;{}m  \x1b[0m\r\n", 31 + n % 7, n % 256, (n * 7) % 256, n % 256).into_bytes()).take(total).collect()
 }
 
 /// Full-screen redraw: home, then 24 rows of positioned colored text, like a TUI repaint.
-pub fn redraw() -> Vec<u8> {
+pub fn redraw(total: usize) -> Vec<u8> {
     let frame: String = std::iter::once("\x1b[H".to_string())
         .chain((1..=24).map(|row| {
             format!(
@@ -285,7 +423,7 @@ pub fn redraw() -> Vec<u8> {
             )
         }))
         .collect();
-    frame.into_bytes().into_iter().cycle().take(TOTAL).collect()
+    frame.into_bytes().into_iter().cycle().take(total).collect()
 }
 
 pub fn unicode(total: usize) -> Vec<u8> {
@@ -314,8 +452,8 @@ pub fn slug(name: &str) -> String {
 pub fn workloads() -> [(&'static str, Vec<u8>); 4] {
     [
         ("plain text", plain(TOTAL)),
-        ("ANSI + truecolor", ansi_color()),
-        ("full-screen redraw", redraw()),
+        ("ANSI + truecolor", ansi_color(TOTAL)),
+        ("full-screen redraw", redraw(TOTAL)),
         ("CJK/emoji/combining", unicode(TOTAL)),
     ]
 }
@@ -326,4 +464,121 @@ pub fn load_average() -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+/// Scrollback workloads: `rows` lines of `cols - 1` cells numbered from `base`, in the shapes that
+/// decide how many rows one byte budget holds (see `examples/scrollback_budget.rs`).
+pub type Workload = fn(base: usize, rows: usize, cols: usize) -> Vec<u8>;
+
+/// Digits only, no styling.
+pub fn plain_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    (base..base + rows)
+        .flat_map(|n| format!("{n:0>w$}\r\n", w = cols - 1).into_bytes())
+        .collect()
+}
+
+/// `style` renders the SGR sequence that starts the `k`-th run of a row (3 to 11 cells long).
+fn run_rows(base: usize, rows: usize, cols: usize, style: impl Fn(usize) -> String) -> Vec<u8> {
+    let mut out = Vec::new();
+    for n in base..base + rows {
+        let (mut used, mut k) = (0, n);
+        while used < cols - 1 {
+            let run = (3 + (k * 7) % 9).min(cols - 1 - used);
+            out.extend(format!("{}{}", style(k), "x".repeat(run)).into_bytes());
+            used += run;
+            k += 1;
+        }
+        out.extend(b"\x1b[0m\r\n");
+    }
+    out
+}
+
+/// A 16-colour foreground and bold, as `ls --color` or a coloured log prints.
+pub fn colour_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    run_rows(base, rows, cols, |k| {
+        format!("\x1b[{};{}m", 30 + k % 8, if k % 5 == 0 { 1 } else { 22 })
+    })
+}
+
+/// Truecolor foregrounds from a 24-value-per-channel palette, as a syntax highlighter prints.
+pub fn syntax_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    run_rows(base, rows, cols, |k| {
+        let channel = |m: usize| (k * m) % 24 * 10;
+        format!("\x1b[38;2;{};{};{}m", channel(37), channel(53), channel(71))
+    })
+}
+
+/// A different truecolor foreground and background on every cell: defeats style sharing.
+pub fn cell_style_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for n in base..base + rows {
+        for c in 0..cols - 1 {
+            let (r, g, b) = (
+                (n * 7 + c * 13) % 256,
+                (n * 11 + c * 5) % 256,
+                (n + c * 3) % 256,
+            );
+            out.extend(format!("\x1b[38;2;{r};{g};{b};48;2;{b};{r};{g}m#").into_bytes());
+        }
+        out.extend(b"\x1b[0m\r\n");
+    }
+    out
+}
+
+/// ZWJ family emoji, wide CJK and stacked combining marks.
+pub fn grapheme_rows(_base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for _ in 0..rows {
+        let mut used = 0;
+        while used + 2 < cols {
+            out.extend("\u{1F468}\u{200d}\u{1F469}\u{200d}\u{1F467}".as_bytes());
+            used += 2;
+            if used + 2 < cols {
+                out.extend("\u{65E5}".as_bytes());
+                used += 2;
+            }
+            if used + 1 < cols {
+                out.extend("e\u{301}\u{302}".as_bytes());
+                used += 1;
+            }
+        }
+        out.extend(b"\r\n");
+    }
+    out
+}
+
+/// A distinct OSC 8 hyperlink on every row.
+pub fn link_rows(base: usize, rows: usize, cols: usize) -> Vec<u8> {
+    (base..base + rows)
+        .flat_map(|n| {
+            format!(
+                "\x1b]8;;http://example.com/{n}\x1b\\{:#<w$}\x1b]8;;\x1b\\\r\n",
+                "",
+                w = cols - 1
+            )
+            .into_bytes()
+        })
+        .collect()
+}
+
+/// A runtime of `cols` by 24 with `scrollback_bytes` of history, fed `rows` rows of `workload`.
+pub fn fed_scrollback(
+    cols: u16,
+    scrollback_bytes: usize,
+    rows: usize,
+    workload: Workload,
+) -> TerminalRuntime {
+    let mut rt = TerminalRuntime::new(Config {
+        size: Size::new(cols, 24),
+        scrollback_bytes,
+        ..Config::default()
+    })
+    .expect("runtime");
+    for base in (0..rows).step_by(256) {
+        feed(
+            &mut rt,
+            &workload(base, 256.min(rows - base), usize::from(cols)),
+        );
+    }
+    rt
 }

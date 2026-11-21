@@ -1,4 +1,4 @@
-use super::*;
+use super::{powershell::Windows, *};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Unix {
     pub os: &'static str,
@@ -44,46 +44,109 @@ fn parse(text: &str) -> Option<Unix> {
         data: rows[5].into(),
     })
 }
+/// A host the app positively identified: a Unix shell, or a Windows OpenSSH host that answered the PowerShell probe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Host {
+    Unix(Unix),
+    Windows(Windows),
+}
+impl Host {
+    /// The Unix host, for what only a Unix shell can do (installation, the Herdr lookup).
+    pub(super) fn unix(self) -> Option<Unix> {
+        match self {
+            Self::Unix(unix) => Some(unix),
+            Self::Windows(_) => None,
+        }
+    }
+    pub(super) fn command(&self, original: &str) -> Result<String> {
+        match self {
+            Self::Unix(unix) => unix.command(original),
+            Self::Windows(windows) => windows.command(original),
+        }
+    }
+    /// `original`, answering `marker` instead of failing when the companion is missing or too old to know the command.
+    /// With `diagnostics` the companion's stderr is kept, for a caller that reads it.
+    pub(super) fn required(
+        &self,
+        original: &str,
+        marker: &str,
+        diagnostics: bool,
+    ) -> Result<String> {
+        match self {
+            Self::Unix(unix) => unix.required(original, marker, diagnostics),
+            Self::Windows(windows) => windows.required(original, marker, diagnostics),
+        }
+    }
+}
 /// What one probe exec learned. `Unknown` means it could not run to an answer (timeout, odd output) and must be asked again.
 pub(super) enum Probed {
-    Known(Option<Unix>),
+    Known(Option<Host>),
     Unknown,
 }
 /// The host's answer, asked once per SSH connection: it cannot change while the connection stands, and every companion
 /// command needs it. A probe that did not answer is not remembered.
-pub(super) async fn detect(session: &Session, lease: &AccessLease) -> Result<Option<Unix>> {
+pub(super) async fn detect(session: &Session, lease: &AccessLease) -> Result<Option<Host>> {
     session
         .handle
         .host_probe
         .resolve(|| probe(session, lease))
         .await
 }
-async fn probe(session: &Session, lease: &AccessLease) -> Result<Probed> {
-    match ssh::exec_bounded(
-        session,
-        format!("sh -c {}", ssh::quote(PROBE)),
-        lease,
-        Duration::from_secs(5),
-        8192,
-        None,
-    )
-    .await
-    {
-        Ok(text) => Ok(Probed::Known(parse(&text))),
+/// How one probe exec ended: with text, with a non-zero exit (the shell could not run it) or without an answer.
+enum Asked {
+    Text(String),
+    Failed,
+    Unanswered,
+}
+async fn ask(
+    session: &Session,
+    lease: &AccessLease,
+    command: String,
+    wait: Duration,
+) -> Result<Asked> {
+    let asked = match ssh::exec_bounded(session, command, lease, wait, 8192, None).await {
+        Ok(text) => return Ok(Asked::Text(text)),
+        Err(error) if error.kind() == "remote_command_failed" => Asked::Failed,
         Err(error)
             if matches!(
                 error.kind(),
-                "remote_command_failed" | "invalid_output" | "output_too_large" | "timeout"
+                "invalid_output" | "output_too_large" | "timeout"
             ) =>
         {
-            lease.check()?;
-            if *session.cancel.borrow() {
-                return Err(super::error("disconnected", "Session closed"));
-            }
-            Ok(Probed::Unknown)
+            Asked::Unanswered
         }
-        Err(error) => Err(error),
+        Err(error) => return Err(error),
+    };
+    lease.check()?;
+    if *session.cancel.borrow() {
+        return Err(super::error("disconnected", "Session closed"));
     }
+    Ok(asked)
+}
+/// The POSIX probe first. Only when it exits non-zero (no `sh`: the localized shell message cannot be matched) is the
+/// Windows probe tried, so a host that answers the first never sees the second. A host that answers neither is asked
+/// again next time, as before.
+async fn probe(session: &Session, lease: &AccessLease) -> Result<Probed> {
+    let posix = format!("sh -c {}", ssh::quote(PROBE));
+    Ok(
+        match ask(session, lease, posix, Duration::from_secs(5)).await? {
+            Asked::Text(text) => Probed::Known(parse(&text).map(Host::Unix)),
+            Asked::Unanswered => Probed::Unknown,
+            Asked::Failed => {
+                match ask(
+                    session,
+                    lease,
+                    Windows::probe_command(),
+                    Duration::from_secs(10),
+                )
+                .await?
+                {
+                    Asked::Text(text) => Probed::Known(Windows::parse(&text).map(Host::Windows)),
+                    _ => Probed::Unknown,
+                }
+            }
+        },
+    )
 }
 impl Unix {
     pub fn target(&self) -> String {
@@ -95,6 +158,17 @@ impl Unix {
     pub fn managed(&self) -> String {
         format!("{}/lazysh-agent", self.managed_dir())
     }
+    /// The closed choice of managed Herdr artifact for this host: one of the four `<os>-herdr-<arch>` targets.
+    pub fn herdr_target(&self) -> String {
+        format!("{}-herdr-{}", self.os, self.arch)
+    }
+    /// The fixed directory, beside the companion's and never inside Herdr's own `lazysh-herdr` application namespace.
+    pub fn herdr_dir(&self) -> String {
+        format!("{}/lazysh/herdr", self.data.trim_end_matches('/'))
+    }
+    pub fn herdr(&self) -> String {
+        format!("{}/lazysh-herdr", self.herdr_dir())
+    }
     fn stat(&self) -> &'static str {
         if self.os == "linux" {
             "stat -c '%u %a %h'"
@@ -103,13 +177,22 @@ impl Unix {
         }
     }
     pub(super) fn command(&self, original: &str) -> Result<String> {
+        self.command_inner(original, false)
+    }
+    /// Confirm the private managed executable itself, without falling back to PATH.
+    pub(super) fn managed_command(&self, original: &str) -> Result<String> {
+        self.command_inner(original, true)
+    }
+    fn command_inner(&self, original: &str, managed_only: bool) -> Result<String> {
         let suffix = original
             .strip_prefix("lazysh-agent ")
             .ok_or_else(|| error("companion_command", "Invalid companion command"))?;
         // Positive Unix proof is required before this fixed read-only POSIX helper.
         // No SFTP requirement is introduced for existing exec-only hosts.
+        // The app's own version, for a companion that can update itself to it; older ones ignore it.
         let script = format!(
             r#"
+LAZYSH_APP_VERSION={app}; export LAZYSH_APP_VERSION
 invalid() {{ printf 'Invalid managed companion namespace or executable\n' >&2; exit 73; }}
 set -f
 p={path}
@@ -134,13 +217,30 @@ if [ -e "$p" ] || [ -L "$p" ]; then
     [ -f "$p" ] && [ -x "$p" ] && [ "$({stat} "$p")" = '{uid} 700 1' ] || invalid
     exec "$p" {suffix}
 else
-    exec {original}
+    {fallback}
 fi
 "#,
+            app = ssh::quote(env!("CARGO_PKG_VERSION")),
             path = ssh::quote(&self.managed()),
             stat = self.stat(),
-            uid = self.uid
+            uid = self.uid,
+            fallback = if managed_only {
+                "exit 127".to_owned()
+            } else {
+                format!("exec {original}")
+            }
         );
+        Ok(format!("sh -c {}", ssh::quote(&script)))
+    }
+    pub(super) fn required(
+        &self,
+        original: &str,
+        marker: &str,
+        diagnostics: bool,
+    ) -> Result<String> {
+        let resolved = self.command(original)?;
+        let redirect = if diagnostics { "" } else { "2>/dev/null" };
+        let script=format!("{resolved} {redirect}; code=$?; case $code in 2|126|127) printf '%s\\n' {};; *) exit \"$code\";; esac",ssh::quote(marker));
         Ok(format!("sh -c {}", ssh::quote(&script)))
     }
 }
@@ -160,6 +260,10 @@ mod tests {
             "'sh' is not recognized",
             "{\"schemaVersion\":1}",
             &linux.replace("Linux", "MINGW64_NT"),
+            // Only the architectures with a published companion are accepted.
+            &linux.replace("x86_64", "riscv64"),
+            &linux.replace("x86_64", "armv7l"),
+            &linux.replace("x86_64", "i686"),
             &linux.replace("/home/owned", "/home/../owned"),
             &format!("banner\n{linux}"),
         ] {
@@ -174,12 +278,14 @@ mod tests {
             os::unix::fs::{MetadataExt, PermissionsExt},
             process::Command,
         };
+        const LEGACY: &[u8] = b"#!/bin/sh\nprintf 'legacy-owned %s' \"$LAZYSH_APP_VERSION\"\n";
+        let version = env!("CARGO_PKG_VERSION");
         let root = tempfile::tempdir().unwrap();
         let base = root.path().canonicalize().unwrap();
         let bin = base.join("bin");
         fs::create_dir(&bin).unwrap();
         let legacy = bin.join("lazysh-agent");
-        fs::write(&legacy, b"#!/bin/sh\nprintf legacy-owned\n").unwrap();
+        fs::write(&legacy, LEGACY).unwrap();
         fs::set_permissions(&legacy, fs::Permissions::from_mode(0o700)).unwrap();
         let data = base.join("data's folder");
         let host = Unix {
@@ -193,27 +299,53 @@ mod tests {
             home: base.to_string_lossy().into(),
             data: data.to_string_lossy().into(),
         };
-        let execute = || {
+        let execute = |managed: bool| {
+            let script = if managed {
+                host.managed_command("lazysh-agent --version")
+            } else {
+                host.command("lazysh-agent --version")
+            }
+            .unwrap();
             Command::new("/bin/sh")
-                .args(["-c", &host.command("lazysh-agent --version").unwrap()])
+                .args(["-c", &script])
                 .env_clear()
                 .env("HOME", root.path())
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
                 .output()
                 .unwrap()
         };
-        let missing = execute();
+        let missing = execute(false);
         assert!(missing.status.success());
-        assert_eq!(missing.stdout, b"legacy-owned");
+        // Every command the app runs tells the companion which app asks, whichever copy answers.
+        assert_eq!(missing.stdout, format!("legacy-owned {version}").as_bytes());
+        assert!(
+            !execute(true).status.success(),
+            "PATH is not evidence of a managed executable"
+        );
         fs::create_dir(&data).unwrap();
         fs::set_permissions(&data, fs::Permissions::from_mode(0o777)).unwrap();
         assert!(
-            !execute().status.success(),
+            !execute(false).status.success(),
             "a mutable existing namespace is not an absent managed executable"
         );
-        assert_eq!(
-            fs::read(&legacy).unwrap(),
-            b"#!/bin/sh\nprintf legacy-owned\n"
-        );
+        assert_eq!(fs::read(&legacy).unwrap(), LEGACY);
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
+        let managed = data.join("lazysh/companion/lazysh-agent");
+        fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        for directory in [data.join("lazysh"), data.join("lazysh/companion")] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        fs::write(
+            &managed,
+            b"#!/bin/sh\nprintf 'managed-owned %s' \"$LAZYSH_APP_VERSION\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&managed, fs::Permissions::from_mode(0o700)).unwrap();
+        for managed in [false, true] {
+            assert_eq!(
+                execute(managed).stdout,
+                format!("managed-owned {version}").as_bytes()
+            );
+        }
     }
 }

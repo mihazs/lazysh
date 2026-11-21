@@ -27,11 +27,19 @@ describe("terminal gesture settings", () => {
     expect(page.getByRole('checkbox',{name:t('edgeGestureViewSwitch')})).toHaveProperty('checked',true);
     fireEvent.click(left);
     fireEvent.change(page.getByRole('slider',{name:t('edgeGestureZoneWidth',{value:'40'})}),{target:{value:'64'}});
-    expect(getPreferences().edgeGestures).toEqual({leftMenu:false,bottomMenu:true,viewSwitch:true,zoneWidth:64,mode:'auto'});
+    expect(getPreferences().edgeGestures).toEqual({leftMenu:false,bottomMenu:true,viewSwitch:true,zoneWidth:64,mode:'auto',showLines:false});
     fireEvent.change(page.getByRole('combobox',{name:t('gestureModeLabel')}),{target:{value:'edges'}});
     expect(getPreferences().edgeGestures).toMatchObject({mode:'edges'});
     fireEvent.click(page.getByRole('button',{name:t('preferencesResetGestures')}));
     expect(getPreferences().edgeGestures).toBeUndefined();
+  });
+  it('shows the gesture lines only when the setting is on, and keeps it across a reload',()=>{
+    savePreferences({...defaults});let page=mountPreferences(t('preferencesCategoryInput'),t('preferencesTerminalTouchGestures'));
+    const box=()=>page.getByRole('checkbox',{name:t('gestureShowLines')});
+    expect(box()).toHaveProperty('checked',false);fireEvent.click(box());
+    expect(getPreferences().edgeGestures?.showLines).toBe(true);
+    cleanup();page=mountPreferences(t('preferencesCategoryInput'),t('preferencesTerminalTouchGestures'));
+    expect(box()).toHaveProperty('checked',true);
   });
   it('lists the gesture styles with the automatic one first',()=>{
     savePreferences({...defaults});const page=mountPreferences(t('preferencesCategoryInput'),t('preferencesTerminalTouchGestures'));

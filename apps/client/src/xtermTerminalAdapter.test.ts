@@ -2,6 +2,7 @@
 import {beforeAll, describe, expect, it} from 'vitest';
 import {runTerminalAdapterContract} from './terminalAdapter.contract';
 import {XtermTerminalAdapter} from './xtermTerminalAdapter';
+import {xtermContractHarness} from './xterm/contractHarness';
 import {terminalEditorSelector, terminalRootSelector} from './terminalAdapter';
 import {Terminal} from '@xterm/xterm';
 
@@ -10,10 +11,7 @@ beforeAll(() => {
   window.matchMedia = ((query: string) => ({matches: false, media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}})) as never;
 });
 
-runTerminalAdapterContract('xterm', {
-  create: () => new XtermTerminalAdapter(new Terminal({cols: 20, rows: 5, scrollback: 200, allowProposedApi: false})),
-  target: () => { const element = document.createElement('div'); document.body.append(element); return {kind: 'dom', element}; },
-});
+runTerminalAdapterContract('xterm', xtermContractHarness);
 
 describe('xterm backend specifics', () => {
   it('exposes the typed-input editor and the drawn screen once mounted, and measures nothing without layout', async () => {

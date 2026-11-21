@@ -237,11 +237,19 @@ fn revoke_for(app: &AppHandle, replacement: bool, native: Option<u64>) {
             .cancel_for_lock()
             .await;
         handle
+            .state::<crate::host_browser::HostBrowsers>()
+            .cancel_for_lock()
+            .await;
+        handle
             .state::<crate::transcript_watch::TranscriptWatches>()
             .cancel_for_lock()
             .await;
         handle
             .state::<crate::previews::PreviewState>()
+            .cancel_for_lock()
+            .await;
+        handle
+            .state::<crate::auth_tunnel::AuthTunnelState>()
             .cancel_for_lock()
             .await;
         if replacement {
@@ -674,11 +682,15 @@ pub fn allowed_while_locked(command: &str) -> bool {
             | "ack_output"
             | "local_ack"
             | "terminal_core_close"
+            | "terminal_core_available"
+            | "native_terminal_probe"
+            | "native_terminal_surface_remove"
             | "disconnect"
             | "local_disconnect"
             | "clipboard_cancel"
             | "board_keep_awake_release"
             | "stop_preview"
+            | "stop_auth_tunnel"
             | "device_stream_stop"
             | "agent_watch_stop"
             | "voice_cancel"
@@ -874,7 +886,7 @@ mod tests {
                     return true;
                 }
                 let handler: fn(tauri::ipc::Invoke<tauri::test::MockRuntime>) -> bool =
-                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
+                    tauri::generate_handler![crate::ssh::list_hosts, crate::companion_settings::get_companion_settings, crate::companion_settings::update_companion_settings, crate::companion_settings::get_host_browser_settings, crate::companion_settings::update_host_browser_settings, crate::companion::install_companion, crate::companion::install_companion_from_device, crate::companion::install_managed_herdr, crate::companion::remove_managed_herdr, crate::companion::check_companion_update, crate::companion::hooks::companion_hooks, crate::companion::hooks::companion_hook_discovery];
                 handler(invoke)
             })
             .build(tauri::generate_context!(test = true))
@@ -909,6 +921,15 @@ mod tests {
             update.body = tauri::ipc::InvokeBody::Json(
                 serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"transcriptDiscoveryEnabled":false,"recordedUsageEnabled":false,"deviceToolsEnabled":false}}),
             );
+            let mut browser = request(nonce);
+            browser.cmd = "get_host_browser_settings".into();
+            browser.body =
+                tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
+            let mut browser_update = request(nonce);
+            browser_update.cmd = "update_host_browser_settings".into();
+            browser_update.body = tauri::ipc::InvokeBody::Json(
+                serde_json::json!({"sessionId":"not-connected","settings":{"expectedRevision":0,"hostBrowserEnabled":false}}),
+            );
             let mut installer = request(nonce);
             installer.cmd = "install_companion".into();
             installer.body = tauri::ipc::InvokeBody::Json(
@@ -917,6 +938,16 @@ mod tests {
             let mut fallback = request(nonce);
             fallback.cmd = "install_companion_from_device".into();
             fallback.body = installer.body.clone();
+            let mut check = request(nonce);
+            check.cmd = "check_companion_update".into();
+            check.body =
+                tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
+            let mut managed = request(nonce);
+            managed.cmd = "install_managed_herdr".into();
+            managed.body = installer.body.clone();
+            let mut removal = request(nonce);
+            removal.cmd = "remove_managed_herdr".into();
+            removal.body = check.body.clone();
             let mut hooks = request(nonce);
             hooks.cmd = "companion_hooks".into();
             hooks.body = tauri::ipc::InvokeBody::Json(
@@ -926,7 +957,19 @@ mod tests {
             discovery.cmd = "companion_hook_discovery".into();
             discovery.body =
                 tauri::ipc::InvokeBody::Json(serde_json::json!({"sessionId":"not-connected"}));
-            [read, update, installer, fallback, hooks, discovery]
+            [
+                read,
+                update,
+                browser,
+                browser_update,
+                installer,
+                fallback,
+                check,
+                managed,
+                removal,
+                hooks,
+                discovery,
+            ]
         };
         let rejected = |nonce: Option<&str>| {
             for request in protected_requests(nonce) {
@@ -939,7 +982,7 @@ mod tests {
         };
         let admitted = |nonce: &str| {
             for request in protected_requests(Some(nonce)) {
-                let installer = request.cmd.starts_with("install_companion");
+                let installer = request.cmd.starts_with("install_");
                 let error = tauri::test::get_ipc_response(&window, request).unwrap_err();
                 if installer {
                     assert!(error.get("phase").is_some_and(serde_json::Value::is_null));

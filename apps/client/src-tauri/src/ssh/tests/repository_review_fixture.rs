@@ -314,6 +314,7 @@ pub(super) async fn verify_discovery(app: &App, id: &str) {
             crate::previews::discover_preview_ports(
                 access_lease(),
                 app.state(),
+                app.state(),
                 id.into(),
                 ports,
                 Some(probe),

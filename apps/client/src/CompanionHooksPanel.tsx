@@ -1,26 +1,27 @@
 import {useMountedAccess,useProtectedApi} from './access';
 import {api as nativeApi} from './bridge';
-import {t,useUi} from './i18n/core';
+import {formatDateTime,t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {useEffect,useRef,useState} from 'react';
-type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp';
+type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp'|'kimi-code';
 const providers={claude:'Claude Code',codex:'Codex',droid:'Droid',gemini:'Gemini CLI',cursor:'Cursor CLI',opencode:'OpenCode',cline:'Cline',kimi:'Kimi',copilot:'GitHub Copilot',amp:'Amp',aider:'Aider'} as const;
 type DetectedAgent=keyof typeof providers;
 type Profile={path:string|null;source:string;state:'directory'|'missing'|'unavailable'|'invalid'};
-type Discovery={schemaVersion:1|2|3;supported:boolean;managedSetupSupported:boolean;agents:{agent:DetectedAgent;setup:'managed'|'manual'|'healthOnly';executable:{path:string;source:'path'|'codexStandalone'}|null;profiles:Profile[]}[];truncated:boolean};
+type Discovery={schemaVersion:1|2|3|4;supported:boolean;managedSetupSupported:boolean;agents:{agent:DetectedAgent;setup:'managed'|'manual'|'healthOnly';executable:{path:string;source:'path'|'codexStandalone'}|null;profiles:Profile[]}[];truncated:boolean};
+function managedAgent(agent:DetectedAgent):Agent{return(agent==='kimi'?'kimi-code':agent) as Agent;}
 const managed=new Set<string>(['claude','codex','droid','gemini','cursor','opencode','cline']);
 function object(value:unknown):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new LocalUiError('hooksInvalid');return value as Record<string,unknown>;}
 function closed(value:Record<string,unknown>,keys:string[]){if(Object.keys(value).some(key=>!keys.includes(key)))throw new LocalUiError('hooksInvalid');}
 function boundedText(value:unknown,maximum=4096):value is string{return typeof value==='string'&&value.length>0&&value.length<=maximum&&!/[\x00-\x1f\x7f]/.test(value);}
 function absoluteProfile(value:string){return boundedText(value)&&value.startsWith('/')&&!value.split('/').some(part=>part==='.'||part==='..');}
-export function parseHookDiscovery(value:unknown,expectedVersion:1|2|3=1):Discovery {
-  if(![1,2,3].includes(expectedVersion))throw new LocalUiError('hooksInvalid');
+export function parseHookDiscovery(value:unknown,expectedVersion:1|2|3|4=1):Discovery {
+  if(![1,2,3,4].includes(expectedVersion))throw new LocalUiError('hooksInvalid');
   const v=object(value);closed(v,['schemaVersion','supported','managedSetupSupported','agents','truncated']);
   if(v.schemaVersion!==expectedVersion||typeof v.supported!=='boolean'||typeof v.managedSetupSupported!=='boolean'||typeof v.truncated!=='boolean'||!Array.isArray(v.agents)||v.agents.length>11||(!v.supported&&(v.managedSetupSupported||v.agents.length)))throw new LocalUiError('hooksInvalid');
   const seen=new Set<string>();
   const agents=v.agents.map(raw=>{
     const a=object(raw),id=a.agent;closed(a,['agent','setup','executable','profiles']);
-    if(typeof id!=='string'||!Object.hasOwn(providers,id)||seen.has(id)||a.setup!==((managed.has(id)||(expectedVersion>=2&&id==='copilot')||(expectedVersion===3&&id==='amp'))?'managed':id==='aider'?'healthOnly':'manual')||!Array.isArray(a.profiles)||a.profiles.length>8)throw new LocalUiError('hooksInvalid');
+    if(typeof id!=='string'||!Object.hasOwn(providers,id)||seen.has(id)||a.setup!==((managed.has(id)||(expectedVersion>=2&&id==='copilot')||(expectedVersion>=3&&id==='amp')||(expectedVersion>=4&&id==='kimi'))?'managed':id==='aider'?'healthOnly':'manual')||!Array.isArray(a.profiles)||a.profiles.length>8)throw new LocalUiError('hooksInvalid');
     seen.add(id);
     let executable:Discovery['agents'][number]['executable']=null;
     if(a.executable!==null){const e=object(a.executable);closed(e,['path','source']);if(!boundedText(e.path)||!absoluteProfile(e.path)||!['path','codexStandalone'].includes(e.source as string)||(e.source==='codexStandalone'&&id!=='codex'))throw new LocalUiError('hooksInvalid');executable={path:e.path,source:e.source as 'path'|'codexStandalone'};}
@@ -32,20 +33,29 @@ export function parseHookDiscovery(value:unknown,expectedVersion:1|2|3=1):Discov
   if(new TextEncoder().encode(JSON.stringify(result)).length>65536)throw new LocalUiError('hooksInvalid');
   return result;
 }
-type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string};
+type LocalEvent={state:'received';lastEventAt:number}|{state:'none'|'notChecked'};
+type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksKimiConfigRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string;localEvent?:LocalEvent};
+/** Additive and advisory: an absent, newer or malformed report from the companion reads as not checked and never fails the status. */
+function parseLocalEvent(value:unknown):LocalEvent|undefined{
+  const report=value as {schemaVersion?:unknown;localEvent?:{state?:unknown;lastEventAt?:unknown}}|null|undefined;
+  const event=report?.schemaVersion===1?report.localEvent:undefined;
+  if(event?.state==='none'||event?.state==='notChecked')return {state:event.state};
+  const at=event?.state==='received'&&typeof event.lastEventAt==='string'?Date.parse(event.lastEventAt):NaN;
+  return Number.isFinite(at)?{state:'received',lastEventAt:at}:undefined;
+}
 export function parseHookStatus(value:unknown,expectedAgent?:Agent):Status {
   if(!value || typeof value!=='object')throw new LocalUiError('hooksInvalid');
   const v=value as Record<string,unknown>;
   if(v.schemaVersion!==1 || typeof v.supported!=='boolean' || v.reporting!=='notChecked' || v.trust!=='notChecked')throw new LocalUiError('hooksInvalid');
-  if(!v.supported){if(v.reason!=='HooksAclUnsupported' && v.reason!=='HooksDroidStandaloneRequired')throw new LocalUiError('hooksInvalid');return {supported:false,state:null,reason:v.reason};}
+  if(!v.supported){if(v.reason!=='HooksAclUnsupported' && v.reason!=='HooksDroidStandaloneRequired' && !(v.reason==='HooksKimiConfigRequired'&&expectedAgent==='kimi-code'))throw new LocalUiError('hooksInvalid');return {supported:false,state:null,reason:v.reason};}
   if(![null,'prepared','configured','removed','conflict'].includes(v.state as null))throw new LocalUiError('hooksInvalid');
   if(v.reason==='HooksAmpShadow'){
     if(expectedAgent!=='amp'||v.agent!=='amp'||v.state==='conflict'||v.installPlan!==null||typeof v.removePlan!=='string'||!/^[a-f0-9]{64}$/.test(v.removePlan))throw new LocalUiError('hooksInvalid');
-    return {supported:true,state:v.state as Status['state'],reason:'HooksAmpShadow',removePlan:v.removePlan};
+    return {supported:true,state:v.state as Status['state'],reason:'HooksAmpShadow',removePlan:v.removePlan,localEvent:parseLocalEvent(v.readiness)};
   }
-  if(v.state==='conflict')return {supported:true,state:'conflict'};
+  if(v.state==='conflict')return {supported:true,state:'conflict',localEvent:parseLocalEvent(v.readiness)};
   if(![v.installPlan,v.removePlan].every(plan=>typeof plan==='string' && /^[a-f0-9]{64}$/.test(plan)))throw new LocalUiError('hooksInvalid');
-  return {supported:true,state:v.state as Status['state'],installPlan:v.installPlan as string,removePlan:v.removePlan as string};
+  return {supported:true,state:v.state as Status['state'],installPlan:v.installPlan as string,removePlan:v.removePlan as string,localEvent:parseLocalEvent(v.readiness)};
 }
 export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionId:string;visible:boolean;reveal?:Readonly<{sessionId:string}>}) {
   useUi();const api=useProtectedApi(nativeApi),{access,mounted}=useMountedAccess();
@@ -68,28 +78,32 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     const owns=()=>mounted.current&&access.current()&&id===discoveryRevision.current&&selection.current.visible&&selection.current.sessionId===sessionId&&disclosure.current?.open;
     setDetecting(true);
     void (async()=>{
-      let version:2|3=3,value:unknown;
-      try {value=await api.companionHookDiscovery(sessionId,3);}
-      catch(error){
-        if(!owns())return;
-        if(!error||typeof error!=='object'||!('kind' in error)||error.kind!=='remote_command_failed')throw error;
-        version=2;value=await api.companionHookDiscovery(sessionId,2);
+      // Newest first; only a companion that rejects the schema falls back, never a malformed or failed answer.
+      for(const version of [4,3,2] as const){
+        try {
+          const value=await api.companionHookDiscovery(sessionId,version);
+          if(owns())setDiscovery(parseHookDiscovery(value,version));
+          return;
+        } catch(error){
+          if(!owns())return;
+          if(version===2||!error||typeof error!=='object'||!('kind' in error)||error.kind!=='remote_command_failed')throw error;
+        }
       }
-      if(owns())setDiscovery(parseHookDiscovery(value,version));
     })().catch(()=>{if(owns())setDiscoveryError(true);}).finally(()=>{if(owns())setDetecting(false);});
     return ()=>{discoveryRevision.current++;};
   },[sessionId,visible,opened]);
   useEffect(()=>{setAgent('');setProfile('');},[sessionId]);
   useEffect(()=>{if(!focusInspection.current)return;focusInspection.current=false;if(visible&&access.current()&&disclosure.current?.open)inspect.current?.focus();},[agent,profile]);
-  function selectDetected(candidate:Discovery['agents'][number],target:Profile){
-    if(busy||!visible||!disclosure.current?.open||!access.current()||!discovery?.managedSetupSupported||candidate.setup!=='managed'||target.state!=='directory'||!target.path||!absoluteProfile(target.path))return;
+  function selectDetected(candidate:Discovery['agents'][number],target:Profile,index:number){
+    if(busy||!visible||!disclosure.current?.open||!access.current()||!discovery?.managedSetupSupported||candidate.setup!=='managed'||target.state!=='directory'||!target.path||!absoluteProfile(target.path)||(candidate.agent==='kimi'&&index>0))return;
     revision.current++;setStatus(undefined);setError('');setUncertain(false);
-    if(agent===candidate.agent&&profile===target.path){focusInspection.current=false;setAgent('');setProfile('');return;}
-    focusInspection.current=true;setAgent(candidate.agent as Agent);setProfile(target.path);
+    if(agent===managedAgent(candidate.agent)&&profile===target.path){focusInspection.current=false;setAgent('');setProfile('');return;}
+    focusInspection.current=true;setAgent(managedAgent(candidate.agent));setProfile(target.path);
   }
   const copilotSupported=!!discovery&&discovery.schemaVersion>=2&&discovery.supported&&discovery.managedSetupSupported;
-  const ampSupported=discovery?.schemaVersion===3&&discovery.supported&&discovery.managedSetupSupported;
-  const providerAllowed=agent==='amp'?ampSupported:agent!=='copilot'||copilotSupported;
+  const ampSupported=!!discovery&&discovery.schemaVersion>=3&&discovery.supported&&discovery.managedSetupSupported;
+  const kimiSupported=discovery?.schemaVersion===4&&discovery.supported&&discovery.managedSetupSupported;
+  const providerAllowed=agent==='amp'?ampSupported:agent==='kimi-code'?kimiSupported:agent!=='copilot'||copilotSupported;
   async function run(action:'status'|'install'|'remove') {
     if(!providerAllowed || flight.current!==null || !visible || !access.current() || !agent || !absoluteProfile(profile) || discovery?.managedSetupSupported===false)return;
     const expectedPlan=action==='install'?status?.installPlan:status?.removePlan;
@@ -121,8 +135,9 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
         {discovery.agents.length===0&&<p className="agent-note">{t('hooksNoneDetected')}</p>}
         <div role="list" aria-label={t('hooksDetected')} style={{display:'grid',gap:6,maxHeight:'min(34dvh, 260px)',overflowY:'auto',overscrollBehavior:'contain'}}>
           {discovery.agents.flatMap(candidate=>(candidate.profiles.length?candidate.profiles:[{path:null,source:'',state:'unavailable'} as Profile]).map((target,index)=>{
-            const enabled=discovery.managedSetupSupported&&candidate.setup==='managed'&&target.state==='directory'&&!!target.path&&absoluteProfile(target.path);
-            return <div role="listitem" key={`${candidate.agent}:${index}`}><button type="button" className="subtle-button" style={{display:'block',width:'100%',minHeight:44,textAlign:'left',overflowWrap:'anywhere',whiteSpace:'normal',lineHeight:1.4,borderColor:agent===candidate.agent&&profile===target.path?'var(--theme-accent)':undefined}} disabled={busy||!enabled} aria-pressed={agent===candidate.agent&&profile===target.path} onClick={()=>selectDetected(candidate,target)}>
+            // Kimi lists its current profile first; the legacy 1.52 profile is metadata only.
+            const enabled=discovery.managedSetupSupported&&candidate.setup==='managed'&&target.state==='directory'&&!!target.path&&absoluteProfile(target.path)&&(candidate.agent!=='kimi'||index===0);
+            return <div role="listitem" key={`${candidate.agent}:${index}`}><button type="button" className="subtle-button" style={{display:'block',width:'100%',minHeight:44,textAlign:'left',overflowWrap:'anywhere',whiteSpace:'normal',lineHeight:1.4,borderColor:agent===managedAgent(candidate.agent)&&profile===target.path?'var(--theme-accent)':undefined}} disabled={busy||!enabled} aria-pressed={agent===managedAgent(candidate.agent)&&profile===target.path} onClick={()=>selectDetected(candidate,target,index)}>
               <strong>{providers[candidate.agent]}</strong>{' · '}{t(candidate.executable?'hooksExecutableFound':'hooksExecutableMissing')}
               <br/>{target.path&&<code>{target.path}</code>}{target.path&&' · '}{target.source&&<>{target.source} · </>}{t(target.state==='directory'?'hooksProfileFound':target.state==='missing'?'hooksProfileMissing':'hooksProfileUnavailable')}
               {candidate.setup!=='managed'&&<> · {t(candidate.setup==='healthOnly'?'hooksHealthOnly':'hooksManualOnly')}</>}
@@ -134,17 +149,22 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     </section>
     <p className="agent-note">{t('hooksManualPath')}</p>
     <div className="tool-bar">
-      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent|'')}><option value="">{t('hooksChooseProvider')}</option><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option><option value="cline">Cline CLI</option><option value="copilot" disabled={!copilotSupported}>GitHub Copilot CLI</option><option value="amp" disabled={!ampSupported}>Amp</option></select></label>
-      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={!agent?t('hooksProfilePlaceholder'):agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':agent==='cline'?'/home/user/.cline':agent==='copilot'?'/home/user/.copilot':agent==='amp'?'/home/user/.config/amp':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
+      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent|'')}><option value="">{t('hooksChooseProvider')}</option><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option><option value="cline">Cline CLI</option><option value="copilot" disabled={!copilotSupported}>GitHub Copilot CLI</option><option value="amp" disabled={!ampSupported}>Amp</option><option value="kimi-code" disabled={!kimiSupported}>Kimi Code</option></select></label>
+      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={!agent?t('hooksProfilePlaceholder'):agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':agent==='cline'?'/home/user/.cline':agent==='copilot'?'/home/user/.copilot':agent==='amp'?'/home/user/.config/amp':agent==='kimi-code'?'/home/user/.kimi-code':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
       <button ref={inspect} className="subtle-button" disabled={busy || !providerAllowed || !agent || !absoluteProfile(profile) || discovery?.managedSetupSupported===false} onClick={()=>void run('status')}>{t('hooksInspect')}</button>
     </div>
     {agent==='copilot'&&!copilotSupported&&<p className="agent-note" role="status">{t('hooksCopilotCapability')}</p>}
     {agent==='amp'&&!ampSupported&&<p className="agent-note" role="status">{t('hooksAmpCapability')}</p>}
+    {agent==='kimi-code'&&!kimiSupported&&<p className="agent-note" role="status">{t('hooksKimiCodeCapability')}</p>}
     {status?.reason==='HooksAmpShadow'&&<p className="agent-note" role="status">{t('hooksAmpShadow')}</p>}
-    {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
+    {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':status.reason==='HooksKimiConfigRequired'?'hooksKimiCodeConfigRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
+    {status?.supported && <ul className="agent-note" aria-label={t('hooksReadinessTitle')} style={{margin:0,paddingLeft:'1.2em'}}>
+      {([['hooksReadinessCompanion',t('hooksReadinessYes')],['hooksReadinessHooks',t(status.state==='configured'?'hooksReadinessYes':status.state==='conflict'?'hooksReadinessConflict':'hooksReadinessNo')],['hooksReadinessReloaded',t('hooksReadinessNotChecked')],['hooksReadinessTrusted',t('hooksReadinessNotChecked')],['hooksReadinessEvent',status.localEvent?.state==='received'?t('hooksReadinessLastEvent',{time:formatDateTime(status.localEvent.lastEventAt)}):t(status.localEvent?.state==='none'?'hooksReadinessNone':'hooksReadinessNotChecked')],['hooksReadinessPane',t('hooksReadinessNotChecked')],['hooksReadinessRemote',t('hooksReadinessNotChecked')]] as const).map(([label,value])=><li key={label}>{t(label)}: {value}</li>)}
+    </ul>}
+    {status?.supported && status.state==='configured' && status.localEvent?.state==='none' && <p className="agent-note">{t('hooksReadinessSilent')}</p>}
     {status?.supported && providerAllowed && discovery?.managedSetupSupported!==false && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy||!status.installPlan} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy||!status.removePlan} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
     {uncertain && <p className="agent-note" role="alert">{t('hooksUncertain')}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}
-    <p className="agent-note">{t(status?.supported && status.state==='configured' ? agent==='codex'?'hooksCodexGuide':agent==='claude'?'hooksClaudeGuide':agent==='opencode'?'hooksOpenCodeGuide':agent==='cline'?'hooksClineGuide':agent==='copilot'?'hooksCopilotGuide':agent==='amp'?'hooksAmpGuide':'hooksTrust' : 'hooksTrust')}</p>
+    <p className="agent-note">{t(status?.supported && status.state==='configured' ? agent==='codex'?'hooksCodexGuide':agent==='claude'?'hooksClaudeGuide':agent==='opencode'?'hooksOpenCodeGuide':agent==='cline'?'hooksClineGuide':agent==='copilot'?'hooksCopilotGuide':agent==='amp'?'hooksAmpGuide':agent==='kimi-code'?'hooksKimiCodeGuide':'hooksTrust' : 'hooksTrust')}</p>
   </details>;
 }

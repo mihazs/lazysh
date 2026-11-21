@@ -20,3 +20,11 @@ it('drops malformed queue entries instead of failing the stream',()=>{
   const op=createWatchApplier<Message>()(parseWatchFrame<Message>({type:'snapshot',gen:1,seq:1,entries:[],queued:[null,{text:5},{text:'ok'}]},'claude',parse));
   expect(op).toMatchObject({kind:'replace',queued:[{text:'ok'}]});
 });
+
+it('passes history-boundary changes through snapshots and deltas and rejects invalid flags',()=>{
+  const apply=createWatchApplier<Message>();
+  const snap=(value:unknown)=>parseWatchFrame<Message>({type:'snapshot',gen:1,seq:1,entries:[],truncated:value},'codex',parse);
+  expect(apply(snap(true))).toMatchObject({kind:'replace',truncated:true});
+  expect(apply(frame({seq:2,truncated:false}))).toMatchObject({kind:'patch',truncated:false});
+  expect(()=>snap('true')).toThrow();
+});

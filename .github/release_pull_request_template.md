@@ -23,6 +23,10 @@ Record reviewed changes and their release impact together. Refs #215.
 - [ ] Relevant moon, Bun frontend, browser, and native platform checks pass, or reviewer records their scope.
 - [ ] Manual test: review generated versions/changelogs and migration notes; this review does not replace installer or device acceptance.
 
+## Regression test
+
+Not a bug fix: this is generated version-only automation, so the `regression-test` check passes with both boxes unticked.
+
 ## Commit attribution
 
 - [ ] Verify automated commits are attributed to GitHub Actions and any human commits retain the intended author.
@@ -39,8 +43,8 @@ Select the highest impact in the consumed changesets before merging:
 
 ## CHANGELOG (merge gate)
 
-- [ ] Root `CHANGELOG.md` history and `[Unreleased]` entries remain intact.
-- [ ] Generated package changelogs match consumed fragments; changed defaults and breaking behavior remain explicit.
+- [ ] Root `CHANGELOG.md` has the new release section, `[Unreleased]` holds no entries, and the development history is intact.
+- [ ] Generated package changelogs and the root section match the consumed fragments, grouped as New, Improved, Fixed, Documentation and Under the hood; changed defaults and breaking behavior remain explicit.
 
 ## Notes for reviewers
 

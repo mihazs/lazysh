@@ -1,0 +1,77 @@
+name: windows-surface-probe
+
+# The Windows composition probe (#1332, gate G19): does a child window show through the transparent WebView2 the app
+# uses? It opens the real tao and wry window on this runner's desktop, stacks a child window below the web view and above
+# it with the overlay cut out of it (GDI-painted and as a Direct3D 12 swapchain), reads its own window back twice
+# (PrintWindow and a screen copy) and writes what it saw, once with a transparent tao window and once with an opaque one.
+# The job fails when the page itself is not visible in the screen readback (nothing it reports then means anything) and
+# when the recorded strategy, a Direct3D 12 child below the web view and above it with a cut-out, stops holding.
+# Not a required check, and no checks.yml job selects it (.github/scripts/native-changes.sh).
+# Results and limits: docs/architecture/windows-surface-composition-poc.md.
+on:
+  pull_request:
+    paths:
+      - packages/terminal-runtime/prototypes/windows-surface/**
+      - .github/workflows/windows-surface-probe.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/terminal-runtime/prototypes/windows-surface/**
+      - .github/workflows/windows-surface-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows-surface-probe:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/terminal-runtime/prototypes/windows-surface
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.1
+      # Pull requests restore main's entry and never save their own, like the other Rust caches.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/terminal-runtime/prototypes/windows-surface
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test the probe's pixel arithmetic
+        run: cargo test --locked
+      - run: cargo build --locked
+      - name: Describe the desktop the probe reads back
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.Screen]::AllScreens | Format-List DeviceName, Bounds, Primary, BitsPerPixel
+          Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty pv
+          [System.Environment]::OSVersion.VersionString
+      - name: Run the probe against a transparent tao window and WebView2
+        run: target/debug/surface-poc.exe "$RUNNER_TEMP/windows-surface/transparent-window"
+      # The app's window is opaque today; only the web view would be transparent.
+      - name: Run the probe against an opaque tao window and a transparent WebView2
+        if: ${{ !cancelled() }}
+        run: target/debug/surface-poc.exe --opaque-window "$RUNNER_TEMP/windows-surface/opaque-window"
+      - name: Show what the probe saw
+        if: ${{ !cancelled() }}
+        run: |
+          for mode in transparent-window opaque-window; do
+            report="$RUNNER_TEMP/windows-surface/$mode/report.md"
+            [ ! -f "$report" ] || { echo "### Windows composition probe, $mode"; cat "$report"; } >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Retain the readbacks of every step
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-windows-surface
+          path: ${{ runner.temp }}/windows-surface
+          if-no-files-found: warn
+          retention-days: 7

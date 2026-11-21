@@ -308,7 +308,9 @@ it('keeps Whisper default and requires explicit fixed Parakeet download with bou
   expect(screen.getByLabelText('Speech engine')).toHaveProperty('value','whisper');
   await chooseParakeet();
   expect(screen.queryByLabelText('Language')).toBeNull();
-  expect(screen.getByText(/automatic language detection/)).toBeTruthy();
+  expect(screen.getByText(/Audio stays on this device/)).toBeTruthy();
+  fireEvent.click(screen.getByText('About Parakeet'));
+  expect(screen.getByText(/Language is detected automatically/)).toBeTruthy();
   expect(screen.getByText(/487,211,443 bytes/)).toBeTruthy();
   expect(invoke).not.toHaveBeenCalledWith('voice_parakeet_install',expect.anything(),expect.anything());
   fireEvent.click(screen.getByRole('button',{name:'Download Parakeet model'}));

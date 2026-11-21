@@ -390,3 +390,45 @@ targets:
         BUNDLE_LOADER: ""
     scheme:
       testTargets: [LazyshWorkspaceUITests]
+
+  # The iOS composition proof of concept (#1311): a standalone UIKit host that stacks an MTKView below a
+  # transparent WKWebView the way wry builds the app's view, and a UI test that reads the composited pixels.
+  # It has no Rust phase, is not embedded in the app and is built only by its own scheme.
+  LazyshSurfacePoc:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../../apple/SurfacePocHost
+    info:
+      path: LazyshSurfacePoc/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleShortVersionString: {{apple.bundle-version-short}}
+        CFBundleVersion: "{{apple.bundle-version}}"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: {{app.identifier}}.surfacepoc
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+  LazyshSurfacePocUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "16.2"
+    sources:
+      - path: ../../apple/SurfacePocUITests
+    dependencies:
+      - target: LazyshSurfacePoc
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: {{app.identifier}}.surfacepocuitests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: LazyshSurfacePoc
+    scheme:
+      testTargets: [LazyshSurfacePocUITests]

@@ -187,26 +187,34 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
             }
             let modified = metadata.modified()?;
             let modified_at = chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339();
+            let name = if matches!(
+                agent,
+                TranscriptAgent::Copilot | TranscriptAgent::Kimi | TranscriptAgent::GrokAcp
+            ) {
+                entry
+                    .path()
+                    .parent()
+                    .and_then(Path::file_name)
+                    .unwrap_or(&entry.file_name())
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                entry.file_name().to_string_lossy().into_owned()
+            };
+            // Only these layouts put the session's own id in the path (the session directory, or the UUID file name),
+            // which is what ties a hook-reported session to its records; every other adapter leaves it unnamed.
+            let session_id = match agent {
+                TranscriptAgent::Copilot | TranscriptAgent::Kimi => Some(name.clone()),
+                TranscriptAgent::Droid => path_stem(&entry.path()),
+                _ => None,
+            };
             discovery.sessions.push(DiscoveredSession {
                 path: path.into(),
-                name: if matches!(
-                    agent,
-                    TranscriptAgent::Copilot | TranscriptAgent::Kimi | TranscriptAgent::GrokAcp
-                ) {
-                    entry
-                        .path()
-                        .parent()
-                        .and_then(Path::file_name)
-                        .unwrap_or(&entry.file_name())
-                        .to_string_lossy()
-                        .into_owned()
-                } else {
-                    entry.file_name().to_string_lossy().into_owned()
-                },
+                name,
                 modified_at,
                 bytes: metadata.len(),
                 modified,
-                session_id: None,
+                session_id,
             });
             discovery.sessions.sort_unstable_by(|left, right| {
                 right
@@ -225,6 +233,12 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
         }
     }
     Ok(discovery)
+}
+
+fn path_stem(path: &Path) -> Option<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_owned)
 }
 
 /// The pinned provider uses a nonempty override verbatim, including relative paths.

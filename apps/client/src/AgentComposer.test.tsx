@@ -43,6 +43,20 @@ it('binds to the proven pane without a confirmation step and delivers a message 
   expect(screen.getByText(t('agentReceiptSending'))).toBeTruthy();
 });
 
+it('sends a Grok Build prompt through the same guarded input and offers no key beyond it',async()=>{
+  mount({conversation:{agent:'grok-acp',path:'/home/owner/.grok/sessions/work/s1/updates.jsonl',report:{sessionId:'g1',agent:'Grok Build',paneId:'%3'}},cwd:'/home/owner/work'});
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));await waitFor(()=>expect(screen.queryByText(t('chatTerminalPending'))).toBeNull());
+  // Escape, the Stop key, is not known to interrupt Grok Build, and an @ or / is typed as text: nothing is suggested.
+  expect(screen.queryByRole('button',{name:t('chatTerminalStop')})).toBeNull();
+  type('@src and /clear');
+  expect(screen.queryByRole('listbox')).toBeNull();
+  type('Fix the parser');
+  await waitFor(()=>expect(sendButton().disabled).toBe(false));
+  fireEvent.click(sendButton());
+  await waitFor(()=>expect(box().value).toBe(''));
+  expect(inputs()).toEqual([expect.objectContaining({source:{agent:'grok-acp',path:'/home/owner/.grok/sessions/work/s1/updates.jsonl',view:'conversation',inlineImages:false},input:{kind:'send',text:'Fix the parser'}})]);
+});
+
 it('sends with Enter on a hardware keyboard, keeps Shift+Enter as a new line and ignores Enter while composing text',async()=>{
   mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));await waitFor(()=>expect(screen.queryByText(t('chatTerminalPending'))).toBeNull());
   type('第一');fireEvent.compositionStart(box());fireEvent.keyDown(box(),{key:'Enter'});
@@ -53,6 +67,42 @@ it('sends with Enter on a hardware keyboard, keeps Shift+Enter as a new line and
   fireEvent.keyDown(box(),{key:'Enter'});
   await waitFor(()=>expect(inputs()).toHaveLength(1));
   expect((inputs()[0].input as {text:string}).text).toBe('第一');
+});
+
+// A touch keyboard (LatinIME, Gboard) can keep the last word as an open composition with no compositionend while the field keeps focus (#1840).
+for(const [name,endsOnBlur] of [['when the browser ends the composition on blur',true],['when the browser leaves the composition open on blur',false]] as const)
+  it(`sends the draft once from an open composition ${name}`,async()=>{
+    mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));await waitFor(()=>expect(screen.queryByText(t('chatTerminalPending'))).toBeNull());
+    box().focus();if(endsOnBlur)box().addEventListener('blur',()=>fireEvent.compositionEnd(box()));
+    fireEvent.compositionStart(box());type('pasted prompt');
+    expect(sendButton().disabled).toBe(false);
+    fireEvent.click(sendButton());
+    await waitFor(()=>expect(inputs()).toHaveLength(1));
+    expect(inputs()[0].input).toEqual({kind:'send',text:'pasted prompt'});
+    expect(document.activeElement).not.toBe(box());
+    await waitFor(()=>expect(box().value).toBe(''));
+    expect(inputs()).toHaveLength(1);
+  });
+
+it('requests a stop from an open composition on the second press, once',async()=>{
+  mount();await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  box().focus();fireEvent.compositionStart(box());type('half typed');
+  const stop=screen.getByRole('button',{name:t('chatTerminalStop')}) as HTMLButtonElement;
+  expect(stop.disabled).toBe(false);
+  fireEvent.click(stop);expect(inputs()).toHaveLength(0);
+  fireEvent.click(await screen.findByRole('button',{name:t('agentComposerStopConfirm')}));
+  await waitFor(()=>expect(inputs()).toHaveLength(1));
+  expect(inputs()[0]).toMatchObject({input:{kind:'request_stop'}});
+});
+
+it('stages the draft from an open composition when the session takes no confirmed input',async()=>{
+  const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged as EventListener);
+  mount({labels:undefined,proof:undefined});
+  box().focus();fireEvent.compositionStart(box());type('stage me');
+  fireEvent.click(screen.getByRole('button',{name:t('chatStage')}));
+  await waitFor(()=>expect(staged).toHaveBeenCalledTimes(1));
+  expect((staged.mock.calls[0][0] as CustomEvent).detail).toEqual({sessionId:'ssh',text:'stage me'});
+  window.removeEventListener('lazysh-prompt-draft',staged as EventListener);
 });
 
 it('keeps Enter as a new line on a touch keyboard and sends with the button',async()=>{
@@ -616,4 +666,54 @@ it('offers the mode button only for Claude Code on tmux',async()=>{
   mount({labels:{backend:'herdr',hostLabel:'host',terminalLabel:'work'},proof:{kind:'herdr',pane:herdrTarget.pane,terminal:herdrTarget.terminal}});
   await screen.findByRole('textbox',{name:t('chatDraftLabel')});
   expect(screen.queryByRole('button',{name:t('agentModeSwitch')})).toBeNull();
+});
+
+it('offers the slash and the file chips for a touch keyboard that hides / and @, and they open the palettes a typed character opens',async()=>{
+  listing([{name:'src',isDir:true,size:0},{name:'README.md',isDir:false,size:12}]);
+  await bound({cwd:'/work'});
+  const chips=within(await screen.findByRole('group',{name:t('agentComposerInsert')}));
+  fireEvent.click(chips.getByRole('button',{name:/Commands/}));
+  expect(box().value).toBe('/');
+  expect(screen.getByRole('listbox',{name:t('agentComposerCommands')})).toBeTruthy();
+  // Commands are only for an empty box: a draft in progress offers files only.
+  type('Look at');
+  expect(within(screen.getByRole('group',{name:t('agentComposerInsert')})).queryByRole('button',{name:/Commands/})).toBeNull();
+  box().setSelectionRange(7,7);fireEvent.select(box());
+  fireEvent.click(within(screen.getByRole('group',{name:t('agentComposerInsert')})).getByRole('button',{name:/Files/}));
+  expect(box().value).toBe('Look at @');
+  await waitFor(()=>expect(screen.getByRole('listbox',{name:t('agentComposerFiles')})).toBeTruthy());
+  type('');
+});
+
+it('offers no file chip without a folder to read',async()=>{
+  await bound();
+  const group=await screen.findByRole('group',{name:t('agentComposerInsert')});
+  expect(within(group).getByRole('button',{name:/Commands/})).toBeTruthy();
+  expect(within(group).queryByRole('button',{name:/Files/})).toBeNull();
+});
+
+it.each(['session','hidden','proof'] as const)('does not stage a composing draft after %s changes',async(change)=>{
+  const staged=vi.fn();window.addEventListener('lazysh-prompt-draft',staged as EventListener);
+  const {view,access}=mount({labels:undefined,proof:undefined});
+  box().focus();fireEvent.compositionStart(box());type('private draft');
+  act(()=>{
+    screen.getByRole('button',{name:t('chatStage')}).click();
+    view.rerender(<AgentComposer sessionId={change==='session'?'other':'ssh'} conversation={conversation} access={access} invoke={bindProtectedInvoke(access)} shown={change!=='hidden'} proof={change==='proof'?{kind:'tmux',paneId:'%4'}:undefined} stage/>);
+  });
+  expect(staged).not.toHaveBeenCalled();
+  window.removeEventListener('lazysh-prompt-draft',staged as EventListener);
+});
+
+it('does not send a composing draft when its confirmed pane changes',async()=>{
+  const access=captureAccess(), stableInvoke=bindProtectedInvoke(access);
+  const view=render(<AgentComposer sessionId="ssh" conversation={conversation} access={access} invoke={stableInvoke} shown labels={tmuxLabels} proof={{kind:'tmux',paneId:'%3'}} stage/>);
+  await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  await waitFor(()=>expect(screen.queryByText(t('chatTerminalPending'))).toBeNull());
+  box().focus();fireEvent.compositionStart(box());type('private draft');
+  act(()=>{
+    sendButton().click();
+    view.rerender(<AgentComposer sessionId="ssh" conversation={conversation} access={access} invoke={stableInvoke} shown labels={tmuxLabels} proof={{kind:'tmux',paneId:'%4'}} stage/>);
+  });
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,50));});
+  expect(inputs()).toEqual([]);
 });

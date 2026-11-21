@@ -8,17 +8,31 @@ use std::{
     collections::VecDeque,
     fs::{self, File, OpenOptions},
     io::{Seek, SeekFrom, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     sync::{atomic::Ordering, Mutex},
     time::Duration,
 };
 use tokio::sync::watch;
 
+// The private cache is trusted from the operating system's own notion of ownership: mode bits on Unix, the owner
+// SID and DACL on Windows.
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+use unix as platform;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as platform;
+
 const CACHE_ERROR: &str =
     "Private Parakeet model storage is unavailable or is in use by another app process";
 const CANCELLED: &str = "Parakeet result cancelled; native work may still be finishing";
 const ARCHIVE_NAME: &str = "parakeet-v3-int8.tar.bz2";
+/// Peak extra disk use while installing: the download, the private verification snapshot and the four extracted
+/// files coexist (docs/voice-parakeet.md). Preparing an already stored archive needs only the last two.
+const PEAK_DISK_BYTES: u64 = 1_644_999_670;
+const PUBLISH_FAILED: &str = "Cannot install Parakeet model; destination may already exist";
 // The release asset URL is mutable upstream; a replaced archive must read as such, not as a network fault.
 const REPUBLISHED: &str = "The downloaded Parakeet archive does not match the one this lazysh version pins, so nothing was installed. The publisher may have replaced it; if this persists, update lazysh";
 struct Cache {
@@ -27,59 +41,36 @@ struct Cache {
 }
 impl Cache {
     fn new(root: PathBuf) -> Result<Self> {
-        let parent = root
-            .parent()
-            .ok_or(CACHE_ERROR)?
-            .canonicalize()
-            .map_err(|_| CACHE_ERROR)?;
-        let uid = unsafe { libc::geteuid() };
-        for ancestor in parent.ancestors() {
-            let metadata = fs::symlink_metadata(ancestor).map_err(|_| CACHE_ERROR)?;
-            if !metadata.is_dir()
-                || !matches!(metadata.uid(), 0) && metadata.uid() != uid
-                || metadata.mode() & 0o022 != 0
-                    && !(metadata.uid() == 0 && metadata.mode() & 0o1000 != 0)
-            {
-                return Err(CACHE_ERROR.into());
-            }
-        }
+        let parent = platform::trusted_parent(&root)?;
         let root = parent.join("parakeet");
-        let mut builder = fs::DirBuilder::new();
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-        match builder.create(&root) {
+        match platform::create_private_directory(&root) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(_) => return Err(CACHE_ERROR.into()),
         }
-        private(&fs::symlink_metadata(&root).map_err(|_| CACHE_ERROR)?, true)?;
+        private(&root, true)?;
         let lock_path = root.join("cache.lock");
-        if let Ok(metadata) = fs::symlink_metadata(&lock_path) {
-            private(&metadata, false)?;
+        if lock_path.symlink_metadata().is_ok() {
+            private(&lock_path, false)?;
         }
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(lock_path)
-            .map_err(|_| CACHE_ERROR)?;
-        private(&lock.metadata().map_err(|_| CACHE_ERROR)?, false)?;
+        let lock = open_lock(&lock_path).map_err(|_| CACHE_ERROR)?;
+        platform::private(
+            &lock_path,
+            &lock.metadata().map_err(|_| CACHE_ERROR)?,
+            false,
+        )?;
         lock.try_lock().map_err(|_| CACHE_ERROR)?;
         // Exclusive process ownership precedes cleanup; never remove another live recognizer's files.
         for entry in fs::read_dir(&root).map_err(|_| CACHE_ERROR)? {
             let entry = entry.map_err(|_| CACHE_ERROR)?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            let metadata = fs::symlink_metadata(entry.path()).map_err(|_| CACHE_ERROR)?;
             if name.strip_suffix(".part").is_some_and(valid_id) {
-                private(&metadata, false)?;
+                private(&entry.path(), false)?;
                 fs::remove_file(entry.path()).map_err(|_| CACHE_ERROR)?;
             } else if name.strip_prefix("lazysh-parakeet-").is_some_and(|tail| {
                 tail.len() == 6 && tail.bytes().all(|c| c.is_ascii_alphanumeric())
             }) {
-                private(&metadata, true)?;
+                private(&entry.path(), true)?;
                 fs::remove_dir_all(entry.path()).map_err(|_| CACHE_ERROR)?;
             }
         }
@@ -89,36 +80,61 @@ impl Cache {
         self.root.join(ARCHIVE_NAME)
     }
     fn installed(&self) -> bool {
-        fs::symlink_metadata(self.archive()).is_ok_and(|m| private(&m, false).is_ok())
+        private(&self.archive(), false).is_ok()
     }
     fn open_archive(&self) -> Result<File> {
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(self.archive())
-            .map_err(|_| "Download the Parakeet model first")?;
+        let path = self.archive();
+        let file = open_archive(&path).map_err(|_| "Download the Parakeet model first")?;
         let metadata = file.metadata().map_err(|_| CACHE_ERROR)?;
-        private(&metadata, false)?;
+        platform::private(&path, &metadata, false)?;
         if metadata.len() != ARCHIVE_BYTES {
             return Err("Stored Parakeet archive is not the one this lazysh version pins (an earlier version may have installed it); remove it and download again".into());
         }
         Ok(file)
     }
 }
-fn private(metadata: &fs::Metadata, directory: bool) -> Result<()> {
-    if metadata.file_type().is_symlink()
-        || (if directory {
-            !metadata.is_dir()
-        } else {
-            !metadata.is_file()
-        })
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o077 != 0
-        || (!directory && metadata.nlink() != 1)
-    {
-        return Err(CACHE_ERROR.into());
+/// The model lives on private storage that may be small, so a lack of space is refused before any byte is written.
+fn require_free_space(directory: &Path, needed: u64) -> Result<()> {
+    if platform::free_space(directory)? < needed {
+        return Err(format!(
+            "Parakeet needs about {:.1} GB of free storage to prepare its model; free some space and try again",
+            needed as f64 / 1e9
+        ));
     }
     Ok(())
+}
+fn open_lock(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    platform::owner_only(&mut options);
+    platform::no_follow(&mut options);
+    options.open(path)
+}
+fn open_archive(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    platform::no_follow(&mut options);
+    options.open(path)
+}
+/// A new download that is not private on arrival is removed before any byte is written to it.
+fn create_partial(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    platform::owner_only(&mut options);
+    let file = options.open(path)?;
+    if let Err(error) = platform::private(path, &file.metadata()?, false) {
+        let _ = fs::remove_file(path);
+        return Err(std::io::Error::other(error));
+    }
+    Ok(file)
+}
+/// `path` is a private, unlinked directory or regular file of the expected kind (never a link followed).
+fn private(path: &Path, directory: bool) -> Result<()> {
+    platform::private(
+        path,
+        &fs::symlink_metadata(path).map_err(|_| CACHE_ERROR)?,
+        directory,
+    )
 }
 fn valid_id(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|value| value.to_string() == id)
@@ -141,13 +157,22 @@ pub(super) struct Manager {
     cache: Cache,
     inner: Mutex<Inner>,
     capacity: Arc<AtomicBool>,
+    peak_disk: u64,
 }
 impl Manager {
     pub(super) fn new(root: PathBuf, capacity: Arc<AtomicBool>) -> Result<Arc<Self>> {
+        Self::with_peak_disk(root, capacity, PEAK_DISK_BYTES)
+    }
+    fn with_peak_disk(
+        root: PathBuf,
+        capacity: Arc<AtomicBool>,
+        peak_disk: u64,
+    ) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
             cache: Cache::new(root)?,
             inner: Mutex::new(Inner::default()),
             capacity,
+            peak_disk,
         }))
     }
     pub(super) fn status(&self) -> Status {
@@ -270,15 +295,10 @@ impl Manager {
         if self.cache.archive().exists() {
             return Err("Remove the existing Parakeet model before installing".into());
         }
+        require_free_space(&self.cache.root, self.peak_disk)?;
         work.keep_engine = false;
         let partial = self.cache.root.join(format!("{id}.part"));
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&partial)
-            .map_err(|_| "Cannot create Parakeet download")?;
+        let mut file = create_partial(&partial).map_err(|_| "Cannot create Parakeet download")?;
         work.partial = Some(partial.clone());
         transfer(
             &mut work,
@@ -312,7 +332,11 @@ impl Manager {
         tokio::task::spawn_blocking(move || {
             work.check()?;
             if work.engine.is_none() {
-                work.prepare(work.manager.cache.open_archive()?)?;
+                let archive = work.manager.cache.open_archive()?;
+                // The stored archive already occupies its share of the peak.
+                let extra = work.manager.peak_disk.saturating_sub(ARCHIVE_BYTES);
+                require_free_space(&work.manager.cache.root, extra)?;
+                work.prepare(archive)?;
             }
             work.check()?;
             work.progress("transcribing", ARCHIVE_BYTES);
@@ -362,10 +386,9 @@ fn install_worker(mut work: Work, mut file: File, partial: PathBuf) -> Result<()
     file.seek(SeekFrom::Start(0))
         .map_err(|_| "Cannot rewind Parakeet archive")?;
     work.prepare(file)?;
-    work.commit(|| publish(&partial, &work.manager.cache.archive()))?;
+    work.commit(|| platform::publish(&partial, &work.manager.cache.archive()))?;
     work.keep_engine = true;
-    File::open(&work.manager.cache.root)
-        .and_then(|root| root.sync_all())
+    platform::sync_directory(&work.manager.cache.root)
         .map_err(|_| "Cannot synchronize Parakeet model directory")?;
     drop(work);
     Ok(())
@@ -508,26 +531,6 @@ async fn transfer(
         return Err(REPUBLISHED.into());
     }
     work.check()
-}
-fn publish(source: &Path, destination: &Path) -> Result<()> {
-    use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| CACHE_ERROR)?;
-    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| CACHE_ERROR)?;
-    // SAFETY: Both private-cache names are terminated and live through the call.
-    // Linux NOREPLACE atomically publishes one name without a hard-link crash window.
-    if unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            source.as_ptr(),
-            libc::AT_FDCWD,
-            destination.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    } != 0
-    {
-        return Err("Cannot install Parakeet model; destination may already exist".into());
-    }
-    Ok(())
 }
 fn publisher_client() -> Result<Client> {
     super::super::download::client(publisher_url, "Unsupported Parakeet download redirect")

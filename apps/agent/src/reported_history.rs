@@ -44,25 +44,41 @@ pub fn validate_session_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Claude, Codex and Gemini CLI all report `session_id` with `transcript_path` in their common hook input.
+/// Claude, Codex and Gemini CLI all report `session_id` with `transcript_path` in their common hook input, and so does
+/// Grok Build. Its session file may not exist when the session starts, so any top-level Grok event that names one reports
+/// it, and an event without one reports nothing instead of marking the session ambiguous.
 pub fn read_hook(
     input: impl Read,
     agent: Agent,
     pane: Option<&str>,
 ) -> Result<(Option<Event>, Option<ReportedSource>)> {
-    if !matches!(agent, Agent::Claude | Agent::Codex | Agent::Gemini) {
+    if !matches!(
+        agent,
+        Agent::Claude | Agent::Codex | Agent::Gemini | Agent::Grok
+    ) {
         return Err(Error::InvalidArgument);
     }
     let payload = read_bounded_json(input, MAX_INPUT)?;
+    let agent = super::hooks::reporting_agent(agent, &payload);
     let event = normalize(&payload, agent, pane)?;
-    let top_level = matches!(payload.get("agent_id"), None | Some(Value::Null))
-        || payload["agent_id"].as_str() == Some("");
-    let source = if top_level
-        && matches!(
-            payload["hook_event_name"].as_str(),
-            // `BeforeAgent` is Gemini CLI's prompt event.
-            Some("SessionStart" | "UserPromptSubmit" | "BeforeAgent")
-        ) {
+    let path = payload["transcript_path"]
+        .as_str()
+        .filter(|path| valid_path(path))
+        .map(str::to_owned);
+    let (top_level, reports) = if matches!(agent, Agent::Grok) {
+        (!super::hooks::grok_subagent(&payload), path.is_some())
+    } else {
+        (
+            matches!(payload.get("agent_id"), None | Some(Value::Null))
+                || payload["agent_id"].as_str() == Some(""),
+            matches!(
+                payload["hook_event_name"].as_str(),
+                // `BeforeAgent` is Gemini CLI's prompt event.
+                Some("SessionStart" | "UserPromptSubmit" | "BeforeAgent")
+            ),
+        )
+    };
+    let source = if top_level && reports {
         payload["session_id"]
             .as_str()
             .filter(|id| validate_session_id(id).is_ok())
@@ -70,10 +86,7 @@ pub fn read_hook(
                 session_id: id.into(),
                 // Invalid metadata must never suppress an otherwise valid lifecycle
                 // event, or leave an older conflicting path looking authoritative.
-                path: payload["transcript_path"]
-                    .as_str()
-                    .filter(|path| valid_path(path))
-                    .map(str::to_owned),
+                path,
                 pane_id: pane
                     .filter(|pane| {
                         !pane.is_empty() && pane.len() <= 256 && !pane.chars().any(char::is_control)
@@ -156,6 +169,13 @@ pub fn gemini_config() -> Value {
     flag_reported_history(super::hooks::gemini_config(), "gemini")
 }
 
+/// The Grok Build fragment with each ingest command opted in to reported history, and `SessionStart` added for the first report.
+pub fn grok_config() -> Value {
+    let mut config = super::hooks::grok_config();
+    config["hooks"].as_object_mut().unwrap().insert("SessionStart".into(), json!([{"hooks":[{"type":"command","command":"lazysh-agent ingest --agent grok","timeout":5}]}]));
+    flag_reported_history(config, "grok")
+}
+
 fn flag_reported_history(mut config: Value, agent: &str) -> Value {
     for rows in config["hooks"].as_object_mut().unwrap().values_mut() {
         rows[0]["hooks"][0]["command"] = json!(format!(
@@ -180,7 +200,12 @@ mod tests {
         )
         .unwrap();
         store
-            .ingest_with_reported_history(event.as_ref(), source.as_ref(), at)
+            .ingest_with_reported_history(
+                event.as_ref(),
+                source.as_ref(),
+                at,
+                crate::notification_policy::Admission::Queue,
+            )
             .unwrap();
     }
 

@@ -7,7 +7,10 @@ import type {TerminalAdapter} from './terminalAdapter';
 import './AgentPickerDock.css';
 
 /** What the lift reads from the session's terminal: the text of the live screen's rows and a signal that output was parsed. */
-export type ScreenSource = Pick<TerminalAdapter, 'readRows' | 'viewport' | 'subscribe'>;
+export type ScreenSource = Pick<TerminalAdapter, 'readRows' | 'viewport' | 'subscribe'> & {
+  /** A screen read from the host instead of a live terminal buffer: read it again before deciding from it. */
+  readAgain?: () => Promise<void>;
+};
 /** The agents whose dialogs were captured from a real session (`src/test/agentDialogs`): each reads its own screen, and no other agent's dialog is guessed. */
 const lifters: Readonly<Record<string, (screen: readonly string[]) => Lift>> = {'Claude Code': liftDialog, Codex: liftCodexDialog};
 export const hasDialogProfile = (agent: string | undefined) => agent !== undefined && agent in lifters;
@@ -56,37 +59,54 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
   const open = shown && lift.kind !== 'none';
   useEffect(() => {publishDialogOpen(sessionId, open); return () => publishDialogOpen(sessionId, false);}, [sessionId, open]);
   const [phase, setPhase] = useState<Phase>('idle');
-  const [ready, setReady] = useState(false);
+  const [readySignature, setReadySignature] = useState<string>();
+  const answerSequence = useRef(0);
   const signature = dialog?.signature;
   // A tap that landed as the card appeared, or as the dialog changed under the finger, must not answer.
-  useEffect(() => {setReady(false); setPhase('idle'); if (!signature) return; const timer = setTimeout(() => setReady(true), 400); return () => clearTimeout(timer);}, [signature]);
+  useEffect(() => {answerSequence.current++; setReadySignature(undefined); setPhase('idle'); if (!signature) return; const timer = setTimeout(() => setReadySignature(signature), 400); return () => clearTimeout(timer);}, [signature, terminal, guard, sessionId]);
   const live = !!control?.ready && !control.busy && answerable;
-  const busy = !ready || phase === 'sending' || !live;
-  const latest = useRef({dialog, terminal, control});
-  latest.current = {dialog, terminal, control};
+  const busy = !signature || readySignature !== signature || phase === 'sending' || !live;
+  const latest = useRef({dialog, terminal, control, guard, sessionId});
+  latest.current = {dialog, terminal, control, guard, sessionId};
 
   /** Chooses one option, or cancels the dialog (no target), only while the screen still shows the dialog the person chose from. Moving the highlight
-   * comes first and is read back: Enter is pressed only once the dialog shows the chosen option highlighted. */
+   * comes first and is read back: Enter is pressed only once the dialog shows the chosen option highlighted. Each key carries the rows of the dialog
+   * as just read, and the host reads the pane again right before pressing it: a pane that no longer shows exactly that dialog gets nothing. */
   async function answer(target?: number) {
     const {dialog: before, terminal: screen, control: bound} = latest.current;
     if (!before || !screen || !bound?.ready || phase === 'sending') return;
+    const sequence = ++answerSequence.current;
+    const current = () => answerSequence.current === sequence && latest.current.terminal === screen && latest.current.guard === guard && latest.current.sessionId === sessionId && latest.current.dialog?.signature === before.signature;
+    const finish = (next: Phase) => {if (current()) setPhase(next);};
     setPhase('sending');
-    const onScreen = () => {const now = readLift(screen, agent); return now.kind === 'dialog' && now.dialog.signature === before.signature && now.dialog.highlighted === before.highlighted;};
+    const dialogNow = () => {const now = readLift(screen, agent); return now.kind === 'dialog' && now.dialog.signature === before.signature && now.dialog.highlighted === before.highlighted ? now.dialog : undefined;};
+    const onScreen = () => !!dialogNow();
     // A list that scrolls as the highlight moves shows other rows, so the chosen option is found by what it says, not by its place.
     const chosen = target === undefined ? undefined : before.options[target];
     const twins = before.options.filter(option => option.label === chosen?.label && option.detail === chosen?.detail).length > 1;
+    // The dialog as the screen was read at the tap, and later as read back with the chosen option highlighted: what each key is sent to.
+    await screen.readAgain?.();
+    let tapped = dialogNow();
+    let confirmed = tapped ?? before;
     const highlightsChosen = () => {const now = readLift(screen, agent); const row = now.kind === 'dialog' ? now.dialog.options[now.dialog.highlighted] : undefined;
-      return now.kind === 'dialog' && now.dialog.title === before.title && row?.label === chosen?.label && row?.detail === chosen?.detail && (!twins || now.dialog.highlighted === target);};
-    const settles = async (test: () => boolean) => {for (let attempt = 0; attempt < 20; attempt++) {await pause(150); if (test()) return true;} return false;};
-    if (!onScreen() || !await guard()) {setPhase('stale'); return;}
+      const same = now.kind === 'dialog' && now.dialog.title === before.title && row?.label === chosen?.label && row?.detail === chosen?.detail && (!twins || now.dialog.highlighted === target);
+      if (same) confirmed = now.dialog;
+      return same;};
+    const settles = async (test: () => boolean) => {for (let attempt = 0; attempt < 20; attempt++) {await pause(150); await screen.readAgain?.(); if (test()) return true;} return false;};
+    // A key the host refused (the pane shows something else by now) changed nothing: say so if this screen has moved on too.
+    const refused = () => finish(onScreen() ? 'failed' : 'stale');
+    if (!tapped || !await guard()) {finish('stale'); return;}
+    tapped = dialogNow();
+    if (!current() || latest.current.control !== bound || !tapped) {finish('stale'); return;}
+    confirmed = tapped;
     const rows = target === undefined ? 0 : target - before.highlighted;
     if (rows !== 0) {
-      if (!await bound.answer({kind: 'pick', rows, enter: false})) {setPhase('failed'); return;}
-      if (!await settles(highlightsChosen)) {setPhase('notMoved'); return;}
+      if (!await bound.answer({kind: 'pick', rows, enter: false, seen: tapped.rows})) {refused(); return;}
+      if (!await settles(highlightsChosen)) {finish('notMoved'); return;}
     }
-    if (!await bound.answer(target === undefined ? {kind: 'request_stop'} : {kind: 'pick', rows: 0, enter: true})) {setPhase('failed'); return;}
+    if (!await bound.answer(target === undefined ? {kind: 'dismiss', seen: confirmed.rows} : {kind: 'pick', rows: 0, enter: true, seen: confirmed.rows})) {refused(); return;}
     // The card is gone once the dialog closes; one that is still open says so.
-    setPhase(await settles(() => !onScreen() && !highlightsChosen()) ? 'idle' : 'still');
+    finish(await settles(() => !onScreen() && !highlightsChosen()) ? 'idle' : 'still');
   }
   const [confirm, setConfirm] = useState<number>();
   useEffect(() => setConfirm(undefined), [signature]);
@@ -129,8 +149,10 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
       <button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button>
     </div>
   </section>;
-  // A dialog that cannot be read exactly, or a menu the agent reported that is not on screen: the terminal has it.
-  if (shown && !ownCard && (lift.kind === 'unliftable' || waiting === 'menu')) return <section className="agent-picker" aria-label={t('agentPickerTitle')}>
+  // A dialog that cannot be read exactly, a menu the agent reported that is not on screen, or an approval or plan decision of an
+  // agent whose dialogs were never captured (Grok Build, Gemini CLI, OpenCode): the terminal has it.
+  const unreadable = !hasDialogProfile(agent) && (waiting === 'approval' || waiting === 'plan');
+  if (shown && !ownCard && (lift.kind === 'unliftable' || waiting === 'menu' || unreadable)) return <section className="agent-picker" aria-label={t('agentPickerTitle')}>
     <p role="status">{t('agentWaitingInTerminal')}</p>
     <div className="button-row"><button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button></div>
   </section>;

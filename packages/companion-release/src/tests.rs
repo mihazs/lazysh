@@ -303,3 +303,47 @@ async fn response_stream_rejects_truncation_extra_bytes_compression_and_size_hea
         Error::verification(Detail::SizeMismatch)
     );
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn tagged_lookup_refuses_a_different_published_version() {
+    use crate::{
+        fake::{Fault, Release, Server},
+        Config, Endpoint, Publisher, Which,
+    };
+    use std::time::Duration;
+
+    let server = Server::start(vec![
+        Release::new("1.0.0").binary("linux-agent-x64", b"older"),
+        Release::new("2.0.0").binary("linux-agent-x64", b"newer"),
+    ]);
+    let publisher = Publisher::with_endpoint(
+        Config {
+            user_agent: "owned-test".into(),
+            env_proxy: false,
+            timeout: Duration::from_secs(5),
+            idle_timeout: None,
+        },
+        Endpoint {
+            api: server.api.clone(),
+            ca_pem: server.ca_pem.as_bytes().to_vec(),
+        },
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let select = || {
+        publisher.select(
+            "linux-agent-x64",
+            Which::Tag {
+                version: "1.0.0",
+                prerelease: false,
+            },
+        )
+    };
+    assert_eq!(runtime.block_on(select()).unwrap().version, "1.0.0");
+    let before = server.requests().len();
+    server.fault(Some(Fault::WrongTaggedRelease));
+    assert!(runtime.block_on(select()).is_err());
+    assert_eq!(server.requests().len(), before + 1);
+    assert_eq!(server.companion_downloads(), 0);
+}

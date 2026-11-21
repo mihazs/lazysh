@@ -53,7 +53,7 @@ The Agent view is built on these; it is not a parallel implementation.
 | Piece | Where | Today |
 | --- | --- | --- |
 | Recorded conversation reader | `ChatPanel.tsx`, `ChatInteraction.tsx`, `ChatMarkdown`, `transcriptSources.ts` | A **chat** tool view. The user picks agent, transcript and Records/Conversation; follow polls every 2 s and replaces the page. |
-| Transcript adapters | `apps/agent/src/transcript.rs`, `transcript/*.rs` | `TranscriptPage` schema 1: typed blocks (text, thinking, tool_use, tool_result, image), cards (plan, proposed plan, question), recorded activity. Conversation views for Claude, Codex, OpenCode and Grok; other agents are records-only. |
+| Transcript adapters | `apps/agent/src/transcript.rs`, `transcript/*.rs` | `TranscriptPage` schema 1: typed blocks (text, thinking, tool_use, tool_result, image), cards (plan, proposed plan, question), recorded activity. Conversation views for Claude, Codex, OpenCode, Gemini CLI and Grok; other agents are records-only. |
 | Confirmed terminal input | `ChatTerminalInput.tsx`, `src-tauri/tmux_chat.rs`, `herdr_guard.rs`, [Confirmed terminal input](chat-terminal-input.md) | After an explicit bind: `send` (text plus CR, at most 4096 bytes), `send_long` (tmux only, 4097 to 65,536 bytes as one bounded paste plus CR) and `request_stop` (Escape). tmux and guarded Herdr on native builds only. |
 | Stage | `lazysh-prompt-draft` event, `TerminalComposer` | Puts a draft, with `[Image #n]`/`[File #n]` tokens, into the terminal composer sheet. |
 | Hooks and board | `apps/agent/src/hooks.rs`, `AgentPanel.tsx`, `AgentStatus.tsx`, `HerdrAgentsPanel` | Hook-reported state (needs attention, working, done) and Herdr live status (idle, working, blocked, done). |
@@ -115,7 +115,7 @@ that lands on an older turn patches that card in place, without moving the reade
 scroll. The window is bounded (500 entries, as today). When the channel cannot be
 opened, the client falls back to the existing 2 s page polling.
 
-The first client slice (Claude Code and Codex, [#1124](https://github.com/mihazs/lazysh/issues/1124)) follows this design with the companion's `transcript-watch` command: see [Live conversation stream](companion.md#live-conversation-stream) for the frames. It patches cards in place, shows the delayed, stale and old-companion states, and leaves model, mode and context usage to [#1224](https://github.com/mihazs/lazysh/issues/1224) and the Codex daemon to a later slice.
+The first client slice (Claude Code and Codex, [#1124](https://github.com/mihazs/lazysh/issues/1124)) follows this design with the companion's `transcript-watch` command: see [Live conversation stream](companion.md#live-conversation-stream) for the frames. It patches cards in place, shows the delayed, stale and old-companion states, and leaves model, mode and context usage to [#1224](https://github.com/mihazs/lazysh/issues/1224) and the Codex daemon to a later slice. OpenCode uses the same command on its database session (`--database-session`), watching the write-ahead log where the newest rows sit.
 
 ### Data model
 
@@ -160,6 +160,10 @@ The client validates every field strictly, as ChatPanel does for schema 1.
 - New dock buttons ignore taps for 400 ms after they appear.
 - Android back from the Agent view returns to the terminal view of the same session.
   The keyboard, IME composition and attachments follow the existing composer rules.
+  A touch keyboard can keep the last word as an open composition with no `compositionend`
+  (seen on an Android 13 WebView, #1840): Send, Stage in terminal and Stop stay enabled and
+  first leave the field, which ends the composition, then act once on the committed draft.
+  Enter on a hardware keyboard is still ignored while composing.
 - The composer is always under a followed conversation (`AgentComposer`). On tmux it
   binds itself to the pane a hook report names: the destination returned by the guarded
   `snapshot` must carry that exact pane ID before the guarded `bind` is sent, so no
@@ -249,8 +253,10 @@ allow-list, not the GitHub default) → depth and count caps:
   classified by `chatInjected.ts` before a message reaches this pipeline, so they keep
   their event rows and are not treated as the person's HTML.
 
-Markdown pipe tables are not rendered (no GFM plugin); Files and repository previews keep
-the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
+Markdown follows GitHub's flavour (`remark-gfm`), so pipe tables, strikethrough and task
+lists render; a fenced block is a code block with its language, **Copy code** and syntax
+colours (see [Agent view design](reference/agent-view-design.md)). Files and repository
+previews keep the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
 
 ### Desktop
 
@@ -264,16 +270,32 @@ the inert renderer (`ChatMarkdown`) because they show untrusted file contents.
 
 | Situation | Agent view shows |
 | --- | --- |
-| No agent detected in the pane (tmux) | "No agent conversation for this terminal", **Show terminal**, **Start Claude Code** and **Start Codex**, which stage the command in the terminal composer; the last-reported list when other panes have agents. |
+| No agent detected in the pane (tmux, Zellij or a plain shell) | "No agent conversation for this terminal", **Show terminal**, **Start Claude Code** and **Start Codex**, which stage the command in the terminal composer, and **Start in a folder** (see [Starting an agent from the empty state](#starting-an-agent-from-the-empty-state)); the last-reported list when other panes have agents. |
 | Herdr: the focused pane runs an agent with one reported conversation | That conversation, opened by itself and re-linked when focus or the agent changes. |
 | Herdr: the focused pane runs no agent, others do | The live agents of the server, with the reason; a pick is marked **Not this pane** and dropped when focus moves. |
-| Herdr: no agent runs | "No agent is running in this session", **Start Claude Code**, **Start Codex**, **Start an agent** (the workspace launcher) and **Show terminal**. |
-| Agent detected, no adapter (records-only or hook-only) | Records or hook state, labelled as partial, with **Show terminal**. |
+| Herdr: no agent runs | "No agent is running in this session", **Start Claude Code**, **Start Codex**, **Start an agent** (the workspace launcher), **Start in a new worktree** and **Show terminal**. Without the launcher (a host companion that predates it), **Start in a folder** replaces the last two launcher buttons. |
+| Agent detected, a records-only adapter whose records name the reported session (GitHub Copilot CLI, Kimi CLI, Droid) | The records of that session, read-only in the timeline under a partial label ("Partial: these are the records Kimi CLI wrote for this pane, read-only, so they can lag behind the terminal and leave out what it does not record. Answer in the terminal."), the agent's last reported hook state in the header, and **Show terminal**. No composer and no dialog answers; the records are read again every 5 seconds, straight away while pages remain. The adapter's discovery has to name the session id the hook reported, exactly once: when it names none, or two files claim it, the row below applies. Tmux and Zellij panes only: under Herdr the view follows Herdr's own agent list, which has no records-only conversations. |
+| Agent detected, no reader in this view (Grok Build, every other records-only adapter, hook-only agents) | The agent's name and last reported hook state, labelled as state only ("This view shows only the last reported state of Pi. Its conversation stays in the terminal."), with **Show terminal**, no composer and no transcript read. An agent the view can read whose history is not reported says to turn on reported history in the companion instead. Records of an adapter not named above stay in the Chat tool view. |
 | A TUI dialog is open that no source can lift | A banner "The agent is waiting for you in the terminal" with **Show terminal**. The view does not switch by itself. |
 | Session cannot accept confirmed input (a Zellij older than 0.45.1, plain PTY, rmux, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
 | Zellij 0.45.1 or newer, the agent's pane named by its own hook report | One report of the attached session binds by itself; with several, the list asks which, and the pick takes input to its own pane. See [Zellij input](#zellij-input). |
 | Watch stream unavailable | Polling, with a "delayed" hint. |
 | Transcript lags (Claude writes asynchronously) | State comes from hooks or protocol, not from transcript recency. |
+
+### Starting an agent from the empty state
+
+- **Start in a new worktree** (Herdr, when no agent runs and a workspace reported a pane directory):
+  opens the Herdr **New worktree from …** dialog for the focused workspace (the first workspace that
+  reported a directory when the focused one has none) with **Start an agent in it?** already set to
+  yes. It shows the exact commands for review before anything runs; once created, the Agent view
+  focuses the new workspace and links to its agent as soon as Herdr reports the session. See
+  [Herdr spaces](multiplexers.md#create-workspaces-worktrees-and-agents) for the dialog's branch, base and path rules.
+- **Start in a folder** (tmux, Zellij, plain shells, and Herdr without the launcher): choose Claude
+  Code or Codex and a host folder (typed, a known folder, or browsed over SFTP). The review step shows
+  the exact command, `cd '<folder>' && claude` or `… && codex` with the folder shell-quoted, and
+  **Stage in the terminal** puts it in the terminal composer and shows the terminal. Nothing runs
+  until you send it there; no multiplexer window or pane is created, so this starts the agent in the
+  pane you are in.
 
 ## Per-agent capabilities
 
@@ -287,7 +309,8 @@ input path, using the agent's profile, with read-back verification.
 | OpenCode | Database transcript; service when attachable | Service SSE, else watch | Plugin, service status | Service form reply, else keys | Service permission reply, else keys | Service abort, else keys | Service, transcript |
 | Grok Build | ACP session log | Watch | Hooks | Keys with screen lift | Keys | Keys | Transcript |
 | Gemini CLI | New transcript reader | Watch | Hooks | Keys with screen lift | Keys | Keys | Transcript |
-| Other records-only adapters (Pi, OMP, Hermes, Kimi, Copilot, Cursor, Droid, Amp, others) | Records | Watch | Hooks where installed | Show terminal | Show terminal | Keys | — |
+| GitHub Copilot CLI, Kimi CLI, Droid | Records, read-only, partial | Poll from the cursor | Hooks | Show terminal | Show terminal | Show terminal | — |
+| Other records-only adapters (Pi, OMP, Hermes, Cursor, Amp, others) | Records stay in the Chat tool view until their records name the reported session | Watch | Hooks where installed | Show terminal | Show terminal | Keys | — |
 
 A capability ships for an agent only with the fixtures and runtime test listed under
 Test strategy. Until then the table cell falls back to **Show terminal**.
@@ -300,13 +323,25 @@ evidence. [Agent view parity](reference/agent-view-parity.md) has the element-by
 | Agent | In the Agent view today | Falls back to the terminal for |
 | --- | --- | --- |
 | Claude Code | The whole table: timeline, live stream, hook state, questions, menus and approvals (docks), interrupt, header pills (model, mode, context, branch), work panel with sub-agents and workflows, send, queue, attachments, slash palette, copy, search and history ([#1293](https://github.com/mihazs/lazysh/pull/1293), [#1276](https://github.com/mihazs/lazysh/pull/1276), [#1351](https://github.com/mihazs/lazysh/pull/1351), [#1356](https://github.com/mihazs/lazysh/pull/1356), [#1377](https://github.com/mihazs/lazysh/pull/1377), [#1431](https://github.com/mihazs/lazysh/pull/1431)) | A dialog with a text field |
-| Codex | Timeline, live stream, hook state, header from the transcript, send and Stop, the approval prompt and list dialogs answered through keys read back from the screen ([#1490](https://github.com/mihazs/lazysh/pull/1490)), sub-agents in the work panel ([#1480](https://github.com/mihazs/lazysh/pull/1480)) | `request_user_input`, Herdr and Zellij dialogs, the Codex app-server daemon |
+| Codex | Timeline, live stream, hook state, header from the transcript, send and Stop, the approval prompt and list dialogs answered through keys read back from the screen ([#1490](https://github.com/mihazs/lazysh/pull/1490)), sub-agents in the work panel ([#1480](https://github.com/mihazs/lazysh/pull/1480)) | The notes box of a Codex question, the Codex app-server daemon |
 | OpenCode | Timeline from its database, header (model, context in use, cost), send and Stop on tmux ([#1491](https://github.com/mihazs/lazysh/pull/1491)), sub-agents ([#1480](https://github.com/mihazs/lazysh/pull/1480)), and, when the OpenCode 2.x background service runs on the host, its permission requests (allow once, always allow behind a confirmation, reject with a message), question forms and Stop answered through that service ([#1656](https://github.com/mihazs/lazysh/issues/1656), [the contract and its limits](opencode-service.md)) | Every dialog the service does not hold: OpenCode marks the highlighted choice by colour only, which a read of the screen's text cannot see, so `/models` and the other lists stay in the terminal; a permission request or question form with a field the app cannot show; every prompt when no OpenCode 2.x service is usable (OpenCode 1.x has none); Herdr and Zellij panes (Herdr's session reference is not a transcript the view can read) |
-| Grok Build, Gemini CLI | The agent's name and hook state, labelled partial, with **Show terminal** and no composer | Everything else |
-| Records-only adapters | The same partial state | Everything else |
+| Gemini CLI | Timeline, hook state, header model and tokens, plan, sub-agent and background-shell cards, send on tmux ([#1568](https://github.com/mihazs/lazysh/pull/1568)) | Questions, approvals and dialogs |
+| Grok Build | Timeline from its session log (turns, tool calls with their output, thinking), the plan card, hook state, send on tmux. The pane is bound by a hook report that names it, so it needs the opted-in hook fragment (`lazysh-agent grok-config --reported-history`), or the Claude Code hooks (Grok Build runs those too) | Questions, approvals (the view says the agent waits in the terminal and holds the draft), dialogs, Stop, header pills (the log records no model or usage), sub-agents and background work |
+| GitHub Copilot CLI, Kimi CLI, Droid | The records of the reported session, read-only in the timeline under a partial label, with the hook state in the header, **Show terminal** and no composer ([#1658](https://github.com/mihazs/lazysh/issues/1658)). Found by the session id the adapter's discovery names: Copilot's and Kimi's session directory, Droid's UUID file name | Everything else: sending, dialogs, approvals and Stop. Not run against a real Copilot CLI, Kimi CLI or Droid: the format cases use records written to each adapter's documented layout, so that each agent's hook `session_id` equals the id in its record path is documented behaviour, not observed here |
+| The other records-only adapters (Pi, OMP, Hermes, Cursor, Amp and others) | The agent's name and last reported hook state, labelled as state only, with **Show terminal** and no composer (Pi, OMP and Hermes have no hook setup, Cursor's records are the IDE's export and Amp's an explicit JSON export, and neither names the CLI's reported session). Their records stay in the Chat tool view | Everything else |
 
-The companion reads Grok Build sessions for the Chat tool view; binding them to the Agent view needs a runtime case against a real Grok
-Build, which the development host does not have. A Gemini CLI reader is a separate change ([#1348](https://github.com/mihazs/lazysh/issues/1348)).
+Each claimed adapter is held by a companion discovery case (`apps/agent/tests/additional_adapters.rs`: the id is named exactly where the path carries it and nowhere
+else) and, per adapter, by recorded companion output in `src/test/recordsOnlyRecorded.ts` driving a Vitest case (`AgentView.test.tsx`: the turn, the hook state, the
+partial label, **Show terminal**, no composer, growth read from the cursor, an id that matches nothing or two files, and records that disappear) and a Playwright case
+(`e2e/agent-view.spec.ts`, phone 390×844 and desktop 1280×850). The state-only label is held by a Vitest case per unclaimed adapter (Pi, Cursor CLI, Amp: the label,
+**Show terminal**, no composer, and no transcript, history or discovery read) and by `e2e/agent-view.spec.ts` ("an agent the view cannot read yet").
+
+Grok Build is bound to its pane by evidence it reports itself: its hooks pass the session id and the path of the session's
+`updates.jsonl`, and the companion records them with the pane the hook ran in (`TMUX_PANE`). A report without a path
+(a session whose file is not written yet) binds nothing, and a sub-agent's own events are ignored. Nothing is guessed from a
+process or from the newest file of a folder. The record format and the hook input are verified against the pinned source
+snapshot and synthetic fixtures only: the development host has no Grok Build binary and no account, so the runtime case
+against a real agent is still open ([#1842](https://github.com/mihazs/lazysh/issues/1842)).
 
 ## Input and control mapping
 
@@ -336,6 +371,17 @@ item answered in the terminal first, an expired approval or a closed dialog fail
 closed and shows a note ("Answered in the terminal", "Expired"). The terminal stays
 usable for the same answer at all times; the first answer wins.
 
+### Herdr panes
+
+For the Claude Code agent of the focused Herdr pane (the conversation Herdr links to it) the view answers what waits for the user without a tmux pane:
+
+- **Permission requests** through the approval hook, exactly as on tmux, matched by the session id the request names.
+- **The open `AskUserQuestion`** with the keys a person presses (an option's digit; the Submit row for a multi-select; the review page's **Submit answers**), sent through Herdr's own `agent send-keys` after the live tree is read again and the agent's report still says it needs the user. A typed free-text answer picks the free-text row and then goes to the pane as one literal line and its Enter (`herdr pane send-text`, checked the same way), because Herdr's `agent prompt` refuses an agent that waits for an answer.
+
+- **List dialogs** (see below) of Claude Code and Codex, a question Codex asks included. The xterm buffer of a Herdr terminal is Herdr's own screen with its sidebar and borders, not the agent's, so the dialog card reads the agent pane's visible rows from the host instead (`herdr agent read PANE --source visible`, display only, at most 200 rows of 400 characters), every 3 seconds while the view is shown and Herdr does not report the agent working, and again before and between the keys of an answer. The same lift, the same read-back and the same `pick` keys apply, sent through Herdr's own `agent send-keys`; the agent's own profile reads its own screen, and a dialog it cannot read exactly shows the banner **The agent is waiting for you in the terminal**.
+
+A conversation picked by hand from the list has no input authority and no dialog card. The companion's report of the followed session names what it waits for (Herdr's own status has the wait but not its kind), so a permission request or a question keeps its own card and the dialog card adds no second one, and the header of a blocked agent names the wait and how long it has lasted (**Waiting for your approval · 5 min. ago**) instead of Herdr's **Needs attention**.
+
 ### List dialogs
 
 A TUI list dialog the agent opens (Claude Code's `/model`, `/resume`, `/rewind` lists, the folder trust prompt, the plan decision) is
@@ -351,8 +397,21 @@ transcript, so it works for dialogs no hook or transcript record describes.
   then sends the guarded `pick` input: arrow keys that move the highlight to the chosen option. It reads the screen back and presses Enter
   (a second `pick`) only once the dialog shows the chosen option highlighted. Nothing is sent when the screen no longer shows the dialog
   that was tapped, and a dialog that does not move gets no Enter. **Cancel the dialog** sends Escape. On a desktop keyboard the digits 1 to 9 choose.
+- **The host captures the pane again before each key.** Reading the app's copy of the screen is not enough for a key that cannot be recalled,
+  so each `pick` carries the rows of the dialog it was read from (the tap's read for the move, the read-back for the Enter) and the tmux
+  connection captures the pane right before pressing it ([Confirmed terminal input](chat-terminal-input.md)). It sends nothing unless those rows
+  appear exactly once: a dialog answered at the terminal first, another prompt in the same pane, a pane whose process was replaced, a
+  prompt drawn twice and a dialog that is gone all get no key. The card then says "The dialog changed. Nothing was sent." (or "The answer was
+  not sent" while this screen still shows the dialog), and the connection stays bound. The request this answers is the dialog on the pane, so
+  there is no listed record to expire: a card is read again at each tap, and the Enter is sent to a read-back that is at most the 3 second
+  read-back window old. The result is the card's note and the pane itself; nothing is stored.
+  The capture is tmux's check: a pane followed through Herdr or Zellij gets the same keys after that backend's own destination check, without it.
+- **Which agents.** Exactly those with a recorded profile below, Claude Code and Codex, through the one reader this card already has (there is no
+  second reader). An agent with no profile has no reader, so its prompt is not answered from here and stays in the terminal: OpenCode (colour-only
+  highlight; its own channel is [#1656](https://github.com/mihazs/lazysh/issues/1656)), Grok Build, Gemini CLI and the records-only agents wait for
+  a captured corpus from a real session.
 - **Authority.** Terminal output never grants authority: `pick` has no key path other than Up, Down and Enter, at most 30 rows, tmux only
-  (the Herdr guard rejects it, so a Herdr pane shows the card read-only with **Show terminal**). A dialog an approval or question card
+  (the Herdr guard rejects it, so a Herdr pane shows the card read-only with **Show terminal**; see **Herdr panes** below for what a Herdr pane can answer). A dialog an approval or question card
   already answers shows no second card (Claude's permission request and every agent's question); Codex has no approval hook here, so its
   approval prompt is answered by this card.
 - **Profile and corpus.** Each agent reads its own screen, and no agent's dialog is guessed from another's layout. The Claude Code 2.1.x
@@ -424,8 +483,35 @@ Tests assert behaviour, not source text.
   dynamic workflow are written the way Claude Code 2.1 does (`subagents/agent-*.jsonl` with its meta
   file, `workflows/wf_*.json` and its journal): the companion lists each as running with the child
   file or the agent tree, the child opens as a conversation of its own, and both end by
-  themselves. Still to add: guarded Herdr, the WebView-level GUI run (`native-e2e` needs Xvfb and
-  `tauri-driver`) and the Android instrumentation case.
+  themselves. The WebView-level run is `apps/client/native-e2e/agentViewReportingAgent.spec.ts`
+  (`bun run test:native-gui`, Xvfb and `tauri-driver`): the same stand-in, started with a fifth
+  argument, also runs the real companion's `ingest --reported-history` hook with its pane's
+  `TMUX_PANE` on each lifecycle event, shows each submitted prompt in its pane and logs every key it
+  reads, in an owned OpenSSH server that also holds the companion and a real tmux (the pinned 3.4 in
+  CI). It covers co-existence cases 1 to 3 below on tmux: the view binds from the hook report; a
+  Terminal, Agent, Terminal round trip while a `hold ...` turn runs keeps the terminal node, the
+  pane (id, PID, tty, scrollback, cursor), the one tmux client and the agent's key log; a prompt
+  sent from the composer reaches the pane once (one submission, its bytes and one Enter) and becomes
+  a turn; a prompt typed in the terminal becomes a turn within 5 s while **Both** shows the two
+  views (the window is 1500 px wide because the sessions list takes 300 px of the 1100 px Both
+  needs). The same three cases run in `agentViewHerdrAgent.spec.ts` against a real guarded Herdr
+  (`LAZYSH_TEST_HERDR`): the stand-in runs in the focused pane under a process named `claude`
+  (Herdr detects an agent by that name), prints enough output first for the pane to have scrollback,
+  and draws `esc to interrupt` on its mode line while a `hold ...` turn runs, which Herdr's own
+  Claude detection reads as working. The fixture reports the session with
+  `herdr pane report-agent-session --source herdr:claude` once Herdr detects the process, and the
+  transcript sits where `lazysh-agent herdr-conversation` resolves that id
+  (`$HOME/.claude/projects/<folder>/<id>.jsonl`), so the Agent view links the focused pane's
+  conversation by itself and its composer binds to the guarded pane with no confirmation step. The
+  round trip keeps the terminal node, the pane (id, terminal, tab, scrollback length), the one SSH
+  connection (the sshd side's socket, to the inode), the agent's key log and the fixture's original
+  receiver pane, which stays empty; the prompt sent from the composer reaches the pane once (one
+  submission, its bytes and one Enter) and shows once in it; the prompt typed in the terminal
+  becomes a turn in **Both** within 5 s (about 0.2 s measured). Both specs share their cases
+  (`agentViewScenarios.ts`) and differ only in the multiplexer (`reportingAgent.ts`). The agent is a
+  stand-in, not Claude Code, and Herdr's state for it comes from the drawn hint, not from Claude's
+  own hooks: provider behaviour, macOS, Windows and Android are not covered by these specs. Still to
+  add: the Android instrumentation case.
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
   native input, back navigation, IME or attachments are involved.
 - **Co-existence cases, required in every slice**:
@@ -480,8 +566,31 @@ The first write failing is a plain refusal; a failure after it, or a lost connec
 and is never resent. The listing and the write are separate host calls, so a pane replaced between them is
 the one window left open, as for stock Herdr; Zellij's CLI has no atomic check.
 
-Limits: a prompt is at most 4,096 bytes (no long paste), dialog answers (`select`, `submit`) and the mode
-key stay in the terminal, and the pane test reads only the first two words of the pane's command line. A
+A dialog the followed agent has open (Claude Code's or Codex's list dialogs, an AskUserQuestion, a Codex question) is answered from the
+Agent view like on tmux and Herdr. The host reads the agent's own pane with `zellij action dump-screen --pane-id` (`zellij_agent_screen`;
+the terminal shows Zellij's composite screen, so its buffer is not what the dialog card reads), only while the report names the agent as not
+working, and the answer is the keys a person presses sent with `zellij action send-keys --pane-id`: a digit, Up, Down and Enter, which Zellij
+encodes for the cursor-key mode of that pane, or one typed line and its Enter. The pane is listed and proven to run the agent before every
+call, the card reads the screen again between the arrows and Enter, and the report must still name the same session in the same pane.
+
+Limits: a prompt is at most 4,096 bytes (no long paste), the mode key stays in the terminal, a permission request of a Zellij pane is
+answered from the Agents board (the Agent view's approval dock needs the exact-pane binding of #1536), and the pane test reads only the first two words
+of the pane's command line. A
 stale report of an agent that has since exited leaves a shell in its pane, which the foreground check
 refuses. rmux (not yet a supported multiplexer, #1140) and plain PTY or local sessions (no proof that the
 agent is the foreground process of the session's PTY, #1133) keep Stage in terminal.
+
+## Terminals lazysh starts
+
+A terminal with no multiplexer has no pane to name, so a hook report from it carries no pane identity. For a
+terminal that lazysh starts itself, the companion reads one more variable: when `LAZYSH_TERMINAL` holds exactly 32
+lowercase hexadecimal characters, `lazysh-agent hook` reports `lazysh:<id>` as the pane identity. A value of any
+other shape is ignored and the report carries no identity; the hook never fails over it. The identity comes last:
+`TMUX_PANE` wins, then Zellij's session and pane, so a multiplexer started inside such a terminal still names its own
+panes. The id is a random launch identifier, not a secret and not input authority.
+
+Status: the companion side ships first (#1867). Nothing exports `LAZYSH_TERMINAL` yet and the Agent view does not bind
+by it, so no behaviour changes on its own; the launcher that exports it and the binding follow with the New agent flow
+for sessions with no multiplexer (#1684). A companion that predates this reports no identity for these terminals, and
+a client that predates it reads `lazysh:<id>` like any other identity it does not know (neither tmux nor Zellij) and
+binds nothing by it, so the manual picker stays.

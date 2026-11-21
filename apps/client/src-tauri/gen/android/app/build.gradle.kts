@@ -71,7 +71,7 @@ val releaseSigning = System.getenv("LAZYSH_ANDROID_SIGNING_PROPERTIES")?.let { p
 // Only the owned ntfy acceptance invocation may add a private test CA. Ordinary
 // debug/release builds never include this resource directory or change trust.
 val unifiedPushAcceptanceCa = providers.gradleProperty("lazyshUnifiedPushAcceptanceCa").orNull?.let { path ->
-    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshRecordedConversationAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance","lazyshTmuxAcceptance","lazyshBiometricAcceptance","lazyshDeniedNotificationAcceptance")
+    check(listOf("lazyshFdroidAcceptance","lazyshThemeLinkAcceptance","lazyshSshAcceptance","lazyshRecordedConversationAcceptance","lazyshSshImeAcceptance","lazyshSshDpadAcceptance","lazyshAttachmentAcceptance","lazyshMoshBackgroundAcceptance","lazyshHerdrAcceptance","lazyshHerdrMoshAcceptance","lazyshCompanionAcceptance","lazyshQrCameraAcceptance","lazyshTmuxAcceptance","lazyshZellijAcceptance","lazyshBiometricAcceptance","lazyshVoiceAcceptance","lazyshDeniedNotificationAcceptance")
         .none {providers.gradleProperty(it).orNull=="true"}) {"UnifiedPush acceptance requires its private report namespace"}
     val allowed = setOf("assembleUniversalDebug", "assembleUniversalDebugAndroidTest",
         "connectedUniversalDebugAndroidTest", "compileUniversalDebugAndroidTestKotlin",
@@ -128,6 +128,8 @@ android {
         // Tauri exits its process when the last activity is finished. Keep the
         // shared native activity alive until AndroidJUnitRunner reports results.
         testInstrumentationRunnerArguments["waitForActivitiesToComplete"] = "false"
+        // A case that blocks (44894372565 attempt 3: onCreate never returned, 57 minutes silent) fails after 15 minutes instead of at the job limit.
+        testInstrumentationRunnerArguments["timeout_msec"] = "900000"
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
@@ -175,6 +177,8 @@ android {
     sourceSets {
         getByName("test").java.srcDir("src/sharedTest/java")
         getByName("androidTest").java.srcDir("src/sharedTest/java")
+        // The owned theme QR PNG is staged into the system picker by the instrumentation; one copy of the bytes serves Rust, Playwright and Android.
+        getByName("androidTest").assets.srcDir("../../../fixtures")
     }
     // Keep first-Activity link receipts when the ordinary instrumentation task
     // executes afterward. Both paths use Gradle's native connected-test reports.
@@ -188,6 +192,12 @@ android {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/ssh-ui"
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/ssh-ui"
+        }
+    }
+    if (providers.gradleProperty("lazyshTerminalCoreAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/terminal-core-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/terminal-core-ui"
         }
     }
     if (providers.gradleProperty("lazyshSshParityAcceptance").orNull == "true") {
@@ -262,6 +272,12 @@ android {
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/tmux-ui"
         }
     }
+    if (providers.gradleProperty("lazyshZellijAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/zellij-ui"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/zellij-ui"
+        }
+    }
     if (providers.gradleProperty("lazyshQrCameraAcceptance").orNull == "true") {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/qr-camera"
@@ -272,6 +288,12 @@ android {
         testOptions {
             reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/biometric-vault"
             resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/biometric-vault"
+        }
+    }
+    if (providers.gradleProperty("lazyshVoiceAcceptance").orNull == "true") {
+        testOptions {
+            reportDir = "${layout.buildDirectory.get().asFile}/reports/androidTests/voice"
+            resultsDir = "${layout.buildDirectory.get().asFile}/outputs/androidTest-results/voice"
         }
     }
     if (providers.gradleProperty("lazyshFdroidAcceptance").orNull == "true") {

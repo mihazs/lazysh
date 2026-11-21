@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {agentName,branchFromLabel,knownDirectories,suggestWorktreePath,validAbsolutePath,validBase,validBranch,validLabel,validPrompt,workspaceDirectory} from './herdrCreate';
+import {agentName,branchFromLabel,knownDirectories,suggestWorktreePath,validAbsolutePath,validBase,validBranch,validLabel,validPrompt,workspaceDirectory,worktreeSource} from './herdrCreate';
 import type {HerdrTree} from './useHerdrNavigation';
 
 describe('Herdr creation validation',()=>{
@@ -48,5 +48,14 @@ describe('Herdr worktree suggestions',()=>{
     expect(workspaceDirectory(tree,'w1')).toBe('/first');
     expect(workspaceDirectory(tree,'w9')).toBeUndefined();
     expect(knownDirectories(tree,['/first','relative','/project'])).toEqual(['/second','/first','/project']);
+  });
+  it('starts a worktree from the focused workspace, else the first one that reported a directory',()=>{
+    const workspace=(id:string,focused:boolean)=>({workspace_id:id,label:`label-${id}`,focused,agent_status:'idle' as const});
+    const place=(id:string,cwd:string|null)=>({tab:{workspace_id:id,tab_id:`${id}:t`,label:'t',number:1,focused:true,agent_status:'idle' as const},pane:{workspace_id:id,tab_id:`${id}:t`,pane_id:`${id}:p`,cwd,focused:true,agent_status:'idle' as const}});
+    const tree=(focused:string,cwds:Record<string,string|null>):HerdrTree=>({workspaces:Object.keys(cwds).map(id=>workspace(id,id===focused)),
+      tabs:Object.entries(cwds).map(([id,cwd])=>place(id,cwd).tab),panes:Object.entries(cwds).map(([id,cwd])=>place(id,cwd).pane)});
+    expect(worktreeSource(tree('w2',{w1:'/one',w2:'/two'}))).toEqual({workspace_id:'w2',label:'label-w2',directory:'/two'});
+    expect(worktreeSource(tree('w2',{w1:'/one',w2:null,w3:'/three'}))).toEqual({workspace_id:'w1',label:'label-w1',directory:'/one'});
+    expect(worktreeSource(tree('w1',{w1:null}))).toBeUndefined();
   });
 });

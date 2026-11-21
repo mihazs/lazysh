@@ -66,7 +66,8 @@ Security and data (each is tested, not only stated):
   starts a process. The field is not in `settings.json` (a strict file that a released companion or client would
   refuse): it has its own file, `host-browser.json`, and `settings host-browser show|update`, as the planned
   update policy does. See [the reference](reference/companion-settings.md). Shipped in the companion by slice A
-  of [#1258](https://github.com/mihazs/lazysh/issues/1258); the app's switch and confirmation come with the viewer.
+  of [#1258](https://github.com/mihazs/lazysh/issues/1258); the app's switch and first-use confirmation are in host
+  settings ([#1696](https://github.com/mihazs/lazysh/issues/1696)), and the viewer that uses them comes later.
 - The first use on a host shows what the browser can reach: the host's network and loopback services, any
   file the browser can open, and every site the user signs in to inside it. The user confirms per host. The
   confirmation is remembered on the device for that host only, never synced.
@@ -228,13 +229,13 @@ the body.
 | 1 | both | A UTF-8 JSON object. |
 | 2 | relay to client | A frame: `sequence:u32be width:u16be height:u16be scrollY:f32be timestampMs:u64be`, then the JPEG bytes as they are. `width` and `height` are the page's viewport in CSS pixels, the space a tap is mapped into. |
 
-Client messages are a closed set, `deny_unknown_fields`: `open {browser?: "chrome", headed?, viewport: {width,
+Client messages are a closed set, `deny_unknown_fields`: `open {browser?: "chrome" | "firefox", headed?, viewport: {width,
 height, scale?}, url?}` (first, once; viewport 100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels
 scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `pause`, `resume`, `control {on}` and the
 input messages below. Anything else, including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
 than 1 ends the session with `ProtocolViolation`. Relay messages are `state {state: "running" | "paused",
 browser, viewport, capabilities}` (the version comes from `Browser.getVersion` and must be Chrome or Chromium
-111 or newer, otherwise the session ends with `BrowserVersionUnsupported` and `detail` names the version),
+111 or newer, or, for Firefox, from `session.new` and must be Firefox 159 or newer, otherwise the session ends with `BrowserVersionUnsupported` and `detail` names the version),
 `page {title, url}` (untrusted text, bounded to 512 and 2048 characters), `refused {reason, count}` (one count
 per reason, sent at count 1, 2, 4, 8 and so on; the reasons are `OperationRefused`, `ControlOff`,
 `InputOutOfRange`, `PermissionRefused` and `InputRateLimited`), and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed`,
@@ -295,6 +296,65 @@ intercepts the file chooser (the browser reports it, no file is supplied) when i
 those two are "denied and reported once", and it sends every command through the list; the hidden developer
 launcher applies the address rule to its first page.
 
+### The Firefox adapter
+
+Slice 1 of [#1257](https://github.com/mihazs/lazysh/issues/1257): the view of a Firefox, with the same relay, wire
+format and client messages as Chrome (`apps/agent/src/host_browser/firefox.rs`, `bidi.rs`). It is view-only for
+now: the capability record says `control`, `navigation` and `tabs` are false, because their client messages are
+the Chrome slices [#1255](https://github.com/mihazs/lazysh/issues/1255),
+[#1256](https://github.com/mihazs/lazysh/issues/1256) and
+[#1259](https://github.com/mihazs/lazysh/issues/1259), and the Firefox adapter follows each of them.
+
+- **Start.** `open {"browser": "firefox"}` runs `firefox --headless --no-remote --profile <private>
+  --remote-debugging-port 0 <url>` (`firefox` or `firefox-esr` on `PATH`, or `--binary`; `--headless` is left out
+  for a headed session). The profile is the private, ephemeral one of every managed browser. The environment
+  loses `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS`, so a page's script can never reach the browser itself, and
+  `--remote-allow-origins` and `--remote-allow-hosts` are never passed. Firefox's output is discarded.
+- **Endpoint.** Firefox writes its port to `WebDriverBiDiServer.json` in the profile. The relay uses it only when
+  the host is `127.0.0.1` (otherwise `BrowserEndpointInvalid`) and connects to `/session` with a WebSocket client of
+  its own, because Firefox refuses a `Host` that lacks the port and any `Origin`, which no library or web view
+  guarantees. A relay that cannot connect ends with `BrowserEndpointUnreachable`. The connection is never offered
+  to the phone.
+- **Version.** The product and version come from `session.new` (`Firefox/160.0`); Firefox 159 is the oldest the
+  measurements used, and an older one is named and refused. A browser that is not Firefox is refused the same way.
+- **One session, always ended.** Firefox allows one BiDi session and keeps one that was never ended until it
+  exits. The relay creates its session with `unhandledPromptBehavior: dismiss` (a page's dialog cannot hang it
+  until the dialog slice answers it) and ends it on every way out: the channel closing, a signal, the page or the
+  browser going away, an error. A Firefox that already holds a session cannot serve the relay and cannot be told
+  to let go, so the relay stops it, removes its profile and starts a new one, once; if that one is busy too the
+  session ends with `BrowserSessionBusy`. A second client that connects to the port while the relay's session is
+  open is refused by Firefox (`session not created`); that is a property of Firefox, tested on the host's own.
+- **Frames.** `browsingContext.captureScreenshot` of the viewport as JPEG quality 0.6, two requests in flight, one
+  every 50 ms at most (20 a second), and one every 250 ms once eight in a row matched the last frame. A frame
+  equal to the last one is not sent, and the outbox keeps the newest one for the device exactly as for Chrome.
+  `pause` stops every request and `resume` sends a frame even if the page did not change. The pacing is fixed and
+  chosen from the [measurements](reference/host-browser-feasibility.md#firefox-host-cost); the adaptive ladder of
+  [#1259](https://github.com/mihazs/lazysh/issues/1259) replaces it. The frame header's scroll offset is 0:
+  the capture is the viewport, and a pointer is mapped into the viewport.
+- **Title and address.** Once a second, `browsingContext.getTree` gives the address and one `script.evaluate` of
+  `document.title`, in a sandbox realm of the relay's own (`lazysh`) that the page's script cannot see or replace,
+  gives the title. That evaluation is the only script the relay ever runs, and the allow-list refuses it with any
+  other expression.
+- **What the phone cannot reach.** Every command passes `allow::bidi` before it is written: only
+  `session.new`, `session.end`, `browsingContext.getTree`, `setViewport` and `captureScreenshot`, and the title
+  evaluation. Refused by class: `storage.*` and `network.*` (cookies and interception), the rest of `script.*`
+  and `webExtension.*`, `input.setFiles` and `browsingContext.startScreencast` (which writes a video file to the
+  host and returns no frames), `permissions.*` and geolocation overrides; anything else is `OperationRefused`.
+- **Profile preferences.** The relay writes `user.js` in the private profile. A download goes nowhere: the profile
+  asks where to save, a headless Firefox has no dialog to answer and saves nothing, where by default a page's
+  download was written to the host user's `~/Downloads` (both checked on Firefox 160). A headed session shows
+  that dialog on the host's screen, to whoever is there, and offers a folder inside the profile. The camera,
+  microphone, location, notification and XR permissions are blocked, and telemetry, update and default-browser
+  checks are off; these were set, and their effect on the network was not observed. Firefox keeps its crash
+  reports and a few cache files in the host user's own directories (`~/.config/mozilla`, `~/.cache/mozilla`),
+  outside the profile; the crash reporter is turned off for the relay's Firefox.
+- **Not yet.** Input (taps, scrolling, text; a `control` message and every input message is refused as
+  `OperationRefused` and counted while the capability record says `control: false`), tabs, navigation, history, dialogs, the file chooser report and the
+  quality ladder for Firefox, a reconnect after the WebSocket drops (a Firefox whose connection dropped holds a
+  leaked session, so the relay ends the session instead), a Firefox older than 159, Firefox from a snap or a
+  Flatpak (its profile and port may sit behind the sandbox), Windows and macOS hosts, and a headed Firefox were not
+  tried.
+
 ### Adapters and capabilities
 
 | Capability | Chrome / Chromium adapter | Firefox adapter |
@@ -308,6 +368,52 @@ launcher applies the address rule to its first page.
 | History | `Page.getNavigationHistory`, `navigateToHistoryEntry`, `reload` | `traverseHistory`, `reload` |
 | Socket-free | yes (pipe) | no |
 | Concurrent clients | several (the relay allows one) | one session, owned and always ended by the relay; a leaked one is cleared by restarting the owned browser |
+
+### App bridge
+
+The app runs the relay over the verified SSH session with six Tauri commands in `apps/client/src-tauri/src/host_browser.rs`
+([#1704](https://github.com/mihazs/lazysh/issues/1704), slice 2 of [#1254](https://github.com/mihazs/lazysh/issues/1254)),
+shaped like the Devices tool's `device_stream_*`. They are in the permission manifest (`build.rs`) and the main capability.
+The viewer that uses them is the next slice ([#1705](https://github.com/mihazs/lazysh/issues/1705)); nothing in the app calls
+them yet.
+
+| Command | Does |
+| --- | --- |
+| `host_browser_start(sessionId, viewport {width, height, scale?}, url?)` | Opens one SSH exec channel that runs `lazysh-agent host-browser serve`, sends `open` and returns a token at once. How the start went arrives as messages. The size and the address are checked first, with the relay's limits (100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels scaled; `http`, `https` or `about:blank`). |
+| `host_browser_next(sessionId, browserId)` | One message as bytes, one pull at a time (a second is refused as `busy`). Waits up to 15 s and then answers one `0` byte. After the closing message was read, a pull fails. |
+| `host_browser_ack(sessionId, browserId, sequence, decodeMs?)` | Sends `ack` after the device decoded a frame, which lets the relay send another. |
+| `host_browser_pause`, `host_browser_resume` | Send `pause` and `resume`. A frame queued before a pause is dropped. |
+| `host_browser_stop(sessionId, browserId)` | Ends the channel's input, so the relay ends its browser and removes its profile, closes the channel and waits (up to 8 s) for that to finish. It works while the app is locked. |
+
+**What a pull answers.** Bytes, never base64 and never a JSON string of an image: the relay's tag and then its message
+without the length. A first byte of `1` is a JSON object, `2` is a frame (`sequence:u32be width:u16be height:u16be
+scrollY:f32be timestampMs:u64be`, then the JPEG as the relay sent it), `0` alone means nothing came. The JSON objects are
+the relay's `state`, `page` and `refused` and a final `closed {reason, detail?}`, re-serialized from what the app
+validated, so a field the relay did not promise never reaches the web view. The relay's first `state` carries the browser, the page size and the capabilities; its answers to `pause` and `resume` name only `state`, and the app passes that on as it is. Page strings are untrusted text. The app
+also ends a session with a `closed` of its own, whose `reason` is one of `Stopped`, `Disconnected`, `ConnectFailed`,
+`ChannelFailed`, `StartTimeout` (nothing came for 120 s after the channel started), `HostCommandFailed`, `ChannelEnded`,
+`CompanionRequired` and `ProtocolViolation`.
+
+**The same bounds as the relay.** A length of zero or above the largest message (a frame is at most 20 header bytes and
+4 MiB of JPEG), a tag other than 1 and 2, a JSON object over 64 KiB, a frame without its header, a page of no size or a
+JPEG that does not start with `FF D8 FF`, a `state`, `page`, `refused` or `closed` that is not what it says or is over
+its bound (title 512, address 2048, reason 64 letters or digits, detail 256) ends the session with `ProtocolViolation`
+and closes the channel. A message type the app does not know is skipped, so a later relay can add messages.
+
+**Back pressure.** The app keeps the newest frame and the newest message of each kind, never a queue, and the relay keeps
+at most two frames unacknowledged, so a slow device sees fewer frames.
+
+**Fail closed.** A companion that predates `host-browser serve` exits with a usage error, which a wrapper turns into a
+marker line: the session ends with `CompanionRequired`. A companion with the switch off sends `closed
+{reason: "HostBrowserDisabled"}`. Either way nothing is started or retried; the viewer names the class.
+
+**Lifetime.** One browser runs per session and two per app (a third is refused as `busy`). Stopping, a lock, the end of the
+SSH connection and the end of the session each end the channel's input and close it, which ends the relay's browser, its
+helpers and its profile. A browser whose channel ended holds no slot.
+
+**Data.** The app keeps no page text or frame outside memory and writes none to a log, to its storage or to a crash
+report. An error names an operation and a reason; the text of a message that fails to parse is dropped, because
+serde's own message quotes the value.
 
 ## Input mapping for a phone
 
@@ -324,6 +430,47 @@ launcher applies the address rule to its first page.
 
 While Control is off, none of this is sent; the client proves it in a test, and the relay refuses it anyway
 (see "Relay wire format").
+
+Status: the mapping, the **Control**, **Select**, **Keyboard** and **Zoom page** buttons and the keyboard field exist
+as client components (`input.ts` and `HostBrowserInput.tsx` in `apps/client/src/hostBrowser/`) and are driven in the
+developer prototype against a real headless Chromium. They are not in the app yet: the relay's input messages and the
+product view ([#1254](https://github.com/mihazs/lazysh/issues/1254)) carry them to users, and the relay must refuse
+the same messages while Control is off ([#1255](https://github.com/mihazs/lazysh/issues/1255), host side). What the
+client decides:
+
+- **Control** is a switch, off at every start and whenever the view stops being live. The one place input leaves the
+  component checks it, so a touch, a key or a composed character is dropped while it is off, and turning it off ends
+  a gesture under way. A **Select**, **Keyboard** and **Zoom page** button is disabled while it is off. The local zoom
+  of a pinch sends nothing, so it works while Control is off.
+- **Tap** sends `pointer` move, press and release with button `left` and click count 1; the second of two taps within
+  300 ms and 10 displayed pixels has click count 2, and a third tap starts over. A held touch that stays within 10
+  pixels for 500 ms sends the same three with button `right`, and lifting it sends nothing more. Points are the
+  touch point scaled by the frame's device size and offset by the frame's `offsetTop`, through the local zoom.
+- **One-finger drag** sends `wheel` at the first touch point with the finger's travel in page pixels, at most once
+  every 16 ms, and the rest when the finger lifts. A touch that has moved 10 pixels is a drag and cannot become a tap
+  or a long press. The deltas are never summed into a scroll position: where the page is comes from the frame's
+  `scrollOffsetY`, because smooth scrolling does not move 1:1 (measured). The client does not correct the travel from
+  that offset while a drag is under way, so a page that scrolls by more or less than the finger moved lags or leads
+  it. **Select** turns the drag into `pointer` move (button `left`), press at the touch point and release where it ends.
+- **Pinch** zooms the displayed frame locally at once (up to what the page scale allows: 1 to 5 times the page scale
+  the frame reports in `pageScaleFactor`), keeps the part of the frame under the fingers under them, and sends
+  nothing. While it is zoomed in, a one-finger drag pans the zoomed frame instead of scrolling, and a tap still lands
+  on the point under the finger. **Zoom page** sends `pinch {scale}`, the product of the page scale and the local zoom,
+  and shows the frame unzoomed; the browser applies it with `Emulation.setPageScaleFactor` (measured with the
+  screencast running and no mobile emulation: the frame metadata reported 3 after a request for 3). The frame
+  returns at the new scale a moment later; until then the unzoomed old frame shows.
+- **Text** from the keyboard field is sent as `text` and goes to the focused element with `Input.insertText`, so accents,
+  emoji and non-Latin text arrive as typed. A composition (an IME) sends nothing until it ends, then the composed text
+  once; the keys of an IME, such as an Enter that picks a candidate, are not sent. The field holds nothing: every
+  character is sent and cleared.
+- **Keys** are `key {key, modifiers}`: Enter, Backspace, Tab, Escape, the arrows, Home, End, Page Up, Page Down and
+  Delete, and a Control or Meta chord of a letter or digit (modifier bits Alt 1, Control 2, Meta 4, Shift 8). Each
+  is a key down and a key up. The clipboard stays off, so Control or Meta with C, X or V and Shift with Delete are
+  never sent (the relay refuses a key event that carries a clipboard command too). AltGr, which a keyboard reports as
+  Control and Alt, is text, and a chord with Alt alone is left to the keyboard.
+- The keyboard field turns off automatic capitals, correction, completion and spell checking. Detecting that the page
+  focused a password field, to also ask the phone keyboard for no suggestions and no learning, needs the focused
+  element, which the closed relay list does not expose; it is not done, and the stricter hints apply to every field.
 
 ## Controls
 
@@ -423,8 +570,8 @@ ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser
   gap.
 - **Client side.** The viewer reaches `ws://127.0.0.1:<port>/devtools/browser/<id>`, the port forwarded over SSH
   (the Preview tool can forward a host port, or `ssh -L` can), draws screencast frames on a canvas,
-  acknowledges each after decoding, and sends a tap (press and release together), typed text (`insertText`,
-  so accents, CJK and emoji work) and Enter, Backspace, Tab and arrow keys. It sends only methods on a closed
+  acknowledges each after decoding, and, while Control is on, sends the input of [Input mapping](#input-mapping-for-a-phone):
+  taps, double taps, long presses, drags, pinches, typed text (`insertText`, so accents, CJK and emoji work) and keys. It sends only methods on a closed
   allow list and refuses an endpoint that is not a loopback browser path. It reports frames per second and the
   time from a tap to the first frame that changed.
 - **Try it.** On the host, `LAZYSH_DEV_HOST_BROWSER=1 lazysh-agent host-browser --allow-origin
@@ -435,7 +582,12 @@ ships no user-facing UI. It is in the repository as `apps/agent/src/host_browser
   when input closes, refusals before anything starts), the same launcher against a real Chrome or Chromium
   where one is on `PATH` (the Ubuntu 24.04 hosted image has Chrome 156), a protocol-client unit test against an
   in-memory DevTools endpoint, and a Playwright test in which a real headless Chromium plays the host: the
-  viewer must draw the fixture page, a tap must turn it blue, and typed accents and CJK must reach its input.
+  viewer must draw the fixture page, a tap must turn it blue, and typed accents and CJK must reach its input. A second test
+  with Control off, then on, taps, double taps and long presses a fixture button, drags a long page until the frames show
+  its scroll offset and a different part of it, types accents and an emoji, a composed character, Backspace and a
+  Control chord into its input, and pinches and commits a page zoom, each checked from the frames the viewer draws or
+  from the page's own state. It drives the viewer with a mouse and with DevTools touch events, not a real finger or
+  a phone keyboard.
   The Playwright test runs in the existing `client` job on the browser the job already installs, and fails
   rather than skips when no browser is found.
 - **What the tests do not cover.** A real SSH hop in CI, a real device, and a headed browser. The measurements

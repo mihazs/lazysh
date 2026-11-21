@@ -1,5 +1,5 @@
 //! The managed namespace on hosts without descriptor-relative file operations (Windows). Names are
-//! paths inside one directory that the user owns by virtue of living under their own profile.
+//! paths inside one directory that `Store::open` admits by owner and DACL, as far as the user data folder.
 //!
 //! A running `lazysh-agent.exe` can be renamed but not overwritten, so the replace is rename then
 //! place: the installed file becomes `lazysh-agent.exe.previous` and the verified file takes its
@@ -78,11 +78,15 @@ impl Store {
         let dir = current::managed_directory()?;
         storage_namespace::resolve(&dir).map_err(unsafe_location)?;
         storage_filesystem::require_local(&dir).map_err(unsafe_location)?;
+        // Before anything is created, locked or replaced: whoever else can change a directory on the way
+        // decides what the file in it is.
+        current::admitted()?;
         if !dir.try_exists()? {
             if !create {
                 return Ok(None);
             }
             storage_namespace::create(&dir).map_err(unsafe_location)?;
+            current::admitted()?;
         }
         Self::in_directory(dir, true).map(Some)
     }

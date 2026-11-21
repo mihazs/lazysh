@@ -1,0 +1,245 @@
+[
+  {
+    "id": "agent-live-region-redraw",
+    "about": "SYNTHETIC (shaped like the live-region redraws of agent CLIs, not a capture): a bordered input box redrawn in place with cursor-up, erase-line and a spinner glyph",
+    "cols": 40,
+    "rows": 10,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "answer line 1\r\nanswer line 2\r\n"
+      },
+      {
+        "write": "\u001b[2K\u001b[38;2;120;120;255m╭──────────────────────────────╮\u001b[0m\r\n\u001b[2K\u001b[38;2;120;120;255m│\u001b[0m ⠋ Thinking… (1s)             \u001b[38;2;120;120;255m│\u001b[0m\r\n\u001b[2K\u001b[38;2;120;120;255m╰──────────────────────────────╯\u001b[0m\r\n\u001b[2K"
+      },
+      {
+        "write": "\u001b[3A\u001b[2K\u001b[38;2;120;120;255m╭──────────────────────────────╮\u001b[0m\r\n\u001b[2K\u001b[38;2;120;120;255m│\u001b[0m ⠙ Thinking… (2s)             \u001b[38;2;120;120;255m│\u001b[0m\r\n\u001b[2K\u001b[38;2;120;120;255m╰──────────────────────────────╯\u001b[0m\r\n\u001b[2K"
+      },
+      {
+        "write": "\u001b[3A\u001b[2K\u001b[38;2;120;120;255m╭──────────────────────────────╮\u001b[0m\r\n\u001b[2K\u001b[38;2;120;120;255m│\u001b[0m ⠹ Thinking… (3s)             \u001b[38;2;120;120;255m│\u001b[0m\r\n\u001b[2K\u001b[38;2;120;120;255m╰──────────────────────────────╯\u001b[0m\r\n\u001b[2K"
+      },
+      {
+        "write": "\u001b[3A\u001b[2K\u001b[38;2;120;120;255m╭──────────────────────────────╮\u001b[0m\r\n\u001b[2K\u001b[38;2;120;120;255m│\u001b[0m ⠸ Thinking… (4s)             \u001b[38;2;120;120;255m│\u001b[0m\r\n\u001b[2K\u001b[38;2;120;120;255m╰──────────────────────────────╯\u001b[0m\r\n\u001b[2K"
+      },
+      {
+        "write": "\u001b[?2004h\u001b[?1004h\u001b[?25l"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        3
+      ],
+      [
+        2,
+        3
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "answer line 1",
+        "answer line 2",
+        "╭──────────────────────────────╮",
+        "│ ⠸ Thinking… (4s)             │",
+        "╰──────────────────────────────╯",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 0,
+        "y": 5
+      },
+      "modes": {
+        "bracketedPaste": true,
+        "sendFocus": true
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 3,
+          "text": "│",
+          "width": 1,
+          "fg": "rgb:7878ff",
+          "bg": "default",
+          "flags": []
+        },
+        {
+          "x": 2,
+          "y": 3,
+          "text": "⠸",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": []
+        }
+      ],
+      "data": "\u001b[O"
+    },
+    "core": {
+      "divergence": [
+        "focus-report-on-enable"
+      ],
+      "expect": {
+        "data": ""
+      }
+    }
+  },
+  {
+    "id": "status-bar-in-a-scroll-region",
+    "about": "SYNTHETIC (shaped like the live-region redraws of agent CLIs, not a capture): a reverse-video status row outside a DECSTBM region while output scrolls in the region",
+    "cols": 30,
+    "rows": 6,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "\u001b[1;5r\u001b[6;1H\u001b[7m status: running \u001b[0m\u001b[1;1H"
+      },
+      {
+        "write": "out 0\r\nout 1\r\nout 2\r\nout 3\r\nout 4\r\nout 5\r\nout 6\r\nout 7\r\nout 8\r\nout 9\r\nout 10\r\nout 11"
+      }
+    ],
+    "probes": [
+      [
+        1,
+        5
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "out 7",
+        "out 8",
+        "out 9",
+        "out 10",
+        "out 11",
+        " status: running"
+      ],
+      "cursor": {
+        "x": 6,
+        "y": 4
+      },
+      "scrollbackRows": 7,
+      "cells": [
+        {
+          "x": 1,
+          "y": 5,
+          "text": "s",
+          "width": 1,
+          "fg": "default",
+          "bg": "default",
+          "flags": [
+            "inverse"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "truecolor-gradient",
+    "about": "SYNTHETIC (shaped like the live-region redraws of agent CLIs, not a capture): per-cell truecolor backgrounds as drawn by progress bars",
+    "cols": 24,
+    "rows": 2,
+    "scrollback": 10,
+    "steps": [
+      {
+        "write": "\u001b[48;2;0;255;128m \u001b[0m\u001b[48;2;12;243;128m \u001b[0m\u001b[48;2;24;231;128m \u001b[0m\u001b[48;2;36;219;128m \u001b[0m\u001b[48;2;48;207;128m \u001b[0m\u001b[48;2;60;195;128m \u001b[0m\u001b[48;2;72;183;128m \u001b[0m\u001b[48;2;84;171;128m \u001b[0m\u001b[48;2;96;159;128m \u001b[0m\u001b[48;2;108;147;128m \u001b[0m\u001b[48;2;120;135;128m \u001b[0m\u001b[48;2;132;123;128m \u001b[0m\u001b[48;2;144;111;128m \u001b[0m\u001b[48;2;156;99;128m \u001b[0m\u001b[48;2;168;87;128m \u001b[0m\u001b[48;2;180;75;128m \u001b[0m\u001b[48;2;192;63;128m \u001b[0m\u001b[48;2;204;51;128m \u001b[0m\u001b[48;2;216;39;128m \u001b[0m\u001b[48;2;228;27;128m \u001b[0m"
+      }
+    ],
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        10,
+        0
+      ],
+      [
+        19,
+        0
+      ]
+    ],
+    "expect": {
+      "lines": [
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 20,
+        "y": 0
+      },
+      "cells": [
+        {
+          "x": 0,
+          "y": 0,
+          "text": " ",
+          "width": 1,
+          "fg": "default",
+          "bg": "rgb:00ff80",
+          "flags": []
+        },
+        {
+          "x": 10,
+          "y": 0,
+          "text": " ",
+          "width": 1,
+          "fg": "default",
+          "bg": "rgb:788780",
+          "flags": []
+        },
+        {
+          "x": 19,
+          "y": 0,
+          "text": " ",
+          "width": 1,
+          "fg": "default",
+          "bg": "rgb:e41b80",
+          "flags": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "alt-screen-tui-lifecycle",
+    "about": "SYNTHETIC (shaped like the live-region redraws of agent CLIs, not a capture): enter the alternate screen with the modes a TUI enables, draw, then leave and keep the shell screen",
+    "cols": 20,
+    "rows": 5,
+    "scrollback": 100,
+    "steps": [
+      {
+        "write": "$ run-tui\r\n"
+      },
+      {
+        "write": "\u001b[?1049h\u001b[?1h\u001b=\u001b[?1000h\u001b[?1006h\u001b[?2004h\u001b[?1004h\u001b[2J\u001b[H┌─ title ─┐\u001b[2;1H│ body    │"
+      },
+      {
+        "write": "\u001b[?1004l\u001b[?2004l\u001b[?1006l\u001b[?1000l\u001b>\u001b[?1l\u001b[?1049l$ "
+      }
+    ],
+    "probes": [],
+    "expect": {
+      "lines": [
+        "$ run-tui",
+        "$",
+        "",
+        "",
+        ""
+      ],
+      "cursor": {
+        "x": 2,
+        "y": 1
+      },
+      "data": "\u001b[O"
+    },
+    "core": {
+      "divergence": [
+        "focus-report-on-enable"
+      ],
+      "expect": {
+        "data": ""
+      }
+    }
+  }
+]

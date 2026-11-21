@@ -1,10 +1,11 @@
 # Dictation
 
-Whisper remains the default. On Linux x86_64, [Parakeet dictation](voice-parakeet.md)
-adds an explicitly downloaded local model, automatic language detection, and a
-reusable recognizer. Cancel discards its result while synchronous native work may
-continue; controls remain busy until that worker finishes. Other platforms report
-Parakeet unavailable.
+Whisper remains the default. On Linux x86_64, Windows x86_64 and in the Google build
+of the Android app, [Parakeet dictation](voice-parakeet.md) adds an explicitly
+downloaded local model, automatic language detection, and a reusable recognizer.
+Cancel discards its result while synchronous native work may continue; controls
+remain busy until that worker finishes. Other platforms and the F-Droid build
+report Parakeet unavailable.
 
 Open Voice, explicitly download a catalog model or import a trusted Whisper tiny/base GGML `.bin` file, choose its language, and select Record speech. Microphone permission is requested only when recording starts. Stop and transcribe runs the model on this device. Edit the draft before copying it or staging it in the current terminal composer. Staging does not send a prompt.
 
@@ -69,6 +70,8 @@ The speech fixture is the [official whisper.cpp JFK sample](https://github.com/g
 
 A second ignored case, `local_whisper_transcribes_non_english_speech_without_network`, runs the multilingual tiny model on a committed 12.46-second Brazilian Portuguese passage (Multilingual LibriSpeech utterance `11247_10229_000002`, CC-BY-4.0; provenance, hashes and reference transcript in [`apps/client/src-tauri/tests/fixtures/mls-portuguese`](../apps/client/src-tauri/tests/fixtures/mls-portuguese/README.md)). It requires `LAZYSH_WHISPER_TEST_MULTILINGUAL_MODEL` (the catalog's `ggml-tiny.bin`) and checks that an explicit `pt` language and `auto` detection both return text within a word-error-rate limit of the reference, and that the English-only `LAZYSH_WHISPER_TEST_MODEL` rejects `pt` before decoding. The `native-linux-runtimes` job downloads both pinned models and runs the case through `bun run test:voice`. One Portuguese sample from one speaker is functional evidence that non-English inference works, not a multilingual accuracy benchmark.
 
+On Android, `NativeWorkspaceTest#ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView` (`bun run test:android-voice`, job `native-android-auxiliary`) drives the same pinned `ggml-tiny.en.bin` and JFK sample through the bundled WebView on the owned x86_64 emulator: it imports the model with `voice_import_begin`, `voice_import_chunk` (1 MiB chunks) and `voice_import_finish`, transcribes the decoded 16 kHz samples with `voice_transcribe` through the bundled whisper.cpp, expects "ask not what your country can do for you", removes the model with `voice_remove_model` and expects `voice_models` to be empty again. The host verifies both fixtures against the pins in `.github/scripts/speech-fixtures.sh` (the script `native-linux-runtimes` also uses) before staging them in a private `/data/local/tmp` directory, which the run deletes. It is functional evidence on an x86_64 emulator, not on ARM64 hardware, a physical device or the microphone path, and not a latency or battery measurement. The Android Portuguese sample is not run.
+
 ## Apple SpeechAnalyzer
 
 On supported iOS 26+ hardware, Voice also offers Apple's on-device SpeechAnalyzer engine. It requires a build using the iOS 26 SDK and Swift 6.2 or newer. Unsupported platforms and devices report the engine unavailable; Whisper remains available through its own model selection. Switching engines does not select a cloud provider.
@@ -81,7 +84,7 @@ The implementation follows the current [SpeechAnalyzer API](https://developer.ap
 
 Rust tests validate the PCM, locale and request-ID boundary; UI tests cover explicit engine choice, installation and cancellation. Native Swift compilation is an iOS CI gate. No Apple microphone/model inference, accuracy, latency or battery claim has been verified on physical hardware.
 
-An optional Unix-host [transcription relay](cloud-transcription.md) provides revocable device tokens and durable audio quotas for explicitly selected Cloud dictation. Remaining issue #13 work includes Parakeet on other platforms, forced-language support, and real-device acceptance.
+An optional Unix-host [transcription relay](cloud-transcription.md) provides revocable device tokens and durable audio quotas for explicitly selected Cloud dictation. Remaining issue #13 work includes Parakeet on Windows and iOS, forced-language support, and real-device acceptance.
 
 ## Explicit Cloud dictation
 

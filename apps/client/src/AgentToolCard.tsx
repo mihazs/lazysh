@@ -35,7 +35,7 @@ export default function AgentToolCard({use, result, live, resultMessage}: {use: 
       <strong>{call.name || t('chatBlockToolUse')}</strong>
       <span className="agent-tool-summary">{call.summary}</span>
       {files.length > 0 && <span className="agent-diff-counts" aria-label={t('agentDiffCounts', {added, removed})}><span data-kind="+">+{added}</span> <span data-kind="-">−{removed}</span></span>}
-      {shown && <span className="agent-tool-status"><Mark size={14} aria-hidden="true" />{t(statusText[call.status])}{call.exitCode !== undefined && ` · ${t('agentToolExit', {code: call.exitCode})}`}</span>}
+      {shown && <span className="agent-tool-status"><Mark size={14} aria-hidden="true" /><span className="agent-tool-status-text">{t(statusText[call.status])}{call.exitCode !== undefined && ` · ${t('agentToolExit', {code: call.exitCode})}`}</span></span>}
     </summary>
     {files.length > 0 ? <>
       {files.map((file, index) => <section key={index} className="agent-diff-file">

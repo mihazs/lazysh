@@ -1,29 +1,36 @@
-import {expect,test} from '@playwright/test';
+import {expect} from '@playwright/test';
+import {test} from './fixtures/terminalBackend';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {openMoshApp} from './fixtures/moshApp';
+import {onAdapter,screenText,terminalBounds,terminalDrawn,terminalRows,terminalSize} from './fixtures/terminalState';
 import type {Terminal} from '../src/xterm/terminal';
 import {readFileSync} from 'node:fs';
-import type {MoshResizeController} from '../src/xterm/moshResize';
+import type {CanonicalResize,TerminalAdapter} from '../src/terminalAdapter';
 type Frame={cols:number;rows:number;state:number;bytesHex:string;expectedVisibleRows:number;expectedCursor:number[];expectedLongRow:string;expectedFirstRowBoldRed:boolean};
 const captured=JSON.parse(readFileSync(new URL('./fixtures/mosh-resize-frames.json',import.meta.url),'utf8')) as {frames:Frame[]};
 
-type Owned={terminal:Terminal;writes:string[];hook?:MoshResizeController;write(data:string|Uint8Array):Promise<void>;frame(cols:number,rows:number,body?:string):Promise<void>};
-declare global {interface Window {ownedMoshResize:{primary:Owned;make(guarded:boolean):Owned;install(terminal:Terminal):MoshResizeController;dispose():void}}}
+/** `adapter` is what the cases read: rows, cursor, selection, size and the input the terminal sent. `terminal` is the xterm under it, for what the contract has no word for: cell styles and the cell array. */
+type Owned={terminal:Terminal;adapter:TerminalAdapter;writes:string[];hook?:CanonicalResize;write(data:string|Uint8Array):Promise<void>;frame(cols:number,rows:number,body?:string):Promise<void>;
+  /** The history rows above the live screen. */base():number;/** One buffer row's text. */row(y:number):string};
+declare global {interface Window {ownedMoshResize:{primary:Owned;make(guarded:boolean):Owned;install(terminal:Terminal):CanonicalResize;dispose():void}}}
 const bytes=(value:string)=>Array.from(value.matchAll(/../g),part=>Number.parseInt(part[0],16));
 
 test.beforeEach(async({page})=>{
   await page.goto('/');
   await page.evaluate(async()=>{
-    const terminalModule='/src/xterm/terminal.ts',policyModule='/src/xterm/moshResize.ts';
-    const {createTerminal}=await import(terminalModule),{installMoshResize}=await import(policyModule);
+    const terminalModule='/src/xterm/terminal.ts',policyModule='/src/xterm/moshResize.ts',adapterModule='/src/xtermTerminalAdapter.ts';
+    const {createTerminal}=await import(terminalModule),{installMoshResize}=await import(policyModule),{XtermTerminalAdapter}=await import(adapterModule);
     const states:{owned:Owned;host:HTMLElement}[]=[];
     const make=(guarded:boolean):Owned=>{
       const host=document.createElement('section');Object.assign(host.style,{position:'fixed',inset:'0',background:'#101010'});document.body.append(host);
       const terminal:Terminal=createTerminal();terminal.options.allowProposedApi=true;terminal.resize(40,12);terminal.open(host);
+      const adapter:TerminalAdapter=new XtermTerminalAdapter(terminal);
       let id=100;
-      const owned:Owned={terminal,writes:[],write:data=>new Promise(resolve=>terminal.write(data,resolve)),frame(cols,rows,body=''){const next=++id;return owned.write(`\x1b]7777;lazysh-mosh;1;begin;${next};${cols};${rows}\x1b\\${body}\x1b]7777;lazysh-mosh;1;end;${next}\x1b\\`);}};
-      terminal.onData(value=>owned.writes.push(value));
-      if(guarded)owned.hook=installMoshResize(terminal);
+      const owned:Owned={terminal,adapter,writes:[],write:data=>adapter.write!(typeof data==='string'?new TextEncoder().encode(data):data),
+        base:()=>adapter.viewport().length-adapter.size().rows,row:y=>adapter.readRows!(y,1)[0],
+        frame(cols,rows,body=''){const next=++id;return owned.write(`\x1b]7777;lazysh-mosh;1;begin;${next};${cols};${rows}\x1b\\${body}\x1b]7777;lazysh-mosh;1;end;${next}\x1b\\`);}};
+      adapter.observeInput!(value=>owned.writes.push(value));
+      if(guarded)owned.hook=adapter.enableCanonicalResize!();
       states.push({owned,host});return owned;
     };
     window.ownedMoshResize={primary:make(true),make,install:installMoshResize,dispose(){for(const {owned,host} of states){owned.hook?.dispose();owned.terminal.dispose();host.remove();}}};
@@ -35,13 +42,14 @@ test('actual producer frames duplicate upstream resize history but not canonical
   const observations=await page.evaluate(async frames=>{
     const results=[];
     for(const guarded of [false,true]) {
-      const owned=guarded?window.ownedMoshResize.primary:window.ownedMoshResize.make(false),terminal=owned.terminal;
-      const stages=[];let resizes=0;terminal.onResize(()=>resizes++);
+      const owned=guarded?window.ownedMoshResize.primary:window.ownedMoshResize.make(false),{adapter}=owned;
+      const stages=[];let resizes=0;adapter.subscribe(()=>resizes++,['geometry']);
       for(const frame of frames) {
-        terminal.resize(frame.cols,frame.rows);await owned.write(new Uint8Array(frame.bytes));
-        const buffer=terminal.buffer.normal,all=Array.from({length:buffer.length},(_,i)=>buffer.getLine(i)!.translateToString(true));
-        const first=buffer.getLine(buffer.baseY)!.getCell(0)!;
-        stages.push({base:buffer.baseY,cursor:[buffer.cursorX,buffer.cursorY],long:all[buffer.baseY+1],bold:!!first.isBold(),fg:first.getFgColor(),counts:Array.from({length:frame.expectedVisibleRows},(_,i)=>all.filter(line=>line.startsWith(`OWNED_ROW_${String(i).padStart(2,'0')}`)).length)});
+        adapter.requestSize({columns:frame.cols,rows:frame.rows});await owned.write(new Uint8Array(frame.bytes));
+        const base=owned.base(),all=adapter.readRows!(0,adapter.viewport().length),{x,y}=adapter.cursor();
+        // The first cell's style is not part of the adapter's contract: it is read from the xterm under it.
+        const first=owned.terminal.buffer.normal.getLine(base)!.getCell(0)!;
+        stages.push({base,cursor:[x,y],long:all[base+1],bold:!!first.isBold(),fg:first.getFgColor(),counts:Array.from({length:frame.expectedVisibleRows},(_,i)=>all.filter(line=>line.startsWith(`OWNED_ROW_${String(i).padStart(2,'0')}`)).length)});
       }
       results.push({guarded,stages,resizes,writes:owned.writes});
     }
@@ -80,21 +88,23 @@ test('keeps genuine history cells, styles, markers, selection and viewport ancho
 
 test('resizes both buffers through one row while the alternate buffer is active and keeps surviving selections',async({page})=>{
   const result=await page.evaluate(async()=>{
-    const {terminal:t,write,writes,frame}=window.ownedMoshResize.primary;
-    await write('\x1b[1;32mSURVIVING\x1b7\x1b[0m\x1b[12;1HCLIPPED');t.select(0,0,9);const selected=t.getSelection();
-    await frame(40,1);const kept=t.getSelection();await frame(40,12);await write('\x1b8Z');const restored=t.buffer.normal.getLine(0)!.getCell(9)!;const savedStyle={bold:!!restored.isBold(),fg:restored.getFgColor()};await write('\x1b[?1049h\x1b[HALT');await frame(20,1);await frame(40,12);
-    const alt=t.buffer.active.getLine(0)!.translateToString(true);await write('\x1b[?1049l');
-    const normal=t.buffer.normal;return {savedStyle,selected,kept,alt,type:t.buffer.active.type,base:normal.baseY,row:normal.getLine(0)!.translateToString(true),bold:!!normal.getLine(0)!.getCell(0)!.isBold(),writes};
+    const {terminal:t,adapter,write,writes,frame,base,row}=window.ownedMoshResize.primary;
+    await write('\x1b[1;32mSURVIVING\x1b7\x1b[0m\x1b[12;1HCLIPPED');adapter.select({start:{x:0,y:0},end:{x:8,y:0}});const selected=adapter.selectedText();
+    await frame(40,1);const kept=adapter.selectedText();await frame(40,12);await write('\x1b8Z');
+    // Cell styles are not part of the adapter's contract: they are read from the xterm under it.
+    const restored=t.buffer.normal.getLine(0)!.getCell(9)!;const savedStyle={bold:!!restored.isBold(),fg:restored.getFgColor()};await write('\x1b[?1049h\x1b[HALT');await frame(20,1);await frame(40,12);
+    const alt=row(0);await write('\x1b[?1049l');
+    return {savedStyle,selected,kept,alt,type:adapter.modes().alternateScreen?'alternate':'normal',base:base(),row:row(0),bold:!!t.buffer.normal.getLine(0)!.getCell(0)!.isBold(),writes};
   });
   expect(result).toEqual({savedStyle:{bold:true,fg:2},selected:'SURVIVING',kept:'SURVIVING',alt:'ALT',type:'normal',base:0,row:'SURVIVINGZ',bold:true,writes:[]});
 });
 
 test('serial queued producer writes and cropped viewport selection never fabricate history or input',async({page})=>{
   const result=await page.evaluate(async frames=>{
-    const owned=window.ownedMoshResize.primary,t=owned.terminal;
-    const first=owned.write(new Uint8Array(frames[0]));t.resize(40,6);const second=owned.write(new Uint8Array(frames[1]));await Promise.all([first,second]);
-    t.select(0,t.buffer.normal.baseY+5,12);await owned.frame(40,1);
-    return {base:t.buffer.normal.baseY,first:t.buffer.normal.getLine(0)!.translateToString(true),selection:t.getSelection(),writes:owned.writes};
+    const owned=window.ownedMoshResize.primary,{adapter}=owned;
+    const first=owned.write(new Uint8Array(frames[0]));adapter.requestSize({columns:40,rows:6});const second=owned.write(new Uint8Array(frames[1]));await Promise.all([first,second]);
+    const last=owned.base()+5;adapter.select({start:{x:0,y:last},end:{x:11,y:last}});await owned.frame(40,1);
+    return {base:owned.base(),first:owned.row(0),selection:adapter.selectedText(),writes:owned.writes};
   },captured.frames.slice(0,2).map(frame=>bytes(frame.bytesHex)));
   expect(result).toEqual({base:0,first:'OWNED_ROW_00',selection:'',writes:[]});
 });
@@ -115,13 +125,14 @@ test('rejects malformed private ABI before installing and restores only its own 
 
 test('desired resizes leave canonical geometry intact until closed FIFO drain preserves final rows and restores stock resizing',async({page})=>{
   const result=await page.evaluate(async()=>{
-    const o=window.ownedMoshResize.primary,t=o.terminal,intents:unknown[]=[],events:unknown[]=[];
-    o.hook!.onResizeIntent(size=>intents.push(size));t.onResize(size=>events.push(size));
-    await o.frame(40,12,'\x1b[12;1HBOTTOM');t.resize(20,6);t.resize(20,6);await o.frame(40,12,'\x1b[HDELTA');
-    const live={size:[t.cols,t.rows],bottom:t.buffer.normal.getLine(11)!.translateToString(true),base:t.buffer.normal.baseY};
-    const closing=o.hook!.close();t.resize(70,20);await closing;await o.hook!.close();
-    const ended={size:[t.cols,t.rows],base:t.buffer.normal.baseY,bottom:t.buffer.normal.getLine(11)!.translateToString(true),failure:o.hook!.failure};t.resize(50,10);
-    return {live,ended,stock:[t.cols,t.rows],intents,events,writes:o.writes};
+    const o=window.ownedMoshResize.primary,{adapter}=o,intents:unknown[]=[],events:unknown[]=[];
+    const size=()=>[adapter.size().columns,adapter.size().rows],resize=(columns:number,rows:number)=>adapter.requestSize({columns,rows});
+    o.hook!.onResizeIntent(size=>intents.push(size));adapter.subscribe(event=>{if(event.type==='geometry')events.push({cols:event.size.columns,rows:event.size.rows});},['geometry']);
+    await o.frame(40,12,'\x1b[12;1HBOTTOM');resize(20,6);resize(20,6);await o.frame(40,12,'\x1b[HDELTA');
+    const live={size:size(),bottom:o.row(11),base:o.base()};
+    const closing=o.hook!.close();resize(70,20);await closing;await o.hook!.close();
+    const ended={size:size(),base:o.base(),bottom:o.row(11),failure:o.hook!.failure};resize(50,10);
+    return {live,ended,stock:size(),intents,events,writes:o.writes};
   });
   expect(result.live).toEqual({size:[40,12],bottom:'BOTTOM',base:0});
   expect(result.ended).toEqual({size:[40,12],base:0,bottom:'BOTTOM',failure:null});expect(result.stock).toEqual([50,10]);
@@ -130,12 +141,12 @@ test('desired resizes leave canonical geometry intact until closed FIFO drain pr
 
 test('bytewise OSC CSI UTF8 and a 16KiB split remain ordered despite mid-frame desired resizes',async({page})=>{
   const result=await page.evaluate(async frames=>{
-    const o=window.ownedMoshResize.primary,t=o.terminal;
-    for(const frame of frames){const writes=[];for(let i=0;i<frame.length;i++){writes.push(o.write(new Uint8Array([frame[i]])));if(i===7)t.resize(20,1);}await Promise.all(writes);}
-    const unicode=t.buffer.normal.getLine(4)!.translateToString(true);
+    const o=window.ownedMoshResize.primary,{adapter}=o;
+    for(const frame of frames){const writes=[];for(let i=0;i<frame.length;i++){writes.push(o.write(new Uint8Array([frame[i]])));if(i===7)adapter.requestSize({columns:20,rows:1});}await Promise.all(writes);}
+    const unicode=o.row(4);
     const bytes=new TextEncoder().encode('\x1b]7777;lazysh-mosh;1;begin;1000;40;12\x1b\\'+'\x1b[H'+'\x1b[0m'.repeat(5000)+'SAFE'+'\x1b]7777;lazysh-mosh;1;end;1000\x1b\\');
-    const first=o.write(bytes.slice(0,16384));t.resize(30,2);const second=o.write(bytes.slice(16384));await Promise.all([first,second]);
-    return {unicode,size:[t.cols,t.rows],base:t.buffer.normal.baseY,row:t.buffer.normal.getLine(0)!.translateToString(true),failure:o.hook!.failure,writes:o.writes};
+    const first=o.write(bytes.slice(0,16384));adapter.requestSize({columns:30,rows:2});const second=o.write(bytes.slice(16384));await Promise.all([first,second]);
+    return {unicode,size:[adapter.size().columns,adapter.size().rows],base:o.base(),row:o.row(0),failure:o.hook!.failure,writes:o.writes};
   },captured.frames.slice(0,2).map(frame=>bytes(frame.bytesHex)));
   expect(result).toEqual({unicode:'OWNED_ROW_04_世界',size:[40,12],base:0,row:'SAFED_ROW_00',failure:null,writes:[]});
 });
@@ -144,7 +155,7 @@ test('malformed nested stale and partial frame envelopes fail closed without inp
   const results=await page.evaluate(async()=>{
     const f=window.ownedMoshResize,results=[];
     for(const payload of ['lazysh-mosh;2;begin;1;40;12','lazysh-mosh;1;begin;9007199254740992;40;12','lazysh-mosh;1;begin;1;1;12','lazysh-mosh;1;end;1']){
-      const o=f.make(true);await o.write(`\x1b]7777;${payload}\x1b\\`);o.terminal.resize(30,5);results.push(o.hook!.failure);
+      const o=f.make(true);await o.write(`\x1b]7777;${payload}\x1b\\`);o.adapter.requestSize({columns:30,rows:5});results.push(o.hook!.failure);
     }
     for(const suffix of ['', '\x1b]7777;lazysh-mosh;1;begin;2;30;5\x1b\\','\x1b]7777;lazysh-mosh;1;end;1\x1b\\\x1b]7777;lazysh-mosh;1;begin;1;40;12\x1b\\']){
       const o=f.make(true);await o.write('\x1b]7777;lazysh-mosh;1;begin;1;40;12\x1b\\'+suffix);await o.hook!.close();results.push(o.hook!.failure);
@@ -158,19 +169,20 @@ test('malformed nested stale and partial frame envelopes fail closed without inp
 
 test('a selection spanning retained history and a surviving viewport prefix is not cleared by narrowing',async({page})=>{
   const result=await page.evaluate(async()=>{
-    const o=window.ownedMoshResize.primary,t=o.terminal;await o.frame(40,6);
+    const o=window.ownedMoshResize.primary,{adapter}=o;await o.frame(40,6);
     await o.write(Array.from({length:10},(_,i)=>`SHORT_${i}`).join('\r\n'));
-    const b=t.buffer.normal;t.select(0,b.baseY-1,45);const before=t.getSelection();await o.frame(20,6);
-    return {before,after:t.getSelection(),base:b.baseY};
+    // From the first column of the last history row through the fifth cell of the next row.
+    adapter.select({start:{x:0,y:o.base()-1},end:{x:4,y:o.base()}});const before=adapter.selectedText();await o.frame(20,6);
+    return {before,after:adapter.selectedText(),base:o.base()};
   });
   expect(result.base).toBeGreaterThan(0);expect(result.before).not.toBe('');expect(result.after).toBe(result.before);
 });
 
 test('close drains queued complete frames before releasing parser ownership and never applies pending desired crop',async({page})=>{
   const result=await page.evaluate(async()=>{
-    const o=window.ownedMoshResize.primary,t=o.terminal;t.resize(20,1);
-    const queued=o.frame(41,12,'\x1b[12;1HQUEUED_BOTTOM\x1b[H');const closed=o.hook!.close();t.resize(70,20);await closed;await queued;
-    return {size:[t.cols,t.rows],bottom:t.buffer.normal.getLine(11)!.translateToString(true),base:t.buffer.normal.baseY,failure:o.hook!.failure,writes:o.writes};
+    const o=window.ownedMoshResize.primary,{adapter}=o;adapter.requestSize({columns:20,rows:1});
+    const queued=o.frame(41,12,'\x1b[12;1HQUEUED_BOTTOM\x1b[H');const closed=o.hook!.close();adapter.requestSize({columns:70,rows:20});await closed;await queued;
+    return {size:[adapter.size().columns,adapter.size().rows],bottom:o.row(11),base:o.base(),failure:o.hook!.failure,writes:o.writes};
   });
   expect(result).toEqual({size:[41,12],bottom:'QUEUED_BOTTOM',base:0,failure:null,writes:[]});
 });
@@ -205,15 +217,16 @@ test('a fresh protected Pane subscriber receives its first same-size measurement
 
 test('actual App installs Mosh framing before early output and fits only remote intent across viewport and Compose changes',async({page})=>{
   await openMoshApp(page,'Mosh frame fixture',bytes(captured.frames[0].bytesHex));
-  const rows=page.locator('.terminal-canvas .xterm-rows > div');
-  await expect(rows).toHaveCount(12);await expect(page.locator('.xterm-screen')).toContainText('OWNED_ROW_11');
+  await terminalDrawn(page);
+  const rowCount=async()=>(await terminalSize(page)).rows,lastRow=async()=>(await terminalRows(page)).at(-1);
+  await expect.poll(rowCount).toBe(12);await expect.poll(()=>screenText(page)).toContain('OWNED_ROW_11');
   const state=()=>page.evaluate(()=>Reflect.get(window,'nativeMoshApp') as {resizes:{cols:number;rows:number}[];writes:string[];acknowledged:number});
   await expect.poll(async()=>(await state()).resizes.length).toBeGreaterThan(0);
   const firstSize=(await state()).resizes.at(-1)!;expect(firstSize).not.toEqual({cols:40,rows:12});
   if ((page.viewportSize()?.width??1280)<=600) {
     await page.evaluate(()=>Reflect.get(window,'nativeMoshApp').emit(Array.from(new TextEncoder().encode('\x1b[?1000h\x1b[?1006h'))));
-    await expect(page.locator('.terminal-canvas .xterm')).toHaveClass(/enable-mouse-events/);
-    const box=(await page.locator('.xterm-screen').boundingBox())!,origin={x:box.x+30,y:box.y+40};
+    await expect.poll(()=>onAdapter(page,adapter=>adapter.modes().mouseTracking)).toBe('vt200');
+    const box=(await terminalBounds(page))!,origin={x:box.left+30,y:box.top+40};
     const input=await page.context().newCDPSession(page);
     await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
     try {
@@ -221,7 +234,7 @@ test('actual App installs Mosh framing before early output and fits only remote 
       await expect.poll(async()=>(await state()).writes.length).toBeGreaterThan(0);
       const before=(await state()).writes.length;
       await page.evaluate(data=>Reflect.get(window,'nativeMoshApp').emit([...data,...new TextEncoder().encode('\x1b[?1000h\x1b[?1006h')]),bytes(captured.frames[1].bytesHex));
-      await expect(rows).toHaveCount(6);await expect(rows.last()).toContainText('OWNED_ROW_05');
+      await expect.poll(rowCount).toBe(6);await expect.poll(lastRow).toContain('OWNED_ROW_05');
       await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+60}]});
       await expect.poll(async()=>(await state()).writes.length).toBeGreaterThan(before);
     } finally {await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await input.detach();}
@@ -229,34 +242,35 @@ test('actual App installs Mosh framing before early output and fits only remote 
     await page.evaluate(()=>{Reflect.get(window,'nativeMoshApp').writes=[];});
   } else {
     await page.evaluate(data=>Reflect.get(window,'nativeMoshApp').emit(data),bytes(captured.frames[1].bytesHex));
-    await expect(rows).toHaveCount(6);await expect(rows.last()).toContainText('OWNED_ROW_05');
+    await expect.poll(rowCount).toBe(6);await expect.poll(lastRow).toContain('OWNED_ROW_05');
   }
   // The composer sheet covers the output: neither it nor a viewport change while it is open requests a Mosh resize.
   const beforeCompose=(await state()).resizes.length;await page.getByRole('button',{name:'Compose',exact:true}).click();
   await expect(page.getByRole('textbox',{name:'Compose text',exact:true})).toBeFocused();
   await page.setViewportSize({width:830,height:590});
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  expect((await state()).resizes.length).toBe(beforeCompose);await expect(rows).toHaveCount(6);
+  expect((await state()).resizes.length).toBe(beforeCompose);await expect.poll(rowCount).toBe(6);
   await page.getByRole('button',{name:'Close composer',exact:true}).click();
-  await expect.poll(async()=>(await state()).resizes.length).toBeGreaterThan(beforeCompose);await expect(rows).toHaveCount(6);
+  await expect.poll(async()=>(await state()).resizes.length).toBeGreaterThan(beforeCompose);await expect.poll(rowCount).toBe(6);
   await page.evaluate(data=>{const s=Reflect.get(window,'nativeMoshApp');s.emit(data);s.closed();},bytes(captured.frames[3].bytesHex));
-  await expect(rows).toHaveCount(12);await expect(rows.last()).toContainText('OWNED_ROW_11');
+  await expect.poll(rowCount).toBe(12);await expect.poll(lastRow).toContain('OWNED_ROW_11');
   const final=await state();expect(final.writes).toEqual([]);expect(final.resizes.some(size=>size.cols===40&&size.rows===6)).toBe(false);
   expect(final.acknowledged).toBeGreaterThanOrEqual(bytes(captured.frames[0].bytesHex).length+bytes(captured.frames[1].bytesHex).length);
 });
 
 test('narrowing clears offscreen history selection endpoints without altering retained history cells',async({page})=>{
   const result=await page.evaluate(async()=>{
-    const o=window.ownedMoshResize.primary,t=o.terminal;await o.frame(40,6);
+    const o=window.ownedMoshResize.primary,{adapter}=o;await o.frame(40,6);
     await o.write(Array.from({length:10},(_,i)=>String(i).repeat(35)+'TAIL!').join('\r\n'));
-    const b=t.buffer.normal,row=b.baseY-1,history=b.getLine(row)!.translateToString(false);
-    t.select(35,row,4);const before={text:t.getSelection(),position:t.getSelectionPosition()};
-    await o.frame(20,6);const narrow={text:t.getSelection(),position:t.getSelectionPosition(),history:b.getLine(row)!.translateToString(false),width:b.getLine(row)!.length};
-    await o.frame(40,6);return {before,narrow,widened:b.getLine(row)!.translateToString(false),history,writes:o.writes};
+    // The row fills all 40 columns, so its trimmed text is its whole width. The line's own cell count is xterm's, read from the xterm under the adapter.
+    const row=o.base()-1,line=()=>o.terminal.buffer.normal.getLine(row)!,history=o.row(row);
+    adapter.select({start:{x:35,y:row},end:{x:38,y:row}});const before={text:adapter.selectedText(),range:adapter.selectionRange()};
+    await o.frame(20,6);const narrow={text:adapter.selectedText(),range:adapter.selectionRange(),history:o.row(row),width:line().length};
+    await o.frame(40,6);return {before,narrow,widened:o.row(row),history,writes:o.writes};
   });
-  expect(result.before.text).toBe('TAIL');expect(result.before.position?.end.x).toBe(39);
+  expect(result.before.text).toBe('TAIL');expect(result.before.range?.end).toEqual({x:38,y:result.before.range!.start.y});
   expect(result.narrow.history).toBe(result.history);expect(result.narrow.width).toBe(40);expect(result.widened).toBe(result.history);
-  expect(result.narrow.text).toBe('');expect(result.narrow.position).toBeUndefined();expect(result.writes).toEqual([]);
+  expect(result.narrow.text).toBe('');expect(result.narrow.range).toBeUndefined();expect(result.writes).toEqual([]);
 });
 
 const moshHistorySource=readFileSync(new URL('../src-tauri/gen/android/app/src/androidTest/assets/owned-mosh-history.js',import.meta.url),'utf8');

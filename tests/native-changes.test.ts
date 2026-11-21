@@ -10,33 +10,34 @@ const roots = gitFixtureRoots('lazysh-native-changes-test-');
 afterAll(() => roots.cleanup());
 
 type Outputs = Record<string, string>;
-const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_mosh',
-  'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios'];
+const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'terminal_bridge', 'terminal_windows', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_terminal_core', 'android_mosh',
+  'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf', 'terminal_macos', 'linux_surface'];
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
 const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false',
   ntfy_variants: '["fdroid","google"]', native: 'true', docs_only: 'false' };
-// Jobs that are not required to merge: pull requests never select them, pushes to main always do.
-const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios'];
+// Jobs that are not required to merge: pull requests never select them, pushes to main always do. terminal-perf is report-only
+// too, but it follows the terminal runtime area on a pull request (see the selection test below).
+const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_macos'];
 const mainOnlyJobs = ['companion-candidates', 'native-desktop', 'native-android-mosh', 'native-android-herdr-navigation',
-  'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator'];
+  'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator', 'terminal-macos'];
 const pullRequestEverything: Outputs = { ...everything, ...Object.fromEntries(mainOnlyOutputs.map(name => [name, 'false'])) };
 const onPullRequest = (jobs: Record<string, number>) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !mainOnlyJobs.includes(id)));
 const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])), android_appium_quarantine: 'false',
   ntfy_variants: '["google"]', native: 'false' };
 
 /** Commit `paths` (and `moves` of seeded files) over a base commit and classify the range as checks.yml does. */
-async function classify(paths: string[], { event = 'pull_request', seed = [] as string[], moves = [] as [string, string][], contents = {} as Record<string, string> } = {}) {
+async function classify(paths: string[], { event = 'pull_request', seed = [] as string[], moves = [] as [string, string][], contents = {} as Record<string, string>, seedContents = {} as Record<string, string> } = {}) {
   const { root, env } = await roots.create();
   Object.assign(env, { GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' });
   const repo = join(root, 'repo');
-  const write = async (path: string) => {
+  const write = async (path: string, text = contents[path]) => {
     await mkdir(dirname(join(repo, path)), { recursive: true });
-    await writeFile(join(repo, path), contents[path] ?? `change ${path}`);
+    await writeFile(join(repo, path), text ?? `change ${path}`);
   };
   await mkdir(repo);
   const git = (...args: string[]) => run(repo, ['git', ...args], env);
   await git('init', '-q', '-b', 'main');
-  for (const path of ['seed.txt', ...seed]) await write(path);
+  for (const path of ['seed.txt', ...seed]) await write(path, seedContents[path]);
   await git('add', '.'); await git('commit', '-q', '-m', 'chore: base');
   const base = (await git('rev-parse', 'HEAD')).stdout.trim();
   for (const path of paths) await write(path);
@@ -88,17 +89,19 @@ async function runningJobs(outputs: Outputs, event = 'push') {
 
 const neverNightly = "github.event_name != 'schedule'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
-const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2,
-  'native-android': 1, 'native-android-runtime': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1,
+const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-macos': 1, 'terminal-windows': 1, 'native-linux-surface': 1, 'native-linux': 1, 'native-terminal-bridge': 1, 'native-desktop': 2,
+  'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-zellij': 1,
   'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-ios-simulator': 1,
   'native-android-biometric': 1, 'native-android-appium': 1 };
-const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-desktop': 2,
-  'native-android': 1, 'native-android-runtime': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
+const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-terminal-bridge': 1, 'native-desktop': 2,
+  'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, 'native-android-tmux': 1, 'native-android-zellij': 1, 'native-android-ssh-parity': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
 const agentRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2,
   'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-appium': 1 };
-const androidRun = { ...alwaysRun, 'herdr-native': 1, 'native-android': 1, 'native-android-runtime': 1,
-  'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-ssh-parity': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
+const androidRun = { ...alwaysRun, 'herdr-native': 1, 'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1,
+  'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-zellij': 1, 'native-android-ssh-parity': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
 const iosRun = { ...alwaysRun, 'native-ios-simulator': 1 };
+const herdrRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1,
+  'native-linux-runtimes': 1, 'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-appium': 1 };
 
 test.each([
   [['docs/connections.md']],
@@ -174,12 +177,17 @@ test.each([
   ['the owned SSH fixture the Appium suite reuses', ['tests/support/sshFixture.ts'], { ...clientRun, ...androidRun }],
   ['iOS project', ['apps/client/src-tauri/apple/project.yml.hbs'], iosRun],
   ['an iOS plugin source set', ['packages/display-idle/ios/Sources/Idle.swift'], iosRun],
-  ['Herdr', ['packages/herdr-guard/client.rs'], { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1,
-    'native-linux-runtimes': 1, 'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-appium': 1 }],
-  ...(['packages/terminal-runtime/src/lib.rs', 'packages/terminal-renderer-wgpu/src/lib.rs'] as const).map(path => [
-    `the terminal runtime and renderer (${path})`, [path], { ...alwaysRun, 'herdr-native': 1 }] as const),
-  ['the Mosh frame fixture the terminal runtime replays', ['apps/client/e2e/fixtures/mosh-resize-frames.json'], { ...clientRun, 'herdr-native': 1 }],
-  ['the platform key fixtures the terminal runtime is held to', ['apps/client/e2e/fixtures/platform-keys/mac.json'], { ...clientRun, 'herdr-native': 1 }],
+  ['Herdr', ['packages/herdr-guard/client.rs', 'tests/herdr-notices.test.ts', '.github/herdr-notices/reviewed.json'], herdrRun],
+  // The app bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt with the native-terminal feature.
+  ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1, 'native-android-terminal-core': 1 }],
+  ['the terminal renderer, which the app compiles with the same feature', ['packages/terminal-renderer-wgpu/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1, 'native-android-terminal-core': 1 }],
+  ...(['packages/herdr-upstream/crates/ghostty-vt/src/lib.rs', 'packages/herdr-upstream/vendor/libghostty-vt/build.zig'] as const).map(path => [
+    `the vendored Herdr binding the terminal runtime builds on and its library (${path})`, [path], { ...herdrRun, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1, 'native-android-terminal-core': 1 }] as const),
+  ['the Linux composition probe, a standalone prototype crate', ['packages/terminal-runtime/prototypes/linux-surface/src/main.rs'], { ...alwaysRun, 'native-linux-surface': 1 }],
+  ["the probe's harness, which also drives the real app's surface host", ['packages/terminal-runtime/prototypes/linux-surface/scripts/check.py'], { ...alwaysRun, 'native-linux-surface': 1, 'native-terminal-bridge': 1 }],
+  ["Herdr's own source, which the terminal runtime does not build on", ['packages/herdr-upstream/src/main.rs'], { ...herdrRun, 'terminal-perf': 1 }],
+  ['the Mosh frame fixture the terminal runtime replays', ['apps/client/e2e/fixtures/mosh-resize-frames.json'], { ...clientRun, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-windows': 1 }],
+  ['the platform key fixtures the terminal runtime is held to', ['apps/client/e2e/fixtures/platform-keys/mac.json'], { ...clientRun, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-windows': 1 }],
   ['Mosh transport', ['packages/mosh-transport/src/lib.rs'], { ...clientRun, ...iosRun, 'native-android-mosh': 1 }],
   ['push registration', ['packages/push-registration/src/lib.rs'], { ...clientRun, ...iosRun,
     'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2 }],
@@ -187,13 +195,35 @@ test.each([
   ['the shared companion release crate', ['packages/companion-release/src/lib.rs'], { ...clientRun, ...agentRun }],
   ...(['apps/notification-service/src/lib.rs', 'packages/notification-client/src/lib.rs'] as const).map(path => [
     `the notification relay (${path})`, [path], { ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2 }] as const),
-  ['always-run-only hooks and services', ['.githooks/pre-commit', 'tests/pre-commit.test.ts', 'tests/moon-graph.test.ts',
-    '.github/workflows/main-verdict.yml', 'tests/main-verdict.test.ts', 'apps/transcription-service/src/main.rs', 'fdroid/metadata/app.lazysh.client.yml'], alwaysRun],
+  ['always-run-only hooks and services', ['.githooks/pre-commit', 'tests/pre-commit.test.ts', 'tests/moon-graph.test.ts', 'tests/speech-fixtures.test.ts',
+    '.github/workflows/main-verdict.yml', 'tests/main-verdict.test.ts', 'tests/native-lib-size.test.ts', '.github/workflows/conventional-commits.yml', 'tests/regression-check.test.ts', 'apps/transcription-service/src/main.rs', 'fdroid/metadata/app.lazysh.client.yml'], alwaysRun],
+  ['the Windows composition probe, a standalone prototype crate with its own workflow', ['packages/terminal-runtime/prototypes/windows-surface/src/main.rs', '.github/workflows/windows-surface-probe.yml'], alwaysRun],
 ] as const)('a pull request changing %s runs exactly the jobs it can affect', async (_, paths, expected) => {
   const outputs = await classify([...paths]);
   expect(outputs.docs_only).toBe('false');
   expect(outputs.native).toBe(Object.keys(expected).length > 3 ? 'true' : 'false');
   expect(await runningJobs(outputs)).toEqual(onPullRequest(expected));
+});
+
+test('the vendored Herdr binding selects the terminal runtime checks, including its Android and Windows builds; the guard does not', async () => {
+  const binding = await classify(['packages/herdr-upstream/crates/ghostty-vt/build.rs']);
+  expect([binding.terminal_runtime, binding.terminal_windows]).toEqual(['true', 'true']);
+  const guard = await classify(['packages/herdr-guard/client.rs']);
+  expect([guard.terminal_runtime, guard.terminal_windows]).toEqual(['false', 'false']);
+});
+
+test('the terminal performance gate runs on a pull request for the runtime and the renderer, never for unrelated paths, and on main always', async () => {
+  for (const path of ['packages/terminal-runtime/src/lib.rs', 'packages/terminal-renderer-wgpu/src/lib.rs']) {
+    const outputs = await classify([path]);
+    expect(outputs.terminal_perf, path).toBe('true');
+    expect(await runningJobs(outputs), path).toHaveProperty('terminal-perf', 1);
+  }
+  for (const path of ['docs/architecture/terminal-runtime.md', 'apps/agent/src/main.rs', 'apps/client/src/App.tsx', 'packages/herdr-guard/client.rs', 'packages/mosh-transport/src/lib.rs']) {
+    const outputs = await classify([path]);
+    expect(outputs.terminal_perf, path).toBe('false');
+    expect(await runningJobs(outputs), path).not.toHaveProperty('terminal-perf');
+  }
+  expect(await runningJobs(await classify(['docs/connections.md'], { event: 'push' }))).toHaveProperty('terminal-perf', 1);
 });
 
 test('the nightly runs the Appium suite and the Herdr it needs, and nothing else', async () => {
@@ -264,4 +294,21 @@ test('superseded runs cancel only where no publication or caller can be interrup
   // Each manual published-APK verification owns its group; only pull request runs supersede each other.
   expect((await workflow('android-published-apk.yml')).concurrency).toEqual({
     group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}", 'cancel-in-progress': true });
+});
+
+test('a Changesets version bump selects no native job, but a dependency or code change in the same range selects everything', async () => {
+  const pkg = (version: string) => `{\n  "name": "x",\n  "version": "${version}",\n  "dependencies": {}\n}\n`;
+  const base = { 'package.json': pkg('1.0.0'), 'apps/agent/package.json': pkg('1.0.0'), 'Cargo.lock': 'version = "1.0.0"\n', '.changeset/a.md': 'x' };
+  const seed = Object.keys(base);
+  const bump = { 'package.json': pkg('1.0.1'), 'apps/agent/package.json': pkg('1.0.1'), 'Cargo.lock': 'version = "1.0.1"\n', 'CHANGELOG.md': '## 1.0.1\n' };
+  const run = (paths: string[], contents: Record<string, string>, moves: [string, string][] = []) => classify(paths, { seed, seedContents: base, contents, moves });
+  expect(await run(Object.keys(bump), bump)).toEqual({ ...nothing, docs_only: 'false' });
+  // The root manifest must be bumped.
+  expect((await run(['apps/agent/package.json'], { 'apps/agent/package.json': pkg('1.0.1') })).linux).toBe('true');
+  // A changed dependency is not a version line.
+  expect((await run(Object.keys(bump), { ...bump, 'apps/agent/package.json': pkg('1.0.1').replace('{}', '{"left-pad": "1"}') })).linux).toBe('true');
+  // Source next to the bump.
+  expect((await run([...Object.keys(bump), 'apps/client/src/a.ts'], bump)).android).toBe('true');
+  // A bump on a push to main still runs everything.
+  expect(await classify(Object.keys(bump), { event: 'push', seed, seedContents: base, contents: bump })).toEqual(everything);
 });

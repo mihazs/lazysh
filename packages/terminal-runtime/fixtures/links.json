@@ -1,0 +1,186 @@
+{"cases":[
+{"id":"soft-wrapped","about":"A URL the terminal wrapped itself, with a prompt above and text after it","cols":30,"rows":3,"scrollback":20,"write":"$ run\r\nopen https://example.com/docs/guides/getting-started/installation?ref=terminal&lang=en#section-two now",
+"urls":[
+{"text":"https://example.com/docs/guides/getting-started/installation?ref=terminal&lang=en#section-two","start":[5,1],"end":[7,4],"line":null,"column":null,"rows":[1,2,3,4]}
+]},
+{"id":"wide-before-url","about":"Wide characters before and inside the URL","cols":40,"rows":3,"scrollback":20,"write":"世界 https://example.com/日本",
+"urls":[
+{"text":"https://example.com/日本","start":[5,0],"end":[28,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"box-border","about":"A URL a TUI broke at the border of its box","cols":26,"rows":5,"scrollback":20,"write":"┌────────────────────────┐\r\n│ see https://example.co │\r\n│ m/a/very/long/path/to/ │\r\n│ page?id=42 for details │\r\n└────────────────────────┘",
+"urls":[
+{"text":"https://example.com/a/very/long/path/to/page?id=42","start":[6,1],"end":[11,3],"line":null,"column":null,"rows":[1,2,3]}
+]},
+{"id":"full-width","about":"A URL a program broke at the full width of the screen","cols":38,"rows":3,"scrollback":20,"write":"  see https://example.com/some/long/pa\r\nth/with/more/segments?q=1 done",
+"urls":[
+{"text":"https://example.com/some/long/path/with/more/segments?q=1","start":[6,0],"end":[24,1],"line":null,"column":null,"rows":[0,1]}
+]},
+{"id":"list-indent","about":"A program's own narrower wrap for a long URL under list indentation","cols":64,"rows":3,"scrollback":20,"write":"  ⎿  See https://example.com/some/long/path/to/the/docs/pa\r\n     ge/index?lang=en&ref=agent",
+"urls":[
+{"text":"https://example.com/some/long/path/to/the/docs/page/index?lang=en&ref=agent","start":[9,0],"end":[30,1],"line":null,"column":null,"rows":[0,1]}
+]},
+{"id":"three-rows","about":"A URL over three hard-wrapped rows inside a box","cols":30,"rows":3,"scrollback":20,"write":"│ https://example.com/aaaaaa │\r\n│ bbbbbbbbbbbbbbbbbbbbbbbb/c │\r\n│ dddd/eeee                  │",
+"urls":[
+{"text":"https://example.com/aaaaaabbbbbbbbbbbbbbbbbbbbbbbb/cdddd/eeee","start":[2,0],"end":[10,2],"line":null,"column":null,"rows":[0,1,2]}
+]},
+{"id":"adjacent-urls-34","about":"Two URLs on adjacent rows are never merged","cols":34,"rows":3,"scrollback":20,"write":"https://one.example/path/to/a/page\r\nhttps://two.example/other/page?x=1",
+"urls":[
+{"text":"https://one.example/path/to/a/page","start":[0,0],"end":[33,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://two.example/other/page?x=1","start":[0,1],"end":[33,1],"line":null,"column":null,"rows":[1]}
+]},
+{"id":"adjacent-urls-60","about":"Two URLs on adjacent rows are never merged","cols":60,"rows":3,"scrollback":20,"write":"https://first.example/a/rather/long/path/segment/here\r\nhttps://second.example/another/rather/long/path?x=1",
+"urls":[
+{"text":"https://first.example/a/rather/long/path/segment/here","start":[0,0],"end":[52,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://second.example/another/rather/long/path?x=1","start":[0,1],"end":[50,1],"line":null,"column":null,"rows":[1]}
+]},
+{"id":"adjacent-urls-boxed","about":"Two boxed URLs on adjacent rows","cols":34,"rows":3,"scrollback":20,"write":"│ https://one.example/aaaaaaaa   │\r\n│ https://two.example/bbbbbbbb   │",
+"urls":[
+{"text":"https://one.example/aaaaaaaa","start":[2,0],"end":[29,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://two.example/bbbbbbbb","start":[2,1],"end":[29,1],"line":null,"column":null,"rows":[1]}
+]},
+{"id":"prose-next","about":"The next line reads as prose","cols":35,"rows":3,"scrollback":20,"write":"curl https://example.com/path/ok/12\r\nand then it failed",
+"urls":[
+{"text":"https://example.com/path/ok/12","start":[5,0],"end":[34,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"bullet-next","about":"The next line is a bullet","cols":35,"rows":3,"scrollback":20,"write":"curl https://example.com/path/ok/12\r\n- another item",
+"urls":[
+{"text":"https://example.com/path/ok/12","start":[5,0],"end":[34,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"numbered-next","about":"The next line is a numbered step","cols":35,"rows":3,"scrollback":20,"write":"curl https://example.com/path/ok/12\r\n1. second step",
+"urls":[
+{"text":"https://example.com/path/ok/12","start":[5,0],"end":[34,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"header-next","about":"The next line is a header","cols":35,"rows":3,"scrollback":20,"write":"curl https://example.com/path/ok/12\r\nContent-Type: text/html",
+"urls":[
+{"text":"https://example.com/path/ok/12","start":[5,0],"end":[34,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"word-next","about":"The next line is one plain word","cols":35,"rows":3,"scrollback":20,"write":"curl https://example.com/path/ok/12\r\nplainword",
+"urls":[
+{"text":"https://example.com/path/ok/12","start":[5,0],"end":[34,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"boxed-prose","about":"A boxed URL with prose after it","cols":34,"rows":3,"scrollback":20,"write":"│ see https://example.com/a/b/c.  │\r\n│ - then do the next step       │",
+"urls":[
+{"text":"https://example.com/a/b/c","start":[6,0],"end":[30,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"short-url","about":"A short URL well before the edge","cols":80,"rows":3,"scrollback":20,"write":"visit https://example.com/a\r\nb/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q",
+"urls":[
+{"text":"https://example.com/a","start":[6,0],"end":[26,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"punctuation","about":"What belongs to the URL: trailing punctuation, brackets, quotes","cols":80,"rows":10,"scrollback":20,"write":"see https://example.com/a.\r\n(see https://example.com/a)\r\n<https://example.com/a>, ok\r\n\"https://example.com/a?x=1&y=2\",\r\nhttps://en.wikipedia.org/wiki/Foo_(bar)\r\n(https://en.wikipedia.org/wiki/Foo_(bar))\r\n[docs](https://example.com/a)\r\nwow https://example.com/a!?\r\nhttp://localhost:3000/a#top;\r\nxhttps://example.com ftp://example.com/a",
+"urls":[
+{"text":"https://example.com/a","start":[4,0],"end":[24,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://example.com/a","start":[5,1],"end":[25,1],"line":null,"column":null,"rows":[1]},
+{"text":"https://example.com/a","start":[1,2],"end":[21,2],"line":null,"column":null,"rows":[2]},
+{"text":"https://example.com/a?x=1&y=2","start":[1,3],"end":[29,3],"line":null,"column":null,"rows":[3]},
+{"text":"https://en.wikipedia.org/wiki/Foo_(bar)","start":[0,4],"end":[38,4],"line":null,"column":null,"rows":[4]},
+{"text":"https://en.wikipedia.org/wiki/Foo_(bar)","start":[1,5],"end":[39,5],"line":null,"column":null,"rows":[5]},
+{"text":"https://example.com/a","start":[7,6],"end":[27,6],"line":null,"column":null,"rows":[6]},
+{"text":"https://example.com/a","start":[4,7],"end":[24,7],"line":null,"column":null,"rows":[7]},
+{"text":"http://localhost:3000/a#top","start":[0,8],"end":[26,8],"line":null,"column":null,"rows":[8]}
+]},
+{"id":"several-per-row","about":"Several URLs on one row","cols":60,"rows":3,"scrollback":20,"write":"a https://x.example/1 b https://y.example/2 c",
+"urls":[
+{"text":"https://x.example/1","start":[2,0],"end":[20,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://y.example/2","start":[24,0],"end":[42,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"scrollback-wide-wrap","about":"Rows in the scrollback, wide characters and a soft wrap","cols":24,"rows":12,"scrollback":20,"write":"x\r\nx\r\nx\r\nx\r\nx\r\nx\r\nx\r\nx\r\nx\r\nx\r\nx\r\nx\r\nx\r\nx\r\n世界 https://example.com/docs/guides/getting-started/installation?ref=terminal&lang=en#section-two done\r\n",
+"urls":[
+{"text":"https://example.com/docs/guides/getting-started/installation?ref=terminal&lang=en#section-two","start":[5,14],"end":[1,18],"line":null,"column":null,"rows":[14,15,16,17,18]}
+]},
+{"id":"paths","about":"Absolute, home and dot-relative paths with line and column","cols":90,"rows":3,"scrollback":20,"write":"wrote /var/log/app.log, see ~/notes/todo.md:12 and ./src/main.rs:3:9.",
+"paths":[
+{"text":"/var/log/app.log","path":"/var/log/app.log","start":[6,0],"end":[21,0],"line":null,"column":null,"rows":[0]},
+{"text":"~/notes/todo.md:12","path":"~/notes/todo.md","start":[28,0],"end":[45,0],"line":12,"column":null,"rows":[0]},
+{"text":"./src/main.rs:3:9","path":"./src/main.rs","start":[51,0],"end":[67,0],"line":3,"column":9,"rows":[0]}
+]},
+{"id":"paths-shapes","about":"dir/file.ext paths in quotes and compiler output, but not prose or URLs","cols":90,"rows":4,"scrollback":20,"write":"error[E0308]: src/lib/mod.rs:40:5\r\nopen \"/tmp/a b.txt\" or (/etc/hosts)\r\nread and/or write, 1/2 done, https://example.com/a/b.html and http://h/x/y.js\r\ndir /var/ and / and ... and ~/",
+"urls":[
+{"text":"https://example.com/a/b.html","start":[29,2],"end":[56,2],"line":null,"column":null,"rows":[2]},
+{"text":"http://h/x/y.js","start":[62,2],"end":[76,2],"line":null,"column":null,"rows":[2]}
+],
+"paths":[
+{"text":"src/lib/mod.rs:40:5","path":"src/lib/mod.rs","start":[14,0],"end":[32,0],"line":40,"column":5,"rows":[0]},
+{"text":"/tmp/a","path":"/tmp/a","start":[6,1],"end":[11,1],"line":null,"column":null,"rows":[1]},
+{"text":"/etc/hosts","path":"/etc/hosts","start":[24,1],"end":[33,1],"line":null,"column":null,"rows":[1]}
+]},
+{"id":"paths-wide-and-wrapped","about":"A path after wide characters, and a path the terminal soft-wrapped","cols":24,"rows":6,"scrollback":20,"write":"世界 /tmp/日本.log:7\r\nbuild failed in /home/dev/projects/app/src/components/Panel.tsx:88",
+"paths":[
+{"text":"/tmp/日本.log:7","path":"/tmp/日本.log","start":[5,0],"end":[19,0],"line":7,"column":null,"rows":[0]},
+{"text":"/home/dev/projects/app/src/components/Panel.tsx:88","path":"/home/dev/projects/app/src/components/Panel.tsx","start":[16,1],"end":[17,3],"line":88,"column":null,"rows":[1,2,3]}
+]},
+{"id":"paths-fine-print","about":"Paths glued to words, dots-only paths, and a path at the end of a URL","cols":60,"rows":3,"scrollback":20,"write":"foo/bar.txt (a/b.c) x/y=z.w ../up/file.md:2 ......./x.y /a..b/c.d\r\nsee https://example.com/dir/file.html and also dir/file.js:10:2",
+"urls":[
+{"text":"https://example.com/dir/file.html","start":[4,2],"end":[36,2],"line":null,"column":null,"rows":[2]}
+],
+"paths":[
+{"text":"foo/bar.txt","path":"foo/bar.txt","start":[0,0],"end":[10,0],"line":null,"column":null,"rows":[0]},
+{"text":"a/b.c","path":"a/b.c","start":[13,0],"end":[17,0],"line":null,"column":null,"rows":[0]},
+{"text":"../up/file.md:2","path":"../up/file.md","start":[28,0],"end":[42,0],"line":2,"column":null,"rows":[0]},
+{"text":"/a..b/c.d","path":"/a..b/c.d","start":[56,0],"end":[4,1],"line":null,"column":null,"rows":[0,1]},
+{"text":"dir/file.js:10:2","path":"dir/file.js","start":[47,2],"end":[2,3],"line":10,"column":2,"rows":[2,3]}
+]},
+{"id":"scheme-case","about":"An upper-case scheme and host","cols":60,"rows":6,"scrollback":20,"write":"HTTP://Example.COM/Path and Https://x.example/A\r\nHTTPS://EXAMPLE.COM/A/B",
+"urls":[
+{"text":"HTTP://Example.COM/Path","start":[0,0],"end":[22,0],"line":null,"column":null,"rows":[0]},
+{"text":"Https://x.example/A","start":[28,0],"end":[46,0],"line":null,"column":null,"rows":[0]},
+{"text":"HTTPS://EXAMPLE.COM/A/B","start":[0,1],"end":[22,1],"line":null,"column":null,"rows":[1]}
+]},
+{"id":"brackets","about":"Unbalanced and nested brackets around URLs","cols":70,"rows":6,"scrollback":20,"write":"(https://a.example/x) [https://b.example/y] {https://c.example/z} <https://d.example/w>\r\nsee (https://e.example/p_(q) and https://f.example/r)) done\r\nhttps://g.example/a*, https://h.example/b…",
+"urls":[
+{"text":"https://a.example/x","start":[1,0],"end":[19,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://b.example/y","start":[23,0],"end":[41,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://c.example/z","start":[45,0],"end":[63,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://d.example/w","start":[67,0],"end":[15,1],"line":null,"column":null,"rows":[0,1]},
+{"text":"https://e.example/p_(q)","start":[5,2],"end":[27,2],"line":null,"column":null,"rows":[2]},
+{"text":"https://f.example/r","start":[33,2],"end":[51,2],"line":null,"column":null,"rows":[2]},
+{"text":"https://g.example/a","start":[0,3],"end":[18,3],"line":null,"column":null,"rows":[3]},
+{"text":"https://h.example/b","start":[22,3],"end":[40,3],"line":null,"column":null,"rows":[3]}
+]},
+{"id":"cjk-neighbours","about":"URLs between CJK text without spaces","cols":60,"rows":6,"scrollback":20,"write":"日本語https://example.com/a日本語 と https://example.com/b、続き\r\n（https://example.com/c）",
+"urls":[
+{"text":"https://example.com/a日本語","start":[6,0],"end":[32,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://example.com/b、続き","start":[37,0],"end":[3,1],"line":null,"column":null,"rows":[0,1]},
+{"text":"https://example.com/c）","start":[2,2],"end":[24,2],"line":null,"column":null,"rows":[2]}
+]},
+{"id":"unicode-space","about":"A no-break space and an ideographic space end a URL","cols":60,"rows":6,"scrollback":20,"write":"https://a.example/x tail https://b.example/y　tail",
+"urls":[
+{"text":"https://a.example/x","start":[0,0],"end":[18,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://b.example/y","start":[25,0],"end":[43,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"exact-width","about":"A URL that fills a row exactly, then a continuation","cols":30,"rows":6,"scrollback":20,"write":"x https://example.com/12345678912\r\n34/rest/of/it done\r\nx https://example.com/1234567891234\r\nzzzzzzzzzzzzzz",
+"urls":[
+{"text":"https://example.com/12345678912","start":[2,0],"end":[2,1],"line":null,"column":null,"rows":[0,1]},
+{"text":"https://example.com/1234567891234","start":[2,3],"end":[4,4],"line":null,"column":null,"rows":[3,4]}
+]},
+{"id":"tabs-and-controls","about":"Tabs and a URL after a tab stop","cols":60,"rows":6,"scrollback":20,"write":"a\thttps://tab.example/x\tb\r\n\thttps://tab.example/y",
+"urls":[
+{"text":"https://tab.example/x","start":[8,0],"end":[28,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://tab.example/y","start":[8,1],"end":[28,1],"line":null,"column":null,"rows":[1]}
+]},
+{"id":"scrollback-boundary","about":"A hard-wrapped URL whose first row has scrolled into the scrollback","cols":26,"rows":4,"scrollback":20,"write":"│ see https://example.co │\r\n│ m/a/very/long/path/to/ │\r\n│ page?id=42 for details │\r\n\r\n\r\n\r\n\r\n\r\n",
+"urls":[
+{"text":"https://example.com/a/very/long/path/to/page?id=42","start":[6,0],"end":[11,2],"line":null,"column":null,"rows":[0,1,2]}
+]},
+{"id":"combining-marks","about":"Combining marks next to and before a URL","cols":60,"rows":6,"scrollback":20,"write":"é https://combining.example/a à́ https://combining.example/b",
+"urls":[
+{"text":"https://combining.example/a","start":[2,0],"end":[28,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://combining.example/b","start":[32,0],"end":[58,0],"line":null,"column":null,"rows":[0]}
+]},
+{"id":"paths-more","about":"More path shapes: quotes, parentheses, equals, trailing colon, windows-ish, long location","cols":100,"rows":6,"scrollback":20,"write":"cat ~/a/b.c:7: and \"x/y.z\" (a/b/c.d:1:2) key=src/m/n.o:12 C:\\dir\\file.txt ./a:1:2:3 ../x/y.z:99999999999\r\n./ ../ ~/ /. /.. /... .../x /a/b/ /a/./b.c a//b.c a/b./c.d",
+"paths":[
+{"text":"~/a/b.c:7","path":"~/a/b.c","start":[4,0],"end":[12,0],"line":7,"column":null,"rows":[0]},
+{"text":"x/y.z","path":"x/y.z","start":[20,0],"end":[24,0],"line":null,"column":null,"rows":[0]},
+{"text":"a/b/c.d:1:2","path":"a/b/c.d","start":[28,0],"end":[38,0],"line":1,"column":2,"rows":[0]},
+{"text":"src/m/n.o:12","path":"src/m/n.o","start":[45,0],"end":[56,0],"line":12,"column":null,"rows":[0]},
+{"text":"./a:1:2:3","path":"./a:1","start":[74,0],"end":[82,0],"line":2,"column":3,"rows":[0]},
+{"text":"../x/y.z:99999999999","path":"../x/y.z","start":[84,0],"end":[3,1],"line":99999999999,"column":null,"rows":[0,1]},
+{"text":"/a/./b.c","path":"/a/./b.c","start":[34,2],"end":[41,2],"line":null,"column":null,"rows":[2]},
+{"text":"a/b./c.d","path":"a/b./c.d","start":[50,2],"end":[57,2],"line":null,"column":null,"rows":[2]}
+]},
+{"id":"boxed-bullets","about":"A URL running to the border of a box, with a bullet or a numbered step on the next line: the border alone must not join them","cols":34,"rows":6,"scrollback":20,"write":"│ see https://example.com/a/b/cdef │\r\n│ - then do the next step        │\r\n│ see https://example.com/a/b/cdef │\r\n│ 1. then do the next step       │\r\n│ see https://example.com/a/b/cdef │\r\n│ * then do the next step        │",
+"urls":[
+{"text":"https://example.com/a/b/cdef","start":[6,0],"end":[33,0],"line":null,"column":null,"rows":[0]},
+{"text":"https://example.com/a/b/cdef","start":[6,3],"end":[33,3],"line":null,"column":null,"rows":[3]},
+{"text":"https://example.com/a/b/cdef","start":[6,6],"end":[33,6],"line":null,"column":null,"rows":[6]}
+]}
+]}

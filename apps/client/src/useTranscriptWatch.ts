@@ -1,11 +1,12 @@
 import {useEffect, useRef, useState} from 'react';
 import {Channel} from '@tauri-apps/api/core';
 import {guardAccessCallback, type AccessLease} from './access';
+import {companionUpdatedEvent} from './companionUpdate';
 import {createWatchApplier, parseWatchFrame, type PageParser, type WatchEvent, type WatchOp} from './transcriptWatch';
 
 export type WatchTarget =
-  | {kind: 'path'; agent: string; path: string; inlineImages?: boolean}
-  | {kind: 'herdr'; agent: string; agentSessionId: string; herdrSession: string; paneId: string; terminalId: string};
+  | {kind: 'path'; agent: string; path: string; inlineImages?: boolean; allowLargeHistory?: boolean}
+  | {kind: 'herdr'; agent: string; agentSessionId: string; herdrSession: string; paneId: string; terminalId: string; allowLargeHistory?: boolean};
 /** `off` and `connecting` show nothing; `live` is the quiet normal state; `delayed` polls because no stream has
  * opened; `stale` lost a stream that was live; `unsupported` needs a newer host companion. */
 export type WatchState = 'off' | 'connecting' | 'live' | 'delayed' | 'stale' | 'unsupported';
@@ -26,7 +27,7 @@ export function useTranscriptWatch<M extends {id: string}>({enabled, sessionId, 
   const key = JSON.stringify([sessionId, target]);
   useEffect(() => {
     if (!enabled) { setState('off'); return; }
-    let cancelled = false, token: string | undefined, timer: ReturnType<typeof setTimeout> | undefined, failures = 0, wasLive = false;
+    let cancelled = false, token: string | undefined, timer: ReturnType<typeof setTimeout> | undefined, failures = 0, wasLive = false, unsupported = false;
     let events: Channel<WatchEvent> | undefined;
     const stop = () => {
       const id = token; token = undefined;
@@ -36,6 +37,7 @@ export function useTranscriptWatch<M extends {id: string}>({enabled, sessionId, 
     };
     const lose = (next: Exclude<WatchState, 'off' | 'connecting' | 'live'>) => {
       stop();
+      unsupported = next === 'unsupported';
       setState(wasLive && next === 'delayed' ? 'stale' : next);
       if (!cancelled) timer = setTimeout(connect, next === 'unsupported' ? UNSUPPORTED_RETRY : RETRY[Math.min(failures++, RETRY.length - 1)]);
     };
@@ -67,8 +69,14 @@ export function useTranscriptWatch<M extends {id: string}>({enabled, sessionId, 
         else token = id;
       }, () => { if (!cancelled && events === channel) lose('delayed'); });
     }
+    // A host that could not stream is asked again at once when its companion has just been updated.
+    const updated = (event: Event) => {
+      if (!unsupported || cancelled || (event as CustomEvent<{sessionId?: string}>).detail?.sessionId !== sessionId) return;
+      clearTimeout(timer); unsupported = false; failures = 0; connect();
+    };
+    window.addEventListener(companionUpdatedEvent, updated);
     connect();
-    return () => { cancelled = true; clearTimeout(timer); stop(); };
+    return () => { cancelled = true; clearTimeout(timer); window.removeEventListener(companionUpdatedEvent, updated); stop(); };
     // `key` stands for sessionId and target.
   }, [enabled, key, lease, invoke]);
   return {state, live: state === 'live'};

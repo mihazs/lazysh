@@ -27,17 +27,40 @@ pub fn target() -> Option<&'static str> {
         _ => return None,
     })
 }
-/// `<user data>/lazysh/companion`: where the app and `installation install` place the companion.
-pub fn managed_directory() -> Result<PathBuf, Fault> {
+/// The directories of the managed namespace below the user data folder.
+pub const MANAGED: [&str; 2] = ["lazysh", "companion"];
+/// The user data folder the managed namespace sits in.
+pub fn data_root() -> Result<PathBuf, Fault> {
     // Tests only: Windows resolves the user data folder through the shell, which no variable redirects.
     #[cfg(feature = "update-test-endpoint")]
     if let Some(root) = std::env::var_os("LAZYSH_UPDATE_TEST_DATA_DIR") {
-        return Ok(PathBuf::from(root).join("lazysh/companion"));
+        return Ok(PathBuf::from(root));
     }
-    let root = dirs::data_local_dir().filter(|root| root.is_absolute());
-    Ok(root
-        .ok_or(Failure::UnsafeInstallLocation)?
-        .join("lazysh/companion"))
+    dirs::data_local_dir()
+        .filter(|root| root.is_absolute())
+        .ok_or_else(|| Failure::UnsafeInstallLocation.into())
+}
+/// `<user data>/lazysh/companion`: where the app and `installation install` place the companion.
+pub fn managed_directory() -> Result<PathBuf, Fault> {
+    Ok(MANAGED
+        .iter()
+        .fold(data_root()?, |path, name| path.join(name)))
+}
+/// Whether the managed executable exists, once the user data folder, the managed directories and the executable
+/// are admitted by owner, DACL and reparse point (`lazysh_common::windows_acl`).
+#[cfg(windows)]
+pub fn admit_namespace(root: &Path) -> Result<bool, lazysh_common::windows_acl::Unsafe> {
+    use lazysh_common::windows_acl::{admit_namespace, admit_path};
+    admit_namespace(root, &MANAGED, NAME, admit_path)
+}
+/// The same, refusing with the fixed install-location failure. A Unix build of the path store runs only under
+/// test, where there is no Windows ACL to read and nothing is admitted.
+#[cfg(any(windows, test))]
+pub fn admitted() -> Result<bool, Fault> {
+    #[cfg(windows)]
+    return admit_namespace(&data_root()?).map_err(|_| Failure::UnsafeInstallLocation.into());
+    #[cfg(not(windows))]
+    Ok(false)
 }
 // A release asset is far smaller; development builds with debug information are the reason for the room.
 const MAX_HASHED: u64 = 1 << 30;
@@ -73,9 +96,19 @@ fn trusted(path: &Path) -> bool {
             .parent()
             .is_some_and(|dir| fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir() && sealed(&m)))
 }
-// shortcut: Windows ACLs are not inspected; the per-user %LOCALAPPDATA% namespace is the boundary, and
-// the managed file is only ever a regular file there (a link or a directory is refused).
-#[cfg(not(unix))]
+/// A file only its owner (or an administrator) can change, in a directory nobody else can change, by owner and
+/// DACL: the only kind this command executes.
+#[cfg(windows)]
+fn trusted(path: &Path) -> bool {
+    use lazysh_common::windows_acl::{admit_path, Need};
+    let sealed = |path: &Path| admit_path(path, Need::NoForeignChange).is_ok();
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+        && sealed(path)
+        && path.parent().is_some_and(sealed)
+}
+// shortcut: modes are checked on Unix and ACLs on Windows; any other host has no published companion, so a regular
+// file is all that is asked there.
+#[cfg(not(any(unix, windows)))]
 fn trusted(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
 }

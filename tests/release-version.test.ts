@@ -78,7 +78,8 @@ async function fixture(fragment?: string, sourceVersion?: string) {
   }
   await mkdir(join(directory, '.changeset'));
   await mkdir(join(directory, 'tests'));
-  for (const path of ['.changeset/config.json', '.changeset/bun-lock.ts', 'tests/release-consistency.test.ts', 'CHANGELOG.md']) {
+  for (const path of ['.changeset/config.json', '.changeset/bun-lock.ts', '.changeset/changelog.mjs', '.changeset/changelog-model.mjs',
+    '.changeset/changelog-rotate.ts', 'tests/release-consistency.test.ts', 'CHANGELOG.md']) {
     await copyFile(join(source, path), join(directory, path));
   }
   if (fragment !== undefined) await writeFile(join(directory, '.changeset', 'owned-test.md'), fragment);
@@ -202,6 +203,19 @@ test.each([['title.txt',50],['short_description.txt',80],['full_description.txt'
   },
 );
 
+test('a structured fragment becomes a typed line linked to its squash-merged pull request and rotates into the root changelog', async () => {
+  const directory = await fixture('---\n"@lazysh/client": minor\n---\n\nfeat(ssh): Keep the host binding when a connection is restored\n\nThe saved binding is reused. No defaults change.\n');
+  await successful(directory, ['git', 'add', '.changeset']);
+  await successful(directory, ['git', '-c', 'user.name=Release fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'feat(ssh): keep the host binding (#77)']);
+  await successful(directory, ['bun', 'run', 'release:version']);
+  const client = await Bun.file(join(directory, 'apps/client/CHANGELOG.md')).text();
+  expect(client).toContain('- feat(ssh): Keep the host binding when a connection is restored ([#77](https://github.com/mihazs/lazysh/pull/77))');
+  expect(client).toContain('<details><summary>Details</summary>\n\n  The saved binding is reused. No defaults change.');
+  expect(client).not.toMatch(/^- [0-9a-f]{7}: /m);
+  expect(await Bun.file(join(directory, 'apps/agent/CHANGELOG.md')).text()).toBe('# @lazysh/agent\n\n## 0.2.0\n\nNo changes in this release.\n');
+  expect(await Bun.file(join(directory, 'CHANGELOG.md')).text()).toContain('### New\n\n- **ssh:** Keep the host binding when a connection is restored ([#77]');
+}, 60_000);
+
 test.each(['0.1.1', '2.3.4'])('owned fixture seed stays independent of source tooling version %s', async sourceVersion => {
   const directory = await fixture(fragment('patch'), sourceVersion);
   const initial = (await json(directory, 'package.json')).version;
@@ -213,7 +227,6 @@ test.each(['0.1.1', '2.3.4'])('owned fixture seed stays independent of source to
 test.each([['patch', '0.1.1', '1001'], ['minor', '0.2.0', '2000'], ['major', '1.0.0', '1000000']])(
   'real Changesets + Bun synchronize a %s release', async (impact, expected, expectedCode) => {
     const directory = await fixture(fragment(impact));
-    const history = await readFile(join(directory, 'CHANGELOG.md'));
     const previousLock = await Bun.file(join(directory, 'bun.lock')).text();
     const vendors = await Promise.all(['portable-pty-vendor', 'deep-link-vendor'].map(name => readFile(join(directory, 'packages', name, 'Cargo.toml'))));
     const platformBefore = await Promise.all(platformSources.map(path => readFile(join(directory, path))));
@@ -228,7 +241,11 @@ test.each([['patch', '0.1.1', '1001'], ['minor', '0.2.0', '2000'], ['major', '1.
     expect(android).toBe(`versionName=${expected}\nversionCode=${expectedCode}\n`);
     await synchronizeWorkspaceVersions(directory);
     expect(await readFile(join(directory, 'apps/client/android-version.properties'), 'utf8')).toBe(android);
-    expect(await readFile(join(directory, 'CHANGELOG.md'))).toEqual(history);
+    // The version's section is prepended to the root changelog and nothing is left behind under [Unreleased].
+    const [, unreleased, released] = (await readFile(join(directory, 'CHANGELOG.md'), 'utf8')).split(/^## /m);
+    expect(unreleased).toStartWith('[Unreleased]');
+    expect(unreleased).not.toContain('\n- ');
+    expect(released).toMatch(new RegExp(`^\\[${expected.replaceAll('.', '\\.')}\\] - \\d{4}-\\d\\d-\\d\\d\\n\\n### `));
     expect(await Promise.all(platformSources.map(path => readFile(join(directory, path))))).toEqual(platformBefore);
     expect((await json(directory, 'apps/client/src-tauri/tauri.conf.json')).identifier).toBe('app.lazysh.client');
     for (const [index, name] of ['portable-pty-vendor', 'deep-link-vendor'].entries()) {
@@ -237,7 +254,7 @@ test.each([['patch', '0.1.1', '1001'], ['minor', '0.2.0', '2000'], ['major', '1.
     const workspaceFiles = [...new Bun.Glob('{apps,packages}/*/CHANGELOG.md').scanSync({ cwd: directory })];
     expect(workspaceFiles.sort()).toEqual(generatedHistories);
     for (const path of workspaceFiles) expect(await Bun.file(join(directory, path)).text()).toContain(`## ${expected}`);
-    expect((await readdir(join(directory, '.changeset'))).sort()).toEqual(['bun-lock.ts', 'config.json']);
+    expect((await readdir(join(directory, '.changeset'))).sort()).toEqual(['bun-lock.ts', 'changelog-model.mjs', 'changelog-rotate.ts', 'changelog.mjs', 'config.json']);
     await successful(directory, ['cargo', 'metadata', '--no-deps', '--locked', '--offline', '--format-version', '1']);
     await successful(directory, ['bun', 'install', '--frozen-lockfile', '--ignore-scripts']);
     expect((await successful(directory, ['git', 'tag', '--list'])).stdout).toBe('');
@@ -366,9 +383,9 @@ test('canonical Apple and Android sources inherit product versions without chang
   const apple = await Bun.file(join(source, platformSources[0])).text();
   const short = [...apple.matchAll(/^\s*CFBundleShortVersionString: (.+)$/gm)].map(match => match[1]);
   const build = [...apple.matchAll(/^\s*CFBundleVersion: (.+)$/gm)].map(match => match[1]);
-  expect(short).toEqual(Array(6).fill('{{apple.bundle-version-short}}'));
-  expect(build).toEqual(Array(6).fill('"{{apple.bundle-version}}"'));
-  for (const target of ['LazyshLiveActivity', 'LazyshWatch', 'LazyshWatchWidget']) expect(apple).toContain(target);
+  expect(short).toEqual(Array(7).fill('{{apple.bundle-version-short}}'));
+  expect(build).toEqual(Array(7).fill('"{{apple.bundle-version}}"'));
+  for (const target of ['LazyshLiveActivity', 'LazyshWatch', 'LazyshWatchWidget', 'LazyshSurfacePoc']) expect(apple).toContain(target);
   expect(apple).toContain('PRODUCT_BUNDLE_IDENTIFIER: {{app.identifier}}');
   const gradle = await Bun.file(join(source, platformSources[2])).text();
   expect(gradle).toContain('versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")');

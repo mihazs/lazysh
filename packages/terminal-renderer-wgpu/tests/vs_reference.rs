@@ -7,6 +7,7 @@ mod common;
 mod golden;
 
 use common::*;
+use lazysh_terminal_renderer_wgpu::{Policy, Target};
 use lazysh_terminal_runtime::{
     CursorVisualStyle, Overlay, RenderError, Selection, SelectionKind, TerminalRenderer,
 };
@@ -124,15 +125,11 @@ fn every_golden_image_of_the_renderer_api_is_reproduced() {
     );
     for g in golden::goldens() {
         let mut rt = runtime(g.cols, g.rows, &g.bytes);
-        let mut r = gpu(g.cols, g.rows);
-        let mut frame = rt.snapshot().unwrap();
-        if g.hollow {
-            frame.cursor.visual_style = CursorVisualStyle::BlockHollow;
-        }
-        r.apply(&frame).unwrap();
-        r.set_overlay(g.overlay).unwrap();
-        r.draw().unwrap();
-        r.present().unwrap();
+        let (width, height) = g.size();
+        let target = Target::new(width, height).with_policy(Policy::for_platform().with_software());
+        let mut r =
+            WgpuRenderer::create(target, g.appearance()).expect("a GPU adapter is required");
+        g.show(&mut r, &mut rt);
         golden::assert_golden(dir, g.name, &r.read_image().unwrap(), false);
     }
 }

@@ -1,4 +1,4 @@
-import {mkdir,open,readFile,stat,writeFile,lstat,realpath} from 'node:fs/promises';
+import {mkdir,open,readdir,readFile,readlink,stat,writeFile,lstat,realpath} from 'node:fs/promises';
 import {createConnection} from 'node:net';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -9,12 +9,29 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'";
 type ReportedAgent={terminalId:string;workspaceId:string;tabId:string;paneId:string};
+/** Stock Herdr's own names for a hook-reported agent that is running (Working) or waiting on the user (Needs attention). */
+export type OwnedAgentState='working'|'blocked';
 export function ownedHerdrContext(snapshot:{workspaces:Record<string,unknown>[];tabs:Record<string,unknown>[]},agent:ReportedAgent,cwd:unknown,directory:string) {
   const workspaces=snapshot.workspaces.filter(value=>value.workspace_id===agent.workspaceId);
   const tabs=snapshot.tabs.filter(value=>value.tab_id===agent.tabId && value.workspace_id===agent.workspaceId);
   if(workspaces.length!==1 || tabs.length!==1 || ![workspaces[0]?.label,tabs[0]?.label].every(value=>typeof value==='string' && value.length>0 && value.length<=256 && !/[\x00-\x1f\x7f-\x9f]/.test(value)) || cwd!==directory)
     throw new Error('Owned Herdr navigation context changed');
   return [workspaces[0].label,tabs[0].label,cwd].join(' / ');
+}
+/**
+ * What the Android Herdr panel leaves behind: one workspace with the given label, its single tab split into exactly two
+ * panes and the tab's zoom flag on. Anything else is a changed topology.
+ */
+export function herdrPanelRows(snapshot:{workspaces?:Record<string,unknown>[];tabs?:Record<string,unknown>[];panes?:Record<string,unknown>[];layouts?:Record<string,unknown>[]},label:string) {
+  const workspaces=(snapshot.workspaces??[]).filter(value=>value.label===label);
+  if(workspaces.length!==1 || typeof workspaces[0].workspace_id!=='string')throw new Error('Owned Herdr panel workspace not observed');
+  const id=workspaces[0].workspace_id;
+  const tabs=(snapshot.tabs??[]).filter(value=>value.workspace_id===id);
+  const panes=(snapshot.panes??[]).filter(value=>value.workspace_id===id);
+  const layouts=(snapshot.layouts??[]).filter(value=>value.workspace_id===id);
+  if(tabs.length!==1 || panes.length!==2 || layouts.length!==1 || layouts[0].tab_id!==tabs[0].tab_id || panes.some(value=>value.tab_id!==tabs[0].tab_id))
+    throw new Error('Owned Herdr panel topology changed');
+  return {workspaceId:id,tabId:tabs[0].tab_id as string,zoomed:layouts[0].zoomed===true,paneCwds:panes.map(value=>value.cwd)};
 }
 export function herdrHistoryFailureStage(error:unknown) {
   try {
@@ -29,6 +46,14 @@ export function herdrHistoryFailureStage(error:unknown) {
     const message=error.message;
     return Object.hasOwn(stages,message)?stages[message]:'unknown';
   } catch {return 'unknown';}
+}
+
+/**
+ * The interactive display clients of one Herdr session among `processes`: the fixture's own binary run as `herdr --session NAME`
+ * and nothing else. The server (`... server`), an API call (`... pane list`) and another session's client are not displays.
+ */
+export function herdrDisplayClients(processes:readonly {exe:string;argv:readonly string[]}[],binary:string,session:string) {
+  return processes.filter(({exe,argv})=>exe===binary && argv.length===3 && argv[1]==='--session' && argv[2]===session).length;
 }
 
 /** Fixed public static paint before the original Mosh receiver starts; no input/RPC. */
@@ -53,7 +78,7 @@ export class HerdrFixture {
   private historyReceiver:OwnedPid|undefined;
   private stopped=false;
   private navigationReceivers:{directory:string;receiver:OwnedPid}[]=[];
-  private navigation: {source:ReportedAgent & {marker:string;label:string};shell:ReportedAgent & {marker:string;label:string};agent:ReportedAgent & {marker:string;label:string};workspaceLabel:string}|undefined;
+  private navigation: {source:ReportedAgent & {marker:string;label:string;status:OwnedAgentState};shell:ReportedAgent & {marker:string;label:string};agent:ReportedAgent & {marker:string;label:string;status:OwnedAgentState};workspaceLabel:string}|undefined;
   private constructor(readonly ssh:SshFixture) {
     this.name='owned-guard';
     this.record='OWNED_HERDR_RECORD_'+ssh.nonce;
@@ -62,6 +87,12 @@ export class HerdrFixture {
     this.pidFile=join(ssh.directory,'receiver-pid');
   }
   get draft(){return '  literal{'+this.ssh.nonce+'}<text>\nsecond\t世界  ';}
+  /** Reports the state through the hook mechanism and returns only after the real server's snapshot shows it on that agent's pane. */
+  async reportAgentState(pane:string,state:OwnedAgentState) {
+    await this.run(['pane','report-agent',pane,'--source','lazysh-owned-ui','--agent','codex','--state',state]);
+    const agent=(JSON.parse(await this.run(['api','snapshot']))?.result?.snapshot?.agents as Record<string,unknown>[]|undefined)?.find(row=>row.pane_id===pane);
+    if(agent?.agent!=='codex' || agent.agent_status!==state)throw new Error('Owned Herdr agent state not applied');
+  }
   async run(args:string[]) {
     const env=this.ssh.environment;
     if(!env)throw new Error('Owned Herdr environment required');
@@ -165,18 +196,20 @@ export class HerdrFixture {
   }
   private async prepareNavigation() {
     const nonce=this.ssh.nonce,workspaceLabel='NAV_WORKSPACE_'+nonce;
-    const source={...this.agent!,marker:'NAV_SOURCE_'+nonce,label:'HERDR_'+nonce};
+    const source={...this.agent!,marker:'NAV_SOURCE_'+nonce,label:'HERDR_'+nonce,status:'working' as OwnedAgentState};
     await this.run(['workspace','create','--focus','--label',workspaceLabel,'--cwd',this.ssh.directory]);
     const shell={...await this.navigationTarget(),marker:'NAV_SHELL_'+nonce,label:'NAV_SHELL_TAB_'+nonce};
     await this.run(['tab','rename',shell.tabId,shell.label]);
     await this.run(['tab','create','--workspace',shell.workspaceId,'--focus','--label','NAV_AGENT_TAB_'+nonce,'--cwd',this.ssh.directory]);
-    const agent={...await this.navigationTarget(),marker:'NAV_AGENT_'+nonce,label:'NAV_AGENT_TAB_'+nonce};
+    const agent={...await this.navigationTarget(),marker:'NAV_AGENT_'+nonce,label:'NAV_AGENT_TAB_'+nonce,status:'blocked' as OwnedAgentState};
     if(source.workspaceId===shell.workspaceId || shell.workspaceId!==agent.workspaceId || shell.tabId===agent.tabId)throw new Error('Owned navigation topology differs');
     for(const [kind,target] of [['shell',shell],['agent',agent]] as const) {
       const directory=join(this.ssh.directory,'navigation-'+kind);await mkdir(directory,{mode:0o700});
       this.navigationReceivers.push({directory,receiver:await this.startReceiver(target.paneId,directory,target.marker)});
     }
-    await this.run(['pane','report-agent',agent.paneId,'--source','lazysh-owned-ui','--agent','codex','--state','unknown']);
+    // One live agent per status group: the source works, the other needs attention, both from the real server.
+    await this.reportAgentState(agent.paneId,agent.status);
+    await this.reportAgentState(source.paneId,source.status);
     await this.run(['workspace','focus',source.workspaceId]);
     this.navigation={source,shell,agent,workspaceLabel};
     for(const name of ['herdr','lazysh-agent','owned-terminal-receiver']) {
@@ -193,6 +226,39 @@ export class HerdrFixture {
     if(!this.navigation)throw new Error('Owned navigation topology required');
     await this.expectBytes(Buffer.alloc(0));
     for(const {directory,receiver} of this.navigationReceivers)await this.expectBytes(Buffer.alloc(0),join(directory,'received-bytes'),receiver);
+  }
+  /** Interactive clients attached to this session now, read from /proc. The app's SSH channel runs one for its display. */
+  async displayClients() {
+    const processes:{exe:string;argv:string[]}[]=[],gone=(error:unknown)=>['ENOENT','ESRCH','EACCES'].includes((error as NodeJS.ErrnoException).code??'');
+    for(const entry of await readdir('/proc')) {
+      if(!/^[0-9]+$/.test(entry))continue;
+      try {
+        const exe=await readlink(`/proc/${entry}/exe`);
+        if(exe===join(this.ssh.directory,'bin/herdr'))processes.push({exe,argv:(await readFile(`/proc/${entry}/cmdline`,'utf8')).split('\0').slice(0,-1)});
+      } catch(error){if(!gone(error))throw error;}
+    }
+    return herdrDisplayClients(processes,join(this.ssh.directory,'bin/herdr'),this.name);
+  }
+  private async bytesNow(path:string) {return readFile(path).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return Buffer.alloc(0);throw error;});}
+  /**
+   * One host sample for the restore case (stock navigation topology): the original server and all three receivers are alive, the
+   * two receivers nobody types into hold nothing, and the source receiver holds what was typed or a leading part of it (the app's
+   * paste arrives in pieces), never anything else. Returns the attached display clients and whether all of it has arrived. Never waits.
+   */
+  async observeRestore(typed:string) {
+    if(!this.navigation)throw new Error('Owned navigation topology required');
+    if(!await this.server?.liveIdentity())throw new Error('Owned Herdr server identity changed');
+    for(const receiver of [this.receiver,...this.navigationReceivers.map(item=>item.receiver)])
+      if(!await this.receiverAlive(receiver))throw new Error('Owned receiver identity changed');
+    for(const {directory} of this.navigationReceivers)
+      if((await this.bytesNow(join(directory,'received-bytes'))).length)throw new Error('Owned receiver bytes differ');
+    const received=await this.bytesNow(this.bytes),expected=Buffer.from(typed+'\r');
+    if(received.length>expected.length || !expected.subarray(0,received.length).equals(received))throw new Error('Owned receiver bytes differ');
+    return {clients:await this.displayClients(),typed:received.length===expected.length};
+  }
+  /** Whether the source receiver holds exactly the bytes typed through the app, waiting for them to land. */
+  async restoreBytesHold(typed:string) {
+    return this.expectBytes(Buffer.from(typed+'\r')).then(()=>true,()=>false);
   }
   private async receiverAlive(receiver=this.receiver) {
     const current=receiver && await identity(receiver.pid);
@@ -300,6 +366,26 @@ export class HerdrFixture {
     if(sample.offset<=0 || sample.oldRows===0 || sample.newTail
       || JSON.parse(await this.run(['api','snapshot'])).result.snapshot.focused_pane_id!==this.agent?.paneId)
       throw new Error('Owned remote history did not scroll and restore');
+  }
+  /**
+   * The Android Herdr panel created a workspace in the fixture directory, renamed it, split its pane down and zoomed it.
+   * Herdr itself is read back: the label, directory, pane count and zoom flag, with the three navigation workspaces and panes kept.
+   */
+  async verifyPanelActions(created:string,renamed:string) {
+    const snapshot=JSON.parse(await this.run(['api','snapshot'])).result.snapshot;
+    if((snapshot.workspaces as Record<string,unknown>[]).some(value=>value.label===created))throw new Error('Owned Herdr panel rename was not observed');
+    const rows=herdrPanelRows(snapshot,renamed);
+    const directory=await realpath(this.ssh.directory);
+    for(const cwd of rows.paneCwds)if(typeof cwd!=='string' || await realpath(cwd)!==directory)throw new Error('Owned Herdr panel directory differs');
+    if(!rows.zoomed)throw new Error('Owned Herdr panel zoom was not observed');
+    const labels=(snapshot.workspaces as Record<string,unknown>[]).map(value=>value.label).sort();
+    if(JSON.stringify(labels)!==JSON.stringify([renamed,'HERDR_'+this.ssh.nonce,'NAV_WORKSPACE_'+this.ssh.nonce].sort()) || snapshot.panes.length!==5)
+      throw new Error('Owned Herdr panel changed an original workspace');
+  }
+  /** Ids from the real server: the reported agent and the second tab's pane (outside navigation mode). */
+  get targets() {
+    if(!this.agent || !this.historyPane)throw new Error('Owned Herdr targets required');
+    return {agent:this.agent,history:this.historyPane};
   }
   metadata() {
     if(!this.agent || !this.agentContext)throw new Error('Owned Herdr agent report required');

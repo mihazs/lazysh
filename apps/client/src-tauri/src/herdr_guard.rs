@@ -7,6 +7,8 @@ use crate::{
 use russh::ChannelMsg;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(desktop)]
+use std::io;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -95,7 +97,7 @@ pub struct Destination {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Ticket {
+pub(crate) struct Ticket {
     boot: Secret,
     ticket: Secret,
 }
@@ -220,12 +222,14 @@ fn response(status: Option<u32>, output: &[u8], errors: &[u8]) -> WireOutcome<Wi
     }
 }
 
+/// The argument that makes a Herdr client hand its private first frame to the one that owns it.
+pub(crate) const GUARDED_ATTACH: &str = "--guarded-attach";
 fn command(name: &str, guarded_attach: bool) -> String {
     format!(
         "herdr --session {} {}",
         ssh::quote(name),
         if guarded_attach {
-            "--guarded-attach"
+            GUARDED_ATTACH
         } else {
             "api guarded"
         }
@@ -234,11 +238,18 @@ fn command(name: &str, guarded_attach: bool) -> String {
 pub(crate) fn attach_command(name: &str) -> String {
     command(name, true)
 }
-pub(crate) fn attach_receipt(name: &str) -> String {
-    crate::herdr_path::with_path(&format!(
-        "herdr --session {} --guarded-attach --startup-fd 3",
-        ssh::quote(name)
-    ))
+/// The Mosh startup command, for a host the caller already identified as POSIX.
+pub(crate) fn attach_receipt(
+    backend: crate::herdr_backend::HerdrBackend,
+    name: &str,
+) -> Result<String> {
+    backend.wrap(
+        &format!(
+            "herdr --session {} --guarded-attach --startup-fd 3",
+            ssh::quote(name)
+        ),
+        true,
+    )
 }
 fn startup_fd_capability(output: &str) -> bool {
     #[derive(Deserialize)]
@@ -254,7 +265,8 @@ fn startup_fd_capability(output: &str) -> bool {
 pub(crate) async fn require_startup_fd(session: &ssh::Session, lease: &AccessLease) -> Result<()> {
     let output = ssh::exec_bounded(
         session,
-        crate::herdr_path::with_path("herdr --guarded-attach-capabilities"),
+        crate::herdr_backend::captured(&session.handle)
+            .wrap("herdr --guarded-attach-capabilities", true)?,
         lease,
         DEADLINE,
         256,
@@ -293,9 +305,24 @@ async fn response_before(
     }
 }
 
+/// Where the guard reaches a Herdr: the SSH host's, or this device's.
+#[derive(Clone)]
+pub(crate) enum Route {
+    Ssh(Arc<SshHandle>),
+    #[cfg(desktop)]
+    Local(Local),
+}
+/// Herdr on this device. Only tests carry state: the environment of a private home.
+#[cfg(desktop)]
+#[derive(Clone, Default)]
+pub(crate) struct Local {
+    #[cfg(test)]
+    pub(crate) env: Vec<(String, String)>,
+}
+
 /// One owned exec per RPC. A canceled waiter cannot leave a reusable partial stream.
 async fn rpc<T: Serialize>(
-    handle: &Arc<SshHandle>,
+    route: &Route,
     name: &str,
     lease: &AccessLease,
     cancel: &mut watch::Receiver<bool>,
@@ -319,6 +346,34 @@ async fn rpc<T: Serialize>(
     if body.len() > LIMIT {
         return Err(Fault::Invalid);
     }
+    // Boxed: every caller embeds this future, and both exchanges inline would overflow the
+    // stack of a debug test thread that awaits an attach.
+    match route {
+        Route::Ssh(handle) => {
+            Box::pin(ssh_exchange(
+                handle, name, lease, cancel, &body, deadline, reply,
+            ))
+            .await
+        }
+        #[cfg(desktop)]
+        Route::Local(local) => {
+            let work = Box::pin(local_exchange(local, name, &body, lease));
+            settle(lease, cancel, reply, deadline, work).await
+        }
+    }
+}
+async fn ssh_exchange(
+    handle: &Arc<SshHandle>,
+    name: &str,
+    lease: &AccessLease,
+    cancel: &mut watch::Receiver<bool>,
+    body: &[u8],
+    deadline: tokio::time::Instant,
+    reply: &mut Option<&mut oneshot::Sender<Result<Reply>>>,
+) -> WireOutcome<WireResult> {
+    // The connection's captured Herdr, never another one, runs every owned RPC.
+    let command = crate::herdr_backend::resolve_cached(handle, &command(name, false))
+        .map_err(|_| Fault::Unavailable)?;
     let mut channel = tokio::select! { biased;
         _ = cancel.changed() => return Err(Fault::Unavailable),
         _ = abandoned(reply) => return Err(Fault::Stale),
@@ -327,20 +382,11 @@ async fn rpc<T: Serialize>(
     let work = async {
         lease.check().map_err(|_| Fault::Stale)?;
         channel
-            .exec(
-                true,
-                crate::herdr_path::select(
-                    &command(name, false),
-                    crate::herdr_path::cached(handle) == Some(true),
-                ),
-            )
+            .exec(true, command)
             .await
             .map_err(|_| Fault::Unavailable)?;
         lease.check().map_err(|_| Fault::Stale)?;
-        channel
-            .data(body.as_slice())
-            .await
-            .map_err(|_| Fault::Uncertain)?;
+        channel.data(body).await.map_err(|_| Fault::Uncertain)?;
         channel.eof().await.map_err(|_| Fault::Uncertain)?;
         let mut output = Zeroizing::new(Vec::new());
         let mut errors = Zeroizing::new(Vec::new());
@@ -359,12 +405,7 @@ async fn rpc<T: Serialize>(
         }
         response(status, &output, &errors)
     };
-    let outcome = tokio::select! { biased;
-        _ = lease.cancelled() => Err(Fault::Stale),
-        _ = cancel.changed() => Err(Fault::Unavailable),
-        _ = abandoned(reply) => Err(Fault::Stale),
-        result = response_before(deadline, work) => result,
-    };
+    let outcome = settle(lease, cancel, reply, deadline, work).await;
     if outcome.is_err() {
         // Only this owned, private CLI process is signalled, never the display/server.
         let _ =
@@ -372,6 +413,80 @@ async fn rpc<T: Serialize>(
     }
     let _ = tokio::time::timeout(Duration::from_secs(2), channel.close()).await;
     outcome
+}
+/// The exchange ends at the first of: access revoked, session closed, waiter gone, deadline.
+async fn settle(
+    lease: &AccessLease,
+    cancel: &mut watch::Receiver<bool>,
+    reply: &mut Option<&mut oneshot::Sender<Result<Reply>>>,
+    deadline: tokio::time::Instant,
+    work: impl std::future::Future<Output = WireOutcome<WireResult>>,
+) -> WireOutcome<WireResult> {
+    tokio::select! { biased;
+        _ = lease.cancelled() => Err(Fault::Stale),
+        _ = cancel.changed() => Err(Fault::Unavailable),
+        _ = abandoned(reply) => Err(Fault::Stale),
+        result = response_before(deadline, work) => result,
+    }
+}
+/// The same one-shot `herdr api guarded` as a child of this app: argv, never a shell, and the
+/// child with its whole tree ends when the exchange does.
+#[cfg(desktop)]
+async fn local_exchange(
+    local: &Local,
+    name: &str,
+    body: &[u8],
+    lease: &AccessLease,
+) -> WireOutcome<WireResult> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    lease.check().map_err(|_| Fault::Stale)?;
+    let mut herdr = crate::host::local_command("herdr").await;
+    herdr
+        .args(["--session", name, "api", "guarded"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(test)]
+    herdr.envs(local.env.iter().cloned());
+    #[cfg(not(test))]
+    let _ = local;
+    lease.check().map_err(|_| Fault::Stale)?;
+    let (mut child, _tree) =
+        lazysh_account_usage::spawn_owned(&mut herdr).map_err(|_| Fault::Unavailable)?;
+    let (Some(mut stdin), Some(mut stdout), Some(mut stderr)) =
+        (child.stdin.take(), child.stdout.take(), child.stderr.take())
+    else {
+        return Err(Fault::Unavailable);
+    };
+    stdin.write_all(body).await.map_err(|_| Fault::Uncertain)?;
+    // The end of input ends the request.
+    drop(stdin);
+    let mut output = Zeroizing::new(Vec::new());
+    let mut errors = Zeroizing::new(Vec::new());
+    let (mut out, mut err) = (Zeroizing::new([0u8; 4096]), Zeroizing::new([0u8; 4096]));
+    let (mut out_open, mut err_open) = (true, true);
+    while out_open || err_open {
+        tokio::select! {
+            read = stdout.read(&mut out[..]), if out_open => match read.map_err(|_| Fault::Uncertain)? {
+                0 => out_open = false,
+                count => output.extend_from_slice(&out[..count]),
+            },
+            read = stderr.read(&mut err[..]), if err_open => match read.map_err(|_| Fault::Uncertain)? {
+                0 => err_open = false,
+                count => errors.extend_from_slice(&err[..count]),
+            },
+        }
+        if output.len() + errors.len() > LIMIT {
+            return Err(Fault::Protocol);
+        }
+    }
+    let status = child.wait().await.map_err(|_| Fault::Uncertain)?;
+    response(
+        status.code().and_then(|code| u32::try_from(code).ok()),
+        &output,
+        &errors,
+    )
 }
 async fn abandoned(reply: &mut Option<&mut oneshot::Sender<Result<Reply>>>) {
     match reply {
@@ -387,17 +502,41 @@ struct Probe<'a> {
     preparation: u64,
 }
 pub(crate) async fn available(session: &ssh::Session, name: &str, lease: &AccessLease) -> bool {
-    // The invalid number is rejected before actor lookup/mutation. This is not authority.
     if crate::herdr_path::admit(session, lease).await.is_err() {
         return false;
     }
+    probe(
+        &Route::Ssh(session.handle.clone()),
+        name,
+        lease,
+        &mut session.cancel.subscribe(),
+    )
+    .await
+}
+/// Whether this device's Herdr is the guarded build; `cancel` ends the probe early.
+#[cfg(desktop)]
+pub(crate) async fn available_local(
+    local: Local,
+    name: &str,
+    lease: &AccessLease,
+    cancel: &mut watch::Receiver<bool>,
+) -> bool {
+    probe(&Route::Local(local), name, lease, cancel).await
+}
+async fn probe(
+    route: &Route,
+    name: &str,
+    lease: &AccessLease,
+    cancel: &mut watch::Receiver<bool>,
+) -> bool {
+    // The invalid number is rejected before actor lookup/mutation. This is not authority.
     let zero = "0".repeat(64);
     matches!(
         rpc(
-            &session.handle,
+            route,
             name,
             lease,
-            &mut session.cancel.subscribe(),
+            cancel,
             "lazysh.guard.cancel_preparation",
             &Probe {
                 boot: &zero,
@@ -514,11 +653,50 @@ pub(crate) async fn acquire(
         _ = cancel.changed() => Err(Fault::Unavailable),
         result = tokio::time::timeout_at(deadline, read) => result.unwrap_or(Err(Fault::Unavailable)),
     }.map_err(Fault::error)?;
+    let startup = claim(
+        &Route::Ssh(parent.handle.clone()),
+        lease,
+        name,
+        &mut cancel,
+        &ticket,
+    )
+    .await?;
+    Ok((startup, std::mem::take(&mut *initial)))
+}
+/// The private first frame of a local display, delivered once by [`StartupReader`].
+#[cfg(desktop)]
+pub(crate) async fn acquire_local(
+    local: Local,
+    lease: &AccessLease,
+    name: &str,
+    tickets: oneshot::Receiver<Ticket>,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<Startup> {
+    let ticket = tokio::select! { biased;
+        _ = lease.cancelled() => Err(Fault::Stale),
+        _ = cancel.changed() => Err(Fault::Unavailable),
+        // A frame that never comes, or a display that ends first, is no ticket.
+        result = tokio::time::timeout(DEADLINE, tickets) => match result {
+            Ok(Ok(ticket)) => Ok(ticket),
+            _ => Err(Fault::Unavailable),
+        },
+    }
+    .map_err(Fault::error)?;
+    claim(&Route::Local(local), lease, name, cancel, &ticket).await
+}
+/// Claims the connection's ownership once; a lost or uncertain claim is never replayed.
+async fn claim(
+    route: &Route,
+    lease: &AccessLease,
+    name: &str,
+    cancel: &mut watch::Receiver<bool>,
+    ticket: &Ticket,
+) -> Result<Startup> {
     let owner = rpc(
-        &parent.handle,
+        route,
         name,
         lease,
-        &mut cancel,
+        cancel,
         "lazysh.guard.claim",
         &Claim {
             boot: &ticket.boot,
@@ -533,16 +711,60 @@ pub(crate) async fn acquire(
             if owner.boot == ticket.boot && owner.last_preparation == 0 =>
         {
             lease.check()?;
-            Ok((
-                Startup {
-                    boot: owner.boot,
-                    ownership: owner.ownership,
-                    name: name.into(),
-                },
-                std::mem::take(&mut *initial),
-            ))
+            Ok(Startup {
+                boot: owner.boot,
+                ownership: owner.ownership,
+                name: name.into(),
+            })
         }
         _ => Err(Fault::Protocol.error()),
+    }
+}
+
+/// Takes the guard's private first frame off a local display before any byte reaches the
+/// terminal. The frame must open the stream; nothing later is ever searched for a ticket.
+#[cfg(desktop)]
+pub(crate) struct StartupReader<R> {
+    inner: R,
+    held: Zeroizing<Vec<u8>>,
+    /// Present until the frame has been delivered.
+    ticket: Option<oneshot::Sender<Ticket>>,
+}
+#[cfg(desktop)]
+impl<R: io::Read> StartupReader<R> {
+    pub(crate) fn new(inner: R, ticket: oneshot::Sender<Ticket>) -> Self {
+        Self {
+            inner,
+            held: Zeroizing::default(),
+            ticket: Some(ticket),
+        }
+    }
+}
+#[cfg(desktop)]
+impl<R: io::Read> io::Read for StartupReader<R> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        loop {
+            // WouldBlock and Interrupted pass through; the state survives the retry.
+            let read = self.inner.read(out)?;
+            if self.ticket.is_none() || read == 0 {
+                return Ok(read);
+            }
+            let refused = |_| io::Error::new(io::ErrorKind::InvalidData, "guard_startup_invalid");
+            extend_startup(&mut self.held, &out[..read]).map_err(refused)?;
+            let Some((ticket, used)) = frame(&self.held).map_err(refused)? else {
+                continue;
+            };
+            // An earlier read held an incomplete frame, so everything after it is from this one.
+            let rest = self.held.len() - used;
+            out[..rest].copy_from_slice(&self.held[used..]);
+            self.held.zeroize();
+            if let Some(sender) = self.ticket.take() {
+                let _ = sender.send(ticket);
+            }
+            if rest > 0 {
+                return Ok(rest);
+            }
+        }
     }
 }
 
@@ -582,9 +804,11 @@ fn guarded_input(input: &Input) -> WireOutcome<()> {
     if matches!(
         input,
         Input::SendLong { .. }
+            | Input::Type { .. }
             | Input::Select { .. }
             | Input::Submit { .. }
             | Input::Pick { .. }
+            | Input::Dismiss { .. }
             | Input::CycleMode {}
     ) {
         return Err(Fault::Invalid);
@@ -642,6 +866,8 @@ impl Action {
 )]
 pub enum Reply {
     Observed {
+        /// The Herdr server this guarded attachment belongs to, so a caller never reads another server's client location.
+        server: String,
         destination: Destination,
     },
     Status {
@@ -672,7 +898,7 @@ struct Bound {
 }
 struct Control {
     startup: Startup,
-    handle: Arc<SshHandle>,
+    route: Route,
     preparation: u64,
     bound: Option<Bound>,
 }
@@ -778,7 +1004,7 @@ impl Control {
             source: &source_digest,
         };
         let result = rpc(
-            &self.handle,
+            &self.route,
             &self.startup.name,
             lease,
             cancel,
@@ -825,7 +1051,7 @@ impl Control {
                 receipt: &bound.remote,
             };
             match rpc(
-                &self.handle,
+                &self.route,
                 &self.startup.name,
                 &bound.owner,
                 cancel,
@@ -856,7 +1082,7 @@ impl Control {
                     ownership: &self.startup.ownership,
                 };
                 match rpc(
-                    &self.handle,
+                    &self.route,
                     &self.startup.name,
                     lease,
                     cancel,
@@ -868,6 +1094,7 @@ impl Control {
                 {
                     WireResult::GuardObserved { guard } if guard.target.valid() => {
                         Ok(Reply::Observed {
+                            server: self.startup.name.clone(),
                             destination: guard.target.public(),
                         })
                     }
@@ -889,7 +1116,7 @@ impl Control {
                     lines,
                 };
                 match rpc(
-                    &self.handle,
+                    &self.route,
                     &self.startup.name,
                     lease,
                     cancel,
@@ -968,7 +1195,7 @@ impl Control {
                     input: &input,
                 };
                 match rpc(
-                    &self.handle,
+                    &self.route,
                     &self.startup.name,
                     &bound.owner,
                     cancel,
@@ -1007,16 +1234,12 @@ struct Work {
     reply: oneshot::Sender<Result<Reply>>,
     _permit: Arc<Permit>,
 }
-pub(crate) fn start(
-    startup: Startup,
-    handle: Arc<SshHandle>,
-    mut cancel: watch::Receiver<bool>,
-) -> Binding {
+pub(crate) fn start(startup: Startup, route: Route, mut cancel: watch::Receiver<bool>) -> Binding {
     let (requests, mut queue) = mpsc::channel::<Work>(1);
     tauri::async_runtime::spawn(async move {
         let mut control = Control {
             startup,
-            handle,
+            route,
             preparation: 0,
             bound: None,
         };
@@ -1140,37 +1363,47 @@ pub(crate) async fn retire_for_view(
 pub async fn herdr_chat(
     lease: AccessLease,
     state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
     session_id: String,
     action: Action,
 ) -> AccessResult<Reply> {
     lease
-        .run(async {
-            lease.check()?;
-            action.validate().map_err(Fault::error)?;
-            let session = state.session(&session_id).await?;
-            let binding = session
-                .bindings
-                .herdr
-                .lock()
-                .map_err(|_| Fault::Unavailable.error())?
-                .clone();
-            if matches!(action, Action::Status) {
-                return Ok(Reply::Status {
-                    available: binding
-                        .as_ref()
-                        .is_some_and(|binding| !binding.requests.is_closed()),
-                });
-            }
-            match binding {
-                Some(binding) => {
-                    binding
-                        .call(&lease, &mut session.cancel.subscribe(), action)
-                        .await
-                }
-                None => Err(Fault::Unavailable.error()),
-            }
-        })
+        .run(chat(&lease, &state, &local, &session_id, action))
         .await
+}
+pub(crate) async fn chat(
+    lease: &AccessLease,
+    state: &AppState,
+    local: &crate::local::LocalState,
+    session_id: &str,
+    action: Action,
+) -> Result<Reply> {
+    lease.check()?;
+    action.validate().map_err(Fault::error)?;
+    let (binding, mut cancel) = if session_id.starts_with("local:") {
+        crate::local::herdr_binding(local, session_id, lease)
+            .map_err(|_| Fault::Unavailable.error())?
+    } else {
+        let session = state.session(session_id).await?;
+        let binding = session
+            .bindings
+            .herdr
+            .lock()
+            .map_err(|_| Fault::Unavailable.error())?
+            .clone();
+        (binding, session.cancel.subscribe())
+    };
+    if matches!(action, Action::Status) {
+        return Ok(Reply::Status {
+            available: binding
+                .as_ref()
+                .is_some_and(|binding| !binding.requests.is_closed()),
+        });
+    }
+    match binding {
+        Some(binding) => binding.call(lease, &mut cancel, action).await,
+        None => Err(Fault::Unavailable.error()),
+    }
 }
 
 #[cfg(test)]

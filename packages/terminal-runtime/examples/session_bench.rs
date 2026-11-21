@@ -15,14 +15,19 @@ use support::*;
 
 const PER_SESSION: usize = 16 * 1024 * 1024;
 
-/// `PUMP_SLICE_KIB=16 cargo run ...` benchmarks another slice size than the default.
+fn env_number(name: &str) -> Option<usize> {
+    std::env::var(name).ok().and_then(|v| v.parse().ok())
+}
+
+/// `PUMP_SLICE_KIB=16 cargo run ...` benchmarks another slice size than the default;
+/// `COMPRESS_AFTER_MS=0` turns scrollback compaction off, another value sets its delay.
 fn hub_config() -> HubConfig {
     let mut config = HubConfig::default();
-    if let Some(kib) = std::env::var("PUMP_SLICE_KIB")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-    {
+    if let Some(kib) = env_number("PUMP_SLICE_KIB") {
         config.pump_slice = kib * 1024;
+    }
+    if let Some(ms) = env_number("COMPRESS_AFTER_MS") {
+        config.compress_after = (ms > 0).then(|| std::time::Duration::from_millis(ms as u64));
     }
     config
 }
@@ -247,7 +252,7 @@ fn screen_update_latency() {
 
 fn memory() {
     let text = Arc::new(plain(8 * 1024 * 1024));
-    println!("\n| memory (RSS KiB) | baseline | after creating | per session |\n|---|---|---|---|");
+    println!("\n| memory (RSS KiB) | baseline | after creating | per session | per session after 3 s idle and detached |\n|---|---|---|---|---|");
     for (count, fill) in [(5, false), (10, false), (5, true), (10, true)] {
         let hub = Hub::new(hub_config());
         let before = rss_kib().unwrap();
@@ -259,14 +264,18 @@ fn memory() {
             fixtures.iter().for_each(|f| f.settle(text.len() as u64));
         }
         let after = rss_kib().unwrap();
+        // Detached and silent: past `compress_after` the workers compact each session's history.
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let idle = rss_kib().unwrap();
         println!(
-            "| {count} sessions, {} | {before} | {after} | {} |",
+            "| {count} sessions, {} | {before} | {after} | {} | {} |",
             if fill {
                 "8 MiB of 80-column lines each, 4 MiB scrollback"
             } else {
                 "empty"
             },
-            (after - before) / count
+            (after - before) / count,
+            idle.saturating_sub(before) / count
         );
     }
     let hub = Hub::new(hub_config());
@@ -280,7 +289,9 @@ fn memory() {
         rss_kib().unwrap()
     };
     let start = rss_kib().unwrap();
-    let rounds: Vec<u64> = (0..4).map(|_| round(&hub)).collect();
+    let rounds: Vec<u64> = (0..env_number("CHURN_ROUNDS").unwrap_or(4))
+        .map(|_| round(&hub))
+        .collect();
     println!("\nchurn, 100 sessions x 1 MiB each, created and closed per round: RSS before {start} KiB, after rounds {rounds:?} KiB");
 }
 

@@ -8,6 +8,7 @@ struct Instance {
     @location(0) rect: vec4<u32>,   // x, y, width, height in target pixels
     @location(1) color: u32,        // 0xAABBGGRR
     @location(2) mask: vec2<u32>,   // atlas origin, or 0xffffffff for a solid rectangle
+    @location(3) kind: u32,         // 0: coverage mask tinted with color; 1: RGBA glyph from the color atlas
 }
 
 struct Varying {
@@ -15,10 +16,12 @@ struct Varying {
     @location(0) @interpolate(flat) color: vec4<f32>,
     @location(1) @interpolate(flat) origin: vec2<u32>,
     @location(2) @interpolate(flat) mask: vec2<u32>,
+    @location(3) @interpolate(flat) kind: u32,
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
+@group(0) @binding(2) var color_atlas: texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) corner: u32, inst: Instance) -> Varying {
@@ -34,6 +37,7 @@ fn vs_main(@builtin(vertex_index) corner: u32, inst: Instance) -> Varying {
     ) / 255.0;
     out.origin = inst.rect.xy;
     out.mask = inst.mask;
+    out.kind = inst.kind;
     return out;
 }
 
@@ -42,6 +46,13 @@ fn fs_main(in: Varying) -> @location(0) vec4<f32> {
     var coverage = 1.0;
     if in.mask.x != 0xffffffffu {
         let local = vec2<u32>(in.position.xy) - in.origin;
+        if in.kind == 1u {
+            let glyph = textureLoad(color_atlas, vec2<i32>(in.mask + local), 0);
+            if glyph.a <= 0.0 {
+                discard;
+            }
+            return glyph;
+        }
         coverage = textureLoad(atlas, vec2<i32>(in.mask + local), 0).r;
         if coverage <= 0.0 {
             discard;

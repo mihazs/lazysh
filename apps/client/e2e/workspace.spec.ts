@@ -3,7 +3,7 @@ import {workspaceControl,openPreferenceCategory,closePreferences,openToolsPageWi
 import {controlContrast} from './fixtures/controlContrast';
 import {forgetKeyboardRequests,keyboardRequests,trackKeyboardRequests} from './fixtures/keyboardRequests';
 import {installNativeBridge} from './fixtures/nativeBridge';
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import {readFileSync} from 'node:fs';
 
 test('browser preview is honest, usable at phone width and keyboard navigable', async ({ page }, testInfo) => {
@@ -115,7 +115,8 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
   await page.addInitScript(({geometry,sessionNames})=>{
     const calls:string[]=[];const state={updated:false,installed:false,offline:false,missing:false,holdTree:false,holdReport:false,connects:0,agentCount:1,visualStates:false,reportCount:1,empty:false,hooksConfigured:false,hookDiscoveryVersions:[] as number[],hookActions:[] as string[],navigations:[] as unknown[],herdrDelay:0};Object.assign(window,{workspaceNavigationCalls:calls,workspaceNavigationState:state});
     window.nativeFixtureInvoke=async(command,args={})=>{
-      calls.push(command);
+      // Spaces reads where the guarded client is (`herdr_chat` observe); that read grants no input, so it is recorded apart from the authority calls the tests forbid.
+      calls.push(command==='herdr_chat' && (args.action as {kind?:string}|undefined)?.kind==='observe'?'herdr_client_observe':command);
       // Herdr display replies can be slowed to mimic a network round trip.
       const herdrReply=()=>state.herdrDelay && args.sessionId==='owned-navigation-herdr'?new Promise(resolve=>setTimeout(resolve,state.herdrDelay)):undefined;
       if(command==='list_hosts'){const hosts=[{id:'nav-host',name:'Navigation host',hostname:'fixture.invalid',username:'fixture',port:22},{id:'other-nav-host',name:'Other navigation host',hostname:'other-fixture.invalid',username:'fixture',port:22}];return sessionNames?sessionNames.map((name,index)=>({...hosts[index%2],id:`crowded-host-${index}`,name})):hosts;}
@@ -133,6 +134,7 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
         tree.agents=tree.panes.map((pane,i)=>({...agent,pane_id:pane.pane_id,terminal_id:pane.terminal_id,name:`codex-builder-${i+1}`}));
       }if(state.visualStates){tree.agents=tree.agents.map((agent,index)=>({...agent,agent_status:index%3===0?'blocked':index%3===1?'working':'done'}));tree.panes=tree.panes.map((pane,index)=>({...pane,agent_status:tree.agents[index].agent_status}));}if(state.holdTree)return new Promise(resolve=>{Object.assign(window,{finishHerdrRead:()=>{state.holdTree=false;resolve(tree);}});});return tree;}
       if(command==='agent_snapshot' && state.missing)throw new Error('Owned fixture companion unavailable');
+      if(command==='check_companion_update')return {schemaVersion:1,via:'update',installed:'1.0.0',previous:'0.9.0',latest:'1.1.0',state:'available'};
       if(command==='install_companion'||command==='install_companion_from_device'){
         if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).sort().join(',')!=='progress,sessionId')throw new Error('Unexpected installer arguments');
         // A host with no route to GitHub fails the default route; only the labelled device route still installs.
@@ -150,13 +152,13 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
       }
       if(command==='companion_hook_discovery'){
         const schemaVersion=args.schemaVersion===undefined?1:args.schemaVersion;
-        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).some(key=>!['sessionId','schemaVersion'].includes(key))||(schemaVersion!==1&&schemaVersion!==2&&schemaVersion!==3))throw new Error('Wrong discovery source');
+        if(args.sessionId!=='owned-navigation-ssh'||Object.keys(args).some(key=>!['sessionId','schemaVersion'].includes(key))||![1,2,3,4].includes(schemaVersion))throw new Error('Wrong discovery source');
         state.hookDiscoveryVersions.push(schemaVersion);
         return {schemaVersion,supported:true,managedSetupSupported:true,truncated:false,agents:[
           {agent:'codex',setup:'managed',executable:{path:'/owned/bin/codex',source:'path'},profiles:[{path:'/owned/profile',source:'CODEX_HOME',state:'directory'}]},
           {agent:'claude',setup:'managed',executable:null,profiles:[{path:'/owned/other-profile',source:'default',state:'directory'}]},
           ...['droid','gemini','cursor','opencode','cline'].map(agent=>({agent,setup:'managed',executable:{path:`/owned/bin/${agent}`,source:'path'},profiles:[{path:`/owned/${agent} profile`,source:'HOME',state:'directory'}]})),
-          {agent:'kimi',setup:'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[]},
+          {agent:'kimi',setup:schemaVersion>=4?'managed':'manual',executable:{path:'/owned/bin/kimi',source:'path'},profiles:[{path:'/owned/.kimi-code',source:'HOME',state:'directory'},{path:'/owned/.kimi',source:'HOME',state:'directory'}]},
           {agent:'aider',setup:'healthOnly',executable:{path:'/owned/bin/aider',source:'path'},profiles:[]},
         ]};
       }
@@ -164,12 +166,14 @@ async function installWorkspaceNavigation(page:Page,geometry=false,sessionNames?
         const request=args.request as {agent:string;action:string;profileRoot:string;expectedPlan?:string};
         if(args.sessionId!=='owned-navigation-ssh' || request.agent!=='codex' || request.profileRoot!=='/owned/profile')throw new Error('Wrong owned hook inspection target');
         state.hookActions.push(request.action);
-        if(request.action==='status')return {schemaVersion:1,supported:true,state:state.hooksConfigured?'configured':null,installPlan:'a'.repeat(64),removePlan:'b'.repeat(64),trust:'notChecked',reporting:'notChecked'};
+        if(request.action==='status')return {schemaVersion:1,supported:true,state:state.hooksConfigured?'configured':null,installPlan:'a'.repeat(64),removePlan:'b'.repeat(64),trust:'notChecked',reporting:'notChecked',readiness:{schemaVersion:1,localEvent:{state:'none'}}};
         if(request.action==='install' && request.expectedPlan==='a'.repeat(64)){state.hooksConfigured=true;return {schemaVersion:1,outcome:{status:'configured'},trust:'notChecked',reporting:'notChecked'};}
         throw new Error('Uninspected hook mutation');
       }
       if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='get_companion_settings')return {schemaVersion:1,revision:4,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true};
+      if(command==='get_host_browser_settings')return {schemaVersion:1,revision:0,hostBrowserEnabled:false};
+      if(command==='get_notification_policy')return {schemaVersion:1,revision:0,nestedAgentSuppressionEnabled:false,suppressWhileDesktopUnlocked:false};
       if(command==='board_keep_awake_status')return {available:geometry,active:false,reason:'Synthetic keep-awake unavailable',epoch:'0/11111111-1111-4111-8111-111111111111',ticket:1};
       if(command==='apple_status_capability')return {available:false,reason:'Synthetic status unavailable'};
       if(['cancel_credential_auth','adopt_session','resize','ack_output','disconnect'].includes(command)||command.startsWith('plugin:event|'))return;
@@ -218,7 +222,8 @@ function nativeHerdrNavigationRow(label:string,context?:string){
   const row=/val row = "([^"\n]+herdr-navigation-row[^"\n]+)"/.exec(nativeWorkspaceSource);
   if(!condition||!row)throw new Error('Native Herdr row selector contract changed');
   const match=condition[context===undefined?1:2].replaceAll('$targetLabel',()=>label).replaceAll('$context',()=>context??'');
-  return 'xpath='+row[1].replace('$match',()=>match);
+  // The native row also filters by agent status; the web e2e selects by label only.
+  return 'xpath='+row[1].replace('$match',()=>match).replace('$state','');
 }
 
 function nativeHerdrNavigationReady(label:string,context?:string){
@@ -283,6 +288,26 @@ test('slow Herdr switches keep the soft keyboard closed on wide touch layouts',a
   const phone=testInfo.project.name==='phone';
   if(phone)await page.setViewportSize({width:844,height:390});
   await herdrSwitchKeyboard(page,{touch:phone,drawer:false,replyDelay:400});
+});
+
+test('live group choice follows an adopted Herdr display',async({page},testInfo)=>{
+  await openClockedNavigation(page);
+  const phone=testInfo.project.name==='phone';
+  await openConnectedAgents(page,phone);
+  await selectAgentSection(page,'live');
+  const live=page.getByRole('region',{name:'Herdr navigation',exact:true});
+  const idle=live.getByRole('button',{name:'Idle · 1',exact:true});
+  await expect(idle).toHaveAttribute('aria-expanded','true');
+  await idle.click();
+  await expect(idle).toHaveAttribute('aria-expanded','false');
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Workspaces',exact:true}).click();
+  await page.locator(nativeHerdrNavigationRow('codex-builder')).click();
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{navigations:unknown[]}}).workspaceNavigationState.navigations)).toEqual([{type:'focusPane',target:'w1:p1'}]);
+  if(phone)await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  await page.getByRole('navigation',{name:'Workspace navigation',exact:true}).getByRole('button',{name:'Agents navigation',exact:true}).click();
+  await selectAgentSection(page,'live');
+  await expect(idle).toHaveAttribute('aria-expanded','false');
+  await expect(live.getByRole('button',{name:/^codex-builder/})).toHaveCount(0);
 });
 
 test('a soft keyboard that is already open stays open through a Herdr switch on a wide touch layout',async({page},testInfo)=>{
@@ -476,6 +501,12 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await modes.getByRole('button',{name:'Workspaces',exact:true}).click();
   await expect(live.getByRole('heading',{name:'Spaces',exact:true})).toBeVisible();
   await expect(page.locator(nativeHerdrNavigationRow('Development'))).toHaveCount(1);
+  const layout=live.getByRole('combobox',{name:'Jump To layout',exact:true});
+  await layout.selectOption('grid');
+  await expect(live.locator('.herdr-navigation-tree')).toHaveClass(/herdr-layout-grid/);
+  expect(await page.evaluate(()=>localStorage.getItem('lazysh.multiplexer.layout'))).toBe('grid');
+  expect(await live.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  await layout.selectOption('list');
   const collapse=live.getByRole('button',{name:'Expand or collapse Development',exact:true});
   await collapse.click();await expect(live.getByText('codex-builder',{exact:true})).toBeHidden();
   await collapse.click();await expect(live.getByText('codex-builder',{exact:true})).toBeVisible();
@@ -523,18 +554,24 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect.poll(()=>page.evaluate(nativeHerdrNavigationReady('Codex tasks'))).toBe(true);
 });
 
-test('a host that cannot reach GitHub offers the labelled device install and the default route never downloads on the device',async({page},testInfo)=>{
+/** The connected fixture host's Agent activity board, with the host fixture's state flags set. */
+async function openCompanionBoard(page:Page,testInfo:TestInfo,flags:Record<string,boolean>) {
   await openClockedNavigation(page);
   if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
   await connectPasswordHost(page);
-  await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{offline:boolean}}).workspaceNavigationState.offline=true;});
+  await page.evaluate(values=>Object.assign((window as unknown as {workspaceNavigationState:object}).workspaceNavigationState,values),flags);
   await (await workspaceControl(page,'Agents')).click();
   await selectAgentSection(page,'activity');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});
   await page.clock.runFor(200);
   const calls=(name:string)=>page.evaluate(command=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(call=>call===command).length,name);
+  return {board,calls};
+}
+
+test('a host that cannot reach GitHub offers the labelled device install and the default route never downloads on the device',async({page},testInfo)=>{
+  const {board,calls}=await openCompanionBoard(page,testInfo,{offline:true});
   await board.getByRole('button',{name:'Install companion',exact:true}).click();
-  await expect(board.locator('details.companion-install').getByRole('alert')).toHaveText('The host could not download the companion from GitHub. It needs outbound HTTPS access.');
+  await expect(board.locator('details[aria-label="Host companion installation"]').getByRole('alert')).toHaveText('The host could not download the companion from GitHub. It needs outbound HTTPS access.');
   expect(await calls('install_companion')).toBe(1);
   expect(await calls('install_companion_from_device'),'the device route is only offered, never taken by itself').toBe(0);
   const fallback=board.getByRole('button',{name:'Install through this device',exact:true});
@@ -545,6 +582,18 @@ test('a host that cannot reach GitHub offers the labelled device install and the
   await expect(board.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
   await expect(fallback).toHaveCount(0);
   expect([await calls('install_companion'),await calls('install_companion_from_device')]).toEqual([1,1]);
+});
+
+test('Check for updates reports the host companion without installing or downloading',async({page},testInfo)=>{
+  const {board,calls}=await openCompanionBoard(page,testInfo,{installed:true});
+  const setup=board.getByRole('button',{name:'Setup',exact:true});
+  if(await setup.getAttribute('aria-expanded')==='false')await setup.click();
+  const panel=board.locator('details[aria-label="Host companion installation"]');
+  if(!await panel.evaluate(node=>(node as HTMLDetailsElement).open))await panel.locator('summary').click();
+  await panel.getByRole('button',{name:'Check for updates',exact:true}).click();
+  await expect(panel.getByText('Host companion 1.0.0 can be updated to 1.1.0.',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  expect([await calls('check_companion_update'),await calls('install_companion'),await calls('install_companion_from_device')]).toEqual([1,0,0]);
 });
 
 test('mobile terminal keeps one compact header and reaches every session control through More',async({page},testInfo)=>{
@@ -597,7 +646,7 @@ test('mobile terminal keeps one compact header and reaches every session control
   await page.screenshot({path:testInfo.outputPath('compact-restore.png')});
   await connectHost();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
-  const closeHosts=nativeWorkspaceSource.match(/private fun endOwnedConnection[\s\S]*?val closeHosts = "([^"\n]+)"/)![1];
+  const closeHosts=nativeWorkspaceSource.match(/private fun closeHostsDrawer[\s\S]*?val closeHosts = "([^"\n]+)"/)![1];
   await expect.poll(()=>page.evaluate(nativeWorkspaceVisibility(closeHosts))).toBe(false);
   if(phone){
     await page.getByRole('button',{name:'Open hosts',exact:true}).click();
@@ -781,9 +830,11 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   const detected=board.getByRole('list',{name:'Detected host agents',exact:true});
   const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
   await expect(codex).toHaveAttribute('aria-pressed','false');
-  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([3]);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([4]);
   await expect(detected.getByRole('button',{name:/Claude Code.*Executable not detected/})).toBeEnabled();
-  await expect(detected.getByRole('button',{name:/Kimi.*Manual setup/})).toBeDisabled();
+  // Only Kimi Code's current profile is selectable; the legacy profile stays metadata.
+  await expect(detected.getByRole('button',{name:/Kimi.*\.kimi-code/})).toBeEnabled();
+  await expect(detected.getByRole('button',{name:/Kimi.*\/owned\/\.kimi(?!-)/})).toBeDisabled();
   await expect(detected.getByRole('button',{name:/Aider.*Callback health only/})).toBeDisabled();
   await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeDisabled();
   expect(await detected.getByRole('listitem').count()).toBeGreaterThanOrEqual(6);
@@ -801,6 +852,8 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   expect(await actions()).toEqual(['status']);
   await board.getByRole('button',{name:'Install or update hooks',exact:true}).click();
   await expect(board.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
+  await expect(board.getByRole('list',{name:'Readiness',exact:true}).getByText('Lifecycle event received on this host: None recorded',{exact:true})).toBeVisible();
+  await expect(board.getByText('Hooks are configured, but this host has recorded no event from this agent.',{exact:false})).toBeVisible();
   await expect(board.getByText('Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status','install','status']);
   await expect(board.locator('.agent-card')).toHaveCount(0);

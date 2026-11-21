@@ -92,7 +92,9 @@ jobs:
           docker exec --workdir /workspace "$BUILD_CONTAINER" /home/vagrant/fdroid-tools/bin/fdroid lint app.lazysh.client
           docker exec --workdir /workspace "$BUILD_CONTAINER" /home/vagrant/fdroid-tools/bin/fdroid scanner --exit-code --json "app.lazysh.client:$VERSION_CODE" > "$RUNNER_TEMP/source-scan.json"
           bun .changeset/release-tag.ts scan "$RUNNER_TEMP/source-scan.json" "$VERSION_CODE"
-          docker exec --workdir /workspace --env CARGO_BUILD_JOBS=4 --env CMAKE_BUILD_PARALLEL_LEVEL=4 "$BUILD_CONTAINER" \
+          # A Maven registry throttle or dropped download fails the Gradle step minutes into the build;
+          # only that failure is retried (see the script), and fdroid rebuilds from the pinned source.
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-gradle-resolution.sh" docker exec --workdir /workspace --env CARGO_BUILD_JOBS=4 --env CMAKE_BUILD_PARALLEL_LEVEL=4 "$BUILD_CONTAINER" \
             /home/vagrant/fdroid-tools/bin/fdroid build --test --stop --scan-binary "app.lazysh.client:$VERSION_CODE"
       - name: Inspect real unsigned release identity and Google-free payload
         if: *admitted

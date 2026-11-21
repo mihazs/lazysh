@@ -19,6 +19,9 @@ tasks:
   test-openssh-connections:
     type: test
     command: 'cargo test --locked --lib ssh::tests::connection_parity_fixture::openssh_parity_ -- --ignored'
+  test-openssh-auth-tunnel:
+    type: test
+    command: 'cargo test --locked --lib ssh::tests::auth_tunnel_fixture::openssh_auth_tunnel_ -- --ignored'
   test-host-clipboard:
     type: test
     command: 'cargo test --locked --lib ssh::tests::macos_host_clipboard_roundtrip -- --ignored --exact --nocapture'
@@ -30,7 +33,7 @@ tasks:
     command: 'cargo test --locked openssh_mosh_bootstrap_and_control_interoperability -- --ignored'
   test-et:
     type: test
-    command: 'cargo test --locked openssh_et_bootstrap_and_control_interoperability -- --ignored'
+    command: 'cargo test --locked openssh_et_ -- --ignored'
   test-multiplexers:
     type: test
     command: 'cargo test --locked --lib -- --ignored multiplexer::tests::real_ herdr::tests::real_ herdr_create::tests::real_ zellij::tests::real_ zellij_input::tests::real_ local::attach_tests::runtime::real_'

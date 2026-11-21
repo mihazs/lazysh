@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use lazysh_agent::{Agent, Error, Store};
 use std::io::{self, Write};
 
@@ -49,6 +49,11 @@ enum Command {
     Licenses,
     /// Check whether a newer verified companion release exists, or show the installed one.
     Update(lazysh_agent::update::Args),
+    /// Whether this companion updates itself when a newer lazysh app connects.
+    AutoUpdate {
+        #[command(subcommand)]
+        command: lazysh_agent::auto_update::Command,
+    },
     /// Inspect or explicitly install this verified binary into its managed user namespace.
     Installation {
         #[command(subcommand)]
@@ -103,6 +108,19 @@ enum Command {
         #[arg(long)]
         pane: String,
     },
+    /// Type into one named stock Herdr pane through a retained, pinned server epoch; JSON lines on stdin and stdout.
+    HerdrPaneInput {
+        #[arg(long)]
+        session: String,
+    },
+    /// Stream the agent-status changes of one Herdr server until stdin closes.
+    HerdrEvents {
+        #[arg(long)]
+        session: String,
+        /// Frame vocabulary version; only 1 exists.
+        #[arg(long, default_value_t=1, value_parser=clap::value_parser!(u8).range(1..=1))]
+        protocol: u8,
+    },
     /// Inspect reported token counters in one bounded transcript window.
     Usage {
         #[arg(long, value_enum)]
@@ -116,6 +134,8 @@ enum Command {
     },
     /// List TCP listeners on loopback or a wildcard address, to confirm a sign-in callback.
     Listeners(lazysh_agent::listeners::Options),
+    /// Review a repository: its changed files and the diff of one file. Read-only.
+    Review(lazysh_agent::review::Arguments),
     /// Inspect and explicitly control host Android devices or iOS Simulators.
     Devices {
         #[command(subcommand)]
@@ -217,6 +237,11 @@ enum Command {
         #[arg(long)]
         reported_history: bool,
     },
+    /// Print a Grok Build hooks fragment for `~/.grok/hooks/`; never changes settings.
+    GrokConfig {
+        #[arg(long)]
+        reported_history: bool,
+    },
     /// Print a standalone Droid hooks.json fragment; never changes settings.
     DroidConfig,
     /// Print Kimi TOML hooks; never changes settings. The default is legacy Kimi CLI 1.52; `--dialect kimi-code-2.4`
@@ -272,6 +297,9 @@ enum Command {
         agent: lazysh_agent::transcript::TranscriptAgent,
         #[arg(long)]
         session_id: String,
+        /// Allow bounded indexing of larger Codex conversation history.
+        #[arg(long)]
+        allow_large_history: bool,
         #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
         limit: u8,
         #[command(flatten)]
@@ -291,6 +319,9 @@ enum Command {
         /// Admit bounded static PNG/JPEG previews (Grok/Codex Records or Claude user images).
         #[arg(long)]
         inline_images: bool,
+        /// Allow bounded indexing of larger Codex conversation history.
+        #[arg(long)]
+        allow_large_history: bool,
         #[arg(long)]
         session_id: Option<String>,
         #[arg(long, default_value_t = 0)]
@@ -303,7 +334,7 @@ enum Command {
         #[command(flatten)]
         window: WindowArgs,
     },
-    /// Stream upserts of one Claude Code or Codex conversation until stdin closes.
+    /// Stream upserts of one Claude Code, Codex or OpenCode conversation until stdin closes.
     TranscriptWatch {
         #[arg(long, value_enum)]
         agent: lazysh_agent::transcript::TranscriptAgent,
@@ -317,6 +348,9 @@ enum Command {
         /// A provider session id resolved inside the agent's own data root.
         #[arg(long)]
         session_id: Option<String>,
+        /// OpenCode: the session to read from the database `--path` names.
+        #[arg(long, conflicts_with = "session_id")]
+        database_session: Option<String>,
         #[arg(long, default_value_t=50, value_parser=clap::value_parser!(u8).range(1..=100))]
         limit: u8,
         #[arg(long, default_value_t=250, value_parser=clap::value_parser!(u64).range(50..=5000))]
@@ -325,8 +359,11 @@ enum Command {
         #[arg(long, default_value_t=1, value_parser=clap::value_parser!(u8).range(1..=1))]
         protocol: u8,
         /// Carry the bounded PNG/JPEG previews of the images a user attached; only with `--path`.
-        #[arg(long, requires = "path")]
+        #[arg(long, conflicts_with = "session_id")]
         inline_images: bool,
+        /// Allow bounded indexing of larger Codex conversation history.
+        #[arg(long)]
+        allow_large_history: bool,
     },
 }
 #[derive(Subcommand)]
@@ -337,6 +374,11 @@ enum SettingsCommand {
     HostBrowser {
         #[command(subcommand)]
         command: HostBrowserSettingsCommand,
+    },
+    /// What may queue a relay notification; kept apart from `settings.json` for older companions.
+    Notifications {
+        #[command(subcommand)]
+        command: NotificationsCommand,
     },
     Update {
         #[arg(long)]
@@ -371,7 +413,27 @@ enum HostBrowserSettingsCommand {
         host_browser_enabled: bool,
     },
 }
+#[derive(Subcommand)]
+enum NotificationsCommand {
+    Show,
+    Update {
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        nested_agent_suppression_enabled: bool,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        suppress_while_desktop_unlocked: bool,
+    },
+}
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
+    // A lazysh app newer than this companion sends its version. Hooks run inside agent turns and
+    // never start anything; `auto-update` and `update` are the update itself.
+    let update = (!matches!(
+        cli.command,
+        Command::Ingest { .. } | Command::ApprovalRequest { .. } | Command::AutoUpdate { .. }
+    ))
+    .then(lazysh_agent::auto_update::trigger)
+    .flatten();
     let operation = match &cli.command {
         Command::Discover { .. } | Command::History { .. } | Command::ReportedHistory { .. } => {
             Some(lazysh_agent::settings::Operation::TranscriptDiscovery)
@@ -409,6 +471,14 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         Command::HerdrFocusPane { session, pane } => {
             Some(lazysh_agent::herdr::focus_pane(&session, &pane)?)
         }
+        Command::HerdrPaneInput { session } => {
+            lazysh_agent::herdr_pane_input::run_stdio(&session)?;
+            None
+        }
+        Command::HerdrEvents { session, .. } => {
+            lazysh_agent::herdr_events::run_stdio(&session)?;
+            None
+        }
         Command::Licenses => Some(serde_json::json!({
             "schemaVersion": 1,
             "notices": [
@@ -418,6 +488,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             ],
         })),
         Command::Update(_) => return Err(Error::InvalidArgument),
+        Command::AutoUpdate { command } => Some(lazysh_agent::auto_update::execute(command)?),
         Command::Installation { command } => Some(lazysh_agent::installation::run(command)?),
         Command::Skills { command } => Some(lazysh_agent::skills::run(command)?),
         Command::Hooks { command } => Some(lazysh_agent::hook_setup::run(command)?),
@@ -436,6 +507,22 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                             expected_revision,
                             host_browser_enabled,
                         } => settings::update(&directory, expected_revision, host_browser_enabled)?,
+                    })
+                }
+                SettingsCommand::Notifications { command } => {
+                    use lazysh_agent::notification_policy as policy;
+                    serde_json::to_value(match command {
+                        NotificationsCommand::Show => policy::read(&directory)?,
+                        NotificationsCommand::Update {
+                            expected_revision,
+                            nested_agent_suppression_enabled,
+                            suppress_while_desktop_unlocked,
+                        } => policy::update(
+                            &directory,
+                            expected_revision,
+                            nested_agent_suppression_enabled,
+                            suppress_while_desktop_unlocked,
+                        )?,
                     })
                 }
                 SettingsCommand::Show => {
@@ -535,6 +622,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         }
         Command::Listeners(options) => lazysh_agent::listeners::run(&options)?,
         Command::OpencodeService { command } => Some(lazysh_agent::opencode_service::run(command)?),
+        Command::Review(arguments) => {
+            lazysh_agent::review::run(arguments, &mut io::stdout().lock())?;
+            None
+        }
         Command::ApprovalConfig { agent } => Some(lazysh_agent::approvals::config(agent)),
         Command::ApprovalRequest {
             agent,
@@ -543,8 +634,9 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             &lazysh_agent::state_directory()?,
             io::stdin().lock(),
             agent,
-            std::env::var("TMUX_PANE").ok().as_deref(),
+            lazysh_agent::approval_pane_identity().as_deref(),
             timeout_seconds,
+            &lazysh_agent::notification_policy::System,
         )?,
         Command::ApprovalList { limit } => Some(lazysh_agent::approvals::list(
             &lazysh_agent::state_directory()?,
@@ -584,6 +676,11 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             lazysh_agent::reported_history::gemini_config()
         } else {
             lazysh_agent::hooks::gemini_config()
+        }),
+        Command::GrokConfig { reported_history } => Some(if reported_history {
+            lazysh_agent::reported_history::grok_config()
+        } else {
+            lazysh_agent::hooks::grok_config()
         }),
         Command::DroidConfig => Some(lazysh_agent::hooks::droid_config()),
         Command::KimiConfig { dialect } => Some(match dialect {
@@ -630,15 +727,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         Command::HerdrConversation {
             agent,
             session_id,
+            allow_large_history,
             limit,
             window,
         } => Some(
-            serde_json::to_value(lazysh_agent::transcript::read_herdr_conversation_window(
-                agent,
-                &session_id,
-                limit,
-                &window.window(),
-            )?)
+            serde_json::to_value(
+                lazysh_agent::transcript::read_herdr_conversation_window_large(
+                    agent,
+                    &session_id,
+                    limit,
+                    &window.window(),
+                    allow_large_history,
+                )?,
+            )
             .map_err(|_| Error::InvalidEvent)?,
         ),
         Command::Transcript {
@@ -647,6 +748,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             checkpoint,
             checkpointed,
             inline_images,
+            allow_large_history,
             session_id,
             offset,
             limit,
@@ -654,6 +756,12 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             window,
         } => {
             let window = window.window();
+            if allow_large_history
+                && (!matches!(agent, lazysh_agent::transcript::TranscriptAgent::Codex)
+                    || !matches!(view, lazysh_agent::transcript::TranscriptView::Conversation))
+            {
+                return Err(Error::InvalidArgument);
+            }
             if window != lazysh_agent::transcript::window::Window::Tail
                 && !matches!(view, lazysh_agent::transcript::TranscriptView::Conversation)
             {
@@ -742,12 +850,13 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                                 &window,
                             )?
                         } else {
-                            lazysh_agent::transcript::conversation_window(
+                            lazysh_agent::transcript::conversation_window_large(
                                 &path,
                                 agent,
                                 limit,
                                 inline_images,
                                 &window,
+                                allow_large_history,
                             )?
                         }
                     }
@@ -759,18 +868,22 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             agent,
             path,
             session_id,
+            database_session,
             limit,
             interval_ms,
             protocol: _,
             inline_images,
+            allow_large_history,
         } => {
             lazysh_agent::transcript::watch::run_stdio(lazysh_agent::transcript::watch::Options {
                 agent,
                 path,
                 session_id,
+                database_session,
                 limit,
                 interval: std::time::Duration::from_millis(interval_ms),
                 inline_images,
+                allow_large_history,
             })?;
             None
         }
@@ -779,41 +892,60 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             reported_history,
         } => {
             let pane = lazysh_agent::pane_identity();
-            if reported_history {
-                let (event, source) = lazysh_agent::reported_history::read_hook(
-                    io::stdin().lock(),
-                    agent,
-                    pane.as_deref(),
-                )?;
+            // The environment's server belongs to the environment's pane, not to a pane a generic payload names itself.
+            let named = |event: &mut lazysh_agent::Event| {
+                if let Some(server) = lazysh_agent::pane_server().filter(|_| event.pane_id == pane)
+                {
+                    event.pane_server = Some(server);
+                }
+            };
+            if !reported_history && matches!(agent, Agent::KimiCode) {
+                if let Some(mut observation) =
+                    lazysh_agent::kimi_code::read(io::stdin().lock(), pane.as_deref())?
+                {
+                    if let lazysh_agent::kimi_code::Observation::Requested { event, .. } =
+                        &mut observation
+                    {
+                        named(event);
+                    }
+                    let (mut store, admission) = open_admitting(agent)?;
+                    store.record_kimi_code(&observation, chrono::Utc::now(), admission)?;
+                }
+            } else {
+                let (event, source) = if reported_history {
+                    lazysh_agent::reported_history::read_hook(
+                        io::stdin().lock(),
+                        agent,
+                        pane.as_deref(),
+                    )?
+                } else {
+                    (
+                        lazysh_agent::read_event(io::stdin().lock(), agent, pane.as_deref())?,
+                        None,
+                    )
+                };
+                let event = event.map(|mut event| {
+                    named(&mut event);
+                    event
+                });
                 if event.is_some() || source.is_some() {
-                    Store::open(&lazysh_agent::state_directory()?)?.ingest_with_reported_history(
+                    let (mut store, admission) = open_admitting(agent)?;
+                    store.ingest_with_reported_history(
                         event.as_ref(),
                         source.as_ref(),
                         chrono::Utc::now(),
+                        admission,
                     )?;
                 }
-            } else if matches!(agent, Agent::KimiCode) {
-                if let Some(observation) =
-                    lazysh_agent::kimi_code::read(io::stdin().lock(), pane.as_deref())?
-                {
-                    Store::open(&lazysh_agent::state_directory()?)?
-                        .record_kimi_code(&observation, chrono::Utc::now())?;
-                }
-            } else if let Some(event) =
-                lazysh_agent::read_event(io::stdin().lock(), agent, pane.as_deref())?
-            {
-                Store::open(&lazysh_agent::state_directory()?)?
-                    .ingest(&event, chrono::Utc::now())?;
             }
             None
         }
-        Command::Snapshot { limit } => Some(
-            serde_json::to_value(
-                Store::open(&lazysh_agent::state_directory()?)?
-                    .snapshot(limit, chrono::Utc::now())?,
-            )
-            .map_err(|_| Error::InvalidEvent)?,
-        ),
+        Command::Snapshot { limit } => {
+            let mut snapshot = Store::open(&lazysh_agent::state_directory()?)?
+                .snapshot(limit, chrono::Utc::now())?;
+            snapshot.update = update;
+            Some(serde_json::to_value(snapshot).map_err(|_| Error::InvalidEvent)?)
+        }
     };
     if let Some(output) = output {
         let mut stdout = io::stdout().lock();
@@ -823,6 +955,19 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     }
     Ok(())
 }
+/// Opens the companion state and decides whether this report may queue a relay notification.
+fn open_admitting(
+    agent: Agent,
+) -> lazysh_agent::Result<(Store, lazysh_agent::notification_policy::Admission)> {
+    let directory = lazysh_agent::state_directory()?;
+    let store = Store::open(&directory)?;
+    let admission = store.admission(
+        &directory,
+        agent,
+        &lazysh_agent::notification_policy::System,
+    )?;
+    Ok((store, admission))
+}
 fn main() -> std::process::ExitCode {
     if let Some(code) = lazysh_account_usage::worker_main() {
         return code;
@@ -831,7 +976,11 @@ fn main() -> std::process::ExitCode {
     if let Some(code) = lazysh_agent::browser::invoked_as_launcher() {
         return code;
     }
-    let cli = Cli::parse();
+    let command = lazysh_agent::review::localize(
+        Cli::command(),
+        lazysh_agent::review::locale_from_environment().as_deref(),
+    );
+    let cli = Cli::from_arg_matches_mut(&mut command.get_matches()).unwrap_or_else(|e| e.exit());
     if let Command::Update(args) = cli.command {
         return lazysh_agent::update::run(args);
     }

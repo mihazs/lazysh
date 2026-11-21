@@ -54,6 +54,7 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
             ),
             5,
         ),
+        Agent::KimiCode => (crate::kimi_code::EVENTS.contains(&event), 5),
         Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp => (false, 0),
     };
     if !valid {
@@ -67,6 +68,8 @@ pub(super) fn v1_entry(agent: Agent, binary: &Path, event: &str) -> Result<Entry
     );
     let group = if agent == Agent::Cursor {
         serde_json::json!({"command":command,"timeout":timeout})
+    } else if agent == Agent::KimiCode {
+        serde_json::json!({"event":event,"command":command,"timeout":timeout})
     } else {
         serde_json::json!({"hooks":[{"type":"command","command":command,"timeout":timeout}]})
     };
@@ -84,6 +87,12 @@ pub(super) fn entries(agent: Agent, binary: &Path) -> Result<Vec<Entry>, &'stati
         Agent::Gemini => crate::hooks::gemini_config(),
         Agent::Cursor => crate::hooks::cursor_config(),
         Agent::Opencode | Agent::Cline | Agent::Copilot | Agent::Amp => return Ok(Vec::new()),
+        Agent::KimiCode => {
+            return crate::kimi_code::EVENTS
+                .iter()
+                .map(|event| v1_entry(agent, binary, event))
+                .collect()
+        }
     };
     if agent == Agent::Cursor && config["version"] != 1 {
         return Err("HooksInvalidTemplate");
@@ -191,6 +200,9 @@ pub(super) fn configuration(
     previous: &[Entry],
     next: &[Entry],
 ) -> Result<String, super::json::Fault> {
+    if agent == Agent::KimiCode {
+        return super::kimi_toml::rewrite(input, previous, next);
+    }
     let input = if agent == Agent::Cursor && (!previous.is_empty() || !next.is_empty()) {
         super::json::cursor_document(input, !next.is_empty())?
     } else {

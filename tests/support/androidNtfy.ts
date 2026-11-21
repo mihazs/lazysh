@@ -422,6 +422,17 @@ export function challengeStateObservation(text:string) {
     busy:match[3]==='unavailable'?null:match[3]==='true',
   };
 }
+const deliveryOutcomes=['other','error','gate','state','binding','phase','buffered','busy','challenge','confirming'];
+export function challengeDeliveryObservation(text:string) {
+  if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy app deliveries[').length!==2)return;
+  const body=/Ntfy app deliveries\[([a-z= ]{1,256})\]/.exec(text)?.[1];
+  if(body===undefined)return;
+  if(body==='unavailable')return {available:false};
+  const pairs=body.split(' ').map(pair=>/^([a-z]+)=(zero|one|many)$/.exec(pair));
+  const names=pairs.map(pair=>pair?.[1]);
+  if(pairs.some(pair=>pair===null) || names.length!==deliveryOutcomes.length || !deliveryOutcomes.every(name=>names.includes(name)))return;
+  return {available:true,...Object.fromEntries(pairs.map(pair=>[pair![1],pair![2]]))};
+}
 export function challengeTrafficObservation(text:string) {
   if(Buffer.byteLength(text)>256*1024 || text.split('Ntfy relay after-failure[').length!==2)return;
   const match=/Ntfy relay after-failure\[subscribeSeen=(true|false) subscribeOk=(true|false) confirmSeen=(true|false) confirmOk=(true|false) pushServiceAccepted=(accepted|notAccepted|unknown)\]/.exec(text);
@@ -454,7 +465,8 @@ async function nativeFailure(directory:string) {
     const returnState=returnStateObservation(failure);
     const challengeState=challengeStateObservation(failure);
     const challengeTraffic=challengeTrafficObservation(failure);
-    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{}),...(returnState?{returnState}:{}),...(challengeState?{challengeState}:{}),...(challengeTraffic?{challengeTraffic}:{})};
+    const challengeDelivery=challengeDeliveryObservation(failure);
+    return {nativeStage:nativeFailureStage(failure),nativeSourceLine:line?Number(line):null,...(firstLaunch?{firstLaunch}:{}),...(permissionAction?{permissionAction}:{}),...(settings?{settings}:{}),...(event?{eventObservation:event}:{}),...(returnState?{returnState}:{}),...(challengeState?{challengeState}:{}),...(challengeTraffic?{challengeTraffic}:{}),...(challengeDelivery?{challengeDelivery}:{})};
   }catch{return {};}
 }
 

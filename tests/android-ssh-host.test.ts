@@ -3,11 +3,15 @@ import {chmod,link,lstat,mkdir,mkdtemp,readFile,realpath,rm,stat,symlink,truncat
 import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation,IME_TRANSACTION_WIRE,IME_CHAT_WIRE} from './support/androidSsh';
-import {HerdrFixture,herdrTools} from './support/androidHerdr';
+import {HerdrFixture,herdrPanelRows,herdrTools} from './support/androidHerdr';
 import {prepareAgentBoardHooks} from './support/androidAgentBoard';
 import {TmuxFixture} from './support/androidTmux';
+import {ZellijFixture} from './support/androidZellij';
+import {androidForceStopRestoreAcceptance} from './support/androidForceStopRestore';
 import {installedCompanion,type PublishedCompanion} from '../apps/client/published-native-e2e/release';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
+import {observeAndroidUploadRecovery,UPLOAD_RECOVERY_QUIET_MS} from './support/androidUploadRecovery';
+import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
 import {sshCommand,receiverProbeErrors} from './support/sshFixture';
 import {identity,reportOwnedTeardownFailure} from './support/ownedProcess';
 
@@ -151,6 +155,73 @@ test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')('owned namespaced 
   } finally {await observer.stop();try{await fixture.stop();}finally{await client?.stop();}}
 },15_000);
 
+// The device half is a shell command in a live Mosh terminal plus an SSH connection through the relay; here
+// a real mosh-client and ssh clients stand in for it, so the host witness runs against real daemons.
+const uploadRecoveryScenarios:[string,{closed?:'create',quiet?:'create',uploaded?:'rewrite',bytes?:number},string?][]=[
+  ['accepts an explicit upload after the manual reconnect and a quiet interval',{}],
+  ['refuses a destination created while the SSH control is closed',{closed:'create'},'before the manual reconnect'],
+  ['refuses an upload made by the reconnect itself',{quiet:'create'},'without an explicit Upload'],
+  ['refuses a file rewritten after its upload completed',{uploaded:'rewrite'},'changed after it completed'],
+  ['refuses a file that never reached the expected size',{bytes:1},'incomplete'],
+];
+for(const [title,mutations,failure] of uploadRecoveryScenarios)test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1')(`owned namespaced SSH upload recovery witness ${title}`,async()=>{
+  const binary=await realpath(process.env.LAZYSH_NATIVE_MOSH_SERVER??(await sshCommand('locate owned Mosh witness binary','sh',['-c','command -v mosh-server'])).trim());
+  const fixture=await SshFixture.start(undefined,{privateTtyGroup:true,moshBinary:binary,observeMoshBootstraps:true});
+  const relay=await OwnedSshRelay.start(fixture.port),relayPort=relay.port,name=`owned-recovery-${fixture.nonce}.png`,destination=join(fixture.directory,name);
+  const witness=observeAndroidUploadRecovery(fixture,relay,name),image=Buffer.alloc(4096,7);
+  const until=async(done:()=>boolean|Promise<boolean>,stage:string)=>{
+    const deadline=performance.now()+10_000;
+    while(!await done()){witness.check();expect(performance.now(),stage).toBeLessThan(deadline);await Bun.sleep(10);}
+  };
+  const present=(path:string)=>stat(path).then(()=>true,()=>false);
+  const clients:OwnedProcess[]=[];
+  try {
+    const control=await fixture.client(true,undefined,relayPort);clients.push(control);
+    await until(()=>control.stdout.includes(fixture.prompt),'app SSH stream through the relay');
+    const receipt=`printf '%s %s\\n' "$$" "$(awk '{print $22}' /proc/$$/stat)" >${fixture.directory}/upload-control.tmp; mv ${fixture.directory}/upload-control.tmp ${fixture.directory}/upload-control; while ! test -f ${fixture.directory}/upload-control-ack; do sleep .1; done; printf 'CONTROL_%s_CLOSED\\n' ${fixture.nonce}; sleep 90`;
+    const bootstrap=await fixture.client(true,"'mosh-server' new -s -c 256 -p 60000:61000 -l 'LC_ALL=C.UTF-8' -- /bin/sh -c '"+receipt.replaceAll("'","'\\''")+"'");
+    const connect=(await bootstrap.finish('owned Mosh recovery bootstrap',5000)).match(/MOSH CONNECT ([0-9]+) ([A-Za-z0-9+/=]+)/);
+    expect(connect!==null).toBe(true);
+    const terminal=new OwnedProcess('/usr/bin/script',['-q','-e','-c',`stty rows 24 cols 80; exec mosh-client 127.0.0.1 ${connect![1]}`,'/dev/null'],undefined,{...process.env,TERM:'xterm-256color',MOSH_KEY:connect![2]});
+    clients.push(terminal);
+    await until(()=>present(join(fixture.directory,'upload-control')),'device receipt');
+    await until(()=>present(join(fixture.directory,'upload-control-ack')),'host closure acknowledged');
+    // Only the app's SSH stream closed: its client ends, the listeners stay, and the Mosh shell prints on.
+    await expect(control.finish('closed SSH control',3000)).rejects.toThrow('Owned fixture failed: closed SSH control');clients.shift();
+    expect(await listening(relayPort)).toBe(true);expect(await listening(fixture.port)).toBe(true);expect(relay.active).toBe(0);
+    await until(()=>terminal.stdout.includes(`CONTROL_${fixture.nonce}_CLOSED`),'Mosh terminal after the SSH closure');
+    if(mutations.closed)await writeFile(destination,image,{flag:'wx'});
+    else {
+      // The manual reconnect is a new SSH connection through the same relay.
+      const reconnect=await fixture.client(true,undefined,relayPort);clients.push(reconnect);
+      await until(()=>reconnect.stdout.includes(fixture.prompt),'manual reconnect through the relay');
+      await Bun.sleep(200);
+      if(mutations.quiet)await writeFile(destination,image,{flag:'wx'});
+      else {
+        await Bun.sleep(UPLOAD_RECOVERY_QUIET_MS+300);
+        await writeFile(destination,image,{flag:'wx'});
+        await Bun.sleep(200);
+        if(mutations.uploaded)await writeFile(destination,Buffer.alloc(image.length,9));
+      }
+    }
+    if(failure) {
+      // The witness polls every 20 ms; give it time to see the mutation before asking for its verdict.
+      await Bun.sleep(100);
+      await expect(witness.assertVerified(mutations.bytes??image.length)).rejects.toThrow(failure);
+    } else {
+      await witness.assertVerified(image.length);
+      expect((await readFile(destination)).equals(image)).toBe(true);
+    }
+  } finally {
+    await witness.stop();
+    const failures:unknown[]=[];
+    for(const step of [...clients.map(client=>()=>client.stop()),()=>relay.stop(),()=>fixture.stop()])try{await step();}catch(error){failures.push(error);}
+    if(failures.length)throw new AggregateError(failures,'Owned upload recovery cleanup failed');
+    expect(await listening(relayPort)).toBe(false);expect(await listening(fixture.port)).toBe(false);
+    await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
+  }
+},30_000);
+
 test.skipIf(process.platform!=='linux')('lost foreground sshd ownership fails explicitly while still removing its private directory',async()=>{
   const fixture=await SshFixture.start();
   await fixture.daemon.stop();
@@ -223,7 +294,7 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_COMPANION!=='1')('actual Android app i
 },610_000);
 
 // The owned fixture stops after the acceptance; a cleanup failure never replaces its original error.
-async function ownedAndroidAcceptance(stage:'Herdr'|'tmux',owned:{stop():Promise<void>},run:()=>Promise<void>) {
+async function ownedAndroidAcceptance(stage:'Herdr'|'tmux'|'Zellij',owned:{stop():Promise<void>},run:()=>Promise<void>) {
   let primary=false;
   try {await run();}
   catch(error){primary=true;throw error;}
@@ -405,10 +476,24 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Androi
   await ownedAndroidAcceptance('Herdr',owned,()=>androidSshAcceptance(undefined,owned,false,false,false,true));
 },610_000);
 
+// The same job and fixture: one saved-credential host and two instrumentation processes with a host force-stop between them.
+test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Android app restores the same stock Herdr display only on click after a force-stop and relaunch',async()=>{
+  await androidForceStopRestoreAcceptance('herdr');
+},1_200_000);
+
 // Separate CI owner: only the pinned tmux fixture and packaged UI decide this verdict.
 test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes',async()=>{
-  const owned=await TmuxFixture.start();
+  // The source-built companion lets the case open a synthetic transcript and send confirmed Chat input to the displayed pane.
+  const agent=process.env.LAZYSH_TEST_AGENT_BIN;
+  if(!agent)throw new Error('The tmux Chat case needs the source-built companion in LAZYSH_TEST_AGENT_BIN');
+  const owned=await TmuxFixture.start(undefined,agent);
   await ownedAndroidAcceptance('tmux',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,owned));
+},610_000);
+
+// Separate CI owner: only the pinned Zellij fixture and packaged UI decide this verdict.
+test.skipIf(process.env.LAZYSH_ANDROID_UI_ZELLIJ!=='1')('actual Android Zellij discovery, session list, attach, numbered tabs and detach keep the original session and panes',async()=>{
+  const owned=await ZellijFixture.start();
+  await ownedAndroidAcceptance('Zellij',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,undefined,false,owned));
 },610_000);
 
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned shared-navigation fixture binds three distinct zero-byte receiver identities',async()=>{
@@ -424,6 +509,8 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     const metadata=owned.metadata(),sourcePane=snapshot.panes.find((pane:Record<string,unknown>)=>pane.pane_id===metadata.agent.paneId && pane.terminal_id===metadata.agent.terminalId);
     expect(metadata.agentContext).toBe([snapshot.workspaces.find((workspace:Record<string,unknown>)=>workspace.workspace_id===metadata.agent.workspaceId).label,snapshot.tabs.find((tab:Record<string,unknown>)=>tab.tab_id===metadata.agent.tabId && tab.workspace_id===metadata.agent.workspaceId).label,sourcePane.cwd].join(' / '));
     expect(snapshot.panes).toHaveLength(3);expect(snapshot.agents).toHaveLength(2);
+    // The real server, not the fixture, names these states: the native cases must see a Working and a Needs attention agent.
+    expect(Object.fromEntries(snapshot.agents.map((agent:Record<string,unknown>)=>[agent.pane_id,agent.agent_status]))).toEqual({[navigation!.source.paneId]:'working',[navigation!.agent.paneId]:'blocked'});
     for(const target of targets)expect(snapshot.panes.some((pane:Record<string,unknown>)=>pane.pane_id===target.paneId&&pane.terminal_id===target.terminalId&&pane.workspace_id===target.workspaceId&&pane.tab_id===target.tabId)).toBe(true);
     await owned.expectNavigationBytes();
   } finally {await owned.stop();}
@@ -431,6 +518,102 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
 },20_000);
 
 
+
+test('Herdr panel readback admits one renamed workspace with a split, zoomed tab and nothing else',()=>{
+  const snapshot=(over:Record<string,unknown>={})=>({
+    workspaces:[{workspace_id:'w1',label:'HERDR'},{workspace_id:'w3',label:'RENAMED'}],
+    tabs:[{workspace_id:'w1',tab_id:'w1:t1'},{workspace_id:'w3',tab_id:'w3:t1'}],
+    panes:[{workspace_id:'w1',tab_id:'w1:t1',cwd:'/a'},{workspace_id:'w3',tab_id:'w3:t1',cwd:'/a'},{workspace_id:'w3',tab_id:'w3:t1',cwd:'/a'}],
+    layouts:[{workspace_id:'w1',tab_id:'w1:t1',zoomed:false},{workspace_id:'w3',tab_id:'w3:t1',zoomed:true}],...over});
+  expect(herdrPanelRows(snapshot(),'RENAMED')).toEqual({workspaceId:'w3',tabId:'w3:t1',zoomed:true,paneCwds:['/a','/a']});
+  expect(herdrPanelRows(snapshot({layouts:[{workspace_id:'w3',tab_id:'w3:t1',zoomed:false}]}),'RENAMED').zoomed).toBe(false);
+  const bad:[string,Record<string,unknown>][]=[
+    ['Owned Herdr panel workspace not observed',{workspaces:[{workspace_id:'w1',label:'HERDR'}]}],
+    ['Owned Herdr panel workspace not observed',{workspaces:[{workspace_id:'w3',label:'RENAMED'},{workspace_id:'w4',label:'RENAMED'}]}],
+    ['Owned Herdr panel topology changed',{panes:[{workspace_id:'w3',tab_id:'w3:t1',cwd:'/a'}]}],
+    ['Owned Herdr panel topology changed',{tabs:[{workspace_id:'w3',tab_id:'w3:t1'},{workspace_id:'w3',tab_id:'w3:t2'}]}],
+    ['Owned Herdr panel topology changed',{layouts:[]}],
+    ['Owned Herdr panel topology changed',{layouts:[{workspace_id:'w3',tab_id:'w3:t2',zoomed:true}]}],
+  ];
+  for(const [message,over] of bad)expect(()=>herdrPanelRows(snapshot(over),'RENAMED')).toThrow(message);
+});
+
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr host readback requires the panel create, rename, split down and zoom on the real server',async()=>{
+  const owned=await HerdrFixture.start(herdrTools(),undefined,true);
+  try {
+    const created='ANDROID_CREATED_'+owned.ssh.nonce,renamed='ANDROID_RENAMED_'+owned.ssh.nonce;
+    const snapshot=async()=>JSON.parse(await owned.run(['api','snapshot'])).result.snapshot;
+    const workspace=async(label:string)=>(await snapshot()).workspaces.find((value:Record<string,string>)=>value.label===label)?.workspace_id as string;
+    await expect(owned.verifyPanelActions(created,renamed)).rejects.toThrow('Owned Herdr panel workspace not observed');
+    // The exact commands the panel sends, each against the owned server only.
+    await owned.run(['workspace','create','--no-focus','--label',created,'--cwd',owned.ssh.directory]);
+    const id=await workspace(created);
+    await owned.run(['workspace','rename',id,renamed]);
+    await expect(owned.verifyPanelActions(created,renamed)).rejects.toThrow('Owned Herdr panel topology changed');
+    const pane=(await snapshot()).panes.find((value:Record<string,string>)=>value.workspace_id===id).pane_id as string;
+    await owned.run(['pane','split','--pane',pane,'--direction','down','--cwd',owned.ssh.directory,'--no-focus']);
+    await expect(owned.verifyPanelActions(created,renamed)).rejects.toThrow('Owned Herdr panel zoom was not observed');
+    await owned.run(['pane','zoom','--pane',pane,'--toggle']);
+    await owned.verifyPanelActions(created,renamed);
+    // A rename that never happened leaves the created label in place.
+    await expect(owned.verifyPanelActions(renamed,renamed)).rejects.toThrow('Owned Herdr panel rename was not observed');
+    await owned.expectNavigationBytes();
+  } finally {await owned.stop();}
+},30_000);
+
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr fixture drives its live agent through Working and Needs attention on the real server without receiver bytes',async()=>{
+  const owned=await HerdrFixture.start(herdrTools());
+  try {
+    const {agent}=owned.metadata();
+    const rows=async()=>JSON.parse(await owned.run(['api','snapshot'])).result.snapshot.agents.map((row:Record<string,unknown>)=>[row.pane_id,row.agent_status]);
+    expect(await rows()).toEqual([[agent.paneId,'unknown']]);
+    for(const state of ['working','blocked','working'] as const) {
+      await owned.reportAgentState(agent.paneId,state);
+      expect(await rows()).toEqual([[agent.paneId,state]]);
+    }
+    await expect(owned.reportAgentState('w999:p999','blocked')).rejects.toThrow();
+    expect(await rows()).toEqual([[agent.paneId,'working']]);
+    await owned.expectBytes(Buffer.alloc(0));
+  } finally {await owned.stop();}
+},30_000);
+
+test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned Herdr restore observation counts the real display client and admits only the typed bytes',async()=>{
+  const owned=await HerdrFixture.start(herdrTools(),undefined,true);
+  let client:OwnedProcess|undefined;
+  const until=async(stage:string,ready:()=>Promise<boolean>|boolean)=>{
+    const deadline=performance.now()+15_000;
+    while(!await ready()){if(performance.now()>=deadline)throw new Error(`Owned Herdr restore probe stage unavailable: ${stage}`);await Bun.sleep(50);}
+  };
+  try {
+    const token=`RESTORE_${owned.ssh.nonce}`;
+    expect(await owned.observeRestore(token)).toEqual({clients:0,typed:false});
+    client=await owned.ssh.client();
+    await until('prompt',()=>client!.stdout.includes(owned.ssh.prompt));
+    // The remote pty has no window size and Herdr refuses to attach to a zero-sized terminal.
+    client.child.stdin!.write('stty rows 40 cols 100; exec herdr --session owned-guard\n');
+    await until('attached',async()=>(await owned.observeRestore(token)).clients===1);
+    expect(await owned.observeRestore(token)).toEqual({clients:1,typed:false});
+    // Input sent before Herdr has painted its first display is not delivered to the pane.
+    await until('painted',()=>client!.stdout.includes(owned.metadata().navigation!.source.marker));
+    // A paste can arrive in pieces: a leading part of the typed bytes is progress, not a failure.
+    client.child.stdin!.write(token);
+    await until('first part',async()=>(await readFile(owned.bytes).catch(()=>Buffer.alloc(0))).length>0);
+    expect((await owned.observeRestore(token)).typed).toBe(false);
+    client.child.stdin!.write('\r');
+    await until('typed',async()=>(await owned.observeRestore(token)).typed);
+    expect(await owned.restoreBytesHold(token)).toBe(true);
+    // A byte nobody typed through the app is a failure, not a count.
+    client.child.stdin!.write('x');
+    await until('stray byte',()=>owned.observeRestore(token).then(()=>false,error=>/Owned receiver bytes differ/.test(String(error))));
+    expect(await owned.restoreBytesHold(token)).toBe(false);
+    await client.stop();client=undefined;
+    await until('detached',async()=>await owned.displayClients()===0);
+  } finally {
+    try{await client?.stop();}catch{/* Keep the original verdict. */}
+    await owned.stop();
+  }
+  await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+},60_000);
 
 test.skipIf(process.platform!=='linux' || process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned namespaced SSH raw receiver root rejects the old namespace and admits exact delivery',async()=>{
   const source=process.env.LAZYSH_TEST_RECEIVER_BIN!;

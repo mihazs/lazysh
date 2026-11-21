@@ -1,4 +1,6 @@
 use crate::app_lock::AccessLease;
+use crate::host::{Cmd, Host};
+use crate::local::LocalState;
 use crate::ssh::{quote, AppState, Result, SshError};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -25,6 +27,8 @@ pub(crate) fn tmux_word(value: &str) -> String {
 pub(crate) fn tmux_arg(value: &str) -> String {
     quote(&tmux_word(value))
 }
+
+const HERDR_SESSIONS: &str = "herdr session list --json";
 
 pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<String> {
     text(value, 200)?;
@@ -59,6 +63,9 @@ pub struct Entry {
     pub tmux_server: Option<String>,
     #[serde(default)]
     pub create_if_missing: bool,
+    /// Herdr only: the backend this connection captures; unset keeps whatever it already captured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<crate::herdr_backend::HerdrBackend>,
 }
 impl Entry {
     pub(crate) fn server(&self) -> Result<crate::tmux_server::TmuxServer> {
@@ -73,6 +80,14 @@ impl Entry {
     pub(crate) fn validate(&self) -> Result<()> {
         attach_command(self.kind, &self.name)?;
         self.server()?;
+        if self.backend.is_some_and(|backend| !backend.is_system())
+            && !matches!(self.kind, MultiplexerKind::Herdr)
+        {
+            return Err(SshError::new(
+                "invalid_target",
+                "Only Herdr has a managed backend",
+            ));
+        }
         if self.name.trim().is_empty() {
             return Err(SshError::new(
                 "invalid_target",
@@ -94,6 +109,12 @@ impl Entry {
     /// The attach command as argv, for a local PTY to execute with no shell in between.
     pub(crate) fn argv(&self) -> Result<Vec<String>> {
         self.validate()?;
+        if self.backend.is_some_and(|backend| !backend.is_system()) {
+            return Err(SshError::new(
+                "invalid_target",
+                "A local session runs the system Herdr",
+            ));
+        }
         let server = self.server()?;
         let (name, target) = (tmux_word(&self.name), tmux_word(&format!("={}", self.name)));
         let words = match (self.kind, self.create_if_missing) {
@@ -141,7 +162,11 @@ impl Entry {
             _ => attach_command(self.kind, &self.name),
         }
     }
-    fn preflight_command(&self, positive_unix: bool) -> Result<String> {
+    fn preflight_command(
+        &self,
+        backend: crate::herdr_backend::HerdrBackend,
+        positive_unix: bool,
+    ) -> Result<String> {
         self.validate()?;
         let (tool, version) = match self.kind {
             MultiplexerKind::Tmux => ("tmux", "-V"),
@@ -158,13 +183,14 @@ impl Entry {
                 tmux_arg(&format!("={}", self.name))
             );
             if self.create_if_missing {
-                let create = action_command_for(
+                let create = action_cmd(
                     &TmuxAction::CreateSession {
                         name: self.name.clone(),
                         directory: ".".into(),
                     },
                     &server,
-                )?;
+                )?
+                .render();
                 command.push_str(&format!(
                     " && ({exists} || {{ {create} >/dev/null 2>&1; {exists}; }})"
                 ));
@@ -173,8 +199,10 @@ impl Entry {
             }
         }
         Ok(
-            if matches!(self.kind, MultiplexerKind::Herdr) && positive_unix {
-                crate::herdr_path::with_path(&command)
+            if matches!(self.kind, MultiplexerKind::Herdr)
+                && (positive_unix || !backend.is_system())
+            {
+                backend.wrap(&command, positive_unix)?
             } else {
                 format!("sh -c {}", quote(&command))
             },
@@ -188,36 +216,44 @@ impl Entry {
         let unavailable = || {
             SshError::new("multiplexer_unavailable", "Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")
         };
-        let positive_unix = if matches!(self.kind, MultiplexerKind::Herdr) {
-            crate::herdr_path::admit(session, lease).await?
+        let herdr = matches!(self.kind, MultiplexerKind::Herdr);
+        let backend = if herdr {
+            crate::herdr_backend::choose(&session.handle, self.backend)?
         } else {
-            false
+            Default::default()
         };
-        crate::ssh::exec_for_access(session, self.preflight_command(positive_unix)?, lease)
-            .await
-            .map_err(|error| {
-                if error.kind() == "remote_command_failed" {
-                    unavailable()
-                } else {
-                    error
-                }
-            })?;
+        let positive_unix = herdr && crate::herdr_path::admit(session, lease).await?;
+        crate::ssh::exec_for_access(
+            session,
+            self.preflight_command(backend, positive_unix)?,
+            lease,
+        )
+        .await
+        .map_err(|error| {
+            if error.kind() == "remote_command_failed" {
+                unavailable()
+            } else {
+                error
+            }
+        })?;
         if !self.create_if_missing && !matches!(self.kind, MultiplexerKind::Tmux) {
-            let command = match self.kind {
-                MultiplexerKind::Herdr => "herdr session list --json",
-                MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
-                MultiplexerKind::Tmux => unreachable!(),
+            let output = if herdr {
+                crate::ssh::exec_for_access(
+                    session,
+                    backend.wrap(HERDR_SESSIONS, positive_unix)?,
+                    lease,
+                )
+                .await?
+            } else {
+                zellij_output(
+                    crate::ssh::exec_for_access_status(
+                        session,
+                        zellij_sessions_command().render(),
+                        lease,
+                    )
+                    .await?,
+                )?
             };
-            let output = crate::ssh::exec_for_access(
-                session,
-                if matches!(self.kind, MultiplexerKind::Herdr) && positive_unix {
-                    crate::herdr_path::with_path(command)
-                } else {
-                    command.into()
-                },
-                lease,
-            )
-            .await?;
             if !persistent_sessions(self.kind, &output)?
                 .iter()
                 .any(|target| target.name == self.name)
@@ -235,8 +271,9 @@ pub(crate) fn default_entry_command(kind: MultiplexerKind, value: &str) -> Resul
         name: value.into(),
         tmux_server: None,
         create_if_missing: true,
+        backend: None,
     }
-    .preflight_command(false)
+    .preflight_command(Default::default(), false)
 }
 pub(crate) async fn prepare_default_entry(
     session: &crate::ssh::Session,
@@ -249,12 +286,35 @@ pub(crate) async fn prepare_default_entry(
         name: value.into(),
         tmux_server: None,
         create_if_missing: true,
+        backend: None,
     }
     .prepare(session, lease)
     .await
 }
 
-fn persistent_sessions(kind: MultiplexerKind, output: &str) -> Result<Vec<PersistentSession>> {
+/// Names of the live and the exited (resurrectable) Zellij sessions. With no session left Zellij prints
+/// "No active zellij sessions found." and exits 1, which is an empty list; any other failure stays one.
+fn zellij_sessions_command() -> Cmd {
+    Cmd::new(
+        &[("LC_ALL", "C")],
+        &["zellij", "list-sessions", "--short", "--no-formatting"],
+    )
+}
+
+fn zellij_output(output: crate::ssh::ExecOutput) -> Result<String> {
+    if output.status == Some(1)
+        && output.stdout.is_empty()
+        && output.stderr == b"No active zellij sessions found.\n"
+    {
+        return Ok(String::new());
+    }
+    output.text()
+}
+
+pub(crate) fn persistent_sessions(
+    kind: MultiplexerKind,
+    output: &str,
+) -> Result<Vec<PersistentSession>> {
     let names: Vec<String> = match kind {
         MultiplexerKind::Herdr => {
             #[derive(Deserialize)]
@@ -299,16 +359,19 @@ fn persistent_sessions(kind: MultiplexerKind, output: &str) -> Result<Vec<Persis
 #[tauri::command]
 pub async fn multiplexer_sessions(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     kind: MultiplexerKind,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<Vec<PersistentSession>> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            let command = match kind {
-                MultiplexerKind::Herdr => "herdr session list --json",
-                MultiplexerKind::Zellij => "zellij list-sessions --short --no-formatting",
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            let cmd = match kind {
+                MultiplexerKind::Herdr => {
+                    Cmd::new(&[], &["herdr", "session", "list", "--json"]).herdr()
+                }
+                MultiplexerKind::Zellij => zellij_sessions_command(),
                 MultiplexerKind::Tmux => {
                     return Err(SshError::new(
                         "invalid_target",
@@ -316,24 +379,12 @@ pub async fn multiplexer_sessions(
                     ))
                 }
             };
-            let positive_unix = if matches!(kind, MultiplexerKind::Herdr) {
-                crate::herdr_path::admit(&session, &access).await?
+            let output = if matches!(kind, MultiplexerKind::Zellij) {
+                zellij_output(host.run_status(&access, &cmd).await?)?
             } else {
-                false
+                host.run(&access, &cmd).await?
             };
-            persistent_sessions(
-                kind,
-                &crate::ssh::exec_for_access(
-                    &session,
-                    if matches!(kind, MultiplexerKind::Herdr) && positive_unix {
-                        crate::herdr_path::with_path(command)
-                    } else {
-                        command.into()
-                    },
-                    &access,
-                )
-                .await?,
-            )
+            persistent_sessions(kind, &output)
         })
         .await
 }
@@ -368,19 +419,48 @@ fn numbers(value: &str) -> Option<Vec<u32>> {
 }
 /// The one table from `(kind, version line)` to support; untested versions stay degraded.
 fn tool(kind: MultiplexerKind, line: &str) -> Tool {
-    let (name, missing): (_, &'static [&'static str]) = match kind {
-        MultiplexerKind::Tmux => ("tmux", &["jump", "confirmedInput"]),
-        // Input to one named pane (`--pane-id`) and the JSON pane list are verified only on the tested 0.45.1.
-        MultiplexerKind::Zellij => (
-            "zellij",
-            &["tree", "close", "resize", "launch", "confirmedInput"],
-        ),
-        MultiplexerKind::Herdr => (
-            "herdr",
-            &["create", "launch", "rename", "confirmedInput", "restore"],
-        ),
+    let name = match kind {
+        MultiplexerKind::Tmux => "tmux",
+        MultiplexerKind::Zellij => "zellij",
+        MultiplexerKind::Herdr => "herdr",
     };
     let version = line.trim().strip_prefix(name).map(str::trim);
+    let missing: &'static [&'static str] = match kind {
+        MultiplexerKind::Tmux => &["jump", "confirmedInput"],
+        // Input to one named pane (`--pane-id`) and the JSON pane list are verified only on the tested 0.45.1.
+        // `dump-screen --path` (stdout when omitted) exists from 0.45; older Zellij takes a positional path.
+        MultiplexerKind::Zellij
+            if version
+                .and_then(numbers)
+                .is_some_and(|v| v.as_slice() >= [0, 45].as_slice()) =>
+        {
+            &[
+                "tree",
+                "rename",
+                "close",
+                "resize",
+                "launch",
+                "confirmedInput",
+            ]
+        }
+        MultiplexerKind::Zellij => &[
+            "tree",
+            "rename",
+            "close",
+            "resize",
+            "launch",
+            "confirmedInput",
+            "history",
+        ],
+        MultiplexerKind::Herdr => &[
+            "create",
+            "launch",
+            "rename",
+            "confirmedInput",
+            "restore",
+            "history",
+        ],
+    };
     let full = version.is_some_and(|version| match kind {
         // `next-3.6` is a tmux development build; a letter suffix is a patch release.
         MultiplexerKind::Tmux => numbers(
@@ -484,14 +564,28 @@ fn name(value: &str) -> Result<()> {
     }
     Ok(())
 }
-fn discovery_command(server: &crate::tmux_server::TmuxServer, positive_unix: bool) -> String {
+// Version commands only print; none of them starts a server.
+fn probe(tool: &str, version: &str) -> String {
+    format!("if command -v {tool} >/dev/null 2>&1; then printf '{tool}\\t1\\t%s\\n' \"$({tool} {version} 2>/dev/null | head -n 1)\"; else printf '{tool}\\t0\\n'; fi")
+}
+/// The chosen Herdr's probe. A managed Herdr that cannot run here reads as absent, never as the system one.
+fn herdr_probe(backend: crate::herdr_backend::HerdrBackend, positive_unix: bool) -> String {
+    let absent = "printf 'herdr\\t0\\n'";
+    backend
+        .wrap_or(
+            &probe("herdr", "--version"),
+            positive_unix,
+            &format!("{absent}; exit 0"),
+        )
+        .unwrap_or_else(|_| absent.into())
+}
+fn discovery_command(
+    server: &crate::tmux_server::TmuxServer,
+    backend: crate::herdr_backend::HerdrBackend,
+    positive_unix: bool,
+) -> String {
     let tmux = server.prefix();
-    // Version commands only print; none of them starts a server.
-    let probe = |tool: &str, version: &str| {
-        format!("if command -v {tool} >/dev/null 2>&1; then printf '{tool}\\t1\\t%s\\n' \"$({tool} {version} 2>/dev/null | head -n 1)\"; else printf '{tool}\\t0\\n'; fi")
-    };
-    let herdr = crate::herdr_path::select(&probe("herdr", "--version"), positive_unix);
-    format!("{}; {herdr}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", probe("tmux", "-V"), probe("zellij", "--version"), quote(PANE_FORMAT))
+    format!("{}; {}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} list-panes -a -F {}; fi", probe("tmux", "-V"), herdr_probe(backend, positive_unix), probe("zellij", "--version"), quote(PANE_FORMAT))
 }
 
 fn parse_tree(output: &str) -> Result<MultiplexerTree> {
@@ -641,24 +735,32 @@ pub enum TmuxAction {
 }
 #[cfg(test)]
 fn action_command(action: &TmuxAction) -> Result<String> {
-    action_command_for(action, &crate::tmux_server::TmuxServer::Default)
+    Ok(action_cmd(action, &crate::tmux_server::TmuxServer::Default)?.render())
 }
-pub(crate) fn action_command_for(
+pub(crate) fn action_cmd(
     action: &TmuxAction,
     server: &crate::tmux_server::TmuxServer,
-) -> Result<String> {
-    let quote = |value: &str| tmux_arg(&value.replace('#', "##"));
+) -> Result<Cmd> {
+    // tmux expands `#` in names and directories as a format, so a literal one is doubled.
+    let word = |value: &str| tmux_word(&value.replace('#', "##"));
     let directory = |value: &str| -> Result<String> {
         text(value, 4096)?;
-        Ok(quote(value))
+        Ok(word(value))
     };
-    let command = match action {
+    let args: Vec<String> = match action {
         TmuxAction::CreateSession {
             name: value,
             directory: path,
         } => {
             name(value)?;
-            format!("new-session -d -s {} -c {}", quote(value), directory(path)?)
+            vec![
+                "new-session".into(),
+                "-d".into(),
+                "-s".into(),
+                word(value),
+                "-c".into(),
+                directory(path)?,
+            ]
         }
         TmuxAction::RenameSession {
             target,
@@ -666,7 +768,12 @@ pub(crate) fn action_command_for(
         } => {
             id(target, '$')?;
             name(value)?;
-            format!("rename-session -t {} {}", quote(target), quote(value))
+            vec![
+                "rename-session".into(),
+                "-t".into(),
+                word(target),
+                word(value),
+            ]
         }
         TmuxAction::CreateWindow {
             target,
@@ -675,12 +782,16 @@ pub(crate) fn action_command_for(
         } => {
             id(target, '$')?;
             text(value, 200)?;
-            format!(
-                "new-window -d -t {} -n {} -c {}",
-                quote(target),
-                quote(value),
-                directory(path)?
-            )
+            vec![
+                "new-window".into(),
+                "-d".into(),
+                "-t".into(),
+                word(target),
+                "-n".into(),
+                word(value),
+                "-c".into(),
+                directory(path)?,
+            ]
         }
         TmuxAction::RenameWindow {
             target,
@@ -688,20 +799,33 @@ pub(crate) fn action_command_for(
         } => {
             id(target, '@')?;
             text(value, 200)?;
-            format!("rename-window -t {} {}", quote(target), quote(value))
+            vec![
+                "rename-window".into(),
+                "-t".into(),
+                word(target),
+                word(value),
+            ]
         }
         TmuxAction::CloseWindow { target } => {
             id(target, '@')?;
-            format!("kill-window -t {}", quote(target))
+            vec!["kill-window".into(), "-t".into(), word(target)]
         }
         TmuxAction::SelectWindow { target } => {
             id(target, '@')?;
-            format!("select-window -t {}", quote(target))
+            vec!["select-window".into(), "-t".into(), word(target)]
         }
         TmuxAction::SelectPane { target } => {
             id(target, '%')?;
             // The pane's window first: select-pane alone marks it active in a window the attached client may not show.
-            format!("select-window -t {0} \\; select-pane -t {0}", quote(target))
+            vec![
+                "select-window".into(),
+                "-t".into(),
+                word(target),
+                ";".into(),
+                "select-pane".into(),
+                "-t".into(),
+                word(target),
+            ]
         }
         TmuxAction::SplitPane {
             target,
@@ -709,60 +833,149 @@ pub(crate) fn action_command_for(
             directory: path,
         } => {
             id(target, '%')?;
-            format!(
-                "split-window -d {} -t {} -c {}",
-                if *horizontal { "-h" } else { "-v" },
-                quote(target),
-                directory(path)?
-            )
+            vec![
+                "split-window".into(),
+                "-d".into(),
+                if *horizontal { "-h" } else { "-v" }.into(),
+                "-t".into(),
+                word(target),
+                "-c".into(),
+                directory(path)?,
+            ]
         }
         TmuxAction::ZoomPane { target } => {
             id(target, '%')?;
-            format!("resize-pane -Z -t {}", quote(target))
+            vec!["resize-pane".into(), "-Z".into(), "-t".into(), word(target)]
         }
     };
-    Ok(format!("{} {command}", server.prefix()))
+    Ok(server.cmd(&args.iter().map(String::as_str).collect::<Vec<_>>()))
+}
+
+/// What a local host runs where the remote one runs `discovery_command`: the same output
+/// lines, from PATH lookups and argv instead of a shell script.
+#[cfg(desktop)]
+async fn local_discovery(
+    host: &Host,
+    access: &AccessLease,
+    server: &crate::tmux_server::TmuxServer,
+) -> Result<String> {
+    // A failed command means "no": the tool is absent, or tmux has no server. Anything else
+    // (a closed session, a revoked lease, a timeout) ends the discovery.
+    async fn ran(host: &Host, access: &AccessLease, cmd: &Cmd) -> Result<Option<String>> {
+        match host.run(access, cmd).await {
+            Ok(output) => Ok(Some(output)),
+            Err(error) if error.kind() == "remote_command_failed" => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+    let mut output = String::new();
+    let mut tmux = false;
+    for (tool, flag) in [
+        ("tmux", "-V"),
+        ("herdr", "--version"),
+        ("zellij", "--version"),
+    ] {
+        // No native Windows tmux exists; it is reached through a WSL target.
+        if (cfg!(windows) && tool == "tmux") || !crate::host::local_program(tool).await {
+            output.push_str(&format!("{tool}\t0\n"));
+            continue;
+        }
+        tmux |= tool == "tmux";
+        let probe = Cmd::new(&[], &[tool, flag]);
+        let probe = if tool == "herdr" {
+            probe.herdr()
+        } else {
+            probe
+        };
+        let version = ran(host, access, &probe).await?.unwrap_or_default();
+        output.push_str(&format!(
+            "{tool}\t1\t{}\n",
+            version.lines().next().unwrap_or_default()
+        ));
+    }
+    if tmux
+        && ran(host, access, &server.cmd(&["has-session"]))
+            .await?
+            .is_some()
+    {
+        let panes = server.cmd(&["list-panes", "-a", "-F", PANE_FORMAT]);
+        output.push_str(&host.run(access, &panes).await?);
+    }
+    Ok(output)
+}
+
+/// The host a tmux command runs on and the tmux server it addresses.
+pub(crate) async fn tmux_target(
+    state: &AppState,
+    local: &LocalState,
+    session_id: &str,
+    requested: Option<&str>,
+    access: &AccessLease,
+) -> Result<(Host, crate::tmux_server::TmuxServer)> {
+    use crate::tmux_server::TmuxServer;
+    let host = Host::resolve(state, local, session_id, access).await?;
+    let server = match &host {
+        Host::Remote(session) => TmuxServer::for_session(&session.bindings, requested)?,
+        #[cfg(desktop)]
+        Host::Local(_) => TmuxServer::attached_or(
+            crate::local::tmux_server(local, session_id, access)
+                .map_err(|error| SshError::new("disconnected", error))?,
+            requested,
+        )?,
+    };
+    Ok((host, server))
+}
+
+/// The current pane of the exact session (`=name:`), wrapped lines joined, newest `lines` of its history.
+pub(crate) fn history_command(
+    session: &str,
+    server: &crate::tmux_server::TmuxServer,
+    lines: usize,
+) -> Result<String> {
+    name(session)?;
+    Ok(format!(
+        "{} capture-pane -p -J -S -{lines} -t {}",
+        server.prefix(),
+        tmux_arg(&format!("={session}:"))
+    ))
 }
 
 #[tauri::command]
 pub async fn multiplexer_tree(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     tmux_server: Option<String>,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<MultiplexerTree> {
     access
         .run(async {
-            let (session, server) =
-                crate::tmux_server::TmuxServer::for_id(&state, &session_id, tmux_server.as_deref())
-                    .await?;
-            let output = crate::ssh::exec_for_access(
-                &session,
-                discovery_command(&server, crate::herdr_path::admit(&session, &access).await?),
-                &access,
-            )
-            .await
-            .map_err(host_shell)?;
+            let (host, server) =
+                tmux_target(&state, &local, &session_id, tmux_server.as_deref(), &access).await?;
+            let output = match &host {
+                Host::Remote(session) => crate::ssh::exec_for_access(
+                    session,
+                    discovery_command(
+                        &server,
+                        crate::herdr_backend::captured(&session.handle),
+                        crate::herdr_path::admit(session, &access).await?,
+                    ),
+                    &access,
+                )
+                .await
+                .map_err(host_shell)?,
+                #[cfg(desktop)]
+                Host::Local(_) => local_discovery(&host, &access, &server).await?,
+            };
             parse_tree(&output)
         })
         .await
-}
-// All multiplexer actions share the same immutable access lease through dispatch.
-pub(crate) async fn execute_action(
-    state: &AppState,
-    access: &AccessLease,
-    session_id: &str,
-    command: Result<String>,
-) -> Result<()> {
-    let command = command?;
-    let session = state.session(session_id).await?;
-    crate::ssh::exec_for_access(&session, command, access).await?;
-    Ok(())
 }
 
 #[tauri::command]
 pub async fn tmux_action(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     action: TmuxAction,
     tmux_server: Option<String>,
@@ -770,11 +983,9 @@ pub async fn tmux_action(
 ) -> crate::ssh::AccessResult<()> {
     access
         .run(async {
-            let (session, server) =
-                crate::tmux_server::TmuxServer::for_id(&state, &session_id, tmux_server.as_deref())
-                    .await?;
-            let command = action_command_for(&action, &server)?;
-            crate::ssh::exec_for_access(&session, command, &access).await?;
+            let (host, server) =
+                tmux_target(&state, &local, &session_id, tmux_server.as_deref(), &access).await?;
+            host.run(&access, &action_cmd(&action, &server)?).await?;
             Ok(())
         })
         .await
@@ -783,6 +994,8 @@ pub async fn tmux_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     #[test]
     fn typed_entry_keeps_namespace_and_creation_policy_without_a_command_interface() {
         let entry: Entry = serde_json::from_value(
@@ -793,11 +1006,11 @@ mod tests {
         let command = entry.command().unwrap();
         assert!(command.contains("tmux -u -L 'named '\\''server'"));
         assert!(entry
-            .preflight_command(false)
+            .preflight_command(Default::default(), false)
             .unwrap()
             .contains("has-session"));
         assert!(!entry
-            .preflight_command(false)
+            .preflight_command(Default::default(), false)
             .unwrap()
             .contains("new-session"));
         let zellij: Entry =
@@ -963,7 +1176,11 @@ mod tests {
         let output = Command::new("/bin/sh")
             .args([
                 "-c",
-                &discovery_command(&crate::tmux_server::TmuxServer::Default, false),
+                &discovery_command(
+                    &crate::tmux_server::TmuxServer::Default,
+                    Default::default(),
+                    false,
+                ),
             ])
             .env_clear()
             .env("PATH", tools.path())
@@ -1019,8 +1236,184 @@ mod tests {
         .unwrap();
         assert_eq!(
             command,
-            "tmux -u -L 'default' new-session -d -s 'a'\\''$(touch nope)' -c '/work/##(touch nope)'"
+            "tmux -u -L default new-session -d -s 'a'\\''$(touch nope)' -c '/work/##(touch nope)'"
         );
+    }
+    /// Kills the isolated tmux server a test started, even when the test panics.
+    #[cfg(unix)]
+    struct TmuxServer<'a>(&'a crate::host::tests::local::Isolated, String);
+    #[cfg(unix)]
+    impl Drop for TmuxServer<'_> {
+        fn drop(&mut self) {
+            let _ = self
+                .0
+                .command("tmux")
+                .args(["-L", &self.1, "kill-server"])
+                .output();
+        }
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires tmux on PATH; runs an isolated temporary server"]
+    async fn real_local_session_discovers_tmux_and_applies_actions_with_literal_names() {
+        use crate::host::tests::local::{lease, ok, Isolated};
+        use tauri::Manager;
+        let home = Isolated::new();
+        let (app, id) = home.session().await;
+        let server = format!("ls-{}", uuid::Uuid::new_v4().simple());
+        let _server = TmuxServer(&home, server.clone());
+        let tree = || {
+            ok(multiplexer_tree(
+                app.state(),
+                app.state(),
+                id.clone(),
+                Some(server.clone()),
+                lease(),
+            ))
+        };
+        let act = |action| {
+            ok(tmux_action(
+                app.state(),
+                app.state(),
+                id.clone(),
+                action,
+                Some(server.clone()),
+                lease(),
+            ))
+        };
+        // No server runs yet: tmux is found by its PATH lookup and no session is listed.
+        let before = tree().await;
+        assert!(before.tmux_available && before.sessions.is_empty());
+        assert!(before
+            .tools
+            .iter()
+            .any(|tool| matches!(tool.kind, MultiplexerKind::Tmux)));
+        // Herdr runs through the same lookup; with no server running it lists no session.
+        if before.herdr_available {
+            let herdr = ok(multiplexer_sessions(
+                app.state(),
+                app.state(),
+                id.clone(),
+                MultiplexerKind::Herdr,
+                lease(),
+            ))
+            .await;
+            assert!(herdr.is_empty());
+        }
+        let work = home.path().join("work dir 'q'");
+        std::fs::create_dir(&work).unwrap();
+        let directory = work.to_str().unwrap().to_owned();
+        let name = "literal 'quote' \"double\" $(touch nope)#(printf bad);".to_owned();
+        act(TmuxAction::CreateSession {
+            name: name.clone(),
+            directory: directory.clone(),
+        })
+        .await;
+        let after = tree().await;
+        assert_eq!(after.sessions.len(), 1);
+        assert_eq!(after.sessions[0].name, name);
+        assert_eq!(after.sessions[0].windows[0].panes[0].path, directory);
+        assert!(!home.path().join("nope").exists());
+        let (session, pane) = (
+            after.sessions[0].id.clone(),
+            after.sessions[0].windows[0].panes[0].id.clone(),
+        );
+        act(TmuxAction::SplitPane {
+            target: pane.clone(),
+            horizontal: true,
+            directory: directory.clone(),
+        })
+        .await;
+        act(TmuxAction::ZoomPane {
+            target: pane.clone(),
+        })
+        .await;
+        act(TmuxAction::SelectPane { target: pane }).await;
+        act(TmuxAction::CreateWindow {
+            target: session.clone(),
+            name: "second".into(),
+            directory,
+        })
+        .await;
+        act(TmuxAction::RenameSession {
+            target: session,
+            name: "renamed;".into(),
+        })
+        .await;
+        let tree_now = tree().await;
+        let session = &tree_now.sessions[0];
+        assert_eq!(
+            (session.name.as_str(), session.windows.len()),
+            ("renamed;", 2)
+        );
+        assert_eq!(session.windows[0].panes.len(), 2);
+        let window = session.windows[1].id.clone();
+        act(TmuxAction::RenameWindow {
+            target: window.clone(),
+            name: "new #{session_name} title;".into(),
+        })
+        .await;
+        act(TmuxAction::SelectWindow { target: window }).await;
+        let tree_now = tree().await;
+        assert_eq!(
+            tree_now.sessions[0].windows[1].name,
+            "new #{session_name} title;"
+        );
+        assert!(tree_now.sessions[0].windows[1].active);
+        let listed = ok(crate::ssh::list_multiplexer_sessions(
+            lease(),
+            app.state(),
+            app.state(),
+            id.clone(),
+            Some(server.clone()),
+        ))
+        .await;
+        assert_eq!(listed.len(), 1);
+        let listed = serde_json::to_value(&listed[0]).unwrap();
+        assert_eq!(
+            (&listed["name"], &listed["windows"], &listed["attached"]),
+            (&"renamed;".into(), &2.into(), &false.into())
+        );
+        // Another named server is another namespace: it knows none of these sessions.
+        let other = ok(multiplexer_tree(
+            app.state(),
+            app.state(),
+            id.clone(),
+            Some("ls-other".into()),
+            lease(),
+        ))
+        .await;
+        assert!(other.sessions.is_empty());
+    }
+    #[test]
+    fn history_reads_the_exact_sessions_current_pane_with_every_name_literal() {
+        let server = crate::tmux_server::TmuxServer::parse(Some("named 'server")).unwrap();
+        assert_eq!(
+            history_command("work'$(touch nope);", &server, 20000).unwrap(),
+            "tmux -u -L 'named '\\''server' capture-pane -p -J -S -20000 -t '=work'\\''$(touch nope);:'"
+        );
+        for invalid in ["", "a:b", "a.b", "a\nb"] {
+            assert!(history_command(invalid, &server, 1).is_err(), "{invalid:?}");
+        }
+    }
+    #[test]
+    fn history_is_missing_only_where_the_cli_is_untested_or_older() {
+        use MultiplexerKind::*;
+        for (kind, line, missing) in [
+            (Tmux, "tmux 3.2a", false),
+            (Zellij, "zellij 0.45.1", false),
+            (Zellij, "zellij 0.46.0", false),
+            (Zellij, "zellij 0.44.3", true),
+            (Zellij, "zellij", true),
+            (Herdr, "herdr 0.9.5", false),
+            (Herdr, "herdr 0.8.2", true),
+        ] {
+            assert_eq!(
+                tool(kind, line).missing.contains(&"history"),
+                missing,
+                "{line}"
+            );
+        }
     }
     #[test]
     #[ignore = "requires tmux on PATH; runs an isolated temporary server"]
@@ -1160,6 +1553,27 @@ mod tests {
         .unwrap();
         assert!(!again.status.success());
         assert_eq!(read_tree().sessions[0].windows.len(), 1);
+        // History reads the pane's scrollback from tmux, not from a client: line 1 survives 5000 lines.
+        run("tmux set-option -g history-limit 50000".into());
+        let server = crate::tmux_server::TmuxServer::Default;
+        run(action_command(&TmuxAction::CreateSession {
+            name: "history".into(),
+            directory: temp.path().to_str().unwrap().to_owned(),
+        })
+        .unwrap());
+        run("tmux send-keys -t '=history:' 'seq 1 5000' Enter".into());
+        let history = crate::multiplexer_history::read_numbered_5000(
+            || {
+                run(
+                    history_command("history", &server, crate::multiplexer_history::MAX_LINES)
+                        .unwrap(),
+                )
+            },
+            None,
+        );
+        assert!(!history.truncated);
+        assert!(history.text.lines().any(|line| line == "1"));
+        assert!(history.lines >= 5000);
     }
 
     #[test]
@@ -1169,7 +1583,7 @@ mod tests {
                 target: "@12".into()
             })
             .unwrap(),
-            "tmux -u -L 'default' kill-window -t '@12'"
+            "tmux -u -L default kill-window -t @12"
         );
         for bad in ["", "12", "@", "@1;kill-server", "$1", "%1", "@1 @2", "-a"] {
             assert!(
@@ -1177,5 +1591,274 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_chosen_herdr_answers_discovery_preflight_and_listing_and_never_the_other() {
+        use crate::herdr_backend::{
+            sandbox::Sandbox,
+            HerdrBackend::{Managed, System},
+        };
+        let sandbox = Sandbox::new(true);
+        let entry: Entry =
+            serde_json::from_value(serde_json::json!({"kind":"herdr","name":"work"})).unwrap();
+        for (backend, name) in [(System, "system"), (Managed, "managed")] {
+            sandbox.assert_ran(backend, &[entry.preflight_command(backend, true).unwrap()]);
+            sandbox.assert_reaches(backend, &[HERDR_SESSIONS]);
+            assert_eq!(
+                sandbox.run_wrapped(&herdr_probe(backend, true)),
+                (format!("herdr\t1\t{name} --version\n"), true)
+            );
+        }
+        // A managed Herdr that is not installed is absent, however good the system one is.
+        assert_eq!(
+            Sandbox::new(false).run_wrapped(&herdr_probe(Managed, true)),
+            ("herdr\t0\n".into(), true)
+        );
+        assert_eq!(herdr_probe(Managed, false), "printf 'herdr\\t0\\n'");
+    }
+
+    #[test]
+    fn a_managed_entry_belongs_to_herdr_and_to_ssh_hosts() {
+        let entry = |value: serde_json::Value| serde_json::from_value::<Entry>(value).unwrap();
+        let managed = entry(serde_json::json!({"kind":"herdr","name":"work","backend":"managed"}));
+        assert!(managed.validate().is_ok());
+        assert_eq!(managed.argv().unwrap_err().kind(), "invalid_target");
+        assert!(
+            entry(serde_json::json!({"kind":"herdr","name":"work","backend":"system"}))
+                .argv()
+                .is_ok()
+        );
+        for kind in ["tmux", "zellij"] {
+            let wrong = entry(serde_json::json!({"kind":kind,"name":"work","backend":"managed"}));
+            assert_eq!(wrong.validate().unwrap_err().kind(), "invalid_target");
+        }
+        let path = serde_json::json!({"kind":"herdr","name":"work","backend":"/opt/herdr"});
+        assert!(serde_json::from_value::<Entry>(path).is_err());
+    }
+
+    /// Runs the product's Zellij listing the way the SSH exec does: one command string through a POSIX shell.
+    #[cfg(unix)]
+    fn list_zellij_sessions(
+        path: &std::path::Path,
+        environment: &[(&str, &std::path::Path)],
+    ) -> Result<String> {
+        let mut command = std::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg(zellij_sessions_command().render())
+            .env("PATH", path);
+        for (key, value) in environment {
+            command.env(key, value);
+        }
+        let output = command.output().unwrap();
+        zellij_output(crate::ssh::ExecOutput {
+            status: output
+                .status
+                .code()
+                .and_then(|code| u32::try_from(code).ok()),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+    #[cfg(unix)]
+    #[test]
+    fn lists_zellij_sessions_and_reads_a_host_without_any_as_an_empty_list_not_a_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake = temp.path().join("zellij");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ncase \"$(cat \"$FAKE_MODE\")\" in\n live) printf 'one\\ntwo\\n';;\n none) echo 'No active zellij sessions found.' >&2; exit 1;;\n exit1) echo 'configuration invalid' >&2; exit 1;;\n dirty) echo unexpected; echo 'No active zellij sessions found.' >&2; exit 1;;\n *) echo boom >&2; exit 2;;\nesac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mode = temp.path().join("mode");
+        let path = format!("{}:/usr/bin:/bin", temp.path().display());
+        let run = |mode_text: &str| {
+            std::fs::write(&mode, mode_text).unwrap();
+            list_zellij_sessions(
+                std::path::Path::new(&path),
+                &[("FAKE_MODE", mode.as_path())],
+            )
+        };
+        let live = run("live").unwrap();
+        let names: Vec<_> = persistent_sessions(MultiplexerKind::Zellij, &live)
+            .unwrap()
+            .into_iter()
+            .map(|session| session.name)
+            .collect();
+        assert_eq!(names, ["one", "two"]);
+        let none = run("none").unwrap();
+        assert!(persistent_sessions(MultiplexerKind::Zellij, &none)
+            .unwrap()
+            .is_empty());
+        let exit1 = run("exit1").unwrap_err();
+        assert_eq!(exit1.kind(), "remote_command_failed");
+        assert!(exit1.message().contains("configuration invalid"));
+        assert!(
+            run("dirty").is_err(),
+            "no-session text with unexpected stdout is a failure"
+        );
+        assert!(run("broken").is_err(), "any other failure stays a failure");
+        // A PATH holding only a shell: the host has no zellij, wherever the test machine keeps its own.
+        let bare = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/bin/sh", bare.path().join("sh")).unwrap();
+        let missing = list_zellij_sessions(bare.path(), &[]);
+        assert!(missing.is_err(), "a host without zellij stays a failure");
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires zellij on PATH; runs isolated background sessions"]
+    fn real_zellij_discovery_lists_live_and_exited_sessions_and_an_empty_list_for_none() {
+        use std::process::Command;
+        // The IPC socket path may not exceed 107 bytes, so the private tree is short.
+        let temp = tempfile::Builder::new()
+            .prefix("zd")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let root = temp.path();
+        for child in ["rt", "cache", "cfg", "sock", "home"] {
+            std::fs::create_dir(root.join(child)).unwrap();
+            std::fs::set_permissions(root.join(child), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+        }
+        std::fs::write(
+            root.join("cfg/config.kdl"),
+            "show_release_notes false\nshow_startup_tips false\nsession_serialization true\nserialization_interval 1\ndefault_shell \"/bin/sh\"\n",
+        )
+        .unwrap();
+        let zellij = |arguments: &[&str]| {
+            let mut command = Command::new("zellij");
+            command
+                .args(arguments)
+                .env("XDG_RUNTIME_DIR", root.join("rt"))
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env("XDG_CONFIG_HOME", root.join("cfg"))
+                .env("ZELLIJ_SOCKET_DIR", root.join("sock"))
+                .env("HOME", root.join("home"))
+                .env("TERM", "xterm-256color")
+                .env_remove("ZELLIJ")
+                .env_remove("ZELLIJ_SESSION_NAME");
+            command.output().unwrap()
+        };
+        // Servers carry their own socket path on the command line; only ours name this private tree.
+        let servers = || -> Vec<i32> {
+            let mark = root.join("sock").display().to_string();
+            std::fs::read_dir("/proc")
+                .unwrap()
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    let pid: i32 = entry.file_name().to_str()?.parse().ok()?;
+                    let line = std::fs::read(entry.path().join("cmdline")).ok()?;
+                    String::from_utf8_lossy(&line)
+                        .contains(&mark)
+                        .then_some(pid)
+                })
+                .collect()
+        };
+        struct Servers<'a>(&'a dyn Fn() -> Vec<i32>);
+        impl Drop for Servers<'_> {
+            fn drop(&mut self) {
+                for pid in (self.0)() {
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+            }
+        }
+        let _cleanup = Servers(&servers);
+        let list = || {
+            let output = list_zellij_sessions(
+                std::path::Path::new(&std::env::var("PATH").unwrap()),
+                &[
+                    ("XDG_RUNTIME_DIR", &root.join("rt")),
+                    ("XDG_CACHE_HOME", &root.join("cache")),
+                    ("XDG_CONFIG_HOME", &root.join("cfg")),
+                    ("ZELLIJ_SOCKET_DIR", &root.join("sock")),
+                    ("HOME", &root.join("home")),
+                ],
+            );
+            let output = output.unwrap();
+            let mut names: Vec<_> = persistent_sessions(MultiplexerKind::Zellij, &output)
+                .unwrap()
+                .into_iter()
+                .map(|session| session.name)
+                .collect();
+            names.sort();
+            names
+        };
+        let wait = |description: &str, ready: &dyn Fn() -> bool| {
+            for _ in 0..500 {
+                if ready() {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            panic!("Zellij did not reach {description}");
+        };
+        assert!(
+            list().is_empty(),
+            "a host with Zellij and no session lists nothing"
+        );
+        let config = root.join("cfg/config.kdl");
+        for name in ["live-one", "exited-one"] {
+            let output = zellij(&[
+                "--config",
+                config.to_str().unwrap(),
+                "attach",
+                "--create-background",
+                name,
+            ]);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let metadata = root
+                .join("cache/zellij/contract_version_1/session_info")
+                .join(name);
+            wait("its session metadata", &|| {
+                metadata.join("session-metadata.kdl").exists()
+            });
+        }
+        // A command pane is what Zellij serializes, so ending the server of a session with one leaves it to resurrect.
+        assert!(zellij(&[
+            "--session",
+            "exited-one",
+            "action",
+            "new-pane",
+            "--",
+            "sleep",
+            "600"
+        ])
+        .status
+        .success());
+        wait("both sessions listed", &|| {
+            list() == ["exited-one", "live-one"]
+        });
+        // Zellij serializes the command pane's layout; ending its server then leaves `exited-one` to resurrect.
+        let layout =
+            root.join("cache/zellij/contract_version_1/session_info/exited-one/session-layout.kdl");
+        wait("a serialized layout", &|| layout.exists());
+        let exited: Vec<i32> = servers()
+            .into_iter()
+            .filter(|pid| {
+                std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .is_ok_and(|line| String::from_utf8_lossy(&line).contains("exited-one"))
+            })
+            .collect();
+        assert!(!exited.is_empty());
+        for pid in exited {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        wait("exited-one marked exited", &|| {
+            String::from_utf8_lossy(&zellij(&["list-sessions", "--no-formatting"]).stdout)
+                .lines()
+                .any(|line| line.starts_with("exited-one") && line.contains("EXITED"))
+        });
+        assert_eq!(
+            list(),
+            ["exited-one", "live-one"],
+            "an exited session is still listed, and is what an attach would resurrect"
+        );
     }
 }

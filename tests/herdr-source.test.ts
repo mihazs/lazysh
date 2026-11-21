@@ -4,6 +4,7 @@ import { copyFile, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execute, runFakeBuild } from './support/fakeBuild';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const prefix = 'packages/herdr-upstream/';
@@ -49,15 +50,15 @@ test('Herdr exclusions preserve upstream bytes and one native-generated schema',
 });
 
 // Opted in by herdr-native after its checksum-verified Zig and archive provision.
-// Execute the exact Actions admission body with real gzip/Zig, without network.
+// Execute the exact Actions admission step of the ghostty-zig action with real gzip/Zig, without network.
 for (const [name, sourceManifest] of [
   ['uucode', 'build.zig.zon'], ['highway', 'pkg/highway/build.zig.zon'], ['pixels', 'pkg/wuffs/build.zig.zon'],
 ] as const) for (const variant of ['matching hash', 'wrong hash', 'truncated archive'] as const) {
   test.skipIf(process.env.LAZYSH_HERDR_ARCHIVE_FIXTURES !== '1')(`local ${name} admission: ${variant}`, async () => {
-    const workflow = Bun.YAML.parse(await Bun.file(join(root, '.github/workflows/checks.yml')).text()) as {
-      jobs: { 'herdr-native': { steps: { id?: string; run?: string; env?: Record<string, string> }[] } };
+    const action = Bun.YAML.parse(await Bun.file(join(root, '.github/actions/ghostty-zig/action.yml')).text()) as {
+      runs: { steps: { id?: string; run?: string; env?: Record<string, string> }[] };
     };
-    const admission = workflow.jobs['herdr-native'].steps.find(step => step.id === `${name}-admission`)!;
+    const admission = action.runs.steps.find(step => step.id === `${name}-admission`)!;
     expect(admission.run).toBeDefined();
     const expected = admission.env!.HERDR_PACKAGE_HASH;
     const manifest = await Bun.file(join(directory, 'vendor/libghostty-vt', sourceManifest)).text();
@@ -72,7 +73,7 @@ for (const [name, sourceManifest] of [
       expect(original.length).toBeLessThanOrEqual(33554432);
       await writeFile(archive, variant === 'truncated archive' ? original.subarray(0, 32) : original);
       const child = Bun.spawn(['bash', '-e', '-c', admission.run!], { cwd: fixture,
-        env: { ...process.env, HERDR_CI_ROOT: fixture, HERDR_ARCHIVE_NAME: name,
+        env: { ...process.env, GITHUB_WORKSPACE: root, HERDR_CI_ROOT: fixture, HERDR_ARCHIVE_NAME: name,
           HERDR_PACKAGE_HASH: variant === 'wrong hash' ? expected + '-wrong' : expected,
           ZIG_GLOBAL_CACHE_DIR: join(fixture, 'global'), ZIG_LOCAL_CACHE_DIR: join(fixture, 'local') },
         stdout: 'pipe', stderr: 'pipe' });
@@ -94,19 +95,19 @@ for (const [name, sourceManifest] of [
 test('CI seals guarded bytes before compiling independently admitted original stock source',async()=>{
   const workflow=Bun.YAML.parse(await Bun.file(join(root,'.github/workflows/checks.yml')).text()) as any;
   const producer=workflow.jobs['herdr-native'],steps=producer.steps;
-  expect(producer['timeout-minutes']).toBe(30);
+  expect(producer['timeout-minutes']).toBe(45);
   expect(producer.outputs['stock-sha256']).toBe('${{ steps.stock-artifact.outputs.sha256 }}');
   const index=(id:string)=>steps.findIndex((step:any)=>step.id===id);
   const guardedUpload=steps.findIndex((step:any)=>step.with?.name==='guarded-herdr-${{ github.run_id }}-${{ github.run_attempt }}');
   expect(index('guarded-artifact')).toBeLessThan(guardedUpload);
   expect(guardedUpload).toBeLessThan(index('stock-source-download'));
-  // The managed-feature build overwrites target/debug/herdr, so it must come after the guarded artifact is sealed.
-  expect(guardedUpload).toBeLessThan(index('managed-namespace'));
+  // The managed release build has its own target profile, but it still starts after the guarded artifact is sealed.
+  expect(guardedUpload).toBeLessThan(index('managed-build'));
   expect(index('stock-source')).toBeLessThan(index('stock-build'));
   expect(index('stock-build')).toBeLessThan(index('stock-artifact'));
   const download=steps[index('stock-source-download')];
   expect(download.env.HERDR_ARCHIVE_URL).toBe('https://codeload.github.com/herdrdev/herdr/tar.gz/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01');
-  expect(download.run).toContain('--max-time 180');expect(download.run).toContain('--max-filesize 33554432');
+  const downloader=await Bun.file(join(root,'.github/scripts/herdr-archive.sh')).text();expect(download.run).toContain('herdr-archive.sh');expect(downloader).toContain('--max-time 180');expect(downloader).toContain('--max-filesize 33554432');
   const source=steps[index('stock-source')],build=steps[index('stock-build')];
   expect(source.run).toContain('cbd4354f1c44530d9f094c2797380208c50f19b4d6350b6e5206e220133c3168');
   for(const step of [source,build]){
@@ -235,24 +236,8 @@ const herdrStep = async (select: (step: any) => boolean) => {
   const workflow = Bun.YAML.parse(await Bun.file(join(root, '.github/workflows/checks.yml')).text()) as any;
   return workflow.jobs['herdr-native'].steps.find(select);
 };
-const execute = async (argv: string[], cwd: string, env: Record<string, string> = {}) => {
-  const child = Bun.spawn(argv, { cwd, env: { ...process.env, ...env }, stdout: 'pipe', stderr: 'pipe', timeout: 30_000 });
-  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { exit, stdout, stderr };
-};
-
-/** Run `argv` with a fake `name` build whose Nth run prints and exits as `plan[N - 1]` ("status:output"). */
-async function runFakeBuild(plan: string[], name: string, argv: (build: string) => string[], env: Record<string, string> = {}) {
-  const fixture = await mkdtemp(join(tmpdir(), 'lazysh-retry-zig-fetch-')), bin = join(fixture, 'bin'), build = join(bin, name);
-  try {
-    await mkdir(bin);
-    await writeFile(build, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$0.calls"\nstep=$(printf "%s\\n" "$PLAN" | sed -n "$(wc -l < "$0.calls")p")\nprintf "%s\\n" "${step#*:}" >&2\nexit "${step%%:*}"\n', { mode: 0o700 });
-    const result = await execute(argv(build, bin), fixture, { PLAN: plan.join('\n'), LAZYSH_FETCH_DELAY: '0', ...env, PATH: `${bin}:${process.env.PATH}` });
-    return { ...result, calls: (await Bun.file(build + '.calls').text()).trim().split('\n') };
-  } finally { await rm(fixture, { recursive: true, force: true }); }
-}
 const retried = (plan: string[], env?: Record<string, string>) =>
-  runFakeBuild(plan, 'build', build => ['sh', join(root, '.github/scripts/retry-zig-fetch.sh'), build, '--locked'], env);
+  runFakeBuild(plan, 'build', build => ['sh', join(root, '.github/scripts/retry-zig-fetch.sh'), build, '--locked'], { LAZYSH_FETCH_DELAY: '0', ...env });
 
 test.each([
   "HTTP response read failure: ConnectionResetByPeer", 'invalid HTTP response: HttpConnectionClosing',
@@ -288,13 +273,14 @@ test('a clean build runs once without a warning', async () => {
 test('the guarded Herdr build retries a Zig dependency download failure with the same Cargo arguments', async () => {
   const step = await herdrStep(candidate => candidate.name === 'Build the real optional Herdr binary');
   const result = await runFakeBuild(['101:error: invalid HTTP response: HttpConnectionClosing', '0:built'], 'cargo',
-    () => ['bash', '-e', '-c', step.run], { GITHUB_WORKSPACE: root });
+    () => ['bash', '-e', '-c', step.run], { GITHUB_WORKSPACE: root, LAZYSH_FETCH_DELAY: '0' });
   expect(result).toMatchObject({ exit: 0, calls: ['+1.96.1 build --locked', '+1.96.1 build --locked'] });
 });
 
 const zigCacheFixtures = process.env.LAZYSH_HERDR_ARCHIVE_FIXTURES === '1';
 const scrubZigPackages = async (global: string) => {
-  const step = await herdrStep(candidate => candidate.id === 'zig-package-scrub');
+  const action = Bun.YAML.parse(await Bun.file(join(root, '.github/actions/ghostty-zig/action.yml')).text()) as any;
+  const step = action.runs.steps.find((candidate: any) => candidate.id === 'zig-package-scrub');
   expect((await execute(['bash', '-e', '-c', step.run], global, { ZIG_GLOBAL_CACHE_DIR: global })).exit).toBe(0);
 };
 
@@ -357,3 +343,40 @@ test.skipIf(!zigCacheFixtures)('restored Zig package tarballs unpack offline, a 
     expect(downloaded.stderr).toContain('unable to connect to server');
   } finally { await rm(fixture, { recursive: true, force: true }); }
 }, 100_000);
+
+/** Run the Android build step with fake `rustup` and `cargo`; each call records its arguments, the NDK and the linkers it saw. */
+async function runAndroidStep(failOn = '') {
+  const fixture = await mkdtemp(join(tmpdir(), 'lazysh-android-target-')), bin = join(fixture, 'bin'), calls = join(fixture, 'calls');
+  try {
+    await mkdir(bin);
+    const fake = '#!/bin/sh\nprintf "%s %s|ndk=%s|arm64=%s|x86_64=%s\\n" "${0##*/}" "$*" "$ANDROID_NDK_HOME" "$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER" "$CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER" >> "$CALLS"\ncase "$*" in *"$FAIL_ON"*) [ -z "$FAIL_ON" ] || exit 1 ;; esac\n';
+    for (const name of ['rustup', 'cargo']) await writeFile(join(bin, name), fake, { mode: 0o700 });
+    const step = await herdrStep(value => value.id === 'terminal-android-target');
+    const result = await execute(['bash', '-e', '-c', step.run], fixture, {
+      CALLS: calls, FAIL_ON: failOn, NDK_HOME: '/pinned/ndk', ANDROID_NDK_HOME: '/runner/preset/ndk', PATH: `${bin}:${process.env.PATH}`,
+    });
+    return { ...result, calls: (await Bun.file(calls).text()).trim().split('\n') };
+  } finally { await rm(fixture, { recursive: true, force: true }); }
+}
+
+test('the Android step checks and links the runtime for both ABIs with the pinned NDK, not the runner image NDK', async () => {
+  const { exit, calls } = await runAndroidStep();
+  const linker = (triple: string) => `/pinned/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/${triple}24-clang`;
+  const arm64 = 'aarch64-linux-android', x86_64 = 'x86_64-linux-android';
+  expect(exit).toBe(0);
+  expect(calls.map(call => call.split('|')[0])).toEqual([
+    `rustup target add --toolchain 1.96.1 ${arm64} ${x86_64}`,
+    `cargo +1.96.1 check --locked --target ${arm64}`, `cargo +1.96.1 test --locked --no-run --target ${arm64}`,
+    `cargo +1.96.1 check --locked --target ${x86_64}`, `cargo +1.96.1 test --locked --no-run --target ${x86_64}`,
+  ]);
+  // Each build sees the pinned NDK and the linker of the ABI it builds.
+  for (const [triple, name, from, to] of [[arm64, 'arm64', 1, 3], [x86_64, 'x86_64', 3, 5]] as const) {
+    for (const call of calls.slice(from, to)) expect(call).toContain(`|ndk=/pinned/ndk|`), expect(call).toContain(`|${name}=${linker(triple)}`);
+  }
+});
+
+test('a failing Android check stops the step before the other ABI is built', async () => {
+  const { exit, calls } = await runAndroidStep('check --locked --target aarch64');
+  expect(exit).not.toBe(0);
+  expect(calls.some(call => call.includes('x86_64-linux-android '))).toBe(false);
+});

@@ -16,6 +16,18 @@ fn line(argv: &[&str]) -> String {
 }
 
 #[test]
+fn local_companion_commands_carry_the_compiled_app_version() {
+    let command = argv("lazysh-agent snapshot --limit 50", "/owned/lazysh-agent").unwrap();
+    assert_eq!(
+        command.render(),
+        format!(
+            "LAZYSH_APP_VERSION={} /owned/lazysh-agent snapshot --limit 50",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+}
+
+#[test]
 fn a_rendered_command_splits_back_into_exactly_its_argv() {
     for argv in [
         vec!["lazysh-agent", "snapshot", "--limit", "50"],
@@ -91,9 +103,9 @@ fn the_bundled_companion_wins_over_the_path_and_a_relative_path_entry_is_never_s
     let path = std::env::join_paths([root.join("empty"), root.join("listed")]).unwrap();
     assert_eq!(
         find(Some(&root.join("app")), None, &path),
-        Some(bundled.clone())
+        Some((bundled.clone(), Source::Bundled))
     );
-    assert_eq!(find(None, None, &path), Some(listed));
+    assert_eq!(find(None, None, &path), Some((listed, Source::Path)));
     // A companion in the working directory is not one the user put on the PATH.
     assert_eq!(find(None, None, OsStr::new("")), None);
     assert_eq!(find(None, None, OsStr::new("relative:.")), None);
@@ -114,17 +126,18 @@ fn the_managed_copy_comes_after_the_bundle_and_before_the_path_and_must_be_the_u
     );
     let path = std::env::join_paths([root.join("listed")]).unwrap();
     let find = || find(Some(&root.join("app")), Some(&root.join("data")), &path);
-    assert_eq!(find(), Some(bundled.clone()));
+    let on_path = Some((listed.clone(), Source::Path));
+    assert_eq!(find(), Some((bundled.clone(), Source::Bundled)));
     fs::remove_file(&bundled).unwrap();
-    assert_eq!(find(), Some(managed.clone()));
+    assert_eq!(find(), Some((managed.clone(), Source::Managed)));
     // Anyone else able to write the file could change what this account runs.
     fs::set_permissions(&managed, fs::Permissions::from_mode(0o770)).unwrap();
-    assert_eq!(find(), Some(listed.clone()));
+    assert_eq!(find(), on_path);
     fs::set_permissions(&managed, fs::Permissions::from_mode(0o600)).unwrap();
-    assert_eq!(find(), Some(listed.clone()), "not executable");
+    assert_eq!(find(), on_path, "not executable");
     fs::remove_file(&managed).unwrap();
     symlink(&listed, &managed).unwrap();
-    assert_eq!(find(), Some(listed.clone()), "a link is not a managed copy");
+    assert_eq!(find(), on_path, "a link is not a managed copy");
     // The PATH keeps working for a user-installed companion, and a plain file is skipped.
     fs::set_permissions(&listed, fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(find(), None);
@@ -143,6 +156,35 @@ fn reporting(path: &Path, version: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn version_probe_recovers_after_a_transient_busy_executable() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = temp.path().join("agent");
+    reporting(&executable, "1.4.0");
+    let writer = fs::OpenOptions::new()
+        .write(true)
+        .open(&executable)
+        .unwrap();
+    assert_eq!(
+        std::process::Command::new(&executable)
+            .output()
+            .unwrap_err()
+            .raw_os_error(),
+        Some(libc::ETXTBSY)
+    );
+    let probe = version_of(&executable);
+    tokio::pin!(probe);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), &mut probe)
+            .await
+            .is_err(),
+        "the probe must keep trying while the executable is busy"
+    );
+    drop(writer);
+    assert_eq!(probe.await.as_deref(), Some("1.4.0"));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn the_bundled_companion_is_copied_privately_and_only_replaced_by_a_newer_one() {
@@ -151,7 +193,16 @@ async fn the_bundled_companion_is_copied_privately_and_only_replaced_by_a_newer_
     let bundled = temp.path().join("mount/usr/bin/lazysh-agent");
     let target = temp.path().join("data/lazysh/companion/lazysh-agent");
     let run = |path: &Path| {
-        let output = std::process::Command::new(path).output().unwrap();
+        let mut attempts = 0;
+        let output = loop {
+            match std::process::Command::new(path).output() {
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 100 => {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                result => break result.unwrap(),
+            }
+        };
         String::from_utf8(output.stdout).unwrap()
     };
     reporting(&bundled, "1.4.0");
@@ -227,6 +278,22 @@ fn an_installed_companion_stands_in_for_the_bundle_only_when_it_is_not_older() {
     }
 }
 
+/// The capability the panel reads: the source is named exactly when a companion resolved.
+#[cfg(desktop)]
+async fn companion_tools() -> Value {
+    let capability = serde_json::to_value(crate::local::local_capability().await).unwrap();
+    capability["targets"][0]["tools"].clone()
+}
+
+#[cfg(desktop)]
+#[tokio::test]
+async fn the_local_capability_names_the_companion_source_exactly_when_it_has_one() {
+    let tools = companion_tools().await;
+    let source = &tools["companionSource"];
+    assert_eq!(tools["companion"], json!(!source.is_null()));
+    assert!(source.is_null() || ["bundled", "managed", "path"].contains(&source.as_str().unwrap()));
+}
+
 // ---- A real companion serving a local session.
 
 /// The companion this build produced, placed beside the test executable the way the desktop
@@ -268,6 +335,25 @@ async fn session(home: &Path) -> (App<MockRuntime>, String) {
     let id = adopted_test_session(&app.state::<LocalState>(), lease()).await;
     (app, id)
 }
+#[cfg(unix)]
+#[tokio::test]
+async fn local_companion_child_receives_the_app_version() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let script = temp.path().join("owned-agent");
+    fs::write(&script, b"#!/bin/sh\nprintf '%s' \"$LAZYSH_APP_VERSION\"\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let (app, id) = session(temp.path()).await;
+    let host = crate::host::Host::resolve(&app.state(), &app.state(), &id, &lease())
+        .await
+        .unwrap();
+    let command = argv("lazysh-agent snapshot", script.to_str().unwrap()).unwrap();
+    assert_eq!(
+        host.run_bytes(&lease(), &command).await.unwrap(),
+        env!("CARGO_PKG_VERSION").as_bytes()
+    );
+}
+
 // Boxed when called, not when awaited: a command future held in a test's own state overflows
 // the test thread's stack in debug.
 fn call<T>(
@@ -296,6 +382,7 @@ async fn transcript(app: &App<MockRuntime>, id: &str, path: &Path) -> Result<Val
         None,
         None,
         None,
+        None,
     ))
     .await
 }
@@ -304,6 +391,12 @@ async fn transcript(app: &App<MockRuntime>, id: &str, path: &Path) -> Result<Val
 #[ignore = "requires the companion this build produced in LAZYSH_TEST_AGENT_BIN"]
 async fn real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell() {
     bundle();
+    // Placed beside the app executable, it resolves as the bundled companion.
+    let tools = companion_tools().await;
+    assert_eq!(
+        (&tools["companion"], &tools["companionSource"]),
+        (&json!(true), &json!("bundled"))
+    );
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
     let recorded = home.join(".claude/projects/project/recorded.jsonl");

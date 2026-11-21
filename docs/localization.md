@@ -124,6 +124,14 @@ first-upgrade behavior follow the native-language document. Reset preferences
 restores System. No language
 resources are fetched remotely.
 
+## Host companion help
+
+The help of `lazysh-agent review` and its `status` and `diff` commands is
+available in the same three languages, chosen by the host's `LC_ALL`,
+`LC_MESSAGES` or `LANG` rather than by the app preference. The command's output,
+its failure classes and the usage errors of the argument parser stay English.
+See [Repository review](repository-review.md#review-from-the-hosts-terminal).
+
 ## Adding interface text
 
 Keep app-local English keys in `apps/client/src/i18n/en.ts`. Supply Brazilian
@@ -213,10 +221,9 @@ to confirm no place is missed.
    checks actually ran: a catalog that passes unit tests is not evidence of native
    or physical-device language behavior.
 6. **Documentation and release.** Update the supported-language and System
-   resolution paragraphs above, add a `CHANGELOG.md` `[Unreleased]` entry that names
-   the language and states that **System** stays the default (a matching system tag
-   now selects the new catalog instead of English), and add a minor Changesets
-   fragment.
+   resolution paragraphs above, add a minor Changesets fragment, which is the changelog
+   entry, that names the language and states in its details that **System** stays
+   the default (a matching system tag now selects the new catalog instead of English).
 
 ## Apple permission explanations
 

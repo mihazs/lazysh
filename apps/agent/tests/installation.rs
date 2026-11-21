@@ -8,6 +8,9 @@ use std::{
 mod binary;
 #[path = "support/json_output.rs"]
 mod json_output;
+#[cfg(windows)]
+#[path = "support/windows_acl.rs"]
+mod windows_acl;
 use json_output::decode as json;
 struct Fixture {
     root: tempfile::TempDir,
@@ -16,6 +19,9 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
+        // The shell resolves the local application data folder through USERPROFILE, which is set to the root below.
+        #[cfg(windows)]
+        windows_acl::profile(root.path());
         fs::create_dir(root.path().join("state")).unwrap();
         for name in ["events.sqlite3", "settings.json"] {
             fs::write(
@@ -120,13 +126,29 @@ fn real_binary_inspect_install_stale_preview_and_reuse_never_touch_state() {
 #[test]
 fn unsupported_platform_reports_capability_before_any_namespace_mutation() {
     let fixture = Fixture::new();
-    assert_eq!(
-        json(fixture.run(&["inspect"])),
-        serde_json::json!({"schemaVersion":1,"supported":false,"reason":"windowsInstallerUnsupported"})
-    );
+    let inspected = json(fixture.run(&["inspect"]));
+    assert_eq!(inspected["schemaVersion"], 1);
+    assert_eq!(inspected["supported"], false);
+    assert_eq!(inspected["reason"], "windowsInstallerUnsupported");
+    // Windows also names where the companion would go and what is there, once that namespace is admitted;
+    // the whole contract of an unsafe one is in `windows_admission.rs`.
+    #[cfg(windows)]
+    {
+        assert!(inspected["destination"]
+            .as_str()
+            .unwrap()
+            .ends_with(r"\lazysh\companion\lazysh-agent.exe"));
+        assert_eq!(
+            inspected["existing"],
+            serde_json::json!({"state": "missing"})
+        );
+    }
     let output = fixture.run(&["install", "--expected-plan", &"0".repeat(64)]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("windowsInstallerUnsupported"));
+    #[cfg(windows)]
+    assert!(!fixture.root.path().join(r"AppData\Local\lazysh").exists());
+    #[cfg(not(windows))]
     assert_eq!(fs::read_dir(fixture.root.path()).unwrap().count(), 1);
     fixture.assert_state();
 }

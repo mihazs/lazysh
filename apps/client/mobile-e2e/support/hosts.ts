@@ -32,8 +32,8 @@ export interface OwnedHosts {
   endpointFile: string;
   nonce: string;
   fixtures: Partial<Record<HostKind, Fixture>>;
-  /** Removes the reverse forwards, stops the fixtures last-started first, deletes the directory, restores the environment. */
-  stop(): Promise<void>;
+  /** Removes owned forwards unless device ownership was lost; always stops fixtures and restores the local environment. */
+  stop(options?: {removeForwards?: boolean}): Promise<void>;
 }
 
 export interface StartOptions {
@@ -48,10 +48,10 @@ export async function startHosts({adb, kinds, fixtures = defaultFixtures}: Start
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-mobile-e2e-run-'));
   const nonce = randomBytes(4).toString('hex');
   const started: [HostKind, Fixture][] = [], reversed: number[] = [];
-  const stop = async () => {
+  const stop = async ({removeForwards = true}: {removeForwards?: boolean} = {}) => {
     const failures: unknown[] = [];
     const attempt = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { failures.push(error); } };
-    for (const port of reversed.splice(0)) await attempt(() => adb('reverse', '--remove', `tcp:${port}`));
+    if (removeForwards) for (const port of reversed.splice(0)) await attempt(() => adb('reverse', '--remove', `tcp:${port}`));
     for (const [, fixture] of started.splice(0).reverse()) await attempt(() => fixture.stop());
     await attempt(() => rm(directory, {recursive: true, force: true}));
     for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }

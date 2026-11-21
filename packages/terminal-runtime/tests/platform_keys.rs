@@ -82,8 +82,11 @@ fn every_platform_has_cases_and_each_sends_what_xterm_js_sends_or_lists_why_not(
                 "{context}: the core no longer sends what the fixture says it sends"
             );
             // The mapping changes an event exactly where the core, given the event as the browser fired it,
-            // would not send what the core sends for the mapped one.
-            if entry["raw"] != entry["input"] {
+            // would not send what the core sends for the mapped one. Not checked on a macOS build: libghostty-vt
+            // built for macOS reads Option's physical key itself (Option+L is ESC l whatever character it typed),
+            // so there the core does handle some events as fired. The check runs on every other host, and the
+            // mapping is a TypeScript module that does not depend on the host the core was built for.
+            if entry["raw"] != entry["input"] && !cfg!(target_os = "macos") {
                 assert_ne!(
                     core_sends(&entry["raw"]),
                     core.as_bytes(),

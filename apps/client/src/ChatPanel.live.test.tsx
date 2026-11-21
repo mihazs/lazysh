@@ -4,6 +4,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
 import ChatPanel from './ChatPanel';
+import {opencodeDatabase,opencodePage,opencodeSession,opencodeToolPage,opencodeToolSession} from './test/opencodeRecorded';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn(),Channel:class{onmessage:((event:unknown)=>void)|undefined;}}));
 
 // Counts how often each message body is rendered: an update must not re-render the unchanged ones.
@@ -99,6 +100,19 @@ describe('a bound conversation with a live watch',()=>{
     expect(order()).toEqual(['Replaced twice']);
     expect(document.querySelector('section.chat-panel')!.getAttribute('data-watch')).toBe('live');
   });
+  it('updates the earlier-page boundary from live Codex watch frames',async()=>{
+    poll={...polled(...first),agent:'codex',truncated:false};
+    render(<ChatPanel sessionId="host" shown bound={{agent:'codex',path:'/host/session.jsonl'}} timeline/>);
+    await advance(0);
+    expect((starts[0] as {target:{allowLargeHistory?:boolean}}).target.allowLargeHistory).toBe(true);
+    await send({type:'hello',protocol:1,agent:'codex'});
+    await send(snapshot(1,1,first.map(message=>entry(message))));
+    expect(screen.getByText('Start of the session')).toBeTruthy();
+    await send(delta(1,2,[],{truncated:true}));
+    expect(screen.getByRole('button',{name:'Load earlier messages'})).toBeTruthy();
+    await send({...snapshot(2,3,first.map(message=>entry(message))),truncated:false});
+    expect(screen.queryByRole('button',{name:'Load earlier messages'})).toBeNull();
+  });
   it('offers the messages the window pushed out of its head, and no longer claims the session starts at the top',async()=>{
     render_();await advance(0);await send(hello);
     const line=(index:number)=>entry(text(`m${index}`,index%2?'assistant':'user',`Line ${index}`));
@@ -132,6 +146,29 @@ describe('a bound conversation with a live watch',()=>{
     expect(sessions.at(-1)).toEqual({model:'claude-opus-5-5',mode:'auto'});
     await send(delta(1,4,[],{session:null}));
     expect(sessions.at(-1)).toBeUndefined();
+  });
+  it('streams a recorded OpenCode session from its database and session, with its footer facts, and no longer polls',async()=>{
+    const sessions:unknown[]=[];
+    poll=opencodeToolPage;
+    render(<ChatPanel sessionId="host" shown bound={{agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeToolSession}} timeline onSession={session=>sessions.push(session)}/>);
+    await advance(0);
+    expect(starts).toEqual([{sessionId:'host',target:{kind:'path',agent:'opencode',path:opencodeDatabase,transcriptSessionId:opencodeToolSession},events:expect.anything()}]);
+    const entries=opencodeToolPage.messages.map(message=>({id:message.id,rev:1,message}));
+    await send({...hello,agent:'opencode'});await send({...snapshot(1,1,entries),session:opencodeToolPage.session});
+    expect(screen.getByText('shell')).toBeTruthy();
+    expect(sessions.at(-1)).toEqual(opencodeToolPage.session);
+    // The reply that was still running when the window opened grows over the stream.
+    const reply=entries.at(-1)!;
+    await send(delta(1,2,[{...reply,rev:2,message:{...reply.message,blocks:[{type:'text',text:'hello, done'}]}}]));
+    expect(screen.getByText('hello, done')).toBeTruthy();
+    await advance(20_000);expect(calls('agent_transcript')).toHaveLength(1);
+    expect(document.querySelector('section.chat-panel')!.getAttribute('data-watch')).toBe('live');
+  });
+  it('does not stream an OpenCode session of a Herdr pane, which has no database session to name',async()=>{
+    poll=opencodePage;
+    render(<ChatPanel sessionId="host" shown bound={{agent:'opencode',path:opencodeSession,transcriptSessionId:opencodeSession,herdr:{herdrSession:'s',paneId:'p',terminalId:'t'}}} timeline/>);
+    await advance(0);
+    expect(starts).toEqual([]);
   });
   it('closes the channel when the view is hidden and opens a new one when it is shown again',async()=>{
     const view=render_();await advance(0);await goLive();
@@ -191,6 +228,16 @@ describe('when the stream cannot be had',()=>{
     poll=polled(...first,text('a2','assistant','Polled'));await advance(2000);expect(screen.getByText('Polled')).toBeTruthy();
     await advance(30_000);expect(starts).toHaveLength(1);
   });
+  it('asks a host that could not stream again at once when its companion has just been updated, and only that host',async()=>{
+    render_('host');await advance(0);
+    await act(async()=>{channel.onmessage({type:'unavailable',reason:'companion_required'});});
+    expect(starts).toHaveLength(1);
+    const updated=(sessionId:string)=>act(async()=>{window.dispatchEvent(new CustomEvent('lazysh-companion-updated',{detail:{sessionId}}));});
+    await updated('another-host');await advance(0);expect(starts).toHaveLength(1);
+    await updated('host');await advance(0);expect(starts).toHaveLength(2);
+    // Streaming now: a later update of the same host does not reopen it.
+    await goLive();await updated('host');await advance(0);expect(starts).toHaveLength(2);
+  });
   it('keeps the background-work panel current from the stream: a snapshot carries the work, a delta that changes it replaces it and one that does not leaves it',async()=>{
     render_();await advance(0);await send(hello);
     const task=(state:string)=>({id:'b1',kind:'shell',title:'Wait for CI',state,events:[],startedAt:new Date().toISOString()});
@@ -247,5 +294,55 @@ describe('tool calls in the timeline',()=>{
     const status=(command:string)=>screen.getAllByText(command)[0].closest('details.agent-tool')!.getAttribute('data-status');
     expect(status('sleep 2')).toBe('running');
     expect(status('sleep 1')).toBe('unknown');
+  });
+});
+
+describe('plan calls in the timeline',()=>{
+  it('draws no row for the result of a plan call, which the plan chip already shows',async()=>{
+    const plan={id:'m-plan',role:'assistant',blocks:[{type:'tool_use',id:'todo-1',name:'TodoWrite',text:'{}',card:{kind:'plan',entries:[{text:'Run the suite',status:'in_progress'}]}}]};
+    const result={id:'m-res',role:'tool',blocks:[{type:'tool_result',id:'todo-1',text:'Todos have been modified successfully'}]};
+    poll=polled(...first,plan,result);
+    render_();await advance(0);
+    expect(screen.queryByText('Todos have been modified successfully')).toBeNull();
+    expect(screen.getByRole('button',{name:/0 of 1/})).toBeTruthy();
+  });
+});
+
+describe('message time',()=>{
+  const stamped=(id:string,role:string,value:string,timestamp?:string)=>({...text(id,role,value),...(timestamp?{timestamp}:{})});
+  it('keeps the time of a message under it for a screen reader and shows it after a tap, without rendering the list again',async()=>{
+    poll=polled(stamped('p1','user','Question','2026-11-13T10:30:00Z'),stamped('a1','assistant','Answer'));
+    render_();await advance(0);
+    const message=screen.getByText('Question').closest('article')!;
+    const time=message.querySelector('time')!;
+    expect(time.getAttribute('datetime')).toBe('2026-11-13T10:30:00Z');
+    expect(time.textContent).toMatch(/^Sent .*2026/);
+    expect(message.hasAttribute('data-stamped')).toBe(false);
+    const renders=markdownRenders.get('Question');
+    fireEvent.click(message);
+    expect(message.hasAttribute('data-stamped')).toBe(true);
+    fireEvent.click(message);
+    expect(message.hasAttribute('data-stamped')).toBe(false);
+    expect(markdownRenders.get('Question')).toBe(renders);
+    // A message the agent wrote without a time has nothing to show.
+    expect(screen.getByText('Answer').closest('article')!.querySelector('time')).toBeNull();
+  });
+  it('shows Copy message after a tap even for a message the agent wrote without a time',async()=>{
+    poll=polled(stamped('a1','assistant','Answer'));
+    render_();await advance(0);
+    const message=screen.getByText('Answer').closest('article')!;
+    expect(message.querySelector('time')).toBeNull();
+    fireEvent.click(message);
+    expect(message.hasAttribute('data-stamped')).toBe(true);
+    expect(message.querySelector('button.agent-copy')).not.toBeNull();
+  });
+  it('does not toggle the time when the tap ends a text selection',async()=>{
+    poll=polled(stamped('a2','assistant','Done','2026-11-13T10:31:00Z'));
+    render_();await advance(0);
+    const message=screen.getByText('Done').closest('article')!;
+    const selection=vi.spyOn(window,'getSelection').mockReturnValue({isCollapsed:false} as Selection);
+    fireEvent.click(message);
+    expect(message.hasAttribute('data-stamped')).toBe(false);
+    selection.mockRestore();
   });
 });
