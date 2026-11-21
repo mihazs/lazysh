@@ -19,6 +19,7 @@ pub mod kimi_code;
 pub mod listeners;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod managed_directory;
+pub mod opencode_service;
 // The process table is read on Unix only; elsewhere only the declared parent session applies.
 #[cfg_attr(not(unix), allow(dead_code))]
 pub mod nested_agent;

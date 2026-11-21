@@ -186,6 +186,11 @@ enum Command {
         #[arg(long)]
         no_sandbox: bool,
     },
+    /// Answer OpenCode permission requests and question forms, and stop a turn, through its loopback background service.
+    OpencodeService {
+        #[command(subcommand)]
+        command: lazysh_agent::opencode_service::Command,
+    },
     /// Print live, bounded permission requests.
     ApprovalList {
         #[arg(long, default_value_t=20, value_parser=clap::value_parser!(u8).range(1..=20))]
@@ -695,6 +700,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             None
         }
         Command::Listeners(options) => lazysh_agent::listeners::run(&options)?,
+        Command::OpencodeService { command } => Some(lazysh_agent::opencode_service::run(command)?),
         Command::Review(arguments) => {
             lazysh_agent::review::run(arguments, &mut io::stdout().lock())?;
             None
