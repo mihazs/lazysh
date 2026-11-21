@@ -10,6 +10,155 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.92.3] - 2026-11-21
+
+### Fixed
+
+- **agents:** show what the agent said in a long turn and fill the Agent view with earlier messages ([#2261](https://github.com/mihazs/lazysh/pull/2261))
+
+## [1.92.2] - 2026-11-21
+
+### Under the hood
+
+- **terminal:** record the first Waydroid lane run of the native core, which stops at the missing owned SSH fixture ([#2278](https://github.com/mihazs/lazysh/pull/2278))
+
+## [1.92.1] - 2026-11-21
+
+### New
+
+- **linux:** draw a native terminal session on the Wayland subsurface with wgpu, native builds only ([#2272](https://github.com/mihazs/lazysh/pull/2272))
+
+### Under the hood
+
+- **android:** upload the x86_64 debug and androidTest APKs for the Waydroid lane ([#2277](https://github.com/mihazs/lazysh/pull/2277))
+
+## [1.92.0] - 2026-11-21
+
+### New
+
+- **settings:** add the Terminal engine control with Auto, Native and xterm.js to Settings ([#2197](https://github.com/mihazs/lazysh/pull/2197))
+- **terminal:** add the typed-input editor for native terminal sessions on desktop and iOS ([#2161](https://github.com/mihazs/lazysh/pull/2161))
+- **terminal:** find web addresses, file paths and hyperlinks in the shared terminal core ([#2198](https://github.com/mihazs/lazysh/pull/2198))
+- **terminal:** give the native core the app's colours and the Mosh canonical-frame mode at session open ([#2160](https://github.com/mihazs/lazysh/pull/2160))
+
+### Under the hood
+
+- **android:** run the real terminal core inside the app on the CI emulator ([#2147](https://github.com/mihazs/lazysh/pull/2147))
+- **ntfy:** record what the Android app did with each pushed challenge when confirmation times out ([#1966](https://github.com/mihazs/lazysh/pull/1966))
+
+## [1.91.4] - 2026-11-21
+
+### New
+
+- **linux:** place a native terminal surface below the web view on Wayland, in builds with the native terminal only ([#2262](https://github.com/mihazs/lazysh/pull/2262))
+
+### Fixed
+
+- **agent:** keep the transcript-watch heartbeat on time while the stream waits after a slow projection. ([#2248](https://github.com/mihazs/lazysh/pull/2248))
+
+## [1.91.3] - 2026-11-21
+
+### Under the hood
+
+- **terminal:** stop the daemons a program test starts when the test ends ([#2269](https://github.com/mihazs/lazysh/pull/2269))
+
+## [1.91.2] - 2026-11-21
+
+### New
+
+- **accessibility:** mirror a native terminal session's rows for a screen reader while Screen reader mode is on ([#2241](https://github.com/mihazs/lazysh/pull/2241))
+- **herdr:** keep the managed Herdr build from replacing itself with a stock release ([#1934](https://github.com/mihazs/lazysh/pull/1934))
+- **terminal:** Draw real text in the native terminal renderer, with font fallback and correct cell widths ([#2224](https://github.com/mihazs/lazysh/pull/2224))
+
+### Under the hood
+
+- **checks:** skip the OSC 52 clipboard step when its Playwright install was skipped ([#2247](https://github.com/mihazs/lazysh/pull/2247))
+- **android:** choose the theme QR image in the real system file picker and check its decoded preview ([#1931](https://github.com/mihazs/lazysh/pull/1931))
+- **herdr:** build the managed Herdr as a release-profile executable and state its libc floor ([#1932](https://github.com/mihazs/lazysh/pull/1932))
+
+## [1.91.1] - 2026-11-20
+
+### Improved
+
+- Probe whether a native surface can sit below the transparent web view on macOS (#1333) ([#2152](https://github.com/mihazs/lazysh/pull/2152))
+
+### Under the hood
+
+- Build and test the shared terminal core and its wgpu renderer on Windows (#1332, part of #1302) ([#2127](https://github.com/mihazs/lazysh/pull/2127))
+
+## [1.91.0] - 2026-11-20
+
+### New
+
+- **hooks:** install, update and remove Kimi Code 2.4 approval hooks from Agent hook setup ([#1947](https://github.com/mihazs/lazysh/pull/1947))
+- **herdr:** add the explicit install and removal of the optional managed Herdr over SSH ([#1941](https://github.com/mihazs/lazysh/pull/1941))
+- **hooks:** list the seven readiness steps of an agent in the Agent hook setup panel ([#1945](https://github.com/mihazs/lazysh/pull/1945))
+- **herdr:** run every native Herdr call on the one Herdr a connection captured, nothing changes for users yet ([#1942](https://github.com/mihazs/lazysh/pull/1942))
+- **hooks:** set up agent hooks on macOS hosts from the app ([#1949](https://github.com/mihazs/lazysh/pull/1949))
+- **hooks:** report whether the host received an agent's events in `lazysh-agent hooks status` ([#1945](https://github.com/mihazs/lazysh/pull/1945))
+- Update the host companion by itself when a newer lazysh app connects ([#1948](https://github.com/mihazs/lazysh/pull/1948))
+
+### Improved
+
+- Refuse a companion release response when its version differs from the requested update version ([#1948](https://github.com/mihazs/lazysh/pull/1948))
+- Generate and check the redistribution notice inventory of the optional managed Herdr derivative in the Herdr… ([#1936](https://github.com/mihazs/lazysh/pull/1936))
+
+### Under the hood
+
+- Verify theme import by QR image file and by an OS `lazysh://` link in the Linux native GUI suite ([#1890](https://github.com/mihazs/lazysh/pull/1890))
+- **android:** cover pinch zoom and two-finger window swipes on a real tmux session ([#1887](https://github.com/mihazs/lazysh/pull/1887))
+- **herdr:** accept the managed Herdr beside a stock server of the same session name ([#1937](https://github.com/mihazs/lazysh/pull/1937))
+- **desktop:** verify the Linux keep-awake control through the real app and an owned portal server ([#1958](https://github.com/mihazs/lazysh/pull/1958))
+- **android:** deny the Attachment Photo camera permission through the real system sheet ([#1928](https://github.com/mihazs/lazysh/pull/1928))
+- **android:** sample the glass chrome material in the Android WebView ([#1893](https://github.com/mihazs/lazysh/pull/1893))
+
+## [1.90.0] - 2026-11-20
+
+### New
+
+- Add the app's bridge to the host browser relay ([#1886](https://github.com/mihazs/lazysh/pull/1886))
+- **terminal:** check the device's GPU before the native terminal engine is offered ([#2221](https://github.com/mihazs/lazysh/pull/2221))
+
+### Fixed
+
+- **release:** List changes from every package in the release notes, not only the client's ([#2232](https://github.com/mihazs/lazysh/pull/2232))
+
+## [1.89.1] - 2026-11-20
+
+### Under the hood
+
+- **android:** cover tmux copy mode and copying a line in the Android tmux acceptance case ([#1881](https://github.com/mihazs/lazysh/pull/1881))
+
+## [1.89.0] - 2026-11-20
+
+### New
+
+- **zellij:** open the Zellij pane that raised an agent notification ([#1872](https://github.com/mihazs/lazysh/pull/1872))
+- **tmux:** list the panes of every tmux window in Jump To and move to the exact pane you choose. ([#1875](https://github.com/mihazs/lazysh/pull/1875))
+- **zellij:** rename and close sessions and panes, and move pane dividers, from the Workspaces panel ([#1870](https://github.com/mihazs/lazysh/pull/1870))
+
+### Under the hood
+
+- **multiplexers:** verify that a copy in tmux, Zellij and Herdr reaches the device clipboard ([#1874](https://github.com/mihazs/lazysh/pull/1874))
+
+## [1.88.0] - 2026-11-20
+
+### New
+
+- **companion:** run the companion on Windows hosts reached over OpenSSH ([#1903](https://github.com/mihazs/lazysh/pull/1903))
+- **desktop:** run Files and Diff inside a WSL target on Windows ([#1921](https://github.com/mihazs/lazysh/pull/1921))
+- **desktop:** choose PowerShell, Git Bash or a WSL distribution for a local terminal on Windows ([#1921](https://github.com/mihazs/lazysh/pull/1921))
+- **agents:** add an opt-in "All hosts" scope to the Agents board ([#1915](https://github.com/mihazs/lazysh/pull/1915))
+- **desktop:** attach native Zellij and Herdr sessions on Windows through the ConPTY ([#1926](https://github.com/mihazs/lazysh/pull/1926))
+- **multiplexers:** run the guarded Herdr input in local terminals ([#1922](https://github.com/mihazs/lazysh/pull/1922))
+
+### Under the hood
+
+- **android:** cover the Device panel against the owned emulator over owned OpenSSH ([#1895](https://github.com/mihazs/lazysh/pull/1895))
+- **share:** verify the share thumbnail fetch against the real share service ([#1918](https://github.com/mihazs/lazysh/pull/1918))
+- **android:** record cancelled pointer sequences when diagnosing the native chooser ([#1927](https://github.com/mihazs/lazysh/pull/1927))
+- **android:** verify the saved tmux create-if-missing default through the real host editor ([#1927](https://github.com/mihazs/lazysh/pull/1927))
+
 ## [1.87.1] - 2026-11-20
 
 ### New
@@ -168,6 +317,7 @@ prompts automatically. See the linked feature documentation for exact limits.
 - Add the client's bridge over the native terminal core's commands (`tauriNativeCoreBridge.ts`, #1321, part of #1302), the TypeScript half of the control plane: it opens a core with `terminal_core_open`, gives the transport the Channel the core's reports (title, bell, directory, clipboard) arrive on, pulls the screen's state at most once per 16 ms however much output arrives, sends typed text and pastes as text, drops input while the app is locked (never queued for later) and wakes the core again after the unlock. Tested over a mocked `invoke`, not against the Rust core or a device. Nothing registers the native engine, so terminal behaviour does not change and no defaults change; xterm.js stays the only engine.
 - Add the native terminal core's control-plane commands (`terminal_core_snapshot`, `terminal_core_scroll`, `terminal_core_resize`, `terminal_core_set_active`) and the core's event stream, the Rust half of the native adapter's bridge (#1321, part of #1302): the core answers with sizes, the cursor, modes, the viewport and the text of a bounded window of rows (256 by default, at most 1,024), never cell data, and sends a change doorbell once per read of its state however much output arrives, with the program's title, bell, directory and clipboard reports (decoded and bounded) ahead of it, on the Channel that opened the core. The commands belong to the current renderer's access lease: a locked app is refused and told nothing, not even a title or a clipboard write. The Rust core answers the same 21 control-plane cases as xterm.js, and the commands are tested over a real local PTY; no cost was measured and the client has no bridge over the commands yet. Nothing creates a native session, so terminal behaviour does not change and no defaults change; xterm.js stays the only engine.
 - Remember a per-device terminal engine choice (Auto, Native or xterm.js) and record, for every new session, which engine it got and why, with the reasons in English, Brazilian Portuguese and Spanish (#2092, first slice, part of #1302). New sessions ask the registry for the saved choice (the developer override still wins) and the session keeps the registry's record; an open session keeps its engine. The choice is stored on this device only and is never part of encrypted sync. No Settings control exists yet and only xterm.js is registered, so every choice runs xterm.js and a Native choice records that the native engine is not registered: nothing changes for users and no default changes.
+- Build and test the shared Rust terminal core and its wgpu renderer on Windows (#1332, part of #1302). A `terminal-windows` CI job on `windows-latest` compiles libghostty-vt with Zig 0.16.0 for `x86_64-pc-windows-msvc` against the runner's Visual Studio C++ tools and Windows SDK (`LIBGHOSTTY_VT_WINDOWS_LIBC`, which Zig writes with `zig libc`), runs the runtime crate's tests, and runs the renderer crate's tests on Direct3D 12 with the WARP software adapter (the runner has no GPU, and the shipping policy still refuses a software adapter). Pull requests that change the terminal crates, the vendored binding or the workflows now run it. Compiling and testing only: the app does not use the core, there is no Windows native surface, and xterm.js stays the only engine and the default, so terminal behaviour does not change and no defaults change.
 - Teach the shared Rust terminal core to answer the default foreground, background, cursor and palette colour queries (`OSC 10`, `11`, `12` and `4`) from a theme in its configuration, so a program that probes them to pick a light or dark scheme (Codex, Zellij, OpenCode, vim, tmux) gets the reply xterm.js gives (#1314). The core is not wired into the app and xterm.js stays the only engine and the default, so terminal behaviour does not change and no defaults change.
 - Show an OpenCode compaction in the Agent view. With the updated host companion, the message OpenCode records when it summarizes a session (a `compaction` part in OpenCode 1, a `compaction` message in OpenCode 2) is one muted **Conversation compacted** line, as for Claude Code and Codex, instead of nothing. OpenCode's step markers and its `patch` part (a list of file names) stay hidden, because the tool cards already show what ran. No defaults change.
 - Answer the list dialogs of Claude Code and Codex from the Agent view under Herdr, as on tmux (part of #1121 and #1288). For the agent of the focused Herdr pane the Agent view reads the pane's visible screen through the host (`herdr agent read`, display only and bounded, every 3 seconds while the agent is not working), shows an open `/model` or `/resume` picker, the trust prompt, the plan decision or Codex's approval prompt as a card, and answers with the arrows and Enter a person presses, sent through Herdr's own `agent send-keys` after the pane's agent session is checked again, reading the highlight back before Enter. A dialog it cannot read exactly shows the banner that the agent waits in the terminal, and the companion's report of the session names what it waits for, so a permission request or a question keeps its own card and the header of a blocked Herdr agent reads **Waiting for your approval · 5 min. ago** (or answer, plan, menu) instead of only **Needs attention**. Needs the updated app only; no default changes.
@@ -234,6 +384,7 @@ prompts automatically. See the linked feature documentation for exact limits.
 - Add the Agent view parity reference: every kind of screen element of the Claude Code and Codex terminal UIs, where each is recorded, how Claude, Codex, Perplexity, Grok, GitHub Copilot, Cursor, Happy and the Herdr mobile clients present it, what the Agent view shows today and which issue closes each gap (#1217). Documentation only; no application defaults change.
 - Add the host browser specification and its measured feasibility note: how lazysh will show and control a Chrome, Chromium or Firefox that the app starts on the host (dedicated profile, opt-in per host, SSH only), with the threat model, input mapping, performance plan and milestones. Documentation only; no application defaults change.
 - Add an **Arrows** terminal toolbar component that draws the four arrow keys as one classic cluster, like other mobile SSH clients such as Haven: Up above Down in the middle, Left and Right on either side of Down (an inverted T), in the same two toolbar rows and at the same toolbar height as before (74 dp at the default 32 px key height, and the cluster follows **Toolbar key height** at every size). In **Preferences → Keyboard and gestures → Toolbar keys and order** it is one chip and one **Add Arrows** palette entry: place it in a row and the whole cluster follows, with Up in its own cell and Left, Down and Right in the row below, or with Up in the row above when it is in the last row; on a one-row toolbar the four arrows sit in a line, and the preview draws the same cluster. Holding an arrow repeats it as before, and Shift, Ctrl and Alt latch for the next arrow like other keys. Arrow keys now also follow the program's **application cursor keys** mode: while a program such as `less`, `vim`, `htop` or a shell prompt has switched it on, Up, Down, Left, Right, Home and End send `ESC O A` to `ESC O F` (what xterm and other terminals send) instead of `ESC [ A` to `ESC [ F`; modified keys such as Ctrl+Left are unchanged. Changed defaults: the default toolbar is the same two rows of nine on screen, `keyboard attach esc tab paste / Home ↑ End` over `Shift ctrl Alt c d enter ← ↓ →`, but the four arrows are now the one Arrows component instead of four separate keys, and a saved toolbar that is still exactly the previous default moves to it. Every other saved toolbar keeps its separate arrow keys and renders them as before; a layout that has Arrows and separate arrow keys draws the cluster once. The Arrows component has no long-press actions of its own.
+- Run the companion on Windows hosts reached over OpenSSH (#1725, part of #490). When the POSIX probe exits non-zero (a Windows host has no `sh`), the app now asks one more probe, `powershell.exe -NoProfile -NonInteractive -InputFormat None -EncodedCommand ...`, which answers a fixed marker, the architecture, the user's SID and `%LOCALAPPDATA%`, and remembers the answer for the connection. Every companion command is then sent as one such encoded line that `cmd.exe`, Windows PowerShell and POSIX quoting pass unchanged, instead of POSIX-quoted text that `cmd.exe` does not unquote, so the Agents board, history, usage, transcripts and companion settings can use a `lazysh-agent.exe` that is on the host's `PATH`. An argument Windows PowerShell 5.1 cannot pass faithfully (empty, with a double quote or a control character, or with a blank and a trailing backslash) and a command longer than `cmd.exe`'s line are refused with `companion_command`, never guessed. Hosts that answer the POSIX probe are unchanged. Changed default: a host whose POSIX probe fails now also gets the Windows probe, one more failing exec each time for an exec-only shell that answers neither. Installation, hook setup and the Herdr lookup still need a Unix shell, and installation still reports unsupported for Windows. Not yet: the managed `%LOCALAPPDATA%\lazysh\companion\lazysh-agent.exe` is not looked for before the `PATH`, and no real OpenSSH server for Windows ran (#1726); the adapter ran through real `cmd.exe` and Windows PowerShell on the hosted Windows runner. See [Windows OpenSSH hosts](docs/companion.md#windows-openssh-hosts).
 - Let you resize the terminal toolbar. **Preferences → Keyboard and gestures → Toolbar keys and order** has a new **Toolbar key height** slider from 28 to 56 px in steps of 2, with the current size shown, a **Default size** button and a preview that draws the keys at the chosen height. The change applies to the open terminal at once: the keys, their text and icons scale together, and the terminal gives up or takes back the rows. The default stays the compact 32 px, the size is saved on this device only (settings sync neither uploads it nor lets a download replace it), and a value outside the range falls back to 32 px. On a very short window the rows are held to about a third of its height whatever the setting. No other defaults change.
 - Add a button to show or hide the soft keyboard in the terminal on phones and tablets. The toolbar's keyboard key is now the toggle, and a **Show keyboard** / **Hide keyboard** button appears in the session header next to Compose whenever that key is out of reach (the toolbar hidden, the docked composer covering it, or the key removed from your layout): one tap focuses the terminal input (or the composer's editor while it is open) and asks Android to show its keyboard, the next tap hides it without sending any input, and the icon follows the real keyboard (the keyboard icon is crossed out while the keyboard is up), including when you close it with the system back gesture, when a hardware keyboard is attached, and after a resize. On Android the show and hide go through the window's IME controller, so the button also works for an input that already had focus; iOS and the browser follow focus and the viewport. Desktop windows have no such button and the toolbar key keeps moving focus. Changed behaviour: the toolbar's keyboard key used to toggle the terminal's focus, so with the keyboard already closed by the back gesture it needed two taps; the header's toolbar toggle now uses a panel icon instead of a keyboard icon, to tell it apart from the new button. Also adds the `soft_keyboard` native command with its access control entry. No defaults change.
 - Let you choose, each time, whether the terminal composer sends a draft or only inserts it. The composer now shows two labelled buttons: **Send** puts the draft on the input line and presses Enter, as before, and **Insert** puts the same text on the input line without pressing Enter, so you can edit it in the terminal first. Both use the same delivery as before (one bracketed paste when the program asked for it, multi-line drafts and attachment paths expanded the same way), and the draft and the composer now stay open when the write fails instead of being cleared. Ctrl+Enter (Cmd+Enter on Apple keyboards) runs Send and Ctrl+Shift+Enter runs Insert. Changed default: the former **Send Enter after pasting the draft** preference is now **Ctrl+Enter sends the draft (off: it only inserts it)**: it only picks which action the shortcut and the filled button run, because both buttons are always available; the button formerly named **Paste draft** is now **Insert**. The Agent view's **Stage in terminal** button hands its text to this composer, so it can be inserted the same way.
@@ -271,8 +422,6 @@ prompts automatically. See the linked feature documentation for exact limits.
 - Import SSH private keys from a file in the SSH identities panel on desktop and Android. The file contents stay in memory, are not shown in the paste field, and files over 64 KiB are refused before reading. Imported OpenSSH, PEM and PKCS#8 keys tolerate Windows line endings and a byte-order mark. Connecting with a public key (`.pub`, `authorized_keys` entry, certificate, RFC 4716 or PEM public key) now fails before authentication with a specific error instead of a generic decode error, and an encrypted key without its passphrase reports that a passphrase is needed. Host-key pins stay in `hosts.json`; storage is unchanged.
 - Show an idle Android screen in the video preview (#1729, part of #19). `screenrecord` writes nothing while the screen is unchanged and FFmpeg completes a frame only when the next one starts, so an idle device never delivered a first frame (the preview stopped at the ten-second startup limit) and a change showed up one change late. The video stream now also sends a screenshot first, which counts as the first frame, and another whenever no video frame has come for a second (at most one a second, one at a time); a screenshot taken while a video frame arrives is dropped and a failed one is skipped. While the screen changes nothing extra is sent. Measured on a Waydroid Android 13 guest: first frame 2.9 s after start on an idle launcher, about 54 KB per idle screenshot; no Android emulator, physical device or iOS run. Needs the updated host companion. Screenshot frames carry the display's pixel size as `width` and `height`, video frames their decoded size, as before. No defaults change.
 - Add an optional gesture to hide the keyboard when scrolling past the bottom of local terminal history. It is off by default; remote mouse scrolling, alternate screens and active text composition keep their existing behavior. Settings snapshots from this version always include the new preference, so older clients reject them until they are updated.
-- Show a Grok Build session's sub-agents, background commands and monitors in the background-work panel, and a Grok Build edit as the shared diff card (#1847, follow-up of #1285). In the conversation view, `subagent_spawned`/`subagent_finished` and `task_backgrounded`/`task_completed` records become rows with their recorded end (`done`, `failed`, `stopped`, or `unknown` for a task Grok lost); a launch with no recorded end stays running, and a record of another shape changes nothing and does not fail the conversation. A completed `edit` call whose output is exactly one ACP `diff` is an `edit` call carrying the diff, drawn as a diff card instead of a text dump of old and new text; any other shape stays an ordinary tool block. The shapes are the ones the official writer serializes (fixtures pinned to its source); no Grok CLI ran, so they are not checked against a real session. The parity matrix now also states why three cells stay unmapped, with evidence: Gemini CLI writes an `info` message only for binary tool output and nothing for a compression or, by default, a finished background shell, and an OpenCode retry is transient state with no part (none in the host database's 100,602 messages). No defaults change.
-
 - Add a reference-client parity matrix for Android and desktop that records each sub-behavior as verified, implemented, partial, missing or not applicable, with test and CI evidence and the issue that owns each gap. Documentation only; no application defaults change.
 - Add explicitly selected OpenCode recorded Conversation views for V1 and V2 databases, with current tool updates, revert handling and recorded token counters. Records remains the default; recorded history does not establish live agent identity or enable unconfirmed input.
 - Show a Grok Build plan as the shared plan card in its conversation view. With the updated host companion, a Grok ACP `plan` update (each one replaces the whole plan) in the **Grok ACP records** conversation view is one plan card with its steps and their state, the same card as the plan of Claude Code, Codex, OpenCode and Gemini CLI, instead of a block of labeled text. A plan with a status the card does not know keeps the labeled text. The plan chip above the composer reads the same card once the Agent view follows a Grok session ([#1125](https://github.com/mihazs/lazysh/issues/1125)); no Grok sub-agent or background-job record shape is verified, so none show. No defaults change.
