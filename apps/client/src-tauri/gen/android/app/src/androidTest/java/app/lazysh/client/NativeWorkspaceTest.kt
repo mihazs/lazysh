@@ -8356,21 +8356,18 @@ class NativeWorkspaceTest {
             var chatFailure: Throwable? = null
             try {
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, "form.chat-composer textarea")).perform(webScrollIntoView())
+                // With the keyboard up the composer's lower part can sit under the key bar: bring it to the middle of its scroller.
+                evaluate(scenario, "($area.scrollIntoView({block:'center',inline:'nearest'}), true)")
                 val target = JSONObject(evaluate(scenario, """
-                    (()=>{const area=$area;area.scrollIntoView({block:'center',inline:'nearest'});
-                      const rect=area.getBoundingClientRect(),bounded=n=>Math.max(-10000,Math.min(10000,Math.round(n)));
-                      // A phone's keyboard and key bar can cover part of the composer: tap a point of it that is on top.
-                      const x=rect.left+rect.width/2,top=Math.max(rect.top,0),bottom=Math.min(rect.bottom,innerHeight);
-                      let y=rect.top+rect.height/2;
-                      for(let i=1;i<=8&&document.elementFromPoint(x,y)!==area;i++)y=top+(bottom-top)*i/9;
-                      const hit=document.elementFromPoint(x,y);
+                    (()=>{const area=$area,rect=area.getBoundingClientRect(),x=rect.left+rect.width/2,
+                        y=(Math.max(rect.top,0)+Math.min(rect.bottom,innerHeight))/2;
+                      const hit=document.elementFromPoint(x,y), bounded=n=>Math.max(-10000,Math.min(10000,Math.round(n)));
                       return {ok:hit===area,bounds:[x,y,innerWidth],diagnostic:{
-                        covering:hit&&hit!==area?hit.tagName+'.'+String(hit.className).slice(0,60)+' in '+String(hit.parentElement?.className).slice(0,60):null,
                         hit:hit===area?'textarea':hit===null?'none':area.contains(hit)?'descendant':
                           hit.contains(area)?'ancestor':hit.closest('.dialog-backdrop')?'dialog':
                           hit.closest('.sidebar, .sidebar-scrim')?'sidebar':hit.closest('.chat-panel')?'chat':
                           hit.closest('.gesture-handle')?'gesture-handle':hit.closest('.bottom-menu, .bottom-menu-scrim')?'bottom-menu':
-                          hit.closest('.terminal-canvas')?'terminal':hit.closest('.session-body')?'session':'other',
+                          hit.closest('.terminal-keys, .session-toolbar')?'keys':hit.closest('.workspace-header, .workspace-footer')?'workspace-bar':hit.closest('.terminal-canvas')?'terminal':hit.closest('.session-body')?'session':'other',
                         rect:[rect.left,rect.top,rect.width,rect.height].map(bounded),viewport:[innerWidth,innerHeight].map(bounded)}};})()
                 """))
                 assertTrue("Owned Chat composer hit target required [${target.getJSONObject("diagnostic")}]", target.getBoolean("ok"))
