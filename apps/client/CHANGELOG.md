@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.95.1
+
+### Patch Changes
+
+- test(android): make the QR fixture the only image the Photo Picker can list ([#2305](https://github.com/mihazs/lazysh/pull/2305))
+
+  <details><summary>Details</summary>
+
+  The Photo Picker's order put another image first on most runs, so the QR case failed to decode it. The case now removes the other indexed images before staging its fixture. Test only. No user-visible behaviour changes.
+
+  </details>
+
 ## 1.95.0
 
 ### Minor Changes
