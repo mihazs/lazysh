@@ -4256,7 +4256,6 @@ async fn real_ssh_managed_guarded_herdr_binds_the_display_through_the_managed_ex
     servers.stop().await;
 }
 
-
 /// Stops the labelled rmux daemon of an owned fixture even when an assertion fails.
 struct RmuxServer {
     binary: PathBuf,
@@ -4305,14 +4304,14 @@ async fn rmux_tree(
     session: &str,
     label: Option<&str>,
 ) -> serde_json::Value {
-    let tree = crate::multiplexer::multiplexer_tree(
+    let tree = Box::pin(crate::multiplexer::multiplexer_tree(
         app.state(),
         app.state(),
         session.into(),
         label.map(Into::into),
         label.map(|_| crate::multiplexer::MultiplexerKind::Rmux),
         lease.clone(),
-    )
+    ))
     .await
     .unwrap()
     .into_inner()
@@ -4375,7 +4374,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
     let directory = f.dir.path().to_str().unwrap().to_owned();
     let hostile = "literal'$(touch nope)#(printf bad);";
     for name in ["owned work", hostile] {
-        tmux_action(
+        Box::pin(tmux_action(
             app.state(),
             app.state(),
             source_id.clone(),
@@ -4386,7 +4385,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
             Some(label.into()),
             Some(Rmux),
             lease.clone(),
-        )
+        ))
         .await
         .unwrap();
     }
@@ -4418,7 +4417,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
     );
     // Attach through the product: a plain rmux terminal that is bound to its labelled rmux server.
     let (events, mut output) = super::test_support::json_events();
-    let child = attach_multiplexer(
+    let child = Box::pin(attach_multiplexer(
         lease.clone(),
         app.state(),
         source_id.clone(),
@@ -4429,7 +4428,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         24,
         events,
         None,
-    )
+    ))
     .await
     .unwrap()
     .into_inner()
@@ -4451,13 +4450,13 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
     );
     // Typed before the rmux client takes over the terminal, the line is echoed by the SSH tty and never reaches the pane.
     owned_terminal_output(&app, &child.session_id, &mut output, b"\x1b[?1049h").await;
-    write_stdin(
+    Box::pin(write_stdin(
         lease.clone(),
         app.state(),
         child.session_id.clone(),
         "printf 'RMUX_%s\\n' READY\n".into(),
         None,
-    )
+    ))
     .await
     .unwrap()
     .into_inner()
@@ -4474,7 +4473,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         .unwrap()
         .to_owned();
     let create = |server: Option<&str>, kind: Option<MultiplexerKind>| {
-        tmux_action(
+        Box::pin(tmux_action(
             app.state(),
             app.state(),
             child.session_id.clone(),
@@ -4486,7 +4485,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
             server.map(Into::into),
             kind,
             lease.clone(),
-        )
+        ))
     };
     assert!(create(None, Some(MultiplexerKind::Tmux)).await.is_err());
     assert!(create(Some("other"), None).await.is_err());
@@ -4502,16 +4501,16 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         .unwrap()
         .len();
     assert_eq!(windows, 2);
-    assert!(crate::tmux_jump::tmux_jump_snapshot(
+    assert!(Box::pin(crate::tmux_jump::tmux_jump_snapshot(
         lease.clone(),
         app.state(),
         app.state(),
         child.session_id.clone()
-    )
+    ))
     .await
     .is_err());
     // Closing the tab leaves the durable session behind.
-    disconnect_inner(&state, child.session_id.clone())
+    Box::pin(disconnect_inner(&state, child.session_id.clone()))
         .await
         .unwrap();
     let after = rmux_tree(&app, &lease, &source_id, Some(label)).await;
