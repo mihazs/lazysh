@@ -87,13 +87,15 @@ internal object TerminalSurfaces {
     /** Developer builds only until the rollout stages open the native backend (docs/architecture/terminal-migration-plan.md). */
     @JvmField var enabled: Boolean = BuildConfig.DEBUG
 
-    /** Who draws a session's surface; the renderer replaces the default, which paints the background. */
-    @JvmField var clientFactory: (background: () -> Int) -> SurfaceClient<Surface> = { BackgroundPainter(it) }
+    /** Who draws a session's surface, given its id and the pane's background. The default is the Rust renderer host, which paints the background when it cannot draw. */
+    @JvmField var clientFactory: (id: String, background: () -> Int) -> SurfaceClient<Surface> =
+        { id, background -> NativeSurfaceClient(id, background, JniSurface, BackgroundPainter(background)) }
 
-    private class Entry(factory: (() -> Int) -> SurfaceClient<Surface>) {
+    private class Entry(id: String, factory: (String, () -> Int) -> SurfaceClient<Surface>) {
         var background = Color.BLACK
         var host: SurfaceHost? = null
-        val lifecycle = SurfaceLifecycle(factory { background })
+        val client = factory(id) { background }
+        val lifecycle = SurfaceLifecycle(client)
     }
 
     private val entries = HashMap<String, Entry>()
@@ -104,7 +106,7 @@ internal object TerminalSurfaces {
         if (!enabled) throw SurfaceUnavailable("native_surface_disabled")
         val web = EdgeGestureExclusion.webView(activity.window.decorView) ?: throw SurfaceUnavailable("native_surface_no_webview")
         val frame = web.parent as? FrameLayout ?: throw SurfaceUnavailable("native_surface_no_frame")
-        val entry = entries.getOrPut(id) { Entry(clientFactory) }
+        val entry = entries.getOrPut(id) { Entry(id, clientFactory) }
         val color = Color.rgb(background shr 16 and 0xff, background shr 8 and 0xff, background and 0xff)
         val repaint = entry.background != color
         entry.background = color
@@ -121,7 +123,11 @@ internal object TerminalSurfaces {
     }
 
     /** The session is over: its surface goes and its generation count with it. */
-    fun remove(id: String) { entries.remove(id)?.host?.detach() }
+    fun remove(id: String) {
+        val entry = entries.remove(id) ?: return
+        entry.host?.detach()
+        (entry.client as? AutoCloseable)?.close()
+    }
 
     fun state(id: String): SurfaceState {
         val entry = entries[id] ?: return SurfaceState(placed = false, ready = false, generation = 0, width = 0, height = 0)
