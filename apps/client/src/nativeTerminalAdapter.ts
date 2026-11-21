@@ -311,10 +311,27 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     let start = cell.x, end = cell.x;
     while (inWord(start - 1)) start--;
     while (end < this.mirror.state.columns - 1 && inWord(end + 1)) end++;
-    return {start: {x: start, y: cell.y}, end: {x: end, y: cell.y}};
+    const range = {start: {x: start, y: cell.y}, end: {x: end, y: cell.y}};
+    this.refine(range, {kind: 'wordAt', cell});
+    return range;
   }
 
-  selectAll() { this.select({start: {x: 0, y: 0}, end: {x: this.mirror.state.columns - 1, y: this.mirror.state.viewport.length - 1}}); }
+  selectAll() {
+    const range = {start: {x: 0, y: 0}, end: {x: this.mirror.state.columns - 1, y: this.mirror.state.viewport.length - 1}};
+    this.select(range);
+    this.refine(range, {kind: 'bufferRange'});
+  }
+
+  /** The contract answers synchronously from the window; the core's answer replaces `guess` if that is still the selection (an empty buffer selects nothing). */
+  private refine(guess: TerminalRange, query: NativeCoreQuery & {kind: 'wordAt' | 'bufferRange'}) {
+    if (!this.bridge.query || this.disposed) return;
+    this.ask(query).then(answer => {
+      const now = this.selected;
+      if (this.disposed || !now || JSON.stringify(now) !== JSON.stringify(guess)) return;
+      if (!answer) this.clearSelection();
+      else if (JSON.stringify(answer) !== JSON.stringify(guess)) this.select(answer);
+    }, noop);
+  }
 
   clearSelection() {
     if (!this.selected) return;

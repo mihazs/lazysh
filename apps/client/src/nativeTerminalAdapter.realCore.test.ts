@@ -70,6 +70,19 @@ describe.skipIf(!binary)('NativeTerminalAdapter over the real core', () => {
     } finally { await adapter.dispose(); }
   });
 
+  it('selects the word of selection.json under a cell as the core answers it', async () => {
+    for (const c of fixture<SelectionCase>('selection')) {
+      const adapter = await openNativeTerminalAdapter(await openStdioCore(binary!, {columns: c.cols, rows: c.rows}));
+      try {
+        await adapter.write!(bytes(c.write));
+        for (const w of c.words) {
+          adapter.select(adapter.selectWordAt(cell(w.at)));
+          await vi.waitFor(() => expect(adapter.selectionRange(), `${c.id}: word at ${w.at}`).toEqual({start: cell(w.range[0]), end: cell(w.range[1])}));
+        }
+      } finally { await adapter.dispose(); }
+    }
+  });
+
   it('offers the OSC 52 writes of osc52.json to the consent flow as the core\'s policy decides, and no other', async () => {
     const adapter = await openNativeTerminalAdapter(await openStdioCore(binary!));
     const offered: string[] = [];
