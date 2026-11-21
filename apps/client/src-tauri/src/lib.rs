@@ -77,14 +77,19 @@ pub fn account_usage_worker() -> Option<std::process::ExitCode> {
 /// A window created from its config cannot ask for page clipboard access, and WebKitGTK then refuses
 /// `navigator.clipboard.readText()`, which the toolbar Paste button uses. `tauri.linux.conf.json` leaves
 /// the window uncreated (`"create": false`); it is built here from the same config with that access.
+/// A build with the native terminal makes the window and its web view transparent, so a surface below the
+/// page shows through where the page paints nothing (#1331); the page paints everywhere else, as before.
 #[cfg(target_os = "linux")]
 fn build_unspawned_windows(app: &tauri::App) -> tauri::Result<()> {
     let config = app.config();
     for window in config.app.windows.iter().filter(|window| !window.create) {
         tauri::WebviewWindowBuilder::from_config(app.handle(), window)?
             .enable_clipboard_access()
+            .transparent(cfg!(feature = "native-terminal"))
             .build()?;
     }
+    #[cfg(feature = "native-terminal")]
+    native_terminal_surface::linux::record_display();
     Ok(())
 }
 

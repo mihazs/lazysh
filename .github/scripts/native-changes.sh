@@ -54,6 +54,8 @@ classify() {
       .github/release_pull_request_template.md | .github/TEMPLATES.md) add docs ;;
     # A standalone prototype crate with its own lock file and its own workflow: no checks.yml job builds it.
     packages/terminal-runtime/prototypes/windows-surface/* | .github/workflows/windows-surface-probe.yml) add none ;;
+    # The probe's harness also drives the real app's surface host in native-terminal-bridge.
+    packages/terminal-runtime/prototypes/linux-surface/scripts/*) add linux_surface terminal_bridge ;;
     packages/*/*) package "$1" ;;
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
     apps/client/src-tauri/gen/android/*) add android ;;

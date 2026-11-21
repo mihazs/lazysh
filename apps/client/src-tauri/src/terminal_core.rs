@@ -578,7 +578,7 @@ const NOT_BUILT: &str = "The native terminal core is not built into this app";
 fn availability(core: bool, host: bool) -> CoreAvailability {
     let reason = match (core, host) {
         (false, _) => NOT_BUILT,
-        (true, false) => "The native terminal surface exists on Android only",
+        (true, false) => "The native terminal surface exists on Android and Linux only",
         (true, true) => "The native terminal core and its surface host are present",
     };
     CoreAvailability {
@@ -588,13 +588,13 @@ fn availability(core: bool, host: bool) -> CoreAvailability {
 }
 
 /// The client registry's probe for the native backend: the core is compiled in (`native-terminal`) and the platform has
-/// a host to draw it on. Android is the only one so far (#1327); each other platform's host adds its target here. The
+/// a host to draw it on: Android (#1327) and Linux (#1331) so far; each other platform's host adds its target here. The
 /// GPU and surface probe is #1336. Allowed while locked: it reads this build, nothing of the user's.
 #[tauri::command]
 pub fn terminal_core_available() -> CoreAvailability {
     availability(
         cfg!(feature = "native-terminal"),
-        cfg!(target_os = "android"),
+        cfg!(any(target_os = "android", target_os = "linux")),
     )
 }
 
@@ -612,8 +612,9 @@ pub struct NativeProbe {
 /// list its adapters and create a device would also delay the first frame of every session.
 const PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// The build and host check first (free), then the GPU: `gpu` names the adapter the renderer would run on, or says
-/// why there is none. It is not called for a build that could not run a native terminal anyway.
+/// The build and host check first (free), then the device: `gpu` names the adapter the renderer would run on, or says
+/// why it cannot draw (no place for a surface, no GPU). It is not called for a build that could not run a native
+/// terminal anyway.
 fn probe(build: CoreAvailability, gpu: impl FnOnce() -> Result<String, String>) -> NativeProbe {
     let started = std::time::Instant::now();
     let (available, reason) = match build.available.then(gpu) {
@@ -652,6 +653,14 @@ async fn within(
     }
 }
 
+/// The platform's surface check: on Linux a native surface composes below the page on Wayland only, so the GDK
+/// display type of the window decides (X11 and Xwayland keep xterm.js, #1331).
+fn surface() -> Result<(), String> {
+    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    crate::native_terminal_surface::linux::display()?;
+    Ok(())
+}
+
 /// The registry's second question, after `terminal_core_available` (#1336): can the renderer draw on this device?
 /// It asks for an adapter under the shipping policy, which refuses CPU rasterizers, and creates its device. Each
 /// platform's surface check joins here with its host. The answer is kept for the life of the process, so the cost is
@@ -662,7 +671,11 @@ pub async fn native_terminal_probe() -> NativeProbe {
     static ANSWER: std::sync::OnceLock<NativeProbe> = std::sync::OnceLock::new();
     within(PROBE_BUDGET, || {
         ANSWER
-            .get_or_init(|| probe(terminal_core_available(), native::gpu))
+            .get_or_init(|| {
+                probe(terminal_core_available(), || {
+                    surface().and_then(|()| native::gpu())
+                })
+            })
             .clone()
     })
     .await
@@ -1775,7 +1788,10 @@ mod tests {
         let answer = serde_json::to_value(terminal_core_available()).unwrap();
         assert_eq!(
             answer["available"],
-            cfg!(all(feature = "native-terminal", target_os = "android"))
+            cfg!(all(
+                feature = "native-terminal",
+                any(target_os = "android", target_os = "linux")
+            ))
         );
         assert!(!answer["reason"].as_str().unwrap().is_empty());
         assert!(crate::app_lock::allowed_while_locked(
@@ -1834,7 +1850,8 @@ mod tests {
         let started = std::time::Instant::now();
         let first = native_terminal_probe().await;
         assert!(started.elapsed() < PROBE_BUDGET, "{:?}", started.elapsed());
-        // Only an Android build with the core has a host to draw on, so every other build is refused with a reason.
+        // Only an Android build with the core can draw here: a Linux one needs a Wayland window, which no test
+        // process has, and every other build has no host. Each is refused with a reason.
         if !cfg!(all(feature = "native-terminal", target_os = "android")) {
             assert!(!first.available);
         }

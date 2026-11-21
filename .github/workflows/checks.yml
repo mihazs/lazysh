@@ -1252,6 +1252,27 @@ jobs:
         run: |
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --ignored --exact "$CASE_NAME" | grep -Fx -- "$CASE_NAME: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --ignored --exact --test-threads=1 "$CASE_NAME"
+      # The Linux surface host (#1331) in the real app. A debug build with the feature loads its page from the dev URL, where
+      # the composition probe's harness serves a fixture page that calls the app's own surface commands; a headless sway
+      # shows the window and grim reads the compositor's pixels back. On Xvfb the probe and the host must refuse. The
+      # fixture page is ours, and the WebKitGTK sandbox needs user namespaces the harness does not set up.
+      - name: Install a headless compositor, an X server and the tools that read their pixels
+        run: sudo sh .github/scripts/apt-install.sh --no-install-recommends sway grim xvfb imagemagick python3-numpy python3-pil dbus
+      - name: Build the app with the native terminal
+        run: sh .github/scripts/retry-zig-fetch.sh cargo build --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal
+      - name: Place a native surface below the real app window on Wayland and refuse it on X11
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
+          POC_APP: ${{ github.workspace }}/target/debug/lazysh
+        run: packages/terminal-runtime/prototypes/linux-surface/scripts/ci.sh "$RUNNER_TEMP/linux-surface-app"
+      - name: Retain the compositor's screenshots of every step
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-linux-surface-app
+          path: ${{ runner.temp }}/linux-surface-app
+          if-no-files-found: warn
+          retention-days: 7
 
   native-desktop:
     needs: changes
