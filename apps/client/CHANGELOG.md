@@ -1,5 +1,11 @@
 # @lazysh/client
 
+## 1.93.1
+
+### Patch Changes
+
+- test(terminal): run the native core test on Waydroid with an owned SSH fixture, thaw the guest and record failure details ([#2282](https://github.com/mihazs/lazysh/pull/2282))
+
 ## 1.93.0
 
 ### Minor Changes
