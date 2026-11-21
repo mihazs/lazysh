@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.92.3
+
+### Patch Changes
+
+- fix(agents): show what the agent said in a long turn and fill the Agent view with earlier messages ([#2261](https://github.com/mihazs/lazysh/pull/2261))
+
+  <details><summary>Details</summary>
+
+  The Agent view folded everything between a prompt and its closing answer into one row, so a session that worked for hours on one prompt was two rows ("Thought for…", "Ran 83 commands") and loading earlier messages only made the count larger. What the agent says between its tool calls is now shown as messages, with the work between them folded. When the newest page does not fill the view, earlier pages are read until it does, and the view stays at the newest message.
+
+  </details>
+
 ## 1.92.2
 
 ### Patch Changes
