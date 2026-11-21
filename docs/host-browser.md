@@ -500,8 +500,8 @@ Preview and the device's browser are opened. What each part decides:
 - **Back, forward, reload, stop** from the browser's own history (`Page.getNavigationHistory`); stop replaces
   reload while the main frame loads.
 - **Open on this device**: a loopback URL on the host opens as a [Preview](previews.md) (`localhost` is forwarded
-  as IPv4; type `[::1]` for a server bound to IPv6 only; Preview forwards bytes and serves HTTP, so a page served
-  over TLS on a loopback port may not render); another URL opens in the phone's browser after a confirmation that
+  as IPv4; type `[::1]` for a server bound to IPv6 only; Preview serves plain HTTP, so an `https://` loopback page is
+  never downgraded to it: the action is shown disabled with the reason, until an HTTPS-capable Preview exists, #2068); another URL opens in the phone's browser after a confirmation that
   names the host (its ASCII form, so a look-alike name shows as `xn--…`). A URL is never opened without that tap.
 - **Dialogs**: an alert, confirm, prompt or leave-page question appears as a native dialog headed "Text from the
   page, not from lazysh". Its text is bounded to 1000 characters and shown as text, without control or

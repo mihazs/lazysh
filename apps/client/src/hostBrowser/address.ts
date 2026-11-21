@@ -42,7 +42,9 @@ export function normalizeAddress(input: string): Address {
 
 export type DeviceOpen =
   | { kind: 'preview'; port: number; address: '127.0.0.1' | '::1'; path: string }
-  | { kind: 'external'; host: string; url: string };
+  | { kind: 'external'; host: string; url: string }
+  // The Preview proxy speaks plain HTTP over the forward, so an HTTPS loopback page is refused rather than downgraded (#2068).
+  | { kind: 'httpsLoopback' };
 
 /**
  * What "Open on this device" does with the address of the page that is showing: a loopback address on the host is
@@ -54,8 +56,9 @@ export function openOnDevice(address: string): DeviceOpen | undefined {
   try { url = new URL(address); } catch { return undefined; }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
   if (!isLoopback(url)) return { kind: 'external', host: url.hostname, url: url.href };
+  if (url.protocol === 'https:') return { kind: 'httpsLoopback' };
   return {
-    kind: 'preview', port: Number(url.port || (url.protocol === 'https:' ? 443 : 80)),
+    kind: 'preview', port: Number(url.port || 80),
     // shortcut: `localhost` is forwarded as IPv4, so a server bound only to ::1 needs the address typed as [::1].
     address: url.hostname === '[::1]' ? '::1' : '127.0.0.1', path: `${url.pathname}${url.search}${url.hash}`,
   };

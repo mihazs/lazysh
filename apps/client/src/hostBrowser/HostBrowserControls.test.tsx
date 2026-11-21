@@ -117,6 +117,15 @@ it('opens a loopback page as a Preview at once, and any other page only after a 
   expect(remote.onOpenOnDevice).toHaveBeenCalledWith({ kind: 'external', host: 'docs.example.com', url: 'https://docs.example.com/start' });
 });
 
+it('refuses an HTTPS loopback page instead of downgrading it to a Preview, and says why', () => {
+  const view = show({ ...idle, tabs: [{ id: 'a', title: 'Secure', url: 'https://localhost:8443/' }] });
+  const button = screen.getByRole('button', { name: t('hostBrowserOpenOnDevice') }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  expect(button.title).toBe(t('hostBrowserOpenOnDeviceHttps'));
+  fireEvent.click(button);
+  expect(view.onOpenOnDevice).not.toHaveBeenCalled();
+});
+
 it('does not offer Open on this device without a way to do it, or for a page that is not on the web', () => {
   show(idle, { open: false });
   expect(screen.queryByRole('button', { name: t('hostBrowserOpenOnDevice') })).toBeNull();
