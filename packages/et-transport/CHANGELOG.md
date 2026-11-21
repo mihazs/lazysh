@@ -1,5 +1,9 @@
 # @lazysh/et-transport
 
+## 1.92.3
+
+No changes in this release.
+
 ## 1.92.2
 
 No changes in this release.
