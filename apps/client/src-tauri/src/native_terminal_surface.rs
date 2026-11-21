@@ -12,7 +12,7 @@ use tauri::Manager;
 #[cfg(all(target_os = "linux", feature = "native-terminal"))]
 pub(crate) mod linux;
 
-/// Longest session id the shell accepts; the renderer's ids are UUIDs.
+/// Longest session id the shell accepts; the renderer's ids are UUIDs, a local terminal's `local:` and a UUID.
 const MAX_SESSION_LEN: usize = 64;
 /// The largest texture side every GPU the app targets accepts, in pixels.
 const MAX_PIXELS: f64 = 16_384.0;
@@ -54,7 +54,7 @@ fn validate_session(session: &str) -> Result<(), String> {
         && session.len() <= MAX_SESSION_LEN
         && session
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':'));
     if ok {
         Ok(())
     } else {
@@ -222,6 +222,8 @@ mod tests {
     #[test]
     fn a_session_id_is_a_short_token() {
         assert!(validate_session("0b1c2d3e-4f50-6789-abcd-ef0123456789").is_ok());
+        // A local terminal's id, which is the core's key in the registry.
+        assert!(validate_session("local:0b1c2d3e-4f50-6789-abcd-ef0123456789").is_ok());
         assert!(
             validate_session("a").is_ok() && validate_session(&"a".repeat(MAX_SESSION_LEN)).is_ok()
         );
