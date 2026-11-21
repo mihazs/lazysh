@@ -303,6 +303,37 @@ describe('native text queries (a core that reads its own text)', () => {
     await adapter.dispose();
   });
 
+  /** The core answers one question at a time, in order: answer the earlier ones with their own text until `kind` is asked, then give it `value`. */
+  async function answerKind(questions: {query: NativeCoreQuery; answer(value: unknown): void}[], kind: string, value: unknown) {
+    for (let i = 0; i < 5 && !questions.some(question => question.query.kind === kind); i++) { questions.shift()?.answer(''); await sleep(0); }
+    questions.splice(questions.findIndex(question => question.query.kind === kind), 1)[0].answer(value);
+    await sleep(0);
+  }
+
+  it('takes the word under a cell and the whole buffer from the core, replacing the window\'s guess', async () => {
+    const {adapter, highlighted, questions} = await asking();
+    await adapter.write!(text('hello world'));
+    const guess = adapter.selectWordAt({x: 7, y: 0});
+    expect(guess).toEqual(row(6, 10));
+    adapter.select(guess);
+    await answerKind(questions, 'wordAt', row(5, 10));
+    expect(adapter.selectionRange()).toEqual(row(5, 10));
+    expect(highlighted.at(-1)).toEqual(row(5, 10));
+    adapter.selectAll();
+    await answerKind(questions, 'bufferRange', row(0, 10));
+    expect(adapter.selectionRange()).toEqual(row(0, 10));
+    for (let i = 0; i < 5; i++) { questions.shift()?.answer(''); await sleep(0); }
+    await adapter.dispose();
+  });
+
+  it('clears a select-all when the core has no buffer to select', async () => {
+    const {adapter, questions} = await asking();
+    adapter.selectAll();
+    await answerKind(questions, 'bufferRange', null);
+    expect(adapter.hasSelection()).toBe(false);
+    await adapter.dispose();
+  });
+
   it('searches the whole buffer through the core, and has no such search without one', async () => {
     const {adapter, questions, answer} = await asking();
     const none = adapter.searchBuffer!('needle', -1, 3), found = adapter.searchBuffer!('needle', 1);

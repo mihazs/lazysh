@@ -67,6 +67,9 @@ describe.skipIf(!binary)('NativeTerminalAdapter over the real core', () => {
       await vi.waitFor(() => expect(adapter.selectedText()).toBe(`at the top\n${'w'.repeat(30)}`));
       adapter.selectAll();
       await vi.waitFor(() => expect(adapter.selectedText().split('\n')).toHaveLength(402));
+      // Row 0 is outside the window, so the adapter's own guess is one cell; the core knows the word.
+      adapter.select(adapter.selectWordAt({x: 3, y: 0}));
+      await vi.waitFor(() => expect(adapter.selectedText()).toBe('needle'));
     } finally { await adapter.dispose(); }
   });
 
