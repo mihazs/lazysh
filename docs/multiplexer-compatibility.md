@@ -142,7 +142,7 @@ implemented without full evidence, *part* means partial.
 | Capability | tmux | Zellij | Herdr | rmux |
 | --- | --- | --- | --- | --- |
 | Discovery | yes | impl → yes #1145 | yes | no → #1140 |
-| Attach, reattach | yes | yes | yes | no → #1140 |
+| Attach, reattach | yes | yes (reattach never creates and refuses an exited session, #1145, #2047) | yes | no → #1140 |
 | Navigation, Jump To, current marker | yes, with pane rows (#1691) | numbered tabs only → #1145 | yes; marker assertion #990 | no → #1140 |
 | Create in a directory | yes | part → #1141 | yes | no → #1140 |
 | Create in a worktree | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
@@ -156,7 +156,7 @@ implemented without full evidence, *part* means partial.
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |
 | Notification opens the pane | part → #1146 | part: the attached session's pane #1690 | part → #1146 | no → #1146 |
-| Restore | desktop yes; Android #988 | skipped → #1145 | impl → #990, #988 | no → #1140 (while the daemon lives) |
+| Restore | desktop yes; Android #988 | impl (live session only; GUI and Android evidence → #1145) | impl → #990, #988 | no → #1140 (while the daemon lives) |
 | Version detection | yes | yes | version yes; API schema → #1159 | no → #1140 |
 
 Restore after a host reboot is not offered for rmux (in-memory daemon) or Zellij;

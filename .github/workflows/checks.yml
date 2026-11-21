@@ -1951,6 +1951,12 @@ jobs:
           test -x "$LAZYSH_TEST_ZELLIJ" && test -x "$LAZYSH_TEST_HERDR"
           bun run --cwd apps/client test:e2e:multiplexers --list | grep -Fx 'Total: 6 tests in 2 files'
           bunx moon run client:test-e2e-multiplexers
+      - name: Create a saved Zellij default, reattach it without creating and refuse a vanished session over real OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tmux_jump_fixture::real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap
+        run: *exact-ignored-case
       - name: Exercise Herdr creation and remote Git argv quoting under sh, bash, zsh and fish login shells
         if: ${{ !cancelled() }}
         env:

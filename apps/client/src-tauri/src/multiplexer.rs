@@ -237,31 +237,43 @@ impl Entry {
             }
         })?;
         if !self.create_if_missing && !matches!(self.kind, MultiplexerKind::Tmux) {
-            let output = if herdr {
-                crate::ssh::exec_for_access(
+            let live = if herdr {
+                let output = crate::ssh::exec_for_access(
                     session,
                     backend.wrap(HERDR_SESSIONS, positive_unix)?,
                     lease,
                 )
-                .await?
+                .await?;
+                persistent_sessions(self.kind, &output)?
+                    .into_iter()
+                    .map(|target| target.name)
+                    .collect()
             } else {
-                zellij_output(
+                // `--short` also lists a serialized exited session, which `zellij attach` resurrects (#2047).
+                zellij_live_sessions(&zellij_output(
                     crate::ssh::exec_for_access_status(
                         session,
-                        zellij_sessions_command().render(),
+                        zellij_full_sessions_command().render(),
                         lease,
                     )
                     .await?,
-                )?
+                )?)?
             };
-            if !persistent_sessions(self.kind, &output)?
-                .iter()
-                .any(|target| target.name == self.name)
-            {
+            if !live.contains(&self.name) {
                 return Err(unavailable());
             }
         }
         Ok(())
+    }
+}
+/// A target that must already exist: reconnect and restore never create it.
+pub(crate) fn reattach_entry(kind: MultiplexerKind, value: &str) -> Entry {
+    Entry {
+        kind,
+        name: value.into(),
+        tmux_server: None,
+        create_if_missing: false,
+        backend: None,
     }
 }
 // Saved defaults create only their explicitly named target in the default namespace.
@@ -299,6 +311,30 @@ fn zellij_sessions_command() -> Cmd {
         &[("LC_ALL", "C")],
         &["zellij", "list-sessions", "--short", "--no-formatting"],
     )
+}
+
+fn zellij_full_sessions_command() -> Cmd {
+    Cmd::new(&[("LC_ALL", "C")], &["zellij", "list-sessions", "--no-formatting"])
+}
+
+/// The names of the sessions whose server is running, from the unshortened listing. Each line is
+/// `<name> [Created <age> ago]`, followed by `(EXITED - attach to resurrect)` for a serialized session without a
+/// server; an unrecognised line is an error rather than a guess, so reattach fails closed.
+pub(crate) fn zellij_live_sessions(output: &str) -> Result<Vec<String>> {
+    let mut live = Vec::new();
+    for line in output.lines().filter(|line| !line.is_empty()) {
+        let Some(at) = line.rfind(" [Created ") else {
+            return Err(SshError::new(
+                "invalid_output",
+                "Unrecognised Zellij session listing",
+            ));
+        };
+        // The marker follows the `]` that closes the zellij-written age, never the name.
+        if !line[at..].contains("(EXITED") {
+            live.push(line[..at].to_owned());
+        }
+    }
+    Ok(live)
 }
 
 fn zellij_output(output: crate::ssh::ExecOutput) -> Result<String> {
@@ -994,6 +1030,25 @@ pub async fn tmux_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn zellij_reattach_lists_only_sessions_with_a_running_server() {
+        let live = zellij_live_sessions(
+            "my notes [Created 2s ago] \nold [Created 1h ago] (EXITED - attach to resurrect)\nfake [Created 1s ago] (EXITED - x) [Created 9s ago] \n",
+        )
+        .unwrap();
+        // A name that imitates the marker is still the live session it is: the marker is read after the last age.
+        assert_eq!(live, ["my notes", "fake [Created 1s ago] (EXITED - x)"]);
+        assert!(zellij_live_sessions("").unwrap().is_empty());
+        assert!(zellij_live_sessions("garbage\n").is_err());
+    }
+    #[test]
+    fn zellij_reattach_quotes_a_hostile_name_and_never_creates() {
+        let hostile = "a'$(touch pwned);`id`\"x";
+        let command = reattach_entry(MultiplexerKind::Zellij, hostile).command().unwrap();
+        assert_eq!(command, "zellij attach 'a'\\''$(touch pwned);`id`\"x'");
+        assert!(reattach_entry(MultiplexerKind::Zellij, "-c").command().is_err());
+        assert!(reattach_entry(MultiplexerKind::Zellij, "a\nb").command().is_err());
+    }
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     #[test]
