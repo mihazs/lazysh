@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.95.3
+
+### Patch Changes
+
+- test(android): collapse the notification shade and system dialogs before a case and when the window loses focus ([#2310](https://github.com/mihazs/lazysh/pull/2310))
+
+  <details><summary>Details</summary>
+
+  Back sent while the notification shade was still expanding left it open, so the app window never regained focus and every later owned SSH case failed with "Native workspace not ready". The cases now collapse the shade through the shell. Test only. No user-visible behaviour changes.
+
+  An instrumented case that blocks now fails after 15 minutes (runner argument `timeout_msec`) instead of holding the job until its 75 minute limit.
+
+  </details>
+
 ## 1.95.2
 
 ### Patch Changes
