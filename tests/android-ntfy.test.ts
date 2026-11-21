@@ -3,7 +3,7 @@ import {mkdtemp,readFile,writeFile,rm,stat,symlink,mkdir} from 'node:fs/promises
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {PassThrough,Writable} from 'node:stream';
-import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,challengeStateObservation,challengeTrafficObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
+import {OwnedNtfyPackages,ntfyAndroidVariant,ntfyToolFailure,ntfyEnvironment,distributorHasGooglePush,inspectAcceptanceTrust,realNtfyChallenge,realNtfyStartup,relayInput,ntfyHealth,privateInputCommand,writePrivateInput,firstLaunchObservation,permissionActionObservation,validateNtfyReport,nativeFailureStage,settingsObservation,returnStateObservation,challengeStateObservation,challengeDeliveryObservation,challengeTrafficObservation,eventObservation,ntfyClockComparison,observeNtfyClock,OwnedNtfyClock,controlledNtfyClockReadback,sameNtfyClockOwner,absentNtfyPackages} from './support/androidNtfy';
 import {OwnedProcess} from './support/androidSsh';
 
 test('ntfy distribution admission is closed and defaults only to the original FOSS owner',()=>{
@@ -377,6 +377,22 @@ test('challenge failure state retains only closed phases and a nullable busy fla
   for(const invalid of [sample+sample,sample.replace(' busy=false',''),sample.replace('busy=false','busy=private'),
     sample.replace('busy=false]','busy=false endpoint=private]'),sample.replace('VERIFY','VERIFY registration=PRIVATE'),sample+'x'.repeat(256*1024)])
     expect(challengeStateObservation(invalid)).toBeUndefined();
+});
+
+test('challenge delivery retains only closed outcome counts, however the app orders them',()=>{
+  const names=['other','error','gate','state','binding','phase','buffered','busy','challenge','confirming'];
+  const sample=`Ntfy app deliveries[${names.map(name=>`${name}=zero`).join(' ')}]`;
+  const zero=Object.fromEntries(names.map(name=>[name,'zero']));
+  expect(challengeDeliveryObservation('private '+sample+' private')).toEqual({available:true,...zero});
+  expect(challengeDeliveryObservation(sample.replace('busy=zero','busy=many').replace('gate=zero','gate=one'))).toEqual({available:true,...zero,busy:'many',gate:'one'});
+  const reversed=`Ntfy app deliveries[${[...names].reverse().map(name=>`${name}=zero`).join(' ')}]`;
+  expect(challengeDeliveryObservation(reversed)).toEqual({available:true,...zero});
+  expect(challengeDeliveryObservation('Ntfy app deliveries[unavailable]')).toEqual({available:false});
+  for(const bad of [sample+sample,sample.replace(' confirming=zero',''),sample.replace('confirming=zero','confirming=zero other=zero'),
+    sample.replace('confirming=zero','endpoint=zero'),sample.replace('busy=zero','busy=private'),sample.replace('busy=zero','busy=3'),
+    sample.replace(' busy=zero','busy=zero'),sample.replace(']','] ').replace('Ntfy app deliveries[','Ntfy app deliveries[private-token '),sample+'x'.repeat(256*1024)])
+    expect(challengeDeliveryObservation(bad)).toBeUndefined();
+  expect(challengeDeliveryObservation('snapshot unavailable')).toBeUndefined();
 });
 
 test('challenge relay snapshot retains only bounded flags after failure',()=>{

@@ -6830,6 +6830,13 @@ class NativeWorkspaceTest {
                 }
             } catch(_:Exception) {"unavailable"}
             primary.addSuppressed(AssertionError("Ntfy challenge state[enrollment=$enrollment registration=$registration busy=$busy]"))
+            // What the app did with each pushed message: all zero means the distributor never delivered one.
+            primary.addSuppressed(AssertionError(try {
+                val counts=native("EnrollmentController").getDeclaredMethod("deliveries").invoke(controller) as Map<*,*>
+                "Ntfy app deliveries["+checkNotNull(native("MessageOutcome").enumConstants).joinToString(" ") {
+                    "${it.toString().lowercase()}=${when(counts[it] as? Int ?: 0) {0 -> "zero";1 -> "one";else -> "many"}}"
+                }+"]"
+            } catch(_:Exception) {"Ntfy app deliveries[unavailable]"}))
             ntfyChallengeTrafficFailure(primary) {
                 val connection=java.net.URL(data.getString("relayOrigin")+"/__fixture/challenge-observation").openConnection(java.net.Proxy.NO_PROXY) as javax.net.ssl.HttpsURLConnection
                 try {
