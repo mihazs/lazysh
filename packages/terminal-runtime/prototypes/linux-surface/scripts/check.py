@@ -243,9 +243,10 @@ check("a recreated surface shows the new colour exactly, at the anchor", rel == 
 if real and mode == "wayland":  # a real session: the renderer host draws the core's screen on the subsurface
     command("destroy")
     opened = command("core 17 5")
-    check("a local terminal opens with a native core", opened.startswith("DONE core "), opened)
+    check("a local terminal opens with a native core", opened.startswith("DONE core ") and len(opened) > 20, opened)
     time.sleep(3)  # the shell starts
-    command("anchor 110 70 150 100")
+    placed = command("anchor 110 70 150 100")
+    check("the surface of the terminal is placed", placed.startswith("DONE anchor") and '"placed":true' in placed, placed)
     time.sleep(2)
     painted = command("paint")
     check("the terminal takes the painting command", painted.startswith("DONE paint"), painted)
