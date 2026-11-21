@@ -930,7 +930,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
             const pending = turn===turns.at(-1) ? turn.activity.filter(message => message.blocks.some(block => block.id && block.id===pendingQuestion)) : [];
             const folded = turn.activity.filter(message => !pending.includes(message));
             // The turn's duration goes on its last folded run.
-            const parts = foldWork(folded), timed = parts.findLast(part => Array.isArray(part));
+            const parts = foldWork(folded), timed = parts.filter(Array.isArray).at(-1);
             return <>{parts.map(part => Array.isArray(part) ? <details key={part[0].id} className="agent-turn-activity"><summary>{activitySummary(part === timed ? {...turn, activity: part} : {key: turn.key, activity: part})}</summary>{part.map(renderMessage)}</details> : renderMessage(part))}{pending.map(renderMessage)}</>;
           })()}
           {turn.answer && renderMessage(turn.answer)}
