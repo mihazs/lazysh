@@ -37,7 +37,7 @@ Default builds, including the debug CI artifact, keep upstream's names on purpos
 
 The `herdr-native` job runs that acceptance with the feature on, against the release-profile executable described next: it includes one case that starts a real server and client under private `HOME` and XDG roots and asserts that `config/` holds exactly `lazysh-herdr`, that the session socket is inside it, and that no entry named `herdr`, `herdr-dev` or `.herdr*` exists anywhere below any root. The retained debug artifact is not a managed build.
 
-It does not make the managed build self-contained: `herdr update`, `herdr channel set` and the background update check can still replace the executable with a stock release ([#1755](https://github.com/mihazs/lazysh/issues/1755)). Publication ([#1758](https://github.com/mihazs/lazysh/issues/1758)) and other operating systems remain open. The notice inventory of the Linux x86-64 managed build is generated and checked by CI ([#1757](https://github.com/mihazs/lazysh/issues/1757), see [Redistribution notices and audit result](#redistribution-notices-and-audit-result)). Nothing here installs or distributes a binary.
+It is made self-contained against stock updates below ([#1755](https://github.com/mihazs/lazysh/issues/1755)). Publication ([#1758](https://github.com/mihazs/lazysh/issues/1758)) and other operating systems remain open. The notice inventory of the Linux x86-64 managed build is generated and checked by CI ([#1757](https://github.com/mihazs/lazysh/issues/1757), see [Redistribution notices and audit result](#redistribution-notices-and-audit-result)). Nothing here installs or distributes a binary.
 
 ### Release-profile managed build and libc floor
 
@@ -73,6 +73,24 @@ The release acceptance ([#1761](https://github.com/mihazs/lazysh/issues/1761), u
 The rest of `acceptance::` runs on the same executable: the guarded capability advertisement and descriptor checks, private startup over FD 3, input bound to the original client and the target guard, history observation, the private join and copy barrier, and the managed namespace. The `ignored` stock focus case keeps its own stock executable. No case here drives the lazysh app: the app's own Herdr navigation ([#591](https://github.com/mihazs/lazysh/issues/591)), the native SSH and Mosh startup adapter ([#575](https://github.com/mihazs/lazysh/issues/575), [#297](https://github.com/mihazs/lazysh/issues/297)) and the choice of the managed backend for every native call ([#1759](https://github.com/mihazs/lazysh/issues/1759)) are not exercised on this executable by this case.
 
 This is not yet the acceptance of a published release. Cargo's own build, or any file named in the variable, stands in for the asset; nothing here downloads, verifies or installs one. The wrong digest, wrong architecture, unsafe destination, stale plan, interrupted publication and cancellation cases need the install flow ([#1760](https://github.com/mihazs/lazysh/issues/1760)) and the publication ([#1758](https://github.com/mihazs/lazysh/issues/1758)), and the public assets and source-to-tag identity can only be checked once a release carries them. The case is Linux only, and no platform support is claimed.
+
+### Managed build never replaces itself with a stock release
+
+Upstream's updater would otherwise replace the executable of a `lazysh-managed` build: `herdr update` and the self-update that `herdr channel set` runs download a release from herdr.dev over the running executable, and every running server polls the stock update manifest in the background ([#1755](https://github.com/mihazs/lazysh/issues/1755), under [#1522](https://github.com/mihazs/lazysh/issues/1522)). That would silently swap the guarded derivative for stock Herdr and drop its capability.
+
+With the feature, `src/main.rs` loads the unchanged `src/update.rs` as `stock_update` and loads the owned `../herdr-guard/managed_update.rs` as `crate::update`, which every upstream caller already uses. The owned module re-exports everything else and replaces four entry points, so `src/update.rs` stays byte-identical to the pinned source, keeps its scan exemption, and is not reachable from the managed build. Updates arrive only through lazysh.
+
+- `herdr update` (with or without `--handoff`) fails with exit 1 and `self-update is disabled for the lazysh-managed Herdr build; updates arrive only through lazysh`.
+- `herdr channel set` follows the path upstream already has for an externally managed install (Homebrew, mise, Nix): `preview` is rejected with exit 1 before anything is written, and `stable` only records the channel, prints that updates arrive only through lazysh and exits 0 without running an update.
+- The background check returns before it contacts the manifest, on startup and on every later interval, whatever `[update] version_check` says.
+- Default builds, the debug CI artifact included, keep upstream's updater exactly as it is.
+
+The owned acceptance runs the real built binary against a `curl` placed first on `PATH` that records each call and fails. One case copies the executable to a private directory, runs `update`, `update --handoff`, `channel set stable` and `channel set preview`, and asserts the exit codes, the reason, an empty `curl` log, an unchanged SHA-256 of the executable and no file created beside it. A second case starts a real server with `version_check` and `manifest_check` on and asserts that the only fetch the server makes is the agent-detection catalog. That fetch is the server's other background check, and seeing it proves the polling is live; the update manifest is never requested. Run against upstream's `update.rs` instead of the owned module, the first case fails on the message and the second shows `https://herdr.dev/latest.json` in the log.
+
+Upstream starts the background checks only without debug assertions, so a debug test binary never polls and the second case would pass for any build; the case therefore runs in the release-profile acceptance of the `herdr-native` job (without debug assertions it is reported as ignored in a debug run).
+
+Limits. This is Linux release-profile evidence. The Windows installer branch of the stock updater is not reachable from the managed build, but no Windows build has run. Two other network paths are out of scope and unchanged: the agent-detection refresh fetches detection data, never an executable, and `herdr --remote` installs a stock Herdr release on a remote host, which a managed installation does not use and the explicit install over the connected session ([#1760](https://github.com/mihazs/lazysh/issues/1760)) replaces.
+
 
 ## Optional build and verification
 
