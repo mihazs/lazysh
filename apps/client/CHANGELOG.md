@@ -1,5 +1,11 @@
 # @lazysh/client
 
+## 1.92.2
+
+### Patch Changes
+
+- test(terminal): record the first Waydroid lane run of the native core, which stops at the missing owned SSH fixture ([#2278](https://github.com/mihazs/lazysh/pull/2278))
+
 ## 1.92.1
 
 ### Patch Changes
