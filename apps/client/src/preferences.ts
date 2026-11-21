@@ -85,10 +85,10 @@ export const edgeGestureZone = {min: 16, max: 96, step: 2, default: 40} as const
 /** How the gestures start: `auto` is handles (and swipes beside them) on Android gesture navigation and true edge swipes everywhere else. */
 export const gestureModes = ["auto", "handles", "edges", "off"] as const;
 export type GestureModePreference = typeof gestureModes[number];
-export type EdgeGestureSettings = Record<EdgeGestureId, boolean> & {zoneWidth: number; mode: GestureModePreference};
+export type EdgeGestureSettings = Record<EdgeGestureId, boolean> & {zoneWidth: number; mode: GestureModePreference; /** Draw the grip lines of the handles; hidden by default. */ showLines: boolean};
 /** The saved form: `mode` is absent until the user picks one. */
-export type StoredEdgeGestures = Omit<EdgeGestureSettings, "mode"> & {mode?: GestureModePreference};
-const edgeGestureDefaults: EdgeGestureSettings = {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: edgeGestureZone.default, mode: "auto"};
+export type StoredEdgeGestures = Omit<EdgeGestureSettings, "mode" | "showLines"> & {mode?: GestureModePreference; showLines?: boolean};
+const edgeGestureDefaults: EdgeGestureSettings = {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: edgeGestureZone.default, mode: "auto", showLines: false};
 /** The saved edge gesture settings with the defaults filled in. */
 export function edgeGestureSettings(p: Pick<Preferences, "edgeGestures">): EdgeGestureSettings { return {...edgeGestureDefaults, ...p.edgeGestures}; }
 function parseEdgeGestures(value: unknown): StoredEdgeGestures | undefined {
@@ -98,6 +98,7 @@ function parseEdgeGestures(value: unknown): StoredEdgeGestures | undefined {
     ...Object.fromEntries(edgeGestureIds.map(id => [id, source[id] !== false])) as Record<EdgeGestureId, boolean>,
     zoneWidth: typeof zone === "number" && Number.isInteger(zone) && zone >= edgeGestureZone.min && zone <= edgeGestureZone.max ? zone : edgeGestureZone.default,
     mode: gestureModes.find(mode => mode === source.mode) ?? edgeGestureDefaults.mode,
+    showLines: source.showLines === true,
   };
   return (Object.keys(parsed) as (keyof EdgeGestureSettings)[]).every(name => parsed[name] === edgeGestureDefaults[name]) ? undefined : parsed;
 }
