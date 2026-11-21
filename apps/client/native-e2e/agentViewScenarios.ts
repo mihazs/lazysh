@@ -70,7 +70,11 @@ export function reportingAgentCases(multiplexer:string,start:()=>Promise<Reporti
       const send=await view.$('button[aria-label="Send to the agent"]');
       await browser.waitUntil(()=>send.isEnabled(),{timeout:20_000,timeoutMsg:'The Agent view composer did not bind to the pane'});
       await send.click();
-      await browser.waitUntil(async()=>(await view.getText()).includes('Answered: Add a test'),{timeout:30_000,timeoutMsg:'The sent prompt did not become a turn'});
+      try {await browser.waitUntil(async()=>(await view.getText()).includes('Answered: Add a test'),{timeout:30_000});}
+      catch {
+        // Tell a prompt that never reached the pane from one that arrived but never showed as a turn.
+        throw new Error(`The sent prompt did not become a turn; pane submitted ${JSON.stringify(await agent.submitted())}, draft ${JSON.stringify(await draft.getValue())}, send enabled ${await send.isEnabled()}`);
+      }
       expect(await browser.$$(turns)).toHaveLength(2);
       // The pane's process got the prompt and one Enter; a second delivery would log a second submission.
       expect(await agent.submitted()).toEqual(['first question','Add a test']);
