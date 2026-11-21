@@ -103,7 +103,7 @@ pub(crate) trait Core: Send + Sync {
     fn set_theme(&self, theme: &Json) -> Result<(), String>;
     /// The session a renderer host draws and the inbox its `changed` calls ring, made again for each call
     /// (a surface that is placed again draws the same session). `None` for a core with nothing to draw.
-    #[cfg(feature = "native-terminal")]
+    #[cfg(all(feature = "native-terminal", native_terminal_core))]
     fn drawing(
         &self,
     ) -> Option<(
@@ -135,7 +135,7 @@ const MAX_PASTE: usize = 64 * 1024;
 /// from: `code` names the physical key and `key` what it produced.
 // The fields are read by the real core, which is built only with the `native-terminal` feature.
 #[derive(Debug, Deserialize)]
-#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -175,7 +175,7 @@ pub(crate) enum CoreInput {
 }
 
 #[derive(Debug, Default, Clone, Copy, Deserialize)]
-#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
 #[serde(default)]
 pub(crate) struct Mods {
     pub(crate) shift: bool,
@@ -185,7 +185,7 @@ pub(crate) struct Mods {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
-#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum MouseAction {
     Press,
@@ -195,7 +195,7 @@ pub(crate) enum MouseAction {
 
 /// X11 buttons 1 to 5.
 #[derive(Debug, Clone, Copy, Deserialize)]
-#[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum MouseButton {
     Left,
@@ -270,7 +270,7 @@ impl Link {
 
     /// Whether the renderer's latest lease is valid: the app is unlocked, in the foreground and has not replaced
     /// the renderer. What the core says about the screen (a title, a clipboard write) leaves only while it is.
-    #[cfg_attr(not(feature = "native-terminal"), allow(dead_code))]
+    #[cfg_attr(not(native_terminal_core), allow(dead_code))]
     pub(crate) fn permits(&self) -> bool {
         self.lease
             .lock()
@@ -471,6 +471,9 @@ pub(crate) fn close_all() {
     let live = std::mem::take(&mut registry().live);
     live.values().for_each(|core| core.close());
 }
+
+/// What every native terminal command says in a build made with `LAZYSH_NATIVE_TERMINAL=off` (the kill switch, see `build.rs`).
+pub(crate) const DISABLED_IN_BUILD: &str = "The native terminal is disabled in this build";
 
 type AccessResult<T> = Result<Guarded<T>, GuardedError<String>>;
 
@@ -737,7 +740,7 @@ fn availability(core: bool, host: bool) -> CoreAvailability {
 #[tauri::command]
 pub fn terminal_core_available() -> CoreAvailability {
     availability(
-        cfg!(feature = "native-terminal"),
+        cfg!(native_terminal_core),
         cfg!(any(target_os = "android", target_os = "linux")),
     )
 }
@@ -800,7 +803,7 @@ async fn within(
 /// The platform's surface check: on Linux a native surface composes below the page on Wayland only, so the GDK
 /// display type of the window decides (X11 and Xwayland keep xterm.js, #1331).
 fn surface() -> Result<(), String> {
-    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    #[cfg(all(target_os = "linux", native_terminal_core))]
     crate::native_terminal_surface::linux::display()?;
     Ok(())
 }
@@ -826,9 +829,17 @@ pub async fn native_terminal_probe() -> NativeProbe {
 }
 
 /// The real core, `lazysh-terminal-runtime` on libghostty-vt, which needs Zig 0.16.0 to build; without
-/// the `native-terminal` feature no build needs Zig and the commands report that.
-#[cfg(not(feature = "native-terminal"))]
+/// the `native-terminal` feature no build needs Zig and the commands report that. A build made with
+/// `LAZYSH_NATIVE_TERMINAL=off` (the kill switch, see `build.rs`) leaves the core out even with the
+/// feature, and says so.
+#[cfg(not(native_terminal_core))]
 mod native {
+    pub(super) const UNAVAILABLE: &str = if cfg!(native_terminal_disabled) {
+        super::DISABLED_IN_BUILD
+    } else {
+        super::NOT_BUILT
+    };
+
     pub(super) fn factory(
         _: u32,
         _: u32,
@@ -837,15 +848,15 @@ mod native {
         _: crate::app_lock::AccessLease,
         _: tauri::ipc::Channel<crate::ssh::SshEvent>,
     ) -> Result<super::Factory, String> {
-        Err(super::NOT_BUILT.into())
+        Err(UNAVAILABLE.into())
     }
 
     pub(super) fn gpu() -> Result<String, String> {
-        Err(super::NOT_BUILT.into())
+        Err(UNAVAILABLE.into())
     }
 }
 
-#[cfg(feature = "native-terminal")]
+#[cfg(native_terminal_core)]
 mod native {
     use super::*;
     use lazysh_terminal_runtime::{
@@ -1844,7 +1855,7 @@ mod native {
 }
 
 /// Live sessions and reserved scrollback bytes of the real core's hub (lifecycle test only).
-#[cfg(all(test, feature = "native-terminal"))]
+#[cfg(all(test, native_terminal_core))]
 pub(crate) fn hub_usage() -> (usize, usize) {
     native::hub_usage()
 }
@@ -2039,7 +2050,7 @@ pub(crate) mod fake {
     }
 
     /// What a control answer may hold: the state and the text of rows, and nothing a cell grid could ride in.
-    #[cfg(feature = "native-terminal")]
+    #[cfg(native_terminal_core)]
     pub(crate) fn assert_no_cells(answer: &Json) {
         let keys = |value: &Json| -> Vec<String> {
             let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
@@ -2410,15 +2421,20 @@ mod tests {
             .unwrap()
     }
 
+    /// The error `terminal_core_open` returns for an 80x24 session with these History lines.
+    async fn open_error(lines: Option<u32>) -> String {
+        terminal_core_open(lease(), channel(), 80, 24, lines, None)
+            .await
+            .err()
+            .unwrap()
+            .into_inner()
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn open_refuses_history_lines_outside_the_setting_range() {
         for lines in [0, 99, 20_001, u32::MAX] {
-            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines), None)
-                .await
-                .err()
-                .unwrap()
-                .into_inner()
-                .unwrap();
+            let error = open_error(Some(lines)).await;
             assert_eq!(error, "scrollback lines must be 100 to 20000", "{lines}");
         }
     }
@@ -2451,7 +2467,7 @@ mod tests {
         assert_eq!(
             answer["available"],
             cfg!(all(
-                feature = "native-terminal",
+                native_terminal_core,
                 any(target_os = "android", target_os = "linux")
             ))
         );
@@ -2514,7 +2530,7 @@ mod tests {
         assert!(started.elapsed() < PROBE_BUDGET, "{:?}", started.elapsed());
         // Only an Android build with the core can draw here: a Linux one needs a Wayland window, which no test
         // process has, and every other build has no host. Each is refused with a reason.
-        if !cfg!(all(feature = "native-terminal", target_os = "android")) {
+        if !cfg!(all(native_terminal_core, target_os = "android")) {
             assert!(!first.available);
         }
         assert!(!first.reason.is_empty());
@@ -2527,25 +2543,19 @@ mod tests {
         ));
     }
 
-    #[cfg(not(feature = "native-terminal"))]
+    /// What a build without the real core says: it is not built, or (the kill switch, even with the feature) disabled.
+    #[cfg(not(native_terminal_core))]
     #[tokio::test]
-    async fn without_the_feature_the_commands_say_the_core_is_not_built() {
-        let error = terminal_core_open(lease(), channel(), 80, 24, None, None)
-            .await
-            .err()
-            .unwrap()
-            .into_inner()
-            .unwrap();
-        assert!(error.contains("not built"), "{error}");
+    async fn without_the_real_core_the_commands_say_why() {
+        let why = if cfg!(native_terminal_disabled) {
+            "The native terminal is disabled in this build"
+        } else {
+            "The native terminal core is not built into this app"
+        };
+        assert_eq!(open_error(None).await, why);
         // The ends of the History lines range reach the core; only values outside it are refused.
         for lines in [100, 20_000] {
-            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines), None)
-                .await
-                .err()
-                .unwrap()
-                .into_inner()
-                .unwrap();
-            assert!(error.contains("not built"), "{lines}: {error}");
+            assert_eq!(open_error(Some(lines)).await, why, "{lines}");
         }
         assert!(terminal_core_open(lease(), channel(), 0, 24, None, None)
             .await

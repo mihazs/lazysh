@@ -1,9 +1,10 @@
 import {t} from './i18n/core';
-import {LACKS_PREFIX, NOT_REGISTERED, type BackendSelection} from './terminalBackendRegistry';
+import {DISABLED_IN_BUILD, LACKS_PREFIX, NOT_REGISTERED, type BackendSelection} from './terminalBackendRegistry';
 
 /** One translated line for a reason the registry recorded when it refused the native engine. */
 export const describeRefusal = (reason: string) =>
   reason === NOT_REGISTERED ? t('terminalEngineNotRegistered')
+    : reason === DISABLED_IN_BUILD ? t('terminalEngineDisabledInBuild')
     : reason === `${LACKS_PREFIX}accessibility` ? t('terminalEngineLacksAccessibility')
     : reason.startsWith(LACKS_PREFIX) ? t('terminalEngineLacks', {capabilities: reason.slice(LACKS_PREFIX.length)})
     : t('terminalEngineProbeFailed', {detail: reason});

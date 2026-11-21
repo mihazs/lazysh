@@ -2578,6 +2578,7 @@ export const english = {
   terminalEnginePreference: "chosen in Settings",
   terminalEngineOverride: "chosen by the developer override",
   terminalEngineNotRegistered: "the native engine is not available on this platform yet",
+  terminalEngineDisabledInBuild: "the native engine is disabled in this build",
   terminalEngineLacksAccessibility: "a screen reader is active and the native engine cannot be read by it",
   terminalEngineLacks: "the native engine lacks {{capabilities}}",
   terminalEngineProbeFailed: "the native engine cannot run here ({{detail}})",

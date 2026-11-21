@@ -7,7 +7,11 @@ import userEvent from '@testing-library/user-event';
 import {defaults, getPreferences, savePreferences} from './preferences';
 import type {LiveSession} from './terminal';
 
-afterEach(() => act(() => savePreferences(defaults)));
+afterEach(() => {
+  vi.unstubAllGlobals();
+  localStorage.removeItem('lazysh.terminal.backend');
+  return act(() => savePreferences(defaults));
+});
 
 const sessionNamed = (id: string) => mocks.terminalPaneProps.mock.calls.map(([props]) => props.session as LiveSession).find(session => session.id === id)!;
 const choose = (terminalEngine: 'native' | 'xterm') => act(() => savePreferences({...getPreferences(), terminalEngine}));
@@ -55,4 +59,22 @@ it('tells a device whose default engine changed, and its button opens Settings',
   expect(localStorage.setItem).toHaveBeenCalledWith('lazysh.terminal.defaultEngineSeen', 'xterm');
   expect(screen.queryByText(notice.textContent!)).toBeNull();
   expect(await screen.findByRole('dialog', {name: 'Preferences'})).toBeTruthy();
+});
+
+it('keeps every new session on xterm.js in a build with the native engine switched off, whatever the preference or the developer override, and records why', async () => {
+  vi.stubGlobal('__LAZYSH_NATIVE_TERMINAL_OFF__', true);
+  mocks.api.connect.mockResolvedValueOnce({sessionId: 'first'}).mockResolvedValueOnce({sessionId: 'second'});
+  const user = await openConnection();
+  choose('native');
+  const first = await connect(user, 'first');
+  await screen.findByText('Live SSH terminal');
+  expect(first.adapter.backend).toBe('xterm');
+  expect(first.selection).toEqual({id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'disabled in this build'}]});
+
+  localStorage.setItem('lazysh.terminal.backend', 'native');
+  const second = await connectAnother(user, 'second');
+  expect(second.adapter.backend).toBe('xterm');
+  expect(second.selection).toEqual(first.selection);
+  expect([first, second].every(session => !session.disposed && session.connected)).toBe(true);
+  expect(getPreferences().terminalEngine).toBe('native');
 });

@@ -9,7 +9,7 @@ use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
 
-#[cfg(all(target_os = "linux", feature = "native-terminal"))]
+#[cfg(all(target_os = "linux", native_terminal_core))]
 pub(crate) mod linux;
 
 /// Longest session id the shell accepts; the renderer's ids are UUIDs, a local terminal's `local:` and a UUID.
@@ -18,6 +18,15 @@ const MAX_SESSION_LEN: usize = 64;
 const MAX_PIXELS: f64 = 16_384.0;
 /// A phone's ratio is 2 to 4; anything past this is a corrupt page, not a display.
 const MAX_DPR: f64 = 8.0;
+
+/// A surface is refused on every platform by a build made with `LAZYSH_NATIVE_TERMINAL=off` (the kill switch, see `build.rs`).
+fn ensure_enabled() -> Result<(), String> {
+    if cfg!(native_terminal_disabled) {
+        Err(crate::terminal_core::DISABLED_IN_BUILD.into())
+    } else {
+        Ok(())
+    }
+}
 
 #[cfg(target_os = "android")]
 struct Surfaces(tauri::plugin::PluginHandle<tauri::Wry>);
@@ -103,6 +112,7 @@ pub async fn native_terminal_surface_place(
     anchor: Anchor,
     background: u32,
 ) -> Result<SurfaceState, String> {
+    ensure_enabled()?;
     validate_session(&session)?;
     anchor.validate()?;
     if background > 0xff_ffff {
@@ -122,14 +132,11 @@ pub async fn native_terminal_surface_place(
         }))
         .await
     }
-    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    #[cfg(all(target_os = "linux", native_terminal_core))]
     {
         linux::place(&app, session, anchor, background).await
     }
-    #[cfg(not(any(
-        target_os = "android",
-        all(target_os = "linux", feature = "native-terminal")
-    )))]
+    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
     {
         let _ = app;
         Err(unavailable())
@@ -144,14 +151,11 @@ pub async fn native_terminal_surface_remove(app: AppHandle, session: String) -> 
     {
         call::<()>(&app, "remove", serde_json::json!({ "session": session })).await
     }
-    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    #[cfg(all(target_os = "linux", native_terminal_core))]
     {
         linux::remove(&app, session).await
     }
-    #[cfg(not(any(
-        target_os = "android",
-        all(target_os = "linux", feature = "native-terminal")
-    )))]
+    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
     {
         let _ = app;
         Ok(())
@@ -164,29 +168,24 @@ pub async fn native_terminal_surface_state(
     app: AppHandle,
     session: String,
 ) -> Result<SurfaceState, String> {
+    ensure_enabled()?;
     validate_session(&session)?;
     #[cfg(target_os = "android")]
     {
         call(&app, "state", serde_json::json!({ "session": session })).await
     }
-    #[cfg(all(target_os = "linux", feature = "native-terminal"))]
+    #[cfg(all(target_os = "linux", native_terminal_core))]
     {
         linux::state(&app, session).await
     }
-    #[cfg(not(any(
-        target_os = "android",
-        all(target_os = "linux", feature = "native-terminal")
-    )))]
+    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
     {
         let _ = app;
         Err(unavailable())
     }
 }
 
-#[cfg(not(any(
-    target_os = "android",
-    all(target_os = "linux", feature = "native-terminal")
-)))]
+#[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
 fn unavailable() -> String {
     "This build has no native terminal surface.".into()
 }
@@ -301,6 +300,21 @@ mod tests {
             .is_err(),
             "a missing dpr is refused"
         );
+    }
+
+    #[cfg(native_terminal_disabled)]
+    #[test]
+    fn the_surface_is_refused_disabled_in_this_build() {
+        assert_eq!(
+            ensure_enabled(),
+            Err("The native terminal is disabled in this build".into())
+        );
+    }
+
+    #[cfg(not(native_terminal_disabled))]
+    #[test]
+    fn the_surface_is_not_refused_without_the_kill_switch() {
+        assert_eq!(ensure_enabled(), Ok(()));
     }
 
     #[test]

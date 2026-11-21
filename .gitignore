@@ -17,6 +17,7 @@ __pycache__/
 *.egg-info/
 dist-bench/
 dist-bench-agent/
+apps/client/dist-kill-switch/
 apps/client/bench-results/
 
 apps/client/mobile-e2e/reports/
