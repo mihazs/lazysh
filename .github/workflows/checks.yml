@@ -140,6 +140,7 @@ jobs:
       - run: sudo sh .github/scripts/apt-install.sh tmux
       # Still installs the system dependencies; a cached browser only skips its download.
       - &playwright-chromium
+        id: playwright-chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/client
       # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six named terminal specs ask
@@ -1949,7 +1950,8 @@ jobs:
       - *playwright-browsers
       - *playwright-chromium
       - name: Exercise tmux, Zellij and Herdr copies reaching the device clipboard through OSC 52 consent
-        if: ${{ !cancelled() }}
+        # The installs above have no status function, so an earlier failure skips them; without its browser this step would only add a misleading failure.
+        if: ${{ !cancelled() && steps.playwright-chromium.outcome == 'success' }}
         run: |
           # With CI set a missing binary fails these cases instead of skipping them; a renamed case must not turn the step into a zero-test pass.
           test -x "$LAZYSH_TEST_ZELLIJ" && test -x "$LAZYSH_TEST_HERDR"
