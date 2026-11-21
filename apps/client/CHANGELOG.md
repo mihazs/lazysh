@@ -1,5 +1,52 @@
 # @lazysh/client
 
+## 1.91.2
+
+### Patch Changes
+
+- ci(checks): skip the OSC 52 clipboard step when its Playwright install was skipped ([#2247](https://github.com/mihazs/lazysh/pull/2247))
+
+  <details><summary>Details</summary>
+
+  In the `native-linux-runtimes` job the OSC 52 clipboard step ran after any earlier failure, but the Playwright install steps before it did not, so it failed with "Executable doesn't exist" and added a misleading second failure to the job. It now runs only when the Chromium install succeeded. An earlier failure still fails the job. CI only; the app is unchanged.
+
+  </details>
+- feat(accessibility): mirror a native terminal session's rows for a screen reader while Screen reader mode is on ([#2241](https://github.com/mihazs/lazysh/pull/2241))
+
+  <details><summary>Details</summary>
+
+  A session on the native engine has no text a screen reader can reach, so while Screen reader mode is on the terminal pane now mirrors its visible rows into a hidden list with a polite, bounded log of new output, and the session reports itself accessible only while that mirror is mounted. Nothing changes for users in this release: a session started with Screen reader mode on still gets xterm.js, native stays a developer-only choice, and no default changes.
+
+  </details>
+- test(android): choose the theme QR image in the real system file picker and check its decoded preview ([#1931](https://github.com/mihazs/lazysh/pull/1931))
+
+  <details><summary>Details</summary>
+
+  Select the owned theme QR PNG through the real Android system file picker from the QR image fallback input and verify the decoded preview appears without applying preferences. Test and documentation only. No user-visible behaviour changes.
+
+  </details>
+- feat(herdr): keep the managed Herdr build from replacing itself with a stock release ([#1934](https://github.com/mihazs/lazysh/pull/1934))
+
+  <details><summary>Details</summary>
+
+  In the optional `lazysh-managed` guarded Herdr build, `herdr update`, the self-update behind `herdr channel set` and the background update check refuse or never run, with the reason that updates arrive only through lazysh. The Herdr native job proves on the real built binary that none of them downloads or replaces anything. Default Herdr builds and every shipped default are unchanged.
+
+  </details>
+- feat(terminal): Draw real text in the native terminal renderer, with font fallback and correct cell widths ([#2224](https://github.com/mihazs/lazysh/pull/2224))
+
+  <details><summary>Details</summary>
+
+  Closes #1325, part of #1302. The wgpu renderer of the native terminal engine now draws glyphs from fonts instead of placeholder patterns: each grapheme cluster is shaped on its own with `swash` (pure Rust), takes the first family of the font list that covers it (a color face for emoji) and is fitted to the one or two cells the terminal core gave it, so CJK, combining marks, ZWJ emoji, flags and keycaps do not move the grid. Bold and italic use the family's own faces and are synthesized when it has none; color emoji have their own atlas. With the optional `native-terminal` feature the renderer host draws with the fonts installed on the machine for the Preferences font list and size (Android and Linux font directories), the platform's monospace font for `monospace`, one CJK and one emoji font, and a bundled subset of DejaVu Sans Mono when nothing else is installed. Fonts imported in Preferences are not drawn by the native engine yet (#2223). Nothing attaches the host and no released build enables the feature, so terminal behaviour and defaults do not change and xterm.js stays the only engine a user can run.
+
+  </details>
+- ci(herdr): build the managed Herdr as a release-profile executable and state its libc floor ([#1932](https://github.com/mihazs/lazysh/pull/1932))
+
+  <details><summary>Details</summary>
+
+  The Herdr native job builds the optional managed Herdr derivative as a release-profile Linux x86-64 executable, runs the owned real-server acceptance against those exact bytes, fails when the executable needs a glibc above the documented 2.35 floor, and retains it with a receipt binding the source commit, original manifest digest, feature set, toolchains and SHA-256. Nothing is published and no platform support is claimed yet.
+
+  </details>
+
 ## 1.91.1
 
 ### Patch Changes
