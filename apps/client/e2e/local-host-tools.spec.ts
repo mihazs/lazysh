@@ -110,6 +110,8 @@ test('a local session opens Devices and lists this device\'s SDK devices when it
   await openLocal(page,{devices:true});
   await (await workspaceControl(page,'Devices')).click();
   const devices=page.getByRole('region',{name:'Host devices',exact:true});
+  // The hint sits behind a closed disclosure since #1786.
+  await devices.getByText('About device tools',{exact:true}).click();
   await expect(devices.getByText('Uses the SDK installed on this device.',{exact:false})).toBeVisible();
   await devices.getByRole('button',{name:'Find devices',exact:true}).click();
   await expect(devices.getByRole('option',{name:`${deviceRecord.name} · ${deviceRecord.state}`})).toBeAttached();
