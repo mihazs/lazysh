@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.93.5
+
+### Patch Changes
+
+- feat(terminal): Take the word under a touch and select all from the native core ([#2287](https://github.com/mihazs/lazysh/pull/2287))
+
+  <details><summary>Details</summary>
+
+  Part of #1334. The native adapter asks the core for the word under a cell and for the whole buffer, so a double tap or Select all covers wrapped lines, wide characters and scrollback outside the adapter's window of rows. No released build can select the native engine, so terminal behaviour and defaults do not change and xterm.js stays the only engine a user can run.
+
+  </details>
+
 ## 1.93.4
 
 ### Patch Changes
