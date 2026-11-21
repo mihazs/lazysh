@@ -39,7 +39,10 @@ impl StockTarget {
 fn command(target: &StockTarget, input: &Input) -> Option<String> {
     let rest = match input {
         Input::Send { text } => format!("agent prompt {} {}", quote(&target.pane), quote(text)),
-        Input::RequestStop => format!("agent send-keys {} esc", quote(&target.pane)),
+        // Cancelling a dialog is the same Escape; only tmux reads the pane again before it.
+        Input::RequestStop | Input::Dismiss { .. } => {
+            format!("agent send-keys {} esc", quote(&target.pane))
+        }
         // The line and its Enter are one literal write, as tmux's `Send` writes them. `agent prompt` would refuse the agent that waits for this answer.
         Input::Type { text } => format!(
             "pane send-text {} {}",
@@ -286,27 +289,9 @@ mod tests {
         for (input, keys) in [
             (Input::Select { option: 3, of: 4 }, "3"),
             (Input::Submit { of: 2 }, "down down down enter"),
-            (
-                Input::Pick {
-                    rows: 2,
-                    enter: false,
-                },
-                "down down",
-            ),
-            (
-                Input::Pick {
-                    rows: -1,
-                    enter: true,
-                },
-                "up enter",
-            ),
-            (
-                Input::Pick {
-                    rows: 0,
-                    enter: true,
-                },
-                "enter",
-            ),
+            (Input::pick_for_test(2, false), "down down"),
+            (Input::pick_for_test(-1, true), "up enter"),
+            (Input::pick_for_test(0, true), "enter"),
         ] {
             assert_eq!(
                 command(&target(), &input).unwrap(),
@@ -372,14 +357,8 @@ mod tests {
             Input::Select { option: 4, of: 3 },
             Input::Select { option: 1, of: 10 },
             Input::Submit { of: 9 },
-            Input::Pick {
-                rows: 31,
-                enter: true,
-            },
-            Input::Pick {
-                rows: 0,
-                enter: false,
-            },
+            Input::pick_for_test(31, true),
+            Input::pick_for_test(0, false),
         ] {
             assert!(input.validate().is_err());
         }
@@ -511,20 +490,8 @@ mod tests {
             })
         };
         for (input, expected) in [
-            (
-                Input::Pick {
-                    rows: 2,
-                    enter: false,
-                },
-                "1b 5b 42 1b 5b 42",
-            ),
-            (
-                Input::Pick {
-                    rows: 0,
-                    enter: true,
-                },
-                "1b 5b 42 1b 5b 42 0d",
-            ),
+            (Input::pick_for_test(2, false), "1b 5b 42 1b 5b 42"),
+            (Input::pick_for_test(0, true), "1b 5b 42 1b 5b 42 0d"),
             (
                 Input::Select { option: 2, of: 3 },
                 "1b 5b 42 1b 5b 42 0d 32",

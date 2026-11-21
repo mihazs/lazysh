@@ -17,6 +17,8 @@ export type LiftedDialog = Readonly<{
   interrupts?: true;
   /** Same title, body, options and footer: the dialog a person saw is the dialog an answer is sent to. */
   signature: string;
+  /** The dialog's own rows, from its text down to its footer, as the screen drew them: what the host compares the pane with before a key. */
+  rows: readonly string[];
 }>;
 /** `none`: no dialog footer on the screen. `unliftable`: a dialog is open that this profile cannot read exactly. */
 export type Lift = Readonly<{kind: 'none' | 'unliftable'} | {kind: 'dialog'; dialog: LiftedDialog}>;
@@ -94,5 +96,5 @@ export function liftDialog(screen: readonly string[]): Lift {
     || hint.length > limits.hint || !enterTakesRow.some(pattern => pattern.test(hint.join(' '))) || questionRows.test(lines.slice(top, esc).join('\n'))) return unliftable;
   const title = clip(lines[titleRow].trim());
   return {kind: 'dialog', dialog: Object.freeze({title, body: body.map(clip), options: Object.freeze(options), highlighted, hint: hint.map(clip),
-    signature: JSON.stringify([title, body, options, hint])})};
+    signature: JSON.stringify([title, body, options, hint]), rows: Object.freeze(lines.slice(titleRow, esc + 1))})};
 }

@@ -458,7 +458,7 @@ test('answers a list dialog open on the terminal with the keys a person presses,
   await sonnet.click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
   const sent=(await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input);
-  expect(sent).toEqual([{kind:'pick',rows:-1,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect(sent).toEqual([{kind:'pick',rows:-1,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
   // The terminal is untouched by the view switch and shows what the keys did.
   await switcher(page).getByRole('button',{name:'Terminal',exact:true}).click();
   expect(await terminalText(page)).toContain('Set model');
@@ -494,7 +494,7 @@ test('answers a Codex approval prompt open on the terminal with the keys a perso
   expect((await fixture(page)).inputs.filter(action=>action.kind==='input')).toHaveLength(before);
   await decline.click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
-  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
 });
 
 test('picks an option of the open dialog with its digit on a desktop keyboard',async({page},testInfo)=>{
@@ -507,7 +507,7 @@ test('picks an option of the open dialog with its digit on a desktop keyboard',a
   const before=(await fixture(page)).inputs.filter(action=>action.kind==='input').length;
   await page.keyboard.press('2');
   await expect(dialog).toHaveCount(0,{timeout:8000});
-  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:1,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input)).toEqual([{kind:'pick',rows:1,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
 });
 
 test('says the agent waits in the terminal for a dialog it cannot read exactly, offers the terminal and sends no key',async({page})=>{
@@ -548,7 +548,7 @@ test('answers a question Codex asks with the keys a person presses and offers no
   await sqlite.click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
   const sent=(await fixture(page)).inputs.filter(action=>action.kind==='input').slice(before).map(action=>action.input);
-  expect(sent).toEqual([{kind:'pick',rows:1,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect(sent).toEqual([{kind:'pick',rows:1,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
 });
 
 /** A tmux session whose Claude conversation lists one running background shell. */
@@ -604,7 +604,7 @@ test('Switch model in the options asks a Claude pane for its model list once and
   await expect(dialog.getByRole('heading',{name:'Select model'})).toBeVisible({timeout:8000});
   await dialog.getByRole('button',{name:/^Sonnet/}).click();
   await expect(dialog).toHaveCount(0,{timeout:8000});
-  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(1).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect((await fixture(page)).inputs.filter(action=>action.kind==='input').slice(1).map(action=>action.input)).toEqual([{kind:'pick',rows:2,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
 });
 
 test('desktop shortcut switches the same session without writing to the terminal',async({page},testInfo)=>{
@@ -883,7 +883,7 @@ test('stock Herdr: a list dialog open on the followed agent\'s pane is answered 
   const {dialog,sonnet}=await modelCard(page,agentView(page));
   await sonnet.click();
   await expect(dialog).toHaveCount(0,{timeout:10000});
-  expect((await herdrFixture(page)).inputs.map(item=>(item as {input:unknown}).input)).toEqual([{kind:'pick',rows:-1,enter:false},{kind:'pick',rows:0,enter:true}]);
+  expect((await herdrFixture(page)).inputs.map(item=>(item as {input:unknown}).input)).toEqual([{kind:'pick',rows:-1,enter:false,seen:expect.any(Array)},{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}]);
 });
 
 test('stock Herdr with an old companion: the Agent view says to update it and still enters the pane',async({page})=>{
@@ -1519,7 +1519,7 @@ test('Zellij: a list dialog open in the agent pane is read from that pane and an
   await sonnet.click();
   await expect(dialog).toHaveCount(0,{timeout:10000});
   const target={zellijSession:'work',pane:7,agent:'claude'};
-  expect((await zellijFixture(page)).inputs).toEqual([{target,input:{kind:'pick',rows:-1,enter:false}},{target,input:{kind:'pick',rows:0,enter:true}}]);
+  expect((await zellijFixture(page)).inputs).toEqual([{target,input:{kind:'pick',rows:-1,enter:false,seen:expect.any(Array)}},{target,input:{kind:'pick',rows:0,enter:true,seen:expect.any(Array)}}]);
   expect((await zellijFixture(page)).tmuxCalls).toBe(0);
 });
 

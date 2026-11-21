@@ -808,6 +808,7 @@ fn guarded_input(input: &Input) -> WireOutcome<()> {
             | Input::Select { .. }
             | Input::Submit { .. }
             | Input::Pick { .. }
+            | Input::Dismiss { .. }
             | Input::CycleMode {}
     ) {
         return Err(Fault::Invalid);

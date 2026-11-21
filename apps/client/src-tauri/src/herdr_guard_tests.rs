@@ -483,7 +483,8 @@ fn dialog_answers_never_reach_the_herdr_guard() {
         json!({"kind":"select","option":1,"of":2}),
         json!({"kind":"submit","of":2}),
         json!({"kind":"cycle_mode"}),
-        json!({"kind":"pick","rows":1,"enter":true}),
+        json!({"kind":"pick","rows":1,"enter":true,"seen":["Select model","1. One","2. Two","Enter to select"]}),
+        json!({"kind":"dismiss","seen":["Select model","1. One","2. Two","Enter to select"]}),
     ] {
         let action: Action = serde_json::from_value(input(answer)).unwrap();
         assert!(matches!(action.validate(), Err(Fault::Invalid)));
