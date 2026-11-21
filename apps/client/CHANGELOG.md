@@ -1,5 +1,27 @@
 # @lazysh/client
 
+## 1.95.0
+
+### Minor Changes
+
+- feat(terminal): hide the gesture indicator lines by default and add a setting to show them ([#2303](https://github.com/mihazs/lazysh/pull/2303))
+
+  <details><summary>Details</summary>
+
+  The thin lines that mark the edge-gesture handles are now hidden. The handles and gestures work as before; turn on Settings > Input > Terminal touch gestures > Show gesture lines to draw them again.
+
+  </details>
+
+### Patch Changes
+
+- fix(terminal): Long-press a URL selects and copies the whole address, however it wraps ([#2295](https://github.com/mihazs/lazysh/pull/2295))
+
+  <details><summary>Details</summary>
+
+  A URL that wraps over several terminal rows, or that an agent prints hard-wrapped inside a box, was copied cut at the row end or with line breaks, borders and spaces in it, so the pasted address was broken. Long-pressing any part of a URL now selects all of it and Copy puts exactly the URL on the clipboard.
+
+  </details>
+
 ## 1.94.0
 
 ### Minor Changes
