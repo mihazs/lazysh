@@ -6571,6 +6571,8 @@ class NativeWorkspaceTest {
                 println("lazysh parity: the share service configured, uploaded to, listed, thumbnailed, linked and deleted through the Share dialog over TLS")
             } finally {
                 Os.unsetenv("LAZYSH_TEST_SHARE_ROOT_PEM")
+                // Later cases open the hosts drawer, which Preferences would cover.
+                runCatching { closePreferences() }
             }
         }
     }
