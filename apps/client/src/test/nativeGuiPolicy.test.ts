@@ -78,7 +78,7 @@ it('points only the input-method case at its own IBus daemon, in a UTF-8 locale,
   const directory='/tmp/lazysh-native-gui-owned',address=`unix:path=${directory}/runtime/ibus`;
   const base=guiEnvironment(directory,`unix:path=${directory}/runtime/bus`,1200);
   const env=inputMethodEnvironment(base,address);
-  expect(env).toMatchObject({GTK_IM_MODULE:'ibus',XMODIFIERS:'@im=ibus',IBUS_ADDRESS:address,LANG:'C.UTF-8',LC_ALL:'C.UTF-8',DISPLAY:':1200',HOME:`${directory}/home`});
+  expect(env).toMatchObject({GTK_IM_MODULE:'ibus',XMODIFIERS:'@im=ibus',IBUS_ADDRESS:address,IBUS_ENABLE_SYNC_MODE:'1',LANG:'C.UTF-8',LC_ALL:'C.UTF-8',DISPLAY:':1200',HOME:`${directory}/home`});
   expect(base).not.toHaveProperty('GTK_IM_MODULE');expect(base.LANG).toBe('C');
   for(const bad of ['tcp:host=127.0.0.1,port=1','unix:abstract=/tmp/ibus','unix:path=relative/ibus',`unix:path=${directory}/runtime/ibus;x`])expect(()=>inputMethodEnvironment(base,bad)).toThrow('address');
 });

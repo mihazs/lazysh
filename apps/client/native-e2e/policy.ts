@@ -23,7 +23,8 @@ export function guiEnvironment(directory:string,bus:string,display?:number):Node
 /** The real IBus input method for one owned GUI: its UTF-8 locale and the GTK/XIM module choice, on the daemon's own private address. */
 export function inputMethodEnvironment(env:NodeJS.ProcessEnv,address:string):NodeJS.ProcessEnv {
   if(!/^unix:path=\/[A-Za-z0-9_./-]+$/.test(address))throw new Error('Invalid owned input-method address');
-  return {...env,LANG:'C.UTF-8',LC_ALL:'C.UTF-8',GTK_IM_MODULE:'ibus',XMODIFIERS:'@im=ibus',IBUS_ADDRESS:address};
+  return {...env,LANG:'C.UTF-8',LC_ALL:'C.UTF-8',GTK_IM_MODULE:'ibus',XMODIFIERS:'@im=ibus',IBUS_ADDRESS:address,// Synchronous key handling: WebDriver's synthetic keys otherwise race IBus's asynchronous forwarding and arrive lost or reordered.
+    IBUS_ENABLE_SYNC_MODE:'1'};
 }
 
 /** The daemon and its engines read their own dictionaries from the system data directory, which the GUI's private `XDG_DATA_DIRS` hides (Ubuntu 22.04's libpinyin then never starts). */
