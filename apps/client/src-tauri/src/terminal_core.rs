@@ -103,7 +103,7 @@ pub(crate) trait Core: Send + Sync {
     fn set_theme(&self, theme: &Json) -> Result<(), String>;
     /// The session a renderer host draws and the inbox its `changed` calls ring, made again for each call
     /// (a surface that is placed again draws the same session). `None` for a core with nothing to draw.
-    #[cfg(feature = "native-terminal")]
+    #[cfg(all(feature = "native-terminal", native_terminal_core))]
     fn drawing(
         &self,
     ) -> Option<(
@@ -2421,15 +2421,20 @@ mod tests {
             .unwrap()
     }
 
+    /// The error `terminal_core_open` returns for an 80x24 session with these History lines.
+    async fn open_error(lines: Option<u32>) -> String {
+        terminal_core_open(lease(), channel(), 80, 24, lines, None)
+            .await
+            .err()
+            .unwrap()
+            .into_inner()
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn open_refuses_history_lines_outside_the_setting_range() {
         for lines in [0, 99, 20_001, u32::MAX] {
-            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines), None)
-                .await
-                .err()
-                .unwrap()
-                .into_inner()
-                .unwrap();
+            let error = open_error(Some(lines)).await;
             assert_eq!(error, "scrollback lines must be 100 to 20000", "{lines}");
         }
     }
@@ -2547,22 +2552,10 @@ mod tests {
         } else {
             "The native terminal core is not built into this app"
         };
-        let error = terminal_core_open(lease(), channel(), 80, 24, None, None)
-            .await
-            .err()
-            .unwrap()
-            .into_inner()
-            .unwrap();
-        assert_eq!(error, why);
+        assert_eq!(open_error(None).await, why);
         // The ends of the History lines range reach the core; only values outside it are refused.
         for lines in [100, 20_000] {
-            let error = terminal_core_open(lease(), channel(), 80, 24, Some(lines), None)
-                .await
-                .err()
-                .unwrap()
-                .into_inner()
-                .unwrap();
-            assert_eq!(error, why, "{lines}");
+            assert_eq!(open_error(Some(lines)).await, why, "{lines}");
         }
         assert!(terminal_core_open(lease(), channel(), 0, 24, None, None)
             .await
