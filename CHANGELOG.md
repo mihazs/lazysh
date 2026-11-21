@@ -10,6 +10,20 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.92.0] - 2026-11-21
+
+### New
+
+- **settings:** add the Terminal engine control with Auto, Native and xterm.js to Settings ([#2197](https://github.com/mihazs/lazysh/pull/2197))
+- **terminal:** add the typed-input editor for native terminal sessions on desktop and iOS ([#2161](https://github.com/mihazs/lazysh/pull/2161))
+- **terminal:** find web addresses, file paths and hyperlinks in the shared terminal core ([#2198](https://github.com/mihazs/lazysh/pull/2198))
+- **terminal:** give the native core the app's colours and the Mosh canonical-frame mode at session open ([#2160](https://github.com/mihazs/lazysh/pull/2160))
+
+### Under the hood
+
+- **android:** run the real terminal core inside the app on the CI emulator ([#2147](https://github.com/mihazs/lazysh/pull/2147))
+- **ntfy:** record what the Android app did with each pushed challenge when confirmation times out ([#1966](https://github.com/mihazs/lazysh/pull/1966))
+
 ## [1.91.4] - 2026-11-21
 
 ### New

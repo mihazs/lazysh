@@ -1,5 +1,55 @@
 # @lazysh/client
 
+## 1.92.0
+
+### Minor Changes
+
+- feat(settings): add the Terminal engine control with Auto, Native and xterm.js to Settings ([#2197](https://github.com/mihazs/lazysh/pull/2197))
+
+  <details><summary>Details</summary>
+
+  Settings, Terminal and accessibility, now has a Terminal engine choice on every platform (#2092, part of #1302): Auto, Native or xterm.js, in English, Brazilian Portuguese and Spanish, reachable with the keyboard like the other choices there. It sets the engine of sessions you open from now on; a session that is already open keeps its engine. The choice is stored on this device only and is never part of encrypted sync. Native is never hidden: while the engine registry refuses it (this platform has no native surface yet or its probe fails, or a screen reader is active and the native engine cannot be read by it) Native is disabled and Settings shows the registry's reason beside it. No release build passes the native probe yet, so Native is disabled everywhere, Auto still uses xterm.js and nothing changes for users; no default changes.
+
+  </details>
+
+### Patch Changes
+
+- feat(terminal): add the typed-input editor for native terminal sessions on desktop and iOS ([#2161](https://github.com/mihazs/lazysh/pull/2161))
+
+  <details><summary>Details</summary>
+
+  First slice of #1334: a hidden text field in the terminal's container that takes keys, input-method composition and paste. Keys go to the core as DOM-shaped key inputs after the platform rules for Option and AltGr; Shift+PageUp and Shift+PageDown scroll the history by a page and are not sent to the program, as with xterm.js; composition shows its preedit at the cursor and commits once whichever order the browser fires its events in; a paste is bracketed for a program that asked for it. Android keeps its native input connection and gets no editor. No release build selects the native terminal, so xterm.js stays the default and nothing changes for users.
+
+  </details>
+- feat(terminal): find web addresses, file paths and hyperlinks in the shared terminal core ([#2198](https://github.com/mihazs/lazysh/pull/2198))
+
+  <details><summary>Details</summary>
+
+  Part of #1320 and #1302. The shared Rust terminal core can now find the web addresses (URLs) and host file paths on a row of its screen or scrollback, including those a program wrapped over several rows or broke at a box border, and read the hyperlinks (OSC 8) an application draws. On 33 shared screens it returns the same addresses, paths, line and column numbers and cell ranges as the existing xterm.js link code. The core is not wired into the app and xterm.js stays the only engine and the default, so terminal behaviour does not change and no defaults change.
+
+  </details>
+- test(android): run the real terminal core inside the app on the CI emulator ([#2147](https://github.com/mihazs/lazysh/pull/2147))
+
+  <details><summary>Details</summary>
+
+  A new `native-android-terminal-core` job builds the app with the optional `native-terminal` feature for arm64 (compiled and linked) and x86_64 and prints the size of each library, and an instrumentation case opens a core through the renderer's IPC, connects to an owned OpenSSH and reads back the shell's output with `terminal_core_text` on the CI emulator. The same harness runs against the Waydroid guest once its session can start. The feature stays off in every release build, so the app, its settings and its defaults are unchanged and nothing changes for users.
+
+  </details>
+- test(ntfy): record what the Android app did with each pushed challenge when confirmation times out ([#1966](https://github.com/mihazs/lazysh/pull/1966))
+
+  <details><summary>Details</summary>
+
+  Count in memory what the Android app does with each pushed ntfy challenge message and retain only those closed counts in the failure receipt when the unchanged 15-second challenge confirmation fails. This separates a message the distributor never delivered from one the app dropped; it is diagnostic evidence, not a confirmation or delivery fix.
+
+  </details>
+- feat(terminal): give the native core the app's colours and the Mosh canonical-frame mode at session open ([#2160](https://github.com/mihazs/lazysh/pull/2160))
+
+  <details><summary>Details</summary>
+
+  Give the native terminal core the app's colours and the Mosh canonical-frame mode when a session opens: `terminal_core_open` takes an optional config with the app's terminal theme and `canonicalFrames`, and `terminal_core_theme` changes the colours of a running session, so a program that asks the core for its colours hears the theme the user chose and a theme change answers the next query. The client's bridge passes the theme when it opens a core and sends a changed theme. Nothing registers the native engine yet, so terminal behaviour and defaults do not change; xterm.js stays the only engine.
+
+  </details>
+
 ## 1.91.4
 
 ### Patch Changes
