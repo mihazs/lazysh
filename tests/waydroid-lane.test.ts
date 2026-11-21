@@ -10,7 +10,7 @@ import { project } from './support/gitFixture';
 // is never touched. What it cannot show is the real container and guest: that is the runbook's job (docs/architecture/waydroid-lane.md).
 const script = join(project, 'apps', 'client', 'bench', 'waydroid-lane.sh');
 const SERIAL = '192.168.240.112:5555';
-const utilities = ['sh', 'dirname', 'basename', 'mktemp', 'id', 'sed', 'grep', 'jq', 'tr', 'cut', 'head', 'tail', 'date', 'sleep', 'find', 'git', 'sha256sum', 'nproc', 'uname', 'cp', 'mv', 'rm', 'mkdir', 'rmdir', 'cat', 'kill', 'touch'];
+const utilities = ['sh', 'dirname', 'basename', 'mktemp', 'id', 'sed', 'grep', 'jq', 'tr', 'cut', 'head', 'tail', 'date', 'sleep', 'find', 'git', 'sha256sum', 'nproc', 'uname', 'cp', 'mv', 'rm', 'mkdir', 'rmdir', 'cat', 'kill', 'touch', 'awk'];
 const stubs: Record<string, string> = {
   waydroid: `echo "waydroid $*" >> "$STUB/calls"
 case "$1" in
@@ -66,7 +66,7 @@ afterAll(async () => { listener.stop(true); await rm(root, { recursive: true, fo
 
 type Options = {
   session?: 'RUNNING' | 'STOPPED'; compositor?: boolean; without?: string[]; files?: Record<string, string>; props?: Record<string, string>; env?: Record<string, string>; instrumentation?: Record<string, string>;
-  lock?: 'held' | 'stale'; listed?: boolean;
+  lock?: 'held' | 'stale'; listed?: boolean; fixture?: 'ok' | 'dies';
 };
 let runs = 0;
 /** One lane run in a fresh sandbox: the stub state, a PATH holding only the stubs and the utilities the script needs, and the evidence it wrote. */
@@ -84,14 +84,19 @@ async function lane(args: string[], options: Options = {}) {
   if (options.listed) await writeFile(join(stub, 'listed'), '');
   if (options.lock) { await mkdir(lock); if (options.lock === 'stale') await utimes(lock, new Date(Date.now() - 3 * 3600_000), new Date(Date.now() - 3 * 3600_000)); }
   const out = join(dir, 'evidence', 'lane.json');
+  const helper = join(dir, 'fixture-helper.sh');
+  // A stand-in for tests/support/waydroidSshFixture.ts: prints the ready line, then keeps running until SIGTERM, like the real helper.
+  if (options.fixture) await writeFile(helper, options.fixture === 'dies' ? 'echo "sshd is missing" >&2; exit 1\n'
+    : `printf '{"x":1}' > "$1/fixture.json"; printf '{"port":4242,"nonce":"${NONCE}","file":"%s"}\\n' "$1/fixture.json"; trap 'echo stopped >> "$STUB/fixture-stopped"; exit 0' TERM; while :; do sleep 0.05; done\n`);
   const env: Record<string, string> = { PATH: bin, STUB: stub, STUB_SERIAL: SERIAL, XDG_RUNTIME_DIR: runtime, HOME: dir, LAZYSH_WAYDROID_LOCK: lock, LAZYSH_WAYDROID_LOCK_WAIT_S: '1', LAZYSH_WAYDROID_LOCK_POLL_S: '0.1',
-    LAZYSH_WAYDROID_BOOT_WAIT_S: '5', LAZYSH_WAYDROID_POLL_S: '0.05', ...(options.compositor === false ? {} : { WAYLAND_DISPLAY: wayland }), ...options.env };
+    LAZYSH_WAYDROID_BOOT_WAIT_S: '5', LAZYSH_WAYDROID_POLL_S: '0.05', ...(options.compositor === false ? {} : { WAYLAND_DISPLAY: wayland }), ...(options.fixture ? { LAZYSH_WAYDROID_FIXTURE_CMD: `exec sh ${helper} "$1"` } : {}), ...options.env };
   const child = Bun.spawn(['/bin/sh', script, '--out', out, ...args], { cwd: dir, env, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' });
   const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
   const calls = (await readFile(join(stub, 'calls'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean);
   return { code, stderr, calls, dir, lock, session: (await readFile(join(stub, 'session'), 'utf8')).trim(), evidence: existsSync(out) ? JSON.parse(await readFile(out, 'utf8')) : undefined };
 }
 const apk = async (name = 'app.apk', body = 'apk bytes') => { const path = join(root, name); await writeFile(path, body); return path; };
+const NONCE = '0123456789abcdef0123456789abcdef';
 const RUNNER = 'app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner', CLASS = 'app.lazysh.client.NativeTerminalSurfaceTest';
 
 describe('refuses to run without what it needs, and says what is missing', () => {
@@ -266,5 +271,88 @@ describe('building with the existing android-apk.sh entry points', () => {
     const result = await lane(['--build', join(root, 'build.sh')], { env: { ANDROID_HOME: '', JAVA_HOME: '' } });
     expect(result.code).toBe(1);
     expect(result.evidence.failures[0]).toMatch(/needs ANDROID_HOME .* and JAVA_HOME/);
+  });
+});
+
+describe('the owned SSH fixture', () => {
+  const remote = `/data/local/tmp/lazysh-ui-ssh-${NONCE}`;
+
+  test('is started, reversed to the guest, pushed, handed to the instrumentation and torn down afterwards', async () => {
+    const result = await lane(['--owned-ssh-fixture', '--apk', await apk(), '--instrument', RUNNER, CLASS], { fixture: 'ok', instrumentation: { [CLASS]: instrumentation([0]) } });
+    expect(result.code).toBe(0);
+    const adb = result.calls.filter(call => /^adb -s \S+ (reverse|push|shell (mkdir|chmod|rm|am instrument))/.test(call)).map(call => call.replace(`adb -s ${SERIAL} `, ''));
+    expect(adb).toEqual([
+      'reverse --no-rebind tcp:4242 tcp:4242', `shell mkdir -m 700 ${remote}`, expect.stringMatching(new RegExp(`^push \\S+/fixture/fixture.json ${remote}/fixture.json$`)),
+      `shell chmod 600 ${remote}/fixture.json`, `shell am instrument -w -r -e class '${CLASS}' -e lazyshSshFixture '${remote}/fixture.json' '${RUNNER}'`,
+      'reverse --remove tcp:4242', `shell rm -rf ${remote}`,
+    ]);
+    expect(await readFile(join(result.dir, 'stub', 'fixture-stopped'), 'utf8')).toBe('stopped\n');
+    expect(result.evidence.status).toBe('passed');
+  });
+
+  test('is torn down when the instrumentation fails', async () => {
+    const result = await lane(['--owned-ssh-fixture', '--apk', await apk(), '--instrument', RUNNER, CLASS], { fixture: 'ok', instrumentation: { [CLASS]: instrumentation([-2]) } });
+    expect(result.code).toBe(1);
+    expect(result.calls).toContain(`adb -s ${SERIAL} reverse --remove tcp:4242`);
+    expect(result.calls).toContain(`adb -s ${SERIAL} shell rm -rf ${remote}`);
+    expect(existsSync(join(result.dir, 'stub', 'fixture-stopped'))).toBe(true);
+  });
+
+  test('a helper that cannot start the server fails the run before any test, with its message', async () => {
+    const result = await lane(['--owned-ssh-fixture', '--apk', await apk(), '--instrument', RUNNER, CLASS], { fixture: 'dies', instrumentation: { [CLASS]: instrumentation([0]) } });
+    expect(result.code).toBe(1);
+    expect(result.evidence.failures[0]).toMatch(/owned SSH fixture did not start: sshd is missing/);
+    expect(result.calls.some(call => call.includes('am instrument') || call.includes(' reverse '))).toBe(false);
+  });
+
+  test('without the option nothing is started and no fixture argument is passed', async () => {
+    const result = await lane(['--apk', await apk(), '--instrument', RUNNER, CLASS], { instrumentation: { [CLASS]: instrumentation([0]) } });
+    expect(result.calls.filter(call => call.includes(' reverse ') || call.includes('lazyshSshFixture'))).toEqual([]);
+  });
+
+  test('the real helper serves an sshd, writes the fixture and retires the server on SIGTERM', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lw-helper-'));
+    const child = Bun.spawn(['bun', join(project, 'tests', 'support', 'waydroidSshFixture.ts'), dir], { stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' });
+    const reader = child.stdout.getReader();
+    const ready = JSON.parse(new TextDecoder().decode((await reader.read()).value));
+    const fixture = JSON.parse(await readFile(ready.file, 'utf8'));
+    const reachable = (port: number) => new Promise<boolean>(resolve => { Bun.connect({ hostname: '127.0.0.1', port, socket: { open(socket) { socket.end(); resolve(true); }, data() {}, error() { resolve(false); }, connectError() { resolve(false); } } }).catch(() => resolve(false)); });
+    expect({ nonce: ready.nonce === fixture.nonce && /^[a-f0-9]{32}$/.test(ready.nonce), port: fixture.port === ready.port, privateKey: fixture.privateKey.includes('PRIVATE KEY'), listening: await reachable(ready.port) })
+      .toEqual({ nonce: true, port: true, privateKey: true, listening: true });
+    child.kill('SIGTERM');
+    expect(await child.exited).toBe(0);
+    expect(await reachable(ready.port)).toBe(false);
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe('thawing the guest', () => {
+  test('launches the app before the first adb command and before stopping it, since Waydroid freezes an idle container', async () => {
+    const result = await lane(['--apk', await apk()]);
+    const launch = 'waydroid app launch app.lazysh.client';
+    const firstShell = result.calls.findIndex(call => call.startsWith('adb -s') && call.includes(' shell '));
+    expect(result.calls.indexOf(launch)).toBeGreaterThanOrEqual(0);
+    expect(result.calls.indexOf(launch)).toBeLessThan(firstShell);
+    expect(result.calls.at(-4)).toBe(launch);
+    expect(result.calls.at(-3)).toBe(`adb -s ${SERIAL} shell am force-stop app.lazysh.client`);
+  });
+});
+
+describe('failure details in the evidence', () => {
+  test('a failed test carries its class, name, message and stack', async () => {
+    const failure = [
+      'INSTRUMENTATION_STATUS: class=app.lazysh.client.NativeTerminalCoreTest', 'INSTRUMENTATION_STATUS: test=theCore', 'INSTRUMENTATION_STATUS_CODE: 1',
+      'INSTRUMENTATION_STATUS: class=app.lazysh.client.NativeTerminalCoreTest', 'INSTRUMENTATION_STATUS: test=theCore',
+      'INSTRUMENTATION_STATUS: stack=java.lang.IllegalArgumentException: An owned SSH fixture path is required', '\tat app.lazysh.client.OwnedSshFixtureKt.ownedSshFixture(OwnedSshFixture.kt:9)', '\tat org.junit.Foo.bar(Foo.java:1)',
+      'INSTRUMENTATION_STATUS_CODE: -2', 'INSTRUMENTATION_STATUS: class=other', 'INSTRUMENTATION_STATUS: test=fine', 'INSTRUMENTATION_STATUS_CODE: 0', 'INSTRUMENTATION_CODE: -1', ''].join('\n');
+    const result = await lane(['--apk', await apk(), '--instrument', RUNNER, CLASS], { instrumentation: { [CLASS]: failure } });
+    expect(result.code).toBe(1);
+    const entry = result.evidence.results.at(-1);
+    expect(entry.failedTests).toEqual([{
+      class: 'app.lazysh.client.NativeTerminalCoreTest', test: 'theCore', message: 'java.lang.IllegalArgumentException: An owned SSH fixture path is required',
+      stack: 'java.lang.IllegalArgumentException: An owned SSH fixture path is required\n\tat app.lazysh.client.OwnedSshFixtureKt.ownedSshFixture(OwnedSshFixture.kt:9)\n\tat org.junit.Foo.bar(Foo.java:1)',
+    }]);
+    expect(entry.reason).toBe('1 test(s) failed: theCore: java.lang.IllegalArgumentException: An owned SSH fixture path is required');
+    expect(result.evidence.failures[0]).toContain('An owned SSH fixture path is required');
   });
 });
