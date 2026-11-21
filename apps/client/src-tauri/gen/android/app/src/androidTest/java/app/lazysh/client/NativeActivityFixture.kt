@@ -31,8 +31,20 @@ internal object NativeActivityFixture {
         launch(Intent(InstrumentationRegistry.getInstrumentation().targetContext, MainActivity::class.java))
     }
 
+    /**
+     * Collapses the notification shade and closes system dialogs through the shell. A shade that is expanding when Back arrives
+     * keeps expanding and holds the window focus, so every later case would wait for a focus that never returns.
+     */
+    fun clearSystemOverlays() {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        for (command in listOf("cmd statusbar collapse", "am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")) {
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use { it.readBytes() }
+        }
+    }
+
     fun launch(intent: Intent): ActivityScenario<MainActivity> {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        clearSystemOverlays()
         val context = instrumentation.targetContext
         val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
