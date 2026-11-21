@@ -77,7 +77,7 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
   const events = new Channel<NativeCoreEvent | SshEvent>();
   const listeners = new Set<(event: NativeCoreEvent) => void>();
   const deliver = sessionOutput<NativeCoreEvent | SshEvent>(event => {
-    if (isCoreEvent(event)) listeners.forEach(listener => listener(event)); else onTransportEvent?.(event);
+    if (isCoreEvent(event)) listeners.forEach(listener => listener(event)); else { onTransportEvent?.(event); adapter.transport?.onEvent?.(event); }
   });
   events.onmessage = deliver;
   try {
@@ -89,8 +89,8 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
     throw asError(error);
   }
 
-  let bind!: (session: Promise<string>) => void;
-  const session = new Promise<string>(resolve => { bind = resolve; });
+  let bind!: (session: Promise<string>) => void, bound = false;
+  const session = new Promise<string>(resolve => { bind = started => { bound = true; resolve(started); }; });
   // A failed start is the caller's to report; the commands that waited for the id reject with it and the adapter drops them.
   session.then(id => registerSessionOutput(id, deliver.dispose), noop);
 
@@ -142,11 +142,14 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
     close() {
       return closing ??= (async () => {
         stopWatching(); deliver.dispose(); listeners.clear();
-        const sessionId = await session.catch(() => undefined);
+        // A transport that never started has no session to wait for.
+        const sessionId = bound ? await session.catch(() => undefined) : undefined;
         // A session that never started has no core to free: the failed start already did.
         if (sessionId) await unguardedInvoke('terminal_core_close', {sessionId});
       })();
     },
   };
-  return {adapter: new NativeTerminalAdapter(bridge, blank(options), adapterOptions), events, bind};
+  const adapter = new NativeTerminalAdapter(bridge, blank(options), adapterOptions);
+  adapter.transport = {events, bind};
+  return {adapter, events, bind};
 }
