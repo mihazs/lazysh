@@ -2,14 +2,18 @@ import {dirname, join, relative, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import ts from 'typescript';
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {type AdapterPage, BACKEND_ENV, onAdapter, requestedBackend} from './e2eTerminalBackend';
+import {type AdapterPage, BACKEND_ENV, onAdapter, onEngine, requestedBackend} from './e2eTerminalBackend';
 import type {TerminalAdapter, TerminalBackendId} from './terminalAdapter';
+import type {BackendSelection} from './terminalBackendRegistry';
 
 afterEach(() => vi.unstubAllEnvs());
 
-/** A page whose drawn terminal is a `backend` adapter; the read runs here instead of in a browser. */
-const pageDrawing = (backend: TerminalBackendId) => ({
-  evaluateHandle: async () => ({evaluate: async (read: (adapter: unknown, arg?: unknown) => unknown, arg?: unknown) => read({backend}, arg), dispose: async () => {}}),
+type Handle = {evaluate: (read: (value: unknown, arg?: unknown) => unknown, arg?: unknown) => Promise<unknown>; evaluateHandle: (pick: (value: unknown) => unknown) => Promise<Handle>; dispose: () => Promise<void>};
+const handleTo = (value: unknown): Handle => ({evaluate: async (read, arg) => read(value, arg), evaluateHandle: async pick => handleTo(pick(value)), dispose: async () => {}});
+
+/** A page whose drawn terminal is a `backend` adapter whose session recorded `selection`; the reads run here instead of in a browser. */
+const pageDrawing = (backend: TerminalBackendId, selection: BackendSelection = {id: backend, reason: 'automatic', fallbacks: []}) => ({
+  evaluateHandle: async () => handleTo({adapter: {backend}, selection}),
 }) as unknown as AdapterPage;
 
 describe('the backend a terminal e2e run asked for', () => {
@@ -35,6 +39,12 @@ describe('the backend a terminal e2e run asked for', () => {
   it('asserts nothing when no backend was requested', async () => {
     vi.stubEnv(BACKEND_ENV, '');
     await expect(onAdapter(pageDrawing('native'), adapter => adapter.backend)).resolves.toBe('native');
+  });
+
+  it('reads the engine the drawn terminal got and why, whatever backend was requested', async () => {
+    vi.stubEnv(BACKEND_ENV, 'native');
+    const recorded: BackendSelection = {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'lacks accessibility'}]};
+    await expect(onEngine(pageDrawing('xterm', recorded))).resolves.toEqual({backend: 'xterm', selection: recorded});
   });
 });
 

@@ -1,4 +1,6 @@
 import type {TerminalAdapter, TerminalBackendId} from './terminalAdapter';
+import type {BackendSelection} from './terminalBackendRegistry';
+import type {LiveSession} from './terminal';
 
 /**
  * The backend matrix of the terminal e2e specs: `LAZYSH_E2E_TERMINAL_BACKEND=xterm|native` makes every spec that takes its `test`
@@ -25,29 +27,48 @@ export function assertBackendUsed(used: TerminalBackendId, requested = requested
   if (requested && used !== requested) throw new BackendMismatchError(`${BACKEND_ENV}=${requested} but the terminal on screen is the ${used} backend: the app fell back or a fixture mounts ${used}, so this run says nothing about ${requested}.`);
 }
 
-/** The part of Playwright's `Page` that `onAdapter` uses; a Playwright `Page` is assignable to it. */
-export interface AdapterPage {
-  evaluateHandle(find: () => TerminalAdapter): Promise<{evaluate<R, A = void>(use: (adapter: TerminalAdapter, arg: A) => R | Promise<R>, arg?: A): Promise<R>; dispose(): Promise<void>}>;
+/** The part of a Playwright `JSHandle` that the readers below use; a Playwright handle is assignable to it. */
+interface Handle<T> {
+  evaluate<R, A = void>(use: (value: T, arg: A) => R | Promise<R>, arg?: A): Promise<R>;
+  evaluateHandle<R>(pick: (value: T) => R): Promise<Handle<R>>;
+  dispose(): Promise<void>;
 }
+
+/** The part of Playwright's `Page` that `onAdapter` and `onEngine` use; a Playwright `Page` is assignable to it. */
+export interface AdapterPage {
+  evaluateHandle(find: () => LiveSession): Promise<Handle<LiveSession>>;
+}
+
+/** Runs in the page: the session of the terminal drawn on screen. The App keeps its sessions in React state, so it is taken from the visible `TerminalPane`'s `session` prop rather than through a hook in the product. */
+const drawnSession = () => {
+  type Fiber = {memoizedProps?: {session?: {adapter?: unknown}} | null; return: Fiber | null};
+  const canvas = [...document.querySelectorAll('.terminal-canvas')].find(node => node.getClientRects().length > 0);
+  const key = canvas && Object.keys(canvas).find(name => name.startsWith('__reactFiber$'));
+  for (let fiber = key ? Reflect.get(canvas, key) as Fiber | null : null; fiber; fiber = fiber.return) if (fiber.memoizedProps?.session?.adapter) return fiber.memoizedProps.session as LiveSession;
+  throw new Error('No terminal is drawn on this page.');
+};
 
 /**
  * Runs `use` in the page against the TerminalAdapter of the terminal drawn on screen: rows (`readRows`), cursor, viewport,
  * selection and geometry come from the adapter, never from a backend's DOM or buffer, so a spec asserts the same way on any
- * backend. The App keeps its sessions in React state, so the adapter is taken from the visible `TerminalPane`'s `session` prop
- * rather than through a hook in the product. `use` is serialized: it reaches only its two arguments. When a backend was requested
+ * backend. `use` is serialized: it reaches only its two arguments. When a backend was requested
  * (`LAZYSH_E2E_TERMINAL_BACKEND`), a terminal of another backend throws before `use` runs, so a silent fallback fails the spec.
  */
 export async function onAdapter<R,A=void>(page:AdapterPage,use:(adapter:TerminalAdapter,arg:A)=>R|Promise<R>,arg?:A):Promise<R> {
-  const adapter=await page.evaluateHandle(()=>{
-    type Fiber={memoizedProps?:{session?:{adapter?:unknown}}|null;return:Fiber|null};
-    const canvas=[...document.querySelectorAll('.terminal-canvas')].find(node=>node.getClientRects().length>0);
-    const key=canvas&&Object.keys(canvas).find(name=>name.startsWith('__reactFiber$'));
-    for(let fiber=key?Reflect.get(canvas,key) as Fiber|null:null;fiber;fiber=fiber.return)if(fiber.memoizedProps?.session?.adapter)return fiber.memoizedProps.session.adapter as TerminalAdapter;
-    throw new Error('No terminal is drawn on this page.');
-  });
+  const session=await page.evaluateHandle(drawnSession);
+  const adapter=await session.evaluateHandle(drawn=>drawn.adapter);
   try{
     const requested=requestedBackend();
     if(requested)assertBackendUsed(await adapter.evaluate(terminal=>terminal.backend),requested);
     return await adapter.evaluate(use,arg);
-  }finally{await adapter.dispose();}
+  }finally{await adapter.dispose();await session.dispose();}
+}
+
+/**
+ * What the session of the terminal drawn on screen got: the adapter's backend and the registry's record of why (the engine, the reason
+ * and what it refused first). A spec that sets the engine itself reads this, so it is not held to the engine a matrix run requested.
+ */
+export async function onEngine(page:AdapterPage):Promise<{backend:TerminalBackendId;selection:BackendSelection}> {
+  const session=await page.evaluateHandle(drawnSession);
+  try{return await session.evaluate(drawn=>({backend:drawn.adapter.backend,selection:drawn.selection}));}finally{await session.dispose();}
 }
