@@ -4,7 +4,7 @@
 <div id="anchor" style="position:absolute;left:60px;top:40px;width:240px;height:160px;outline:1px dashed #888"></div>
 <div id="overlay" style="position:absolute;left:200px;top:120px;width:140px;height:100px;background:#f00;color:#fff">DOM overlay</div>
 <script>
-const session = 'composition-check';
+let session = 'composition-check';
 const anchor = document.getElementById('anchor');
 const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
 let color = 0x00c800;
@@ -20,6 +20,15 @@ const commands = {
   anchor: (x, y, w, h) => { Object.assign(anchor.style, {left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px`}); return place(); },
   color: hex => { color = parseInt(hex, 16); },
   state: async () => JSON.stringify(await invoke('native_terminal_surface_state', {session})),
+  // A local terminal with a native core, whose id the surface commands then use: the real core and PTY behind a surface.
+  core: async (cols, rows) => {
+    const events = `__CHANNEL__:${window.__TAURI_INTERNALS__.transformCallback(() => {})}`;
+    await invoke('terminal_core_open', {events, cols: +cols, rows: +rows});
+    session = (await invoke('local_connect', {events, cols: +cols, rows: +rows})).sessionId;
+    return session;
+  },
+  // Four cells of an exact colour at the top left of a cleared screen.
+  paint: () => invoke('local_write', {sessionId: session, data: "printf '\\033[2J\\033[H\\033[48;2;200;30;30m    \\033[0m'\r"}),
   probe: async () => JSON.stringify(await invoke('native_terminal_probe')),
 };
 const answer = body => fetch('/done', {method: 'POST', body});
