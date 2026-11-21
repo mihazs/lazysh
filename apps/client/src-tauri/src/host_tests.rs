@@ -651,6 +651,23 @@ pub(crate) mod local {
         assert_eq!(result.unwrap_err().kind(), "disconnected");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_run_status_returns_a_failing_exit_as_data_where_run_refuses_it() {
+        let (_temp, _app, _id, host) = resolved().await;
+        let access = lease();
+        let command = Cmd::new(&[], &["sh", "-c", "echo out; echo problem >&2; exit 3"]);
+        let output = host.run_status(&access, &command).await.unwrap();
+        assert_eq!(output.status, Some(3));
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"problem\n");
+        let refused = host.run(&access, &command).await.unwrap_err();
+        assert_eq!(
+            (refused.kind(), refused.message()),
+            ("remote_command_failed", "problem")
+        );
+    }
+
     #[tokio::test]
     async fn local_exec_is_cancelled_by_closing_the_session() {
         let (_temp, app, id, host) = resolved().await;

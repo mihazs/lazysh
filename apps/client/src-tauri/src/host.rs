@@ -167,6 +167,23 @@ impl Host {
     pub(crate) async fn run(&self, lease: &AccessLease, cmd: &Cmd) -> Result<String> {
         self.exec(lease, cmd, OP_TIMEOUT, FILE_LIMIT as usize).await
     }
+    /// `run` for a command whose exit status the caller interprets: a non-zero exit is data here.
+    pub(crate) async fn run_status(
+        &self,
+        lease: &AccessLease,
+        cmd: &Cmd,
+    ) -> Result<ssh::ExecOutput> {
+        match self {
+            Self::Remote(session) => {
+                ssh::exec_for_access_status(session, cmd.render(), lease).await
+            }
+            #[cfg(desktop)]
+            Self::Local(host) => {
+                host.exec_status(lease, cmd, OP_TIMEOUT, FILE_LIMIT as usize)
+                    .await
+            }
+        }
+    }
     pub(crate) async fn exec(
         &self,
         lease: &AccessLease,
@@ -525,6 +542,17 @@ impl LocalHost {
         deadline: Duration,
         limit: usize,
     ) -> Result<Vec<u8>> {
+        let output = self.exec_status(lease, cmd, deadline, limit).await?;
+        ssh::check_exit(output.status, &output.stderr)?;
+        Ok(output.stdout)
+    }
+    async fn exec_status(
+        &self,
+        lease: &AccessLease,
+        cmd: &Cmd,
+        deadline: Duration,
+        limit: usize,
+    ) -> Result<ssh::ExecOutput> {
         use std::process::Stdio;
         let wrapped;
         let cmd = match &self.wsl {
@@ -621,8 +649,11 @@ impl LocalHost {
                     ssh::check_output_budget(bytes.len() + error.len(), limit)?;
                 }
                 let status = child.wait().await?;
-                ssh::check_exit(status.code().map(|code| code as u32), &error)?;
-                Ok(bytes)
+                Ok(ssh::ExecOutput {
+                    status: status.code().map(|code| code as u32),
+                    stdout: bytes,
+                    stderr: error,
+                })
             })
             .await
             .map_err(|_| SshError::new("timeout", "Local command timed out"))?
