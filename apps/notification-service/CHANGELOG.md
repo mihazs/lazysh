@@ -1,5 +1,9 @@
 # @lazysh/notification-service
 
+## 1.92.0
+
+No changes in this release.
+
 ## 1.91.4
 
 No changes in this release.
