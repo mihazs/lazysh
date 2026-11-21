@@ -474,3 +474,46 @@ impl Tmux {
         assert!(out.status.success(), "tmux {args:?}: {out:?}");
     }
 }
+
+/// A program that starts a daemon in its own session (as `codex app-server` does) leaves nothing behind
+/// when the test ends, normally or by panic.
+#[test]
+fn a_detached_daemon_does_not_outlive_the_program_guard() {
+    let alive = |pid: &str| Path::new(&format!("/proc/{pid}")).exists();
+    let run = |panic: bool| {
+        let scratch = Scratch::new(if panic { "daemon-panic" } else { "daemon-ok" });
+        let pidfile = scratch.path("daemon.pid");
+        let script = format!(
+            "setsid sleep 300 </dev/null >/dev/null 2>&1 & echo $! > {pidfile:?}; sleep 300"
+        );
+        let body = std::panic::AssertUnwindSafe(|| {
+            let program = Program::start(Path::new("/bin/sh"), &["-c", &script], &[], 80, 24);
+            let pid = loop {
+                if let Ok(pid) = std::fs::read_to_string(&pidfile) {
+                    if !pid.trim().is_empty() {
+                        break pid.trim().to_string();
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            assert!(alive(&pid), "the daemon runs while the program does");
+            let _program = program;
+            if panic {
+                panic!("test body fails");
+            }
+            pid
+        });
+        let result = std::panic::catch_unwind(body);
+        let pid = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .to_string();
+        assert_eq!(result.is_err(), panic);
+        assert!(
+            !alive(&pid),
+            "daemon {pid} outlived the test (panic: {panic})"
+        );
+    };
+    run(false);
+    run(true);
+}
