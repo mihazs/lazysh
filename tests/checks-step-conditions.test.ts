@@ -24,3 +24,16 @@ test('the OSC 52 clipboard step of native-linux-runtimes runs exactly when its P
   // The steps that need no browser still report after an earlier failure.
   expect(ran(steps, true).length).toBeGreaterThan(10);
 });
+
+test('native-android-terminal-core uploads the x86_64 APKs for the Waydroid lane after a failed or passed emulator run, not after a cancel', async () => {
+  const { steps } = (await document('.github/workflows/checks.yml')).jobs['native-android-terminal-core'];
+  const uploads = (status: { success?: boolean; cancelled?: boolean }) => steps
+    .filter(step => step.uses?.startsWith('actions/upload-artifact@') && (status.cancelled ? false : step.if === undefined ? status.success : evaluate(step.if, {})))
+    .map(step => step.with.name);
+  expect(uploads({ success: true })).toContain('lazysh-android-debug-x86_64');
+  expect(uploads({ success: false })).toContain('lazysh-android-debug-x86_64');
+  expect(uploads({ cancelled: true })).toEqual([]);
+  const upload = steps.find(step => step.with?.name === 'lazysh-android-debug-x86_64');
+  expect(upload.with['if-no-files-found']).toBe('error');
+  expect(upload.with['retention-days']).toBe(7);
+});

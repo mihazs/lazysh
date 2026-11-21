@@ -1755,6 +1755,16 @@ jobs:
           path: *android-runtime-result-paths
           if-no-files-found: warn
           retention-days: 3
+      # What the Waydroid lane installs (waydroid-lane.sh --apk): Waydroid cannot run the arm64 artifact of native-android.
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: lazysh-android-debug-x86_64
+          path: |
+            apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+            apps/client/src-tauri/gen/android/app/build/outputs/apk/androidTest/universal/debug/app-universal-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 7
 
   # Owned OpenSSH password, encrypted-key, rotated-key, bastion, agent-forwarding, Auto-fallback and
   # forced-ET parity cases (#985), the browser preview forward and teardown case (#994) and the

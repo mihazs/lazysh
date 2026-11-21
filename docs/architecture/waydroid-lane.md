@@ -52,6 +52,18 @@ apps/client/bench/waydroid-lane.sh \
 
 Steps run in the order of the arguments. A failed install or build stops the run (the evidence says the rest did not run); a failed class or benchmark does not hide the ones after it.
 
+### Prebuilt APKs from CI
+
+The `native-android-terminal-core` job uploads the x86_64 debug APK with the terminal core and its instrumentation APK as the artifact `lazysh-android-debug-x86_64` (kept 7 days). Download it from a run and install both without a local Android build:
+
+```sh
+gh run download <run> -n lazysh-android-debug-x86_64 -D /tmp/lazysh-apks
+apps/client/bench/waydroid-lane.sh --out <evidence.json> --label <name> \
+  --apk /tmp/lazysh-apks/universal/debug/app-universal-debug.apk \
+  --apk /tmp/lazysh-apks/androidTest/universal/debug/app-universal-debug-androidTest.apk \
+  --instrument app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner app.lazysh.client.NativeTerminalCoreTest
+```
+
 ### The program workloads on the lane
 
 `apps/client/e2e/terminal-programs.spec.ts` replays W5 to W8 and W11 ([benchmarks](terminal-benchmarks.md#program-workloads-w5-to-w8-and-w11)) through xterm.js in the guest's Android System WebView when `LAZYSH_BENCH_ANDROID` is set, which the lane does for every `--bench` command:
