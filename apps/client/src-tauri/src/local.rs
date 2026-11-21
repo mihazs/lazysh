@@ -2421,7 +2421,7 @@ mod tests {
         use portable_pty::CommandBuilder;
         let state = LocalState::default();
         let (event, mut rx) = events();
-        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 6, None)
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 6, None, None)
             .await
             .unwrap();
         let mut command = CommandBuilder::new("sh");
@@ -2455,7 +2455,7 @@ mod tests {
         let _kept = terminal_core::tests_keeping_cores().read();
         let state = LocalState::default();
         let (event, _rx) = events();
-        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 10, None)
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 10, None, None)
             .await
             .unwrap();
         // Column 40 is clamped to the last column of the grid, so where the Y lands shows the width.
@@ -2483,9 +2483,16 @@ mod tests {
         tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
     ) {
         let (event, rx) = events();
-        crate::terminal_core::terminal_core_open(access_lease(), event.clone(), cols, rows, None)
-            .await
-            .unwrap();
+        crate::terminal_core::terminal_core_open(
+            access_lease(),
+            event.clone(),
+            cols,
+            rows,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         (LocalState::default(), event, rx)
     }
     /// The events the core's Channel has delivered so far. The core's output never travels on it.
@@ -2681,7 +2688,7 @@ mod tests {
         let _kept = terminal_core::tests_keeping_cores().read();
         let state = LocalState::default();
         let (event, _rx) = events();
-        terminal_core::terminal_core_open(access_lease(), event.clone(), 120, 24, None)
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 120, 24, None, None)
             .await
             .unwrap();
         // Bracketed paste and mouse tracking on, then a device attributes query: the core answers it
@@ -2730,9 +2737,16 @@ mod tests {
         let _exclusive = terminal_core::tests_keeping_cores().write();
         let state = LocalState::default();
         let (event, _rx) = events();
-        terminal_core::terminal_core_open(access_lease(), event.clone(), 120, 24, Some(5_000))
-            .await
-            .unwrap();
+        terminal_core::terminal_core_open(
+            access_lease(),
+            event.clone(),
+            120,
+            24,
+            Some(5_000),
+            None,
+        )
+        .await
+        .unwrap();
         let connected =
             desktop::start_with_access(&state, access_lease(), shell("echo done"), 120, 24, event)
                 .await
@@ -2771,9 +2785,16 @@ mod tests {
                 baseline = resident_kib(); // after warm-up: allocator pools and thread stacks exist
             }
             let (event, mut rx) = events();
-            terminal_core::terminal_core_open(access_lease(), event.clone(), 80, 24, Some(1_000))
-                .await
-                .unwrap();
+            terminal_core::terminal_core_open(
+                access_lease(),
+                event.clone(),
+                80,
+                24,
+                Some(1_000),
+                None,
+            )
+            .await
+            .unwrap();
             let connected = desktop::start_with_access(
                 &state,
                 access_lease(),

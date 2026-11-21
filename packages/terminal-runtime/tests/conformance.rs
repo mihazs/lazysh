@@ -875,6 +875,54 @@ fn the_theme_palette_colours_the_cells() {
 }
 
 #[test]
+fn a_theme_set_on_a_running_session_answers_the_next_queries_and_colours_the_next_cells() {
+    let query = b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07\x1b]4;5;?\x07\x1b]4;6;?\x07";
+    let mut rt = themed();
+    feed(&mut rt, query);
+    let before = rt.take_replies().0;
+    assert!(String::from_utf8_lossy(&before).contains("rgb:aaaa/bbbb/cccc"));
+
+    let mut theme = Theme {
+        foreground: rgb(0xfa0102),
+        background: rgb(0x030405),
+        cursor: rgb(0x060708),
+        ..Theme::default()
+    };
+    theme.palette[5] = rgb(0x0a0b0c);
+    // Palette 6 is one the program sets itself: the program's colour is reported, not the theme's.
+    feed(&mut rt, b"\x1b]4;6;rgb:11/22/33\x07");
+    rt.set_theme(&theme).unwrap();
+    feed(&mut rt, query);
+    assert_eq!(
+        String::from_utf8_lossy(&rt.take_replies().0),
+        "\x1b]10;rgb:fafa/0101/0202\x07\x1b]11;rgb:0303/0404/0505\x07\x1b]12;rgb:0606/0707/0808\x07\
+         \x1b]4;5;rgb:0a0a/0b0b/0c0c\x07\x1b]4;6;rgb:1111/2222/3333\x07"
+    );
+    feed(&mut rt, b"\x1b[35mx");
+    assert_eq!(
+        rt.snapshot().unwrap().dirty[0].cells[0].fg,
+        Some(rgb(0x0a0b0c)),
+        "the cells resolve against the new palette too"
+    );
+}
+
+#[test]
+fn a_query_split_across_a_theme_change_is_answered_with_the_theme_in_force_when_it_ends() {
+    let mut rt = themed();
+    feed_chunk(&mut rt, b"\x1b]11;?");
+    rt.set_theme(&Theme {
+        background: rgb(0xabcdef),
+        ..Theme::default()
+    })
+    .unwrap();
+    feed_chunk(&mut rt, b"\x07");
+    assert_eq!(
+        String::from_utf8_lossy(&rt.take_replies().0),
+        "\x1b]11;rgb:abab/cdcd/efef\x07"
+    );
+}
+
+#[test]
 fn a_colour_the_program_set_is_reported_once_wherever_the_query_is_split() {
     let stream = b"\x1b]11;rgb:ff/00/00\x1b\\\x1b]11;?\x1b\\\x1b]111\x07\x1b]11;?\x07";
     let expected = "\x1b]11;rgb:ffff/0000/0000\x1b\\\x1b]11;rgb:4444/5555/6666\x07";

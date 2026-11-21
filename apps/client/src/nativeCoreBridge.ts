@@ -3,7 +3,7 @@
  * This is a control plane: every value is a size, a position, a mode flag or the TEXT of rows. No command returns a
  * cell grid, styles or pixels; the renderer reads those inside the runtime.
  */
-import type {Disposable, TerminalInputOrigin, TerminalModes, TerminalScrollAction, TerminalViewport} from './terminalAdapter';
+import type {Disposable, TerminalInputOrigin, TerminalModes, TerminalScrollAction, TerminalTheme, TerminalViewport} from './terminalAdapter';
 
 export type NativeCoreState = {
   columns: number;
@@ -41,6 +41,8 @@ export interface NativeCoreBridge {
   resize?(size: {columns: number; rows: number}): Promise<NativeCoreSnapshot>;
   /** An inactive session keeps parsing; the core stops waking the adapter. */
   setActive?(active: boolean): void;
+  /** The app's terminal theme changed: the core reports these colours to the programs that ask for them from now on. */
+  setTheme?(theme: TerminalTheme): void;
   subscribe(listener: (event: NativeCoreEvent) => void): Disposable;
   /** Frees the core. Idempotent. */
   close(): Promise<void>;

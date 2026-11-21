@@ -2,7 +2,8 @@ import type {NativeCoreBridge, NativeCoreEvent, NativeCoreSnapshot} from './nati
 import {cellsOf, sliceColumns} from './nativeRowText';
 import type {
   Disposable, TerminalAdapter, TerminalBounds, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
-  TerminalMountTarget, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalSelection, TerminalSize, TerminalViewport,
+  TerminalMountTarget, TerminalPreferences, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalSelection, TerminalSize, TerminalTheme,
+  TerminalViewport,
 } from './terminalAdapter';
 import {TerminalEvents} from './terminalEvents';
 import {searchRows} from './terminalText';
@@ -17,7 +18,11 @@ export const nativeCapabilities: TerminalCapabilities = {
 const REFRESH_MS = 16;
 const noop = () => {};
 
-export type NativeAdapterOptions = {refreshMs?: number};
+export type NativeAdapterOptions = {
+  refreshMs?: number;
+  /** The theme the core was opened with, so `applyPreferences` tells the core only about a change. */
+  theme?: TerminalTheme;
+};
 
 /**
  * The native backend: the terminal's state lives in a Rust core behind a {@link NativeCoreBridge}. The adapter keeps a
@@ -44,9 +49,12 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private again = false;
   private stale = false;
   private mirrored = false;
+  /** The theme the core reports, as JSON: preferences hand over a new object whenever anything changes. */
+  private theme: string | undefined;
 
   constructor(private readonly bridge: NativeCoreBridge, initial: NativeCoreSnapshot, private readonly options: NativeAdapterOptions = {}) {
     this.mirror = initial;
+    this.theme = options.theme && JSON.stringify(options.theme);
     this.dataPath = bridge.feed ? 'renderer' : 'runtime';
     if (bridge.feed) this.write = (bytes, onApplied) => this.feed(bytes, onApplied);
     this.source = bridge.subscribe(event => this.onCore(event));
@@ -169,7 +177,13 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     return {columns, rows, cellWidth: rect && columns ? rect.width / columns : 0, cellHeight: rect && rows ? rect.height / rows : 0, scrollbackLines};
   }
 
-  applyPreferences() { /* The renderer applies fonts and colours; the core has no use for them. */ }
+  /** The renderer applies fonts and colours; the core needs the theme to answer a program that asks what its colours are. */
+  applyPreferences({theme}: TerminalPreferences) {
+    const next = JSON.stringify(theme);
+    if (this.disposed || next === this.theme) return;
+    this.theme = next;
+    this.bridge.setTheme?.(theme);
+  }
 
   scroll(action: TerminalScrollAction) {
     if (this.disposed) return;

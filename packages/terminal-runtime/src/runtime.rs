@@ -122,7 +122,7 @@ pub struct Config {
     /// The colours the terminal reports to programs that ask: the default foreground, background and
     /// cursor (`OSC 10`, `11`, `12`) and the 256-colour palette (`OSC 4`). Pass the theme the
     /// renderer draws with, so a program that probes it to pick a light or dark scheme sees what is
-    /// on screen. Fixed when the session opens.
+    /// on screen. The theme the session opens with; [`TerminalRuntime::set_theme`] changes it later.
     pub theme: Theme,
 }
 
@@ -258,6 +258,15 @@ impl TerminalRuntime {
             display: config.canonical_frames.then(Display::new),
             processed: 0,
         })
+    }
+
+    /// Report `theme`'s colours to the queries that arrive from now on, for a user who changed the app's theme while the
+    /// session runs (see [`Config::theme`]). A reply already queued keeps the colour it was made with. A palette colour a
+    /// program set itself (`OSC 4`) stays; the others follow the new palette.
+    pub fn set_theme(&mut self, theme: &Theme) -> Result<(), Error> {
+        self.terminal.set_default_palette(&theme.palette)?;
+        self.colors.set(theme);
+        Ok(())
     }
 
     /// Queue transport bytes. Rejected chunks come back untouched; nothing is dropped or reordered.
