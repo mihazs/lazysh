@@ -26,18 +26,18 @@ const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, '
   ntfy_variants: '["google"]', native: 'false' };
 
 /** Commit `paths` (and `moves` of seeded files) over a base commit and classify the range as checks.yml does. */
-async function classify(paths: string[], { event = 'pull_request', seed = [] as string[], moves = [] as [string, string][], contents = {} as Record<string, string> } = {}) {
+async function classify(paths: string[], { event = 'pull_request', seed = [] as string[], moves = [] as [string, string][], contents = {} as Record<string, string>, seedContents = {} as Record<string, string> } = {}) {
   const { root, env } = await roots.create();
   Object.assign(env, { GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' });
   const repo = join(root, 'repo');
-  const write = async (path: string) => {
+  const write = async (path: string, text = contents[path]) => {
     await mkdir(dirname(join(repo, path)), { recursive: true });
-    await writeFile(join(repo, path), contents[path] ?? `change ${path}`);
+    await writeFile(join(repo, path), text ?? `change ${path}`);
   };
   await mkdir(repo);
   const git = (...args: string[]) => run(repo, ['git', ...args], env);
   await git('init', '-q', '-b', 'main');
-  for (const path of ['seed.txt', ...seed]) await write(path);
+  for (const path of ['seed.txt', ...seed]) await write(path, seedContents[path]);
   await git('add', '.'); await git('commit', '-q', '-m', 'chore: base');
   const base = (await git('rev-parse', 'HEAD')).stdout.trim();
   for (const path of paths) await write(path);
@@ -294,4 +294,21 @@ test('superseded runs cancel only where no publication or caller can be interrup
   // Each manual published-APK verification owns its group; only pull request runs supersede each other.
   expect((await workflow('android-published-apk.yml')).concurrency).toEqual({
     group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}", 'cancel-in-progress': true });
+});
+
+test('a Changesets version bump selects no native job, but a dependency or code change in the same range selects everything', async () => {
+  const pkg = (version: string) => `{\n  "name": "x",\n  "version": "${version}",\n  "dependencies": {}\n}\n`;
+  const base = { 'package.json': pkg('1.0.0'), 'apps/agent/package.json': pkg('1.0.0'), 'Cargo.lock': 'version = "1.0.0"\n', '.changeset/a.md': 'x' };
+  const seed = Object.keys(base);
+  const bump = { 'package.json': pkg('1.0.1'), 'apps/agent/package.json': pkg('1.0.1'), 'Cargo.lock': 'version = "1.0.1"\n', 'CHANGELOG.md': '## 1.0.1\n' };
+  const run = (paths: string[], contents: Record<string, string>, moves: [string, string][] = []) => classify(paths, { seed, seedContents: base, contents, moves });
+  expect(await run(Object.keys(bump), bump)).toEqual({ ...nothing, docs_only: 'false' });
+  // The root manifest must be bumped.
+  expect((await run(['apps/agent/package.json'], { 'apps/agent/package.json': pkg('1.0.1') })).linux).toBe('true');
+  // A changed dependency is not a version line.
+  expect((await run(Object.keys(bump), { ...bump, 'apps/agent/package.json': pkg('1.0.1').replace('{}', '{"left-pad": "1"}') })).linux).toBe('true');
+  // Source next to the bump.
+  expect((await run([...Object.keys(bump), 'apps/client/src/a.ts'], bump)).android).toBe('true');
+  // A bump on a push to main still runs everything.
+  expect(await classify(Object.keys(bump), { event: 'push', seed, seedContents: base, contents: bump })).toEqual(everything);
 });

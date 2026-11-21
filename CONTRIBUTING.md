@@ -105,6 +105,7 @@ separate, never-gating `native-android-appium-quarantine` job.
 Matrices fail fast on pull requests and keep every verdict on `main`. The script and
 `tests/native-changes.test.ts` are the exact mapping; extend both when a job gains a
 new input, and map an uncertain path to more jobs, never fewer.
+A Changesets version bump (every changed line a version line, root `package.json` bumped) selects no native job on a pull request; `main` still runs everything.
 
 ### Required checks
 
