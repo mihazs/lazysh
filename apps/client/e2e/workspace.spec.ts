@@ -944,7 +944,8 @@ for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'rep
   await expect(live).toHaveAttribute('aria-busy','false');
   const scroller=sidebar.locator('.workspace-navigation-scroll');
   await expect(board.getByRole('heading',{name:'Agent activity',exact:true})).not.toBeInViewport();
-  const calls=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls);
+  // The shown Herdr server's event watch starts and retries on its own clock; this case counts what the Activity jump itself calls.
+  const calls=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>command!=='agent_watch_start'));
   const before=await calls(),windowScroll=await page.evaluate(()=>({x:scrollX,y:scrollY}));
   const jumpActivity=jumps.getByRole('button',{name:'Reported agent activity',exact:true});
   await expect(jumpActivity).toBeInViewport({ratio:0.9});
