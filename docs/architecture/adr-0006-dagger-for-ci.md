@@ -86,3 +86,14 @@ Also learned:
 
 1. This ADR (docs only), closing [#2172](https://github.com/mihazs/lazysh/issues/2172).
 2. [#2173](https://github.com/mihazs/lazysh/issues/2173) scaffolds the module and [#2174](https://github.com/mihazs/lazysh/issues/2174) adds the setup action and proves the state pruning; then [#2175](https://github.com/mihazs/lazysh/issues/2175), [#2176](https://github.com/mihazs/lazysh/issues/2176) and [#2178](https://github.com/mihazs/lazysh/issues/2178), then [#2177](https://github.com/mihazs/lazysh/issues/2177); the rest of epic [#2171](https://github.com/mihazs/lazysh/issues/2171) follows.
+
+## Addendum, 2026-11-21: Dagger 1.0-beta evaluation (documentation only)
+
+Dagger has no stable 1.x: the newest stable is 0.21.12 and the newest tag is `v1.0.0-beta.28`. The 1.0-beta documentation was read; nothing was run. Findings:
+
+- **Engine cache on ephemeral runners.** The self-hosting page says "Do not run engines on a pool of ephemeral machines. Each new machine starts with an empty cache." and that without `DAGGER_ENGINE` "On an ephemeral runner, the cache of that engine is lost after each job" ([self-hosting](https://docs.dagger.io/self-hosting)). It documents no GitHub Actions cache or registry cache export and import. The documented fixes are a persistent self-hosted engine or Cloud Engines, which need `DAGGER_CLOUD_TOKEN` (ruled out). The `actions/cache` archive of the engine state used in the spike is not a documented method.
+- **Size.** The engine prunes by `gc.maxUsedSpace` and related settings ([engine.json](https://docs.dagger.io/reference/config-files/engine-json)); a pruned state skips less work. Condition 4.2 (2 GiB) is unchanged and unproven.
+- **Skipping unaffected work.** `dagger check` selects checks by name or collection key, for example `--go-package` and `dag://` links ([checking](https://docs.dagger.io/using/checking)), not by git diff. Skipping stays content-addressed cache hits, narrowed by Workspace `exclude` and `include` ([TypeScript SDK](https://docs.dagger.io/reference/sdks/typescript)). There is nothing the 0.21.12 spike lacked. Which jobs run stays with the moon-graph selection (see the CI job table in CONTRIBUTING).
+- **Migration.** 1.0 splits `dagger.json` into `dagger-module.toml` and `dagger.toml`, and `dagger init` creates a workspace ([migrate to 1.0](https://docs.dagger.io/migrate-to-v1)). The TypeScript SDK page's GitHub Actions example pins `v1.0.0-beta.29`, a tag that did not exist when checked.
+
+Decision: no beta trial and no change to the conditions above. Revisit when stable 1.0 ships or Dagger documents an ephemeral-runner cache; re-evaluate only with a persistent self-hosted engine.
