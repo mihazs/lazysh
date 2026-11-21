@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.92.1
+
+### Patch Changes
+
+- ci(android): upload the x86_64 debug and androidTest APKs for the Waydroid lane ([#2277](https://github.com/mihazs/lazysh/pull/2277))
+
+  <details><summary>Details</summary>
+
+  The `native-android-terminal-core` job now uploads `lazysh-android-debug-x86_64` (7 days) with the x86_64 debug APK and the instrumentation APK it already builds, so the Waydroid lane can install them with `--apk`. Nothing changes for users or in what the job builds.
+
+  </details>
+- feat(linux): draw a native terminal session on the Wayland subsurface with wgpu, native builds only ([#2272](https://github.com/mihazs/lazysh/pull/2272))
+
+  <details><summary>Details</summary>
+
+  In builds with the `native-terminal` feature, which no release enables, a session that has a native core is drawn on its Wayland subsurface by the renderer host: GDK's display and the subsurface go to wgpu as raw handles, and the swapchain follows the pane's anchor and the window's scale. Released builds are unchanged: the terminal stays xterm.js.
+
+  </details>
+
 ## 1.92.0
 
 ### Minor Changes
