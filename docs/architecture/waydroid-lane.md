@@ -122,5 +122,22 @@ On the maintainer's machine on 2026-11-18 the container is active and the sessio
 
 - Ran: the session was attached to, both APKs installed (the 540 MB app APK included) and `app.lazysh.client.NativeTerminalCoreTest` started in the guest and its one test ran for 0.6 s.
 - Failed: `IllegalArgumentException: An owned SSH fixture path is required` (`OwnedSshFixture.kt:9`). The test reads a host-written fixture from `-e lazyshSshFixture /data/local/tmp/lazysh-ui-ssh-<32 hex>/fixture.json`, which `tests/support/androidTerminalCore.ts` creates together with an owned OpenSSH server. The lane passes no such argument and starts no server, so the test never reached the core. This says nothing about the core in the guest: **no terminal composition, input or benchmark ran.**
-- Next slice: give the lane the owned SSH fixture, reachable from the guest address, or run the test through that driver on the lane's guest.
+- Next slice (done, see [Second run](#second-run-with-the-owned-ssh-fixture)): give the lane the owned SSH fixture.
 - Operational note: Waydroid freezes the container when no app is shown, and `adb shell` then hangs; `waydroid app launch <package>` thaws it. `waydroid session start` must stay alive in the background.
+
+## Owned SSH fixture, thawing and failure details
+
+- `--owned-ssh-fixture` starts the owned OpenSSH server of `tests/support/sshFixture.ts` on the host through `tests/support/waydroidSshFixture.ts` (needs `bun`, `sshd`, `ssh-keygen`), reaches it from the guest with `adb reverse --no-rebind tcp:<port> tcp:<port>` (the same way CI's emulator job does; the server listens on host loopback, the app connects to the guest's own `127.0.0.1`), pushes the fixture to `/data/local/tmp/lazysh-ui-ssh-<nonce>/fixture.json` and passes `-e lazyshSshFixture <that path>` to every `--instrument` step. Teardown (also after a failed step or an interrupt) stops the server, removes the reverse and deletes the device directory. `LAZYSH_WAYDROID_FIXTURE_CMD` replaces the helper command in tests.
+- The lane runs `waydroid app launch <package>` before it first talks to the guest, before each instrumentation step and before teardown, because a frozen container makes `adb shell` hang. A session it starts must still stay alive in the background of the caller (`waydroid session start` in a foreground `timeout` leaves it STOPPED); the lane does that itself.
+- A failed or erring test is recorded in the instrumentation result as `failedTests` (class, test, message, stack) and its message is part of `reason` and of `failures`.
+
+## Second run with the owned SSH fixture
+
+2026-11-21, source commit a089c448 plus this change (`dirty: true` in the evidence), the same APKs as the first run (CI run 44869362726, artifact `lazysh-android-debug-x86_64`), guest as in the first run. The evidence is [terminal-lane-core-waydroid-run2.json](benchmarks/terminal-lane-core-waydroid-run2.json), `status` `passed`: both APKs installed and `app.lazysh.client.NativeTerminalCoreTest` ran 1 test, 1 passed, 0 failed, 0 skipped. The test drives the real core in the packaged app against the owned OpenSSH shell on this host. **No terminal composition, input or benchmark ran.** Reproduce:
+
+```sh
+WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 apps/client/bench/waydroid-lane.sh \
+  --out docs/architecture/benchmarks/terminal-lane-core-waydroid-run2.json --label core-run2 --owned-ssh-fixture \
+  --apk <artifact>/universal/debug/app-universal-debug.apk --apk <artifact>/androidTest/universal/debug/app-universal-debug-androidTest.apk \
+  --instrument app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner app.lazysh.client.NativeTerminalCoreTest
+```

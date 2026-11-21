@@ -5,12 +5,15 @@
 # error with its own exit code, and an instrumentation class that runs no test or skips one fails the lane. Runbook: docs/architecture/waydroid-lane.md.
 #
 # Usage: waydroid-lane.sh --out <evidence.json> [--label <text>] [--package <id>]
-#          [--build <build.sh>]... [--apk <file>]... [--instrument <runner> <class>]... [--bench <name> <command>]...
+#          [--owned-ssh-fixture] [--build <build.sh>]... [--apk <file>]... [--instrument <runner> <class>]... [--bench <name> <command>]...
+# --owned-ssh-fixture starts the owned OpenSSH server of tests/support/sshFixture.ts on this host (loopback), reaches it from the guest with
+# "adb reverse", pushes its fixture to /data/local/tmp/lazysh-ui-ssh-<nonce>/ and passes -e lazyshSshFixture to every instrumentation step.
 # Exit: 0 passed, 1 a step failed (evidence written with status "failed"), 2 usage, 3 missing tool, 4 container not active,
 #       5 no Wayland compositor, 6 lock timeout, 7 session or guest did not come up (no evidence written for 3 to 7).
 # Environment: LAZYSH_WAYDROID_SERIAL (default $ANDROID_SERIAL or 192.168.240.112:5555), ADB (adb binary), ANDROID_HOME and JAVA_HOME and
 # LAZYSH_WAYDROID_BUILD_ASSETS (for --build, see android-apk.sh), LAZYSH_WAYDROID_LOCK (default /tmp/lazysh-waydroid-lane.lock; the lane is a
-# shared resource), LAZYSH_WAYDROID_LOCK_HELD=1 (the caller holds it), LAZYSH_WAYDROID_{LOCK_WAIT_S,LOCK_POLL_S,LOCK_STALE_MIN,BOOT_WAIT_S,POLL_S}.
+# shared resource), LAZYSH_WAYDROID_LOCK_HELD=1 (the caller holds it), LAZYSH_WAYDROID_FIXTURE_CMD (sh command that runs the fixture helper, default bun on
+# tests/support/waydroidSshFixture.ts; it gets the work directory as $1), LAZYSH_WAYDROID_{LOCK_WAIT_S,LOCK_POLL_S,LOCK_STALE_MIN,BOOT_WAIT_S,POLL_S}.
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -23,7 +26,7 @@ lock_stale=${LAZYSH_WAYDROID_LOCK_STALE_MIN:-90}
 boot_wait=${LAZYSH_WAYDROID_BOOT_WAIT_S:-180}
 poll=${LAZYSH_WAYDROID_POLL_S:-2}
 out='' label='' package=app.lazysh.client
-work='' lock_held='' session_pid='' connected='' guest_up=''
+work='' lock_held='' session_pid='' connected='' guest_up='' owned_ssh='' fixture_pid='' fixture_port='' fixture_remote=''
 failures=''
 
 say() { echo "waydroid-lane: $*" >&2; }
@@ -39,7 +42,17 @@ retry() {
   done
 }
 
+# Waydroid freezes its container while no app is shown, and adb then hangs until an app is launched.
+thaw() { waydroid app launch "$package" >/dev/null 2>&1; }
 cleanup() {
+  if [ -n "$guest_up" ]; then thaw; fi
+  if [ -n "$fixture_pid" ]; then
+    kill "$fixture_pid" 2>/dev/null  # the helper stops its sshd on SIGTERM
+    retry 20 fixture_gone || kill -9 "$fixture_pid" 2>/dev/null
+    wait "$fixture_pid" 2>/dev/null
+  fi
+  if [ -n "$fixture_port" ]; then adb_s reverse --remove "tcp:$fixture_port" >/dev/null 2>&1; fi
+  if [ -n "$fixture_remote" ]; then adb_s shell rm -rf "$fixture_remote" >/dev/null 2>&1; fi
   if [ -n "$guest_up" ]; then adb_s shell am force-stop "$package" >/dev/null 2>&1; fi
   if [ -n "$connected" ]; then "$adb" disconnect "$serial" >/dev/null 2>&1; fi
   # Only a session this run started is stopped; an attached one is left as it was found.
@@ -52,18 +65,21 @@ cleanup() {
 }
 # The wrapper records the exit status of "waydroid session start", which blocks for as long as the session lives (kill -0 would also see an unreaped child).
 session_gone() { [ -f "$work/session.exit" ]; }
+# Linux only (as Waydroid is): an unreaped child still answers kill -0, so a zombie counts as gone.
+fixture_gone() { [ ! -d "/proc/$fixture_pid" ] || grep -q '^[0-9]* (.*) Z' "/proc/$fixture_pid/stat"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 # --- arguments: the plan is a file of tab-separated steps, run in the order given -----------------------------------------------------
 work=$(mktemp -d) || die 2 'cannot create a work directory'
 plan="$work/plan"; : > "$plan"; : > "$work/results.jsonl"
-usage() { die 2 "$*; usage: waydroid-lane.sh --out <evidence.json> [--label <text>] [--package <id>] [--build <build.sh>]... [--apk <file>]... [--instrument <runner> <class>]... [--bench <name> <command>]..."; }
+usage() { die 2 "$*; usage: waydroid-lane.sh --out <evidence.json> [--label <text>] [--package <id>] [--owned-ssh-fixture] [--build <build.sh>]... [--apk <file>]... [--instrument <runner> <class>]... [--bench <name> <command>]..."; }
 step() { printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >> "$plan"; }
 while [ $# -gt 0 ]; do
   flag=$1
   case $flag in
     --out | --label | --package | --build | --apk) [ $# -ge 2 ] || usage "$flag needs a value"; value=$2; shift 2 ;;
+    --owned-ssh-fixture) owned_ssh=1; shift; continue ;;
     --instrument | --bench) [ $# -ge 3 ] || usage "$flag needs two values"; value=$2; second=$3; shift 3 ;;
     *) usage "unknown argument $1" ;;
   esac
@@ -131,6 +147,7 @@ guest_ready() {
   case $serial in *:*) "$adb" connect "$serial" >/dev/null 2>&1 ;; esac
   [ "$(adb_s shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]
 }
+thaw
 retry "$boot_wait" guest_ready || die 7 "the guest $serial did not finish booting within ${boot_wait}s (adb devices; waydroid status)"
 guest_up=1
 
@@ -195,17 +212,30 @@ run_build() { # run_build <build.sh>: builds with the existing android-apk.sh en
 }
 run_instrument() { # run_instrument <runner> <class>: counts the raw status codes of am instrument; zero tests or a skipped one fail
   say "instrumenting $2 with $1"
-  raw=$(adb_s shell "am instrument -w -r -e class '$2' '$1'" 2>&1 | tr -d '\r')
+  thaw
+  extra=''; [ -z "$fixture_remote" ] || extra=" -e lazyshSshFixture '$fixture_remote/fixture.json'"
+  raw=$(adb_s shell "am instrument -w -r -e class '$2'$extra '$1'" 2>&1 | tr -d '\r')
   count() { printf '%s\n' "$raw" | grep -c "^INSTRUMENTATION_STATUS_CODE: $1\$"; }
   passed=$(count 0); failed=$(($(count -1) + $(count -2))); skipped=$(($(count -3) + $(count -4)))
   reason=''
+  # The -r status blocks of a failed or erring test carry its class, test and stack: keep them as evidence.
+  details=$(printf '%s\n' "$raw" | awk '
+    /^INSTRUMENTATION_STATUS: / { line = substr($0, 25); key = line; sub(/=.*/, "", key); val = line; sub(/^[^=]*=/, "", val)
+      instack = 0
+      if (key == "class") cls = val; else if (key == "test") test = val; else if (key == "stack") { stack = val; instack = 1 }
+      next }
+    /^INSTRUMENTATION_STATUS_CODE: / { if ($2 == "-1" || $2 == "-2") printf "%s\t%s\t%s\n", cls, test, stack; stack = ""; instack = 0; next }
+    /^INSTRUMENTATION_/ { instack = 0; next }
+    instack { stack = stack "\001" $0 }' | jq -Rsc 'split("\n") | map(select(. != "") | split("\t") | {class: .[0], test: .[1], message: ((.[2:] | join("\t")) | split("\u0001")[0]), stack: ((.[2:] | join("\t")) | gsub("\u0001"; "\n"))})')
+  [ -n "$details" ] || details='[]'
   case $raw in *'INSTRUMENTATION_CODE: -1'*) ;; *) reason='the instrumentation did not finish (crashed, or the runner or class is not installed)' ;; esac
-  [ "$failed" -eq 0 ] || reason="$failed test(s) failed"
+  [ "$failed" -eq 0 ] || reason="$failed test(s) failed: $(printf '%s' "$details" | jq -r 'map(.test + ": " + .message) | join("; ")')"
   [ "$skipped" -eq 0 ] || reason="$skipped test(s) skipped: the lane does not skip"
   [ "$passed" -gt 0 ] || [ -n "$reason" ] || reason='no test ran for this class'
   ok=true; [ -z "$reason" ] || { ok=false; fail "instrument $2: $reason"; }
-  record --arg runner "$1" --arg class "$2" --argjson passed "$passed" --argjson failed "$failed" --argjson skipped "$skipped" --arg reason "$reason" --argjson ok "$ok" \
-    '{kind: "instrumentation", runner: $runner, class: $class, passed: $passed, failed: $failed, skipped: $skipped, ok: $ok, reason: ($reason | if . == "" then null else . end)}'
+  record --arg runner "$1" --arg class "$2" --argjson passed "$passed" --argjson failed "$failed" --argjson skipped "$skipped" --arg reason "$reason" --argjson ok "$ok" --argjson details "$details" \
+    '{kind: "instrumentation", runner: $runner, class: $class, passed: $passed, failed: $failed, skipped: $skipped, ok: $ok, reason: ($reason | if . == "" then null else . end)}
+     + (if ($details | length) > 0 then {failedTests: $details} else {} end)'
 }
 run_bench() { # run_bench <name> <command>: the command writes its result files into $LAZYSH_LANE_OUT; they are kept beside the evidence
   say "benchmark $1: $2"
@@ -225,8 +255,31 @@ run_bench() { # run_bench <name> <command>: the command writes its result files 
   record --arg name "$1" --arg command "$2" --argjson exitCode "$code" --argjson files "$files" --argjson ok "$ok" '{kind: "benchmark", name: $name, command: $command, exitCode: $exitCode, ok: $ok, files: $files}'
 }
 
+start_fixture() { # the owned OpenSSH of tests/support/sshFixture.ts on this host, reached from the guest over adb reverse
+  say 'starting the owned SSH fixture'
+  mkdir "$work/fixture" || return 1
+  FIXTURE_TS="$here/../../../tests/support/waydroidSshFixture.ts" sh -c "${LAZYSH_WAYDROID_FIXTURE_CMD:-exec bun \"\$FIXTURE_TS\" \"\$1\"}" fixture "$work/fixture" \
+    >"$work/fixture/ready" 2>"$work/fixture/log" </dev/null &
+  fixture_pid=$!
+  ready_or_dead() { [ -s "$work/fixture/ready" ] || fixture_gone; }
+  retry 60 ready_or_dead
+  [ -s "$work/fixture/ready" ] || { fail "owned SSH fixture did not start: $(tail -n 5 "$work/fixture/log")"; return 1; }
+  port=$(jq -r '.port' "$work/fixture/ready"); nonce=$(jq -r '.nonce' "$work/fixture/ready"); file=$(jq -r '.file' "$work/fixture/ready")
+  case $port in '' | *[!0-9]*) fail "owned SSH fixture reported a bad port: $port"; return 1 ;; esac
+  case $nonce in *[!a-f0-9]* | '') fail "owned SSH fixture reported a bad nonce"; return 1 ;; esac
+  [ "${#nonce}" -eq 32 ] || { fail 'owned SSH fixture reported a bad nonce'; return 1; }
+  remote=/data/local/tmp/lazysh-ui-ssh-$nonce
+  thaw
+  # --no-rebind: a guest port somebody else already forwards is an error, never silently taken over.
+  adb_s reverse --no-rebind "tcp:$port" "tcp:$port" >/dev/null && fixture_port=$port || { fail "adb reverse tcp:$port failed"; return 1; }
+  fixture_remote=$remote
+  adb_s shell mkdir -m 700 "$remote" && adb_s push "$file" "$remote/fixture.json" >/dev/null && adb_s shell chmod 600 "$remote/fixture.json" ||
+    { fail "pushing the owned SSH fixture to $remote failed"; return 1; }
+}
+
 tab=$(printf '\t')
 setup_ok=true
+[ -z "$owned_ssh" ] || start_fixture || setup_ok=false
 while IFS=$tab read -r kind a b <&3; do
   [ "$setup_ok" = true ] || break
   case $kind in
