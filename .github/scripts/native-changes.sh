@@ -92,6 +92,28 @@ classify() {
   esac
 }
 
+# A Changesets version bump (changelogs, manifest versions, lock-file versions, deleted fragments) changes no
+# behaviour: main's push run verifies the result in full. Every changed line must be a version line, and the
+# root package.json must be bumped, so a dependency update in a lock file never passes as a release.
+# shortcut: a lock-file version line of a third-party crate is not told apart from a workspace one, upgrade by reading the owning name line.
+release_only() {
+  bumped=false
+  while IFS= read -r path; do
+    case "$path" in
+      CHANGELOG.md | */CHANGELOG.md) continue ;;
+      .changeset/*.md) git cat-file -e "$HEAD:$path" 2>/dev/null && return 1; continue ;;
+      package.json | */package.json | Cargo.toml | */Cargo.toml | Cargo.lock | bun.lock | apps/client/android-version.properties) ;;
+      *) return 1 ;;
+    esac
+    lines=$(git diff -U0 --no-renames "$start" "$HEAD" -- "$path" | sed -n '/^[-+][^-+]/p' | grep -Ev '^[-+] *"?version"? *[=:] *"[0-9][^"]*",?$|^[-+]version(Name|Code)=[0-9.]+$')
+    [ -z "$lines" ] || return 1
+    [ "$path" = package.json ] && bumped=true
+  done <<EOF
+$files
+EOF
+  [ "$bumped" = true ]
+}
+
 if [ "${EVENT-}" = schedule ]; then
   add nightly # only the device suite: main's push run is the parity evidence for everything else.
 elif [ "${EVENT-}" != pull_request ] || [ -z "${BASE-}" ] || [ -z "${HEAD-}" ]; then
@@ -99,6 +121,8 @@ elif [ "${EVENT-}" != pull_request ] || [ -z "${BASE-}" ] || [ -z "${HEAD-}" ]; 
 elif ! start=$(git merge-base "$BASE" "$HEAD" 2>/dev/null) ||
   ! files=$(git diff --name-only --no-renames "$start" "$HEAD" 2>/dev/null) || [ -z "$files" ]; then
   add all
+elif release_only; then
+  add none
 else
   while IFS= read -r path; do classify "$path"; done <<EOF
 $files
