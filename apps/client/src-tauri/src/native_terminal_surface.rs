@@ -136,10 +136,7 @@ pub async fn native_terminal_surface_place(
     {
         linux::place(&app, session, anchor, background).await
     }
-    #[cfg(not(any(
-        target_os = "android",
-        all(target_os = "linux", native_terminal_core)
-    )))]
+    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
     {
         let _ = app;
         Err(unavailable())
@@ -158,10 +155,7 @@ pub async fn native_terminal_surface_remove(app: AppHandle, session: String) -> 
     {
         linux::remove(&app, session).await
     }
-    #[cfg(not(any(
-        target_os = "android",
-        all(target_os = "linux", native_terminal_core)
-    )))]
+    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
     {
         let _ = app;
         Ok(())
@@ -184,20 +178,14 @@ pub async fn native_terminal_surface_state(
     {
         linux::state(&app, session).await
     }
-    #[cfg(not(any(
-        target_os = "android",
-        all(target_os = "linux", native_terminal_core)
-    )))]
+    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
     {
         let _ = app;
         Err(unavailable())
     }
 }
 
-#[cfg(not(any(
-    target_os = "android",
-    all(target_os = "linux", native_terminal_core)
-)))]
+#[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
 fn unavailable() -> String {
     "This build has no native terminal surface.".into()
 }
