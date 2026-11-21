@@ -50,15 +50,15 @@ test('Herdr exclusions preserve upstream bytes and one native-generated schema',
 });
 
 // Opted in by herdr-native after its checksum-verified Zig and archive provision.
-// Execute the exact Actions admission body with real gzip/Zig, without network.
+// Execute the exact Actions admission step of the ghostty-zig action with real gzip/Zig, without network.
 for (const [name, sourceManifest] of [
   ['uucode', 'build.zig.zon'], ['highway', 'pkg/highway/build.zig.zon'], ['pixels', 'pkg/wuffs/build.zig.zon'],
 ] as const) for (const variant of ['matching hash', 'wrong hash', 'truncated archive'] as const) {
   test.skipIf(process.env.LAZYSH_HERDR_ARCHIVE_FIXTURES !== '1')(`local ${name} admission: ${variant}`, async () => {
-    const workflow = Bun.YAML.parse(await Bun.file(join(root, '.github/workflows/checks.yml')).text()) as {
-      jobs: { 'herdr-native': { steps: { id?: string; run?: string; env?: Record<string, string> }[] } };
+    const action = Bun.YAML.parse(await Bun.file(join(root, '.github/actions/ghostty-zig/action.yml')).text()) as {
+      runs: { steps: { id?: string; run?: string; env?: Record<string, string> }[] };
     };
-    const admission = workflow.jobs['herdr-native'].steps.find(step => step.id === `${name}-admission`)!;
+    const admission = action.runs.steps.find(step => step.id === `${name}-admission`)!;
     expect(admission.run).toBeDefined();
     const expected = admission.env!.HERDR_PACKAGE_HASH;
     const manifest = await Bun.file(join(directory, 'vendor/libghostty-vt', sourceManifest)).text();
@@ -73,7 +73,7 @@ for (const [name, sourceManifest] of [
       expect(original.length).toBeLessThanOrEqual(33554432);
       await writeFile(archive, variant === 'truncated archive' ? original.subarray(0, 32) : original);
       const child = Bun.spawn(['bash', '-e', '-c', admission.run!], { cwd: fixture,
-        env: { ...process.env, HERDR_CI_ROOT: fixture, HERDR_ARCHIVE_NAME: name,
+        env: { ...process.env, GITHUB_WORKSPACE: root, HERDR_CI_ROOT: fixture, HERDR_ARCHIVE_NAME: name,
           HERDR_PACKAGE_HASH: variant === 'wrong hash' ? expected + '-wrong' : expected,
           ZIG_GLOBAL_CACHE_DIR: join(fixture, 'global'), ZIG_LOCAL_CACHE_DIR: join(fixture, 'local') },
         stdout: 'pipe', stderr: 'pipe' });
@@ -107,7 +107,7 @@ test('CI seals guarded bytes before compiling independently admitted original st
   expect(index('stock-build')).toBeLessThan(index('stock-artifact'));
   const download=steps[index('stock-source-download')];
   expect(download.env.HERDR_ARCHIVE_URL).toBe('https://codeload.github.com/herdrdev/herdr/tar.gz/2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01');
-  expect(download.run).toContain('--max-time 180');expect(download.run).toContain('--max-filesize 33554432');
+  const downloader=await Bun.file(join(root,'.github/scripts/herdr-archive.sh')).text();expect(download.run).toContain('herdr-archive.sh');expect(downloader).toContain('--max-time 180');expect(downloader).toContain('--max-filesize 33554432');
   const source=steps[index('stock-source')],build=steps[index('stock-build')];
   expect(source.run).toContain('cbd4354f1c44530d9f094c2797380208c50f19b4d6350b6e5206e220133c3168');
   for(const step of [source,build]){
@@ -279,7 +279,8 @@ test('the guarded Herdr build retries a Zig dependency download failure with the
 
 const zigCacheFixtures = process.env.LAZYSH_HERDR_ARCHIVE_FIXTURES === '1';
 const scrubZigPackages = async (global: string) => {
-  const step = await herdrStep(candidate => candidate.id === 'zig-package-scrub');
+  const action = Bun.YAML.parse(await Bun.file(join(root, '.github/actions/ghostty-zig/action.yml')).text()) as any;
+  const step = action.runs.steps.find((candidate: any) => candidate.id === 'zig-package-scrub');
   expect((await execute(['bash', '-e', '-c', step.run], global, { ZIG_GLOBAL_CACHE_DIR: global })).exit).toBe(0);
 };
 
