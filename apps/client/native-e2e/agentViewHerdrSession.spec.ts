@@ -44,6 +44,7 @@ it('opens an explicitly selected owned Herdr agent session through the native re
   await (await agentView.$('button[aria-label="Agent view options"]')).click();
   expect(await agentView.getText()).toContain('Herdr links this conversation to the focused pane of this terminal');
   expect(await agentView.$('input[aria-label="Transcript path"]').isExisting()).toBe(false);
-  expect(await agentView.$('[aria-label="Terminal input"]').isExisting()).toBe(false);
+  // The pane is focused now, so its composer is shown; nothing was typed into it.
+  expect(await agentView.$('[aria-label="Terminal input"]').isExisting()).toBe(true);
   await herdr.expectBytes(Buffer.alloc(0));
 },180_000);
