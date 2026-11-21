@@ -112,7 +112,7 @@ import {paletteCommands} from './paletteCommands';
 import { dictationInput, type DirectDictation } from './voiceDelivery';
 import type {UploadedAttachment} from "./AttachmentPanel";
 import {stageComposerAttachment} from "./composerTokens";
-import {bothMinWidth,readSessionViews,saveSessionView,sessionViewKey,type SessionView} from "./sessionView";
+import {bothMinWidth,readAgentFull,readSessionViews,saveAgentFull,saveSessionView,sessionViewKey,type SessionView} from "./sessionView";
 import {useEdgeGestureMode} from "./edgeGestures";
 import GestureHandle from "./GestureHandle";
 import {useViewSwipe} from "./useViewSwipe";
@@ -1476,6 +1476,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const leftMenuGesture=useEdgeGestureMode('leftMenu')==='gesture';
   const sideMenuMode=useSideMenuMode(!!active,!wideSidebar) && leftMenuGesture;
   const activeSessionView = active ? sessionViewOf(active) : 'terminal';
+  const [agentFull,setAgentFull]=useState(readAgentFull);
+  const fullAgent=agentFull && view==='terminal' && activeSessionView==='agent';
+  const toggleAgentFull=()=>{const next=!agentFull;saveAgentFull(next);setAgentFull(next);};
   useEffect(()=>{if(active && activeSessionView!=='terminal')setAgentMounted(ids=>ids.includes(active.id)?ids:[...ids,active.id]);},[active,activeSessionView]);
   // A closed session's id never comes back.
   useEffect(()=>{setAgentMounted(ids=>ids.every(id=>sessions.some(session=>session.id===id))?ids:ids.filter(id=>sessions.some(session=>session.id===id)));},[sessions]);
@@ -1664,6 +1667,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(!lease.current())return;
     if(!window.dispatchEvent(new Event('lazysh-workspace-back',{cancelable:true})))return;
     if(!wideSidebar && sidebar){if(navigationEntry.mode!=='connections' && trail.current.length)returnToContext();else setSidebar(false);return;}
+    if(fullAgent){toggleAgentFull();return;}
     if(agentViewBack && active){chooseSessionView(active,'terminal');return;}
     if(terminalBack.current?.sessionId===activeId && terminalBack.current.close())return;
     returnToContext();
@@ -2420,7 +2424,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           onClick={() => setSidebar(false)}
         />
       )}
-      <main className={`workspace${active && !wideSidebar ? " workspace-terminal-focus" : ""}${sideMenuMode ? " workspace-side-menu" : ""}`} data-single-session={sessions.length===1} inert={!wideSidebar && sidebar}>
+      <main className={`workspace${fullAgent?" workspace-agent-full":""}${active && !wideSidebar ? " workspace-terminal-focus" : ""}${sideMenuMode ? " workspace-side-menu" : ""}`} data-single-session={sessions.length===1} inert={!wideSidebar && sidebar}>
         {native && <ThemeLinkPanel target={themeLinkTarget} />}
         {!sideMenuMode && <header className="workspace-header">
           <button
@@ -2590,7 +2594,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 ))}
                 {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
                   <Suspense key={session.id} fallback={null}>
-                  <AgentView sessionId={session.id} shown={activeId === session.id && view === "terminal" && (sessionViewOf(session) !== "terminal" || swipeFrom!==null)}
+                  <AgentView sessionId={session.id} full={fullAgent} onToggleFull={toggleAgentFull} shown={activeId === session.id && view === "terminal" && (sessionViewOf(session) !== "terminal" || swipeFrom!==null)}
                     tmux={native && session.attached?.kind==='tmux'} zellijSession={native && session.attached?.kind==='zellij' ? session.attached.name : undefined} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id],true)} terminal={session.adapter} onShowTerminal={()=>chooseSessionView(session,'terminal')}
                     onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} onOpenCompanion={()=>showAgentSetup(session)} />
                   </Suspense>

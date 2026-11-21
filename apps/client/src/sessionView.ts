@@ -30,3 +30,12 @@ export function saveSessionView(views: Record<string, SessionView>, key: string,
   try { localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(Object.entries(next).filter(([key]) => stored(key))))); } catch { /* The choice lasts for this app run. */ }
   return next as Record<string, SessionView>;
 }
+
+const fullKey = 'lazysh-agent-view-full';
+/** Per-device convenience: the Agent view hides the app bars around it. Off is the default and is not stored. */
+export function readAgentFull(): boolean {
+  try { return localStorage.getItem(fullKey) === '1'; } catch { return false; }
+}
+export function saveAgentFull(full: boolean) {
+  try { if (full) localStorage.setItem(fullKey, '1'); else localStorage.removeItem(fullKey); } catch { /* The choice lasts for this app run. */ }
+}

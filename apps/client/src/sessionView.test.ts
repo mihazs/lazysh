@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {beforeEach,expect,it,vi} from 'vitest';
-import {readSessionViews,saveSessionView,sessionViewKey} from './sessionView';
+import {readAgentFull,readSessionViews,saveAgentFull,saveSessionView,sessionViewKey} from './sessionView';
 
 beforeEach(()=>localStorage.clear());
 const work=sessionViewKey({id:'ssh-1',hostId:'host',attached:{kind:'tmux',name:'work'}});
@@ -35,4 +35,12 @@ it('keeps working for this run when device storage is unavailable or damaged',()
   const failing=vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{throw new Error('quota');});
   try {expect(saveSessionView({},work,'both')).toEqual({[work]:'both'});}
   finally {failing.mockRestore();}
+});
+
+it('remembers the full-window Agent view on this device and falls back to off when storage fails',()=>{
+  expect(readAgentFull()).toBe(false);
+  saveAgentFull(true);expect(readAgentFull()).toBe(true);
+  saveAgentFull(false);expect(readAgentFull()).toBe(false);
+  vi.spyOn(Storage.prototype,'getItem').mockImplementation(()=>{throw new Error('blocked');});
+  expect(readAgentFull()).toBe(false);
 });

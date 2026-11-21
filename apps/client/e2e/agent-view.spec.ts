@@ -805,6 +805,19 @@ async function openHerdr(page:Page,companion:boolean,rich=false,start:{focus?:st
 const herdrFixture=(page:Page)=>page.evaluate(()=>(window as unknown as {herdrFixture:{conversations:unknown[];entered:unknown[];inputs:unknown[]}}).herdrFixture);
 const focusPane=(page:Page,pane:string)=>page.evaluate(pane=>{(window as unknown as {herdrFixture:{focus:string}}).herdrFixture.focus=pane;},pane);
 
+test('the Agent view can take the whole window and give it back, remembering the choice',async({page})=>{
+  await openHerdr(page,true);
+  const agent=agentView(page),header=page.locator('.workspace-header');
+  await expect(header).toBeVisible();
+  await agent.getByRole('button',{name:'Full window',exact:true}).click();
+  await expect(agent.getByRole('button',{name:'Full window',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(header).toBeHidden();
+  expect(await page.evaluate(()=>localStorage.getItem('lazysh-agent-view-full'))).toBe('1');
+  await agent.getByRole('button',{name:'Full window',exact:true}).click();
+  await expect(header).toBeVisible();
+  expect(await page.evaluate(()=>localStorage.getItem('lazysh-agent-view-full'))).toBeNull();
+});
+
 test('stock Herdr: the Agent view lists the live agents, and selecting one opens its native chat',async({page})=>{
   await openHerdr(page,true);
   const agent=agentView(page);

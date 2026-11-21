@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
-import {Ellipsis,Search,TerminalSquare} from 'lucide-react';
+import {Ellipsis,Maximize2,Minimize2,Search,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation, type BoundRecords} from './ChatPanel';
 import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
@@ -59,8 +59,8 @@ const sameSource = (left: BoundConversation | BoundRecords | undefined, right: B
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, tmux, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
-  sessionId: string; shown: boolean; tmux: boolean; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
+export default function AgentView({sessionId, shown, full, onToggleFull, tmux, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
+  sessionId: string; shown: boolean; /** The Agent view has the whole window: the app bars around it are hidden. */full?: boolean; onToggleFull?: () => void; tmux: boolean; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
   onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
 }) {
   useUi();
@@ -327,6 +327,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       </div>
       {reader && <button type="button" className="icon-button" aria-label={t('agentSearch')} title={t('agentSearch')} aria-pressed={reading.search} onClick={()=>changeReading({...reading,search:!reading.search,query:''})}><Search size={18} aria-hidden="true"/></button>}
       <button type="button" className="icon-button" aria-label={t('agentViewOptions')} title={t('agentViewOptions')} aria-expanded={menu} aria-controls={menuId} onClick={()=>setMenu(value=>!value)}><Ellipsis size={18} aria-hidden="true"/></button>
+      {onToggleFull && <button type="button" className="icon-button" aria-label={t('agentViewFull')} title={t('agentViewFull')} aria-pressed={!!full} onClick={onToggleFull}>{full?<Minimize2 size={18} aria-hidden="true"/>:<Maximize2 size={18} aria-hidden="true"/>}</button>}
       <button type="button" className="icon-button" aria-label={t('agentViewTerminal')} title={t('agentViewTerminal')} onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true"/></button>
     </header>
     {menu && <div id={menuId} className="agent-view-menu" role="group" aria-label={t('agentViewOptions')}>
