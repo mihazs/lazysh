@@ -119,6 +119,17 @@ it('refuses an oversized, mislabeled or malformed media file without showing a p
   expect(document.querySelector('iframe')).toBeNull();
 });
 
+it('drops the previous file\'s player when the next file is refused', async () => {
+  render(<FilesPanel sessionId="ssh1"/>);
+  serve({mime: 'video/mp4', data: base64(mp4)});
+  await open('clip.mp4');
+  await screen.findByTitle('Preview of ./clip.mp4');
+  vi.mocked(invoke).mockRejectedValueOnce({kind: 'media_mislabeled', message: 'host text'});
+  await open('page.mp4');
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/^This file is not the video or audio/));
+  expect(document.querySelector('iframe')).toBeNull();
+});
+
 it('makes no media element where the platform cannot play without crashing, and says why', async () => {
   render(<FilesPanel sessionId="ssh1"/>);
   serve({mime: 'video/mp4', data: base64(mp4)}, false);
