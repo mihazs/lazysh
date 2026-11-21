@@ -39,6 +39,9 @@ internal object OwnedFileChooser {
         assertTrue("Staging a picker fixture requires scoped MediaStore (API 29)", Build.VERSION.SDK_INT >= 29)
         val resolver = instrumentation.context.contentResolver
         val collection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        // The Photo Picker names no file and its order is not ours, so the fixture must be the only image it can list.
+        // The shell may remove other apps' rows, which the test package may not; the emulator is owned and rebuilt per job.
+        instrumentation.uiAutomation.executeShellCommand("content delete --uri content://media/external/images/media").let { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).use { stream -> stream.readBytes() } }
         val uri = requireNotNull(resolver.insert(collection, ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
@@ -105,6 +108,7 @@ internal object OwnedFileChooser {
             if (device.wait(Until.hasObject(photoGrid), 3_000)) {
                 val tile = device.wait(Until.findObject(By.pkg(picker).clickable(true).hasAncestor(photoGrid)), 10_000)
                     ?: throw AssertionError("The Photo Picker lists no image")
+                println("lazysh QR UI: Photo Picker lists ${device.findObjects(By.pkg(picker).clickable(true).hasAncestor(photoGrid)).size} tile(s)")
                 tile.click()
                 assertTrue("The picker must close after the entry is chosen", device.wait(Until.gone(By.pkg(picker)), 10_000))
                 return
