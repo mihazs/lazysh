@@ -2,6 +2,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gitFixtureRoots, project, spawnText as run } from './support/gitFixture';
+import { moonJson } from './support/moon';
 
 const script = join(project, '.github', 'scripts', 'native-changes.sh');
 const workflow = async (name: string) => Bun.YAML.parse(await Bun.file(join(project, '.github', 'workflows', name)).text()) as any;
@@ -366,4 +367,22 @@ test('a Changesets version bump selects no native job, but a dependency or code 
   expect((await run([...Object.keys(bump), 'apps/client/src/a.ts'], bump)).android).toBe('true');
   // A bump on a push to main still runs everything.
   expect(await classify(Object.keys(bump), { event: 'push', seed, seedContents: base, contents: bump })).toEqual(everything);
+});
+
+test('the graph-derived area map covers every moon project, only names real edges, and a path outside the graph selects everything', async () => {
+  const config = JSON.parse(await Bun.file(join(project, '.github', 'ci-areas.json')).text());
+  const projects = (await moonJson(['query', 'projects'])).projects as any[];
+  // A new project without an entry would silently select no area: this fails until it is mapped.
+  expect(projects.map(entry => entry.id).sort()).toEqual(Object.keys(config.projects).sort());
+  const edges = projects.flatMap(entry => (entry.config.dependsOn ?? []).map((dependency: any) => `${entry.id}>${dependency.id ?? dependency}`));
+  for (const edge of config.ignoreEdges) expect(edges).toContain(edge);
+  const unknown = await classify(['packages/not-a-project/src/lib.rs']);
+  expect(unknown).toEqual(pullRequestEverything);
+});
+
+test('a change in a leaf crate selects its dependents through moon, not unrelated jobs', async () => {
+  const outputs = await classify(['packages/et-transport/src/lib.rs']);
+  expect(outputs.linux).toBe('true'); // client depends on it
+  expect(outputs.terminal_runtime).toBe('false');
+  expect(outputs.android).toBe('true');
 });

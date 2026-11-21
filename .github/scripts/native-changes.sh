@@ -29,21 +29,11 @@ package() {
   case "$name/$top" in
     # The app's native-terminal bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt (native-terminal-bridge).
     herdr-upstream/crates | herdr-upstream/vendor) add herdr terminal_runtime terminal_bridge terminal_windows android_core ;; # the terminal runtime builds on its vendored ghostty-vt binding, for Android too.
-    herdr-upstream/*) add herdr terminal_runtime ;;
-    herdr-guard/*) add herdr ;;
     terminal-runtime/prototypes) add linux_surface ;; # a standalone prototype crate with its own lock file: only its own job builds it.
-    terminal-runtime/*) add terminal_runtime terminal_bridge terminal_windows android_core ;; # tested inside herdr-native: it provisions the admitted Zig and libghostty-vt. terminal-windows builds and tests it again on Windows.
-    terminal-renderer-wgpu/*) add terminal_runtime terminal_bridge terminal_windows android_core ;; # the app compiles it with the native-terminal feature.
     */ios) add ios ;;
     */android | */android-*) add android ;;
-    common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
-    account-usage/* | ai-usagebar-vendor/* | companion-release/*) add client agent ;;
-    notification-client/*) add agent push relay gotify ;; # native-linux-runtimes runs the real Apprise API relay case.
-    push-registration/*) add client android ios push ;;
-    mosh-transport/*) add client ios mosh ;;
-    credential-vault/* | display-idle/* | apple-speech/* | apple-status/*) add client ios ;;
-    et-transport/* | parakeet-runtime/* | portable-pty-vendor/* | deep-link-vendor/*) add client ;;
-    *) add all ;;
+    # Everything else: the moon project graph decides (moon-areas.mjs); any failure selects every job.
+    *) if areas_of_path=$(node "$(dirname "$0")/moon-areas.mjs" "$1" 2>/dev/null); then add $areas_of_path; else add all; fi ;;
   esac
 }
 
