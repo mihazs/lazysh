@@ -2,8 +2,9 @@ import {expect,type Page} from '@playwright/test';
 
 /** Reach the real visible workspace control, including compact mobile navigation. */
 export async function workspaceControl(page:Page,name:string) {
-  const button=page.getByRole('button',{name,exact:true}).first();
-  const dialogButton=page.getByRole('dialog').getByRole('button',{name,exact:true}).first();
+  // A disabled control of the same name (the terminal key bar has an Attach key a local session disables) is not the workspace control.
+  const button=page.getByRole('button',{name,exact:true,disabled:false}).first();
+  const dialogButton=page.getByRole('dialog').getByRole('button',{name,exact:true,disabled:false}).first();
   await expect.poll(async()=>await dialogButton.isVisible() || await button.isVisible() || await page.locator('.workspace-tools-trigger:visible').isVisible()).toBe(true);
   if(await dialogButton.isVisible())return dialogButton;
   const menu=page.getByRole('dialog').filter({has:page.locator('.workspace-tools-content')});
@@ -12,7 +13,7 @@ export async function workspaceControl(page:Page,name:string) {
     await page.locator('.workspace-tools-trigger:visible').click();
   }
   await openToolsPageWith(page,name);
-  const revealed=menu.getByRole('button',{name,exact:true}).first();
+  const revealed=menu.getByRole('button',{name,exact:true,disabled:false}).first();
   await expect(revealed).toBeVisible();
   return revealed;
 }
