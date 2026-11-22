@@ -1,5 +1,6 @@
 use crate::colors::ColorQueries;
-use crate::frame::{Frame, Renderer};
+use crate::cursor::CursorChoice;
+use crate::frame::{CursorDefault, Frame, Renderer};
 use crate::ingress::{IngressHandle, Offer};
 use crate::input::{self, Encoders, KeyInput, MouseInput};
 use crate::mosh::{self, Action, Display, DisplayFailure};
@@ -213,6 +214,7 @@ pub struct TerminalRuntime {
     ingress: IngressHandle,
     replies: Arc<Mutex<Replies>>,
     colors: ColorQueries,
+    cursor: CursorChoice,
     titles: Titles,
     events: Events,
     size: Size,
@@ -249,6 +251,7 @@ impl TerminalRuntime {
             ingress: IngressHandle::new(config.ingress_bytes),
             replies,
             colors: ColorQueries::new(&config.theme),
+            cursor: CursorChoice::new(),
             titles: Titles::default(),
             events: Events::default(),
             size,
@@ -271,6 +274,14 @@ impl TerminalRuntime {
         self.terminal.set_default_palette(&theme.palette)?;
         self.colors.set(theme);
         Ok(())
+    }
+
+    /// The cursor the frames show for a program that never chose one (`DECSCUSR` 1 to 6) or gave it back (0), as a
+    /// host's preferences name it; `None`, the start, leaves what the VT draws. A program's own choice is kept, which
+    /// the VT alone cannot tell from the default (the `cursor` module reads the bytes for it). Take a [`TerminalRuntime::snapshot`] for it to
+    /// reach a renderer that already holds the screen.
+    pub fn set_cursor_default(&mut self, default: Option<CursorDefault>) {
+        self.renderer.set_cursor_default(default);
     }
 
     /// Queue transport bytes. Rejected chunks come back untouched; nothing is dropped or reordered.
@@ -309,6 +320,8 @@ impl TerminalRuntime {
         if let Some(title) = self.titles.scan(chunk) {
             self.events.title = Some(title);
         }
+        self.cursor.scan(chunk);
+        self.renderer.set_cursor_chosen(self.cursor.chosen());
         let mut at = 0;
         while let Some((end, reply)) = self.colors.find(chunk, at) {
             self.write_segment(&chunk[at..end - 1]);

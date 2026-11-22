@@ -1,7 +1,7 @@
 use crate::runtime::Error;
 use ghostty_vt::{
-    ActiveScreen, CellStyle, CellWide, Dirty, RenderCursor, RenderState, RgbColor, RowCells,
-    RowIterator, Terminal,
+    ActiveScreen, CellStyle, CellWide, CursorVisualStyle, Dirty, RenderCursor, RenderState,
+    RgbColor, RowCells, RowIterator, Terminal,
 };
 
 /// One cell as a renderer needs it. Colors are resolved RGB; `None` means the default color.
@@ -34,10 +34,21 @@ pub struct Frame {
     pub dirty: Vec<Row>,
 }
 
+/// The cursor a program that chose none gets (see [`crate::TerminalRuntime::set_cursor_default`]): a host's
+/// preferred style and blink, as xterm.js's `cursorStyle` and `cursorBlink` options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorDefault {
+    pub style: CursorVisualStyle,
+    pub blink: bool,
+}
+
 pub(crate) struct Renderer {
     state: RenderState,
     row_iter: RowIterator,
     row_cells: RowCells,
+    /// What the cursor shows until a program chooses one, and whether one has.
+    default: Option<CursorDefault>,
+    chosen: bool,
     /// Cursor and screen of the last frame handed out: libghostty-vt does not mark any row dirty
     /// when only these change, so they are compared here.
     last: Option<(RenderCursor, ActiveScreen)>,
@@ -49,8 +60,20 @@ impl Renderer {
             state: RenderState::new()?,
             row_iter: RowIterator::new()?,
             row_cells: RowCells::new()?,
+            default: None,
+            chosen: false,
             last: None,
         })
+    }
+
+    /// The next frame's cursor is `default` unless a program chose its own. A frame is made when this changes the
+    /// cursor, so a host that changed it asks for a snapshot all the same.
+    pub(crate) fn set_cursor_default(&mut self, default: Option<CursorDefault>) {
+        self.default = default;
+    }
+
+    pub(crate) fn set_cursor_chosen(&mut self, chosen: bool) {
+        self.chosen = chosen;
     }
 
     /// The cursor's cell in the viewport (the live screen when the viewport is at the bottom).
@@ -71,7 +94,11 @@ impl Renderer {
     ) -> Result<Option<Frame>, Error> {
         self.state.update(terminal)?;
         let dirty = self.state.dirty()?;
-        let chrome = (self.state.cursor()?, terminal.active_screen()?);
+        let mut cursor = self.state.cursor()?;
+        if let Some(default) = self.default.filter(|_| !self.chosen) {
+            (cursor.visual_style, cursor.blinking) = (default.style, default.blink);
+        }
+        let chrome = (cursor, terminal.active_screen()?);
         if dirty == Dirty::Clean && !force && self.last == Some(chrome) {
             return Ok(None);
         }

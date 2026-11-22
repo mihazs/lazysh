@@ -94,10 +94,15 @@ pub extern "system" fn Java_app_lazysh_client_JniSurface_nativeReady(
                 target,
                 Box::new(holder),
                 generation.max(0) as u32,
-                look(density, background as u32 & 0xff_ffff),
+                look(&id, density, background as u32 & 0xff_ffff),
             )
         })
     })
+}
+
+/// The session's preferences changed: the surface that draws it takes them (none is not an error).
+pub(super) fn relook(id: &str) -> Result<(), String> {
+    panes(|panes| panes.relook(id))
 }
 
 #[no_mangle]
@@ -119,7 +124,7 @@ pub extern "system" fn Java_app_lazysh_client_JniSurface_nativeChanged(
                 &id,
                 width.max(1) as u32,
                 height.max(1) as u32,
-                look(density, background as u32 & 0xff_ffff),
+                look(&id, density, background as u32 & 0xff_ffff),
             )
         })
     })

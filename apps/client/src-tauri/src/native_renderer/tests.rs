@@ -6,8 +6,8 @@
 use super::*;
 use lazysh_terminal_renderer_wgpu::Policy;
 use lazysh_terminal_runtime::{
-    CellPos, CellRange, Config, Hooks, Hub, HubConfig, Image, Offer, Origin, PtyWriter,
-    ReferenceRenderer, Refused, Selection, SelectionKind, Size,
+    CellPos, CellRange, Config, CursorVisualStyle, Hooks, Hub, HubConfig, Image, Offer, Origin,
+    PtyWriter, ReferenceRenderer, Refused, Selection, SelectionKind, Size,
 };
 
 const COLS: u16 = 24;
@@ -35,6 +35,8 @@ fn look() -> Look {
         font_px: 40.0 / 3.0,
         scale: 1.0,
         system_fonts: false,
+        bold: BoldText::default(),
+        cursor: None,
     }
 }
 
@@ -389,6 +391,68 @@ fn the_preferences_decide_the_cells_the_colours_and_the_fonts() {
         "an impossible font size is refused"
     );
     shown.shows(&reference(&text, &large, None), "and changes nothing");
+}
+
+#[test]
+fn bold_text_follows_the_bold_preferences_and_changes_live() {
+    let colour = lazysh_terminal_runtime::RgbColor {
+        r: 0x33,
+        g: 0x66,
+        b: 0x99,
+    };
+    let styled = Look {
+        bold: BoldText {
+            bright: true,
+            color: Some(colour),
+        },
+        ..look()
+    };
+    let text = format!("{STEADY}\x1b[1;31mred\x1b[0m \x1b[1mdefault\x1b[0m");
+    let (plain, bright) = (
+        reference(&text, &look(), None),
+        reference(&text, &styled, None),
+    );
+    // Not the reference against itself: bold red is the palette's bright red and bold default text the bold colour.
+    let has = |image: &Image, color| {
+        (0..image.height).any(|y| (0..image.width).any(|x| image.pixel(x, y) == color))
+    };
+    let bright_red = Theme::default().palette[9];
+    assert!(has(&bright, colour) && has(&bright, bright_red));
+    assert!(!has(&plain, colour) && !has(&plain, bright_red));
+
+    let shown = Shown::new(&text, styled.clone());
+    shown.shows(&bright, "bold text in the bold colours");
+    shown.host.set_look(look()).unwrap();
+    shown.shows(&plain, "bold text in the foreground colours");
+    shown.host.set_look(styled).unwrap();
+    shown.shows(&bright, "the bold colours again");
+}
+
+#[test]
+fn a_program_that_chose_no_cursor_gets_the_preferred_one_and_a_program_that_did_keeps_its_own() {
+    let default = |style, blink| Look {
+        cursor: Some(CursorDefault { style, blink }),
+        ..look()
+    };
+    let steady_bar = default(CursorVisualStyle::Bar, false);
+    // The oracle is a program that asked for the cursor itself: DECSCUSR 6 is a steady bar, 4 a steady underline.
+    let bar = reference("cursor\x1b[6 q", &look(), None);
+    let underline = reference("cursor\x1b[4 q", &look(), None);
+    assert_ne!(bar, underline);
+    // No DECSCUSR, and DECSCUSR 0, which hands the cursor back: the preference.
+    Shown::new("cursor", steady_bar.clone()).shows(&bar, "the preferred cursor");
+    Shown::new("cursor\x1b[0 q", steady_bar.clone()).shows(&bar, "after a reset");
+    // The program's own steady cursor is its choice.
+    Shown::new("cursor\x1b[4 q", steady_bar.clone()).shows(&underline, "the program's cursor");
+
+    // A new preference reaches the cursor of a screen that is already drawn.
+    let shown = Shown::new("cursor", steady_bar);
+    shown.shows(&bar, "the preferred bar");
+    shown
+        .host
+        .set_look(default(CursorVisualStyle::Underline, false))
+        .unwrap();
+    shown.shows(&underline, "the preferred underline");
 }
 
 #[test]

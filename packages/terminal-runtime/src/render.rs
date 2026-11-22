@@ -147,6 +147,17 @@ impl Default for Theme {
     }
 }
 
+/// How bold text is coloured, as xterm.js's `drawBoldTextInBrightColors` and the custom bold colour
+/// do. The default changes nothing: bold only changes the glyph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BoldText {
+    /// Bold text in one of the eight base palette colours (0 to 7) is drawn in its bright variant
+    /// (8 to 15) from [`Theme::palette`].
+    pub bright: bool,
+    /// Bold text in the default foreground colour is drawn in this colour instead.
+    pub color: Option<RgbColor>,
+}
+
 /// Everything that is not screen content. Changing it repaints every row.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Appearance {
@@ -154,6 +165,7 @@ pub struct Appearance {
     /// Preferred family first, then the fallback list (CJK, emoji). Renderers without fonts ignore it.
     pub font_families: Vec<String>,
     pub theme: Theme,
+    pub bold: BoldText,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
