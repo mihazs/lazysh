@@ -13,9 +13,9 @@ import {TerminalEvents} from './terminalEvents';
 import type {CoreKeyInput} from './terminalPlatformKeys';
 import {searchRows} from './terminalText';
 
-/** Honest for a core without a renderer (`ime` is xterm.js' input observation, which this backend does not have: its keyboards are the capture and the Android input view): it parses, scrolls and answers questions about the screen, and draws nothing. */
+/** Honest for a core without a renderer (`ime` is xterm.js' input observation and `mouseReporting` is its DOM wheel dispatch, which this backend does not have: its keyboards are the capture and the Android input view, and its wheel reports go to the core): it parses, scrolls and answers questions about the screen, and draws nothing. */
 export const nativeCapabilities: TerminalCapabilities = {
-  nativeRendering: false, selection: true, scrollback: true, mouseReporting: true, ime: false, accessibility: false,
+  nativeRendering: false, selection: true, scrollback: true, mouseReporting: false, ime: false, accessibility: false,
   screenInspection: true, canonicalMoshResize: false, customBoldColor: false,
 };
 

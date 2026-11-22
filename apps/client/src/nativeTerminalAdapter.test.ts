@@ -457,8 +457,4 @@ describe('native wheel and finger scrolling', () => {
     expect(adapter.viewport().top).toBe(bottom - 3);
     expect(core.mice).toEqual([]);
   });
-
-  it('claims mouse reporting, which it now sends', () => {
-    expect(nativeCapabilities.mouseReporting).toBe(true);
-  });
 });
