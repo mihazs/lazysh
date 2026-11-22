@@ -10,6 +10,8 @@ mod json;
 mod kimi_toml;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod readiness;
+#[cfg(not(windows))]
+mod readonly_store;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod record;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
