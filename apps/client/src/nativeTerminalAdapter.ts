@@ -4,7 +4,7 @@ import {NativeInputCapture} from './nativeInputCapture';
 import {attachPointerSelection} from './nativePointerSelection';
 import {cellsOf, sliceColumns} from './nativeRowText';
 import type {
-  Disposable, TerminalAdapter, TerminalBounds, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
+  Disposable, RuntimeTransport, TerminalAdapter, TerminalBounds, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
   TerminalMountTarget, TerminalPreferences, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalSelection, TerminalSize, TerminalTheme,
   TerminalViewport,
 } from './terminalAdapter';
@@ -41,6 +41,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   /** A mounted screen-reader mirror is what makes the rows reachable, so `accessibility` holds only while one is. */
   get capabilities(): TerminalCapabilities { return this.mirrored ? {...nativeCapabilities, accessibility: true} : nativeCapabilities; }
   readonly dataPath: 'renderer' | 'runtime';
+  transport?: RuntimeTransport;
   write?: TerminalAdapter['write'];
   searchBuffer?: TerminalAdapter['searchBuffer'];
   private mirror: NativeCoreSnapshot;

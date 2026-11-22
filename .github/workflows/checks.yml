@@ -46,6 +46,7 @@ jobs:
       android: ${{ steps.paths.outputs.android }}
       android_runtime: ${{ steps.paths.outputs.android_runtime }}
       android_terminal_core: ${{ steps.paths.outputs.android_terminal_core }}
+      android_release_native: ${{ steps.paths.outputs.android_release_native }}
       android_mosh: ${{ steps.paths.outputs.android_mosh }}
       android_herdr: ${{ steps.paths.outputs.android_herdr }}
       android_appium: ${{ steps.paths.outputs.android_appium }}
@@ -59,6 +60,7 @@ jobs:
       terminal_perf: ${{ steps.paths.outputs.terminal_perf }}
       terminal_macos: ${{ steps.paths.outputs.terminal_macos }}
       linux_surface: ${{ steps.paths.outputs.linux_surface }}
+      terminal_ios: ${{ steps.paths.outputs.terminal_ios }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -596,12 +598,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # macOS has no sha256sum or timeout, which the aliased steps below use.
-      - name: Install GNU coreutils for the checksum and timeout tools of the shared steps
+      - &macos-gnu-coreutils
+        name: Install GNU coreutils for the checksum and timeout tools of the shared steps
         run: |
           brew install coreutils
           echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
       - *herdr-task-paths
-      - name: Copy the runtime, the renderer and the Herdr sources they build against
+      # terminal-ios copies the renderer too and does not build it: one step for both jobs.
+      - &macos-copy-sources
+        name: Copy the runtime, the renderer and the Herdr sources they build against
         run: |
           mkdir -p "$HERDR_CI_ROOT"
           cp -a packages/herdr-upstream packages/terminal-runtime packages/terminal-renderer-wgpu "$HERDR_CI_ROOT"
@@ -768,6 +773,95 @@ jobs:
           cargo +1.96.1 test --locked
           # Name the adapter the tests drew on in the log: Direct3D 12 on a hosted runner is WARP.
           cargo +1.96.1 test --locked --test frames windows_draws_on_direct3d_12 -- --nocapture
+  # The terminal core on iOS (#1330). herdr-native builds libghostty-vt for Linux and Android only: the Apple SDK
+  # package of Ghostty's build needs a macOS host with Xcode. Here Zig builds it against the runner's iPhoneOS and
+  # iPhoneSimulator SDKs and the runtime crate is built for aarch64-apple-ios (linked, never run: no device) and
+  # aarch64-apple-ios-sim (every test runs inside a booted simulator through `simctl spawn`, the way the Mosh
+  # transport's iOS tests do). Nothing here says how a surface, input, IME, VoiceOver, a real device's CPU or its
+  # battery behave. It shares terminal-macos's setup steps, herdr-native's admitted archives and the caches by alias.
+  # Not a required check, so it runs on pushes to main only (native-changes.sh).
+  terminal-ios:
+    needs: changes
+    if: needs.changes.outputs.terminal_ios == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      # The app's minimum, which the iOS simulator job links Mosh with.
+      IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    steps:
+      - uses: actions/checkout@v4
+      - *macos-gnu-coreutils
+      - *herdr-task-paths
+      - *macos-copy-sources
+      - *rust-release-manifest
+      - *rust-1-96-1
+      - *herdr-cargo-downloads
+      - *pinned-download-cache
+      - name: Add the iOS targets, report the host and the SDKs, and require Apple silicon
+        run: |
+          rustup +1.96.1 target add aarch64-apple-ios aarch64-apple-ios-sim
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          xcrun simctl list runtimes available
+          host=$(rustc +1.96.1 -vV | sed -n 's/^host: //p')
+          [ "$host" = aarch64-apple-darwin ] || { echo "::error::the runner's Rust host is $host, expected aarch64-apple-darwin"; exit 1; }
+      - uses: ./.github/actions/ghostty-zig
+        with:
+          zig-target: aarch64-macos
+          zig-sha256: b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489
+      # Each target builds its own libghostty-vt (the build script keeps one archive per target). The steps are
+      # independent and run on after a failure, so one run reports every iOS failure.
+      - name: Build libghostty-vt and link the runtime's tests for iOS devices
+        id: device-build
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: |
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 test --locked --no-run --target aarch64-apple-ios
+          cargo +1.96.1 clippy --locked --all-targets --target aarch64-apple-ios -- -D warnings
+      - name: Build libghostty-vt and link the runtime's tests for the iOS simulator
+        id: simulator-build
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: |
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 test --locked --no-run --target aarch64-apple-ios-sim
+          cargo +1.96.1 clippy --locked --all-targets --target aarch64-apple-ios-sim -- -D warnings
+      - name: Create and boot an isolated iOS simulator
+        id: simulator
+        if: ${{ !cancelled() && steps.simulator-build.outcome == 'success' }}
+        run: |
+          id=$(xcrun simctl create lazysh-terminal-ci com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro)
+          echo "LAZYSH_IOS_SIMULATOR_ID=$id" >> "$GITHUB_ENV"
+          xcrun simctl bootstatus "$id" -b
+      # `cargo test` hands each test executable to the runner, and `simctl spawn` runs it inside the simulator, which
+      # sees this host's file system. It passes on only the variables with the SIMCTL_CHILD_ prefix.
+      - name: Run every test of the runtime inside the iOS simulator
+        if: ${{ !cancelled() && steps.simulator.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        env:
+          SIMCTL_CHILD_LAZYSH_MOSH_FIXTURE: ${{ runner.temp }}/lazysh-herdr-native/mosh-resize-frames.json
+          SIMCTL_CHILD_LAZYSH_PLATFORM_KEYS_FIXTURES: ${{ runner.temp }}/lazysh-herdr-native/platform-keys
+        timeout-minutes: 20
+        run: |
+          export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="xcrun simctl spawn --standalone $LAZYSH_IOS_SIMULATOR_ID"
+          cargo +1.96.1 test --locked --no-fail-fast --target aarch64-apple-ios-sim
+      # An executable built for macOS would link and pass on this host and say nothing about iOS. Cargo is told not to colour its output: CI sets CARGO_TERM_COLOR=always, which breaks the match.
+      - name: Require an iOS device build and an iOS simulator build, not a macOS one
+        if: ${{ !cancelled() && steps.device-build.outcome == 'success' && steps.simulator-build.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
+        run: |
+          for pair in aarch64-apple-ios:IOS aarch64-apple-ios-sim:IOSSIMULATOR; do
+            target=${pair%%:*} platform=${pair##*:}
+            executable=$(cargo +1.96.1 test --color never --locked --no-run --target "$target" --test keys 2>&1 | sed -n 's/^ *Executable tests\/keys.rs (\(.*\))$/\1/p')
+            [ -n "$executable" ] || { echo "::error::cargo named no executable for the keys test of $target"; exit 1; }
+            xcrun vtool -show-build "$executable" | tee "$RUNNER_TEMP/vtool-$target.txt"
+            grep -Eq "^ *platform $platform$" "$RUNNER_TEMP/vtool-$target.txt" || { echo "::error::the $target executable is not a $platform build"; exit 1; }
+          done
+      - name: Delete the simulator
+        if: ${{ always() && env.LAZYSH_IOS_SIMULATOR_ID != '' }}
+        run: xcrun simctl delete "$LAZYSH_IOS_SIMULATOR_ID"
 
   native-linux:
     needs: [changes, herdr-native]
@@ -1663,6 +1757,35 @@ jobs:
             apps/client/src-tauri/gen/android/app/build/outputs/apk/androidTest/universal/debug/app-universal-debug-androidTest.apk
           if-no-files-found: error
           retention-days: 7
+
+  # The Google release APK with the native terminal engine (#2306): the release workflow's own build command (the release profile,
+  # unsigned) and the size ceiling it enforces, which release-artifacts.yml cannot show on a pull request. Selected only by a pull
+  # request that changes the release build configuration (native-changes.sh), never by a push. Nothing runs on a device here.
+  native-android-release-core:
+    needs: changes
+    if: needs.changes.outputs.android_release_native == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      CARGO_BUILD_JOBS: '4'
+    steps:
+      - *source-checkout
+      - *source-bun
+      - *pinned-download-cache
+      - *ghostty-zig-checkout
+      - *android-toolchains
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - run: bun install --frozen-lockfile
+      - name: Build the Google release APK with the native terminal engine, as release-artifacts.yml does
+        run: |
+          export CMAKE_ANDROID_NDK="$NDK_HOME" ANDROID_NDK_HOME="$NDK_HOME" WHISPER_DONT_GENERATE_BINDINGS=1
+          sh .github/scripts/retry-zig-fetch.sh bun run --cwd apps/client tauri android build --target aarch64 --apk --ci --features parakeet-android,native-terminal -- --locked
+      - run: sh .github/scripts/native-lib-size.sh arm64-v8a
+      - name: Hold the APK to the release size ceiling
+        run: bun .github/scripts/apk-budget.ts android-google-arm64 apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
 
   # Owned OpenSSH password, encrypted-key, rotated-key, bastion, agent-forwarding, Auto-fallback and
   # forced-ET parity cases (#985), the browser preview forward and teardown case (#994) and the

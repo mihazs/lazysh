@@ -1,5 +1,6 @@
 import { protectedInvoke as invoke, sessionOutput, guardAccessCallback } from './access';
 import { Channel, invoke as acknowledgeInvoke, isTauri } from "@tauri-apps/api/core";
+import type { RuntimeTransport } from './terminalAdapter';
 import type { AuthHint } from './authHints';
 import { registerSessionOutput } from './pendingSessions';
 
@@ -82,6 +83,13 @@ function remoteInvoke<T>(command:string, args:{sessionId:string}&Record<string,u
   return invoke<T>(command,args);
 }
 function createSession(command: string, args: Record<string,unknown>, onEvent: (event:SshEvent)=>void) {
+  // A session on the native data path starts on its core's Channel: the core reads the output in Rust, and `onEvent` only sees what is not output.
+  const link = (onEvent as {link?: RuntimeTransport}).link;
+  if (link) {
+    const started = invoke<{sessionId:string}>(command, {...args,events:link.events});
+    link.bind(started.then(result => result.sessionId));
+    return started;
+  }
   const events = new Channel<SshEvent>();
   const deliver = sessionOutput(onEvent); events.onmessage = deliver;
   return invoke<{sessionId:string}>(command, {...args,events}).then(result=>{

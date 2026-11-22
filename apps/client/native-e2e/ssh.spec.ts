@@ -585,8 +585,16 @@ it('shows the real Herdr agent states and a current marker that follows the real
   expect(before.focused_pane_id).toBe(agent.paneId);
   // Choosing rows asks the real server to move focus; the marker must follow what the server reports, not the click.
   const choose=async(strong:string)=>(await spaces.$(`.//button[contains(@class,"herdr-navigation-row")][.//strong[normalize-space(.)=${JSON.stringify(strong)}]]`)).click();
-  const focus=(pane:string,tab:string)=>browser.waitUntil(async()=>{const now=await snapshot();return now.focused_pane_id===pane && now.focused_tab_id===tab;},
-    {timeout:30_000,timeoutMsg:'The real Herdr server did not focus the target chosen in the GUI'});
+  // On a timeout, name what the server and the GUI each report so a lost click, a refused action and a slow server are told apart.
+  const focus=async(pane:string,tab:string)=>{
+    try {await browser.waitUntil(async()=>{const now=await snapshot();return now.focused_pane_id===pane && now.focused_tab_id===tab;},{timeout:30_000});}
+    catch {
+      const now=await snapshot();
+      const gui=await browser.execute(()=>({status:Array.from(document.querySelectorAll('.herdr-navigation [role="status"],.herdr-navigation [role="alert"]')).map(node=>node.textContent),
+        busy:Array.from(document.querySelectorAll('.herdr-navigation')).map(node=>node.getAttribute('aria-busy')+'/'+node.hasAttribute('hidden'))}));
+      throw new Error(`The real Herdr server did not focus the target chosen in the GUI; wanted ${pane}/${tab}, server has ${now.focused_pane_id}/${now.focused_tab_id}, GUI ${JSON.stringify(gui)}`);
+    }
+  };
   await choose(history.paneId);
   await focus(history.paneId,history.tabId);
   await open('workspaces');
