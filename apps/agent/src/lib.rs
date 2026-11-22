@@ -1299,7 +1299,7 @@ mod tests {
                     scope.spawn(|| {
                         barrier.wait();
                         let started = Instant::now();
-                        let mut store = Store::open_with_storage_checks(
+                        Store::open_with_storage_checks(
                             directory.path(),
                             storage_filesystem::require_local,
                             |sidecar| {
@@ -1307,11 +1307,7 @@ mod tests {
                                 validate_sidecar(sidecar)
                             },
                         )
-                        .map_err(|error| ("open", started.elapsed(), error))?;
-                        let opened = Instant::now();
-                        store
-                            .ingest(&event, Utc::now())
-                            .map_err(|error| ("ingest", opened.elapsed(), error))
+                        .map_err(|error| (started.elapsed(), error))
                     })
                 })
                 .collect::<Vec<_>>();
@@ -1320,8 +1316,14 @@ mod tests {
                 .map(|worker| worker.join().unwrap())
                 .collect::<Vec<_>>()
         });
-        for result in &results {
-            assert!(result.is_ok(), "simultaneous open or ingest: {result:?}");
+        // Only the opens race. Sixteen ingests at once would queue on SQLite's single
+        // writer, each commit waiting for a disk sync: on a slow disk that exhausts
+        // the 3 s budget however admission behaves.
+        for result in results {
+            let mut store = result.unwrap_or_else(|(elapsed, error)| {
+                panic!("simultaneous open failed after {elapsed:?}: {error:?}")
+            });
+            store.ingest(&event, Utc::now()).unwrap();
         }
         let snapshot = Store::open(directory.path())
             .unwrap()
