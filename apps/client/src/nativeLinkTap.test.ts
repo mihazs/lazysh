@@ -1,0 +1,126 @@
+// @vitest-environment jsdom
+import {afterEach, describe, expect, it, vi} from 'vitest';
+import {createHeadlessCore} from './xterm/nativeCoreHeadless';
+import {openNativeTerminalAdapter} from './nativeTerminalAdapter';
+import type {NativeCoreLink} from './nativeCoreBridge';
+import {TOUCH_SELECTION_DELAY} from './terminalTouchSelection';
+
+afterEach(() => { vi.useRealTimers(); document.body.replaceChildren(); });
+
+const docs: NativeCoreLink = {kind: 'url', uri: 'https://example.com/docs'};
+const file: NativeCoreLink = {kind: 'path', text: 'src/main.rs:12', path: 'src/main.rs', line: 12, range: {start: {x: 2, y: 3}, end: {x: 15, y: 3}}};
+
+/** A 20x5 core over a 200x50 anchor (a cell is 10x10 pixels) that answers each `linkAt` from `links` by cell and records what it was asked. */
+async function mounted(links: Record<string, NativeCoreLink> = {'1,0': docs, '2,3': file}, output = '', readsText = true) {
+  const element = document.createElement('div');
+  element.id = 'link-anchor';
+  element.getBoundingClientRect = () => ({left: 0, top: 0, width: 200, height: 50, right: 200, bottom: 50, x: 0, y: 0, toJSON() {}});
+  document.body.append(element);
+  const asked: unknown[] = [];
+  const core = createHeadlessCore({columns: 20, rows: 5});
+  const bridge = !readsText ? core : Object.create(core, {query: {value: async (query: {kind: string; cell: {x: number; y: number}}) => {
+    // A selection asks for its text too; only the links are the subject here.
+    if (query.kind !== 'linkAt') return '';
+    asked.push(query);
+    return links[`${query.cell.x},${query.cell.y}`] ?? null;
+  }}});
+  const adapter = await openNativeTerminalAdapter(bridge);
+  await adapter.write!(new TextEncoder().encode(output));
+  const handlers = {openUrl: vi.fn(), hostPaths: {exists: vi.fn(async () => true), open: vi.fn()}};
+  const target = {kind: 'native' as const, anchorId: element.id};
+  const fire = (type: string, x: number, y: number, init: {detail?: number; shiftKey?: boolean; pointerType?: string; button?: number; pointerId?: number} = {}) => {
+    const event = new MouseEvent(type, {clientX: x, clientY: y, detail: init.detail ?? 1, shiftKey: init.shiftKey, button: init.button ?? 0, bubbles: true});
+    Object.defineProperty(event, 'pointerType', {value: init.pointerType ?? 'mouse'});
+    Object.defineProperty(event, 'pointerId', {value: init.pointerId ?? 1});
+    element.dispatchEvent(event);
+  };
+  const tap = (column: number, row: number, init?: Parameters<typeof fire>[3]) => { fire('pointerdown', column * 10 + 5, row * 10 + 5, init); fire('pointerup', column * 10 + 5, row * 10 + 5, init); };
+  return {adapter, handlers, asked, target, tap, fire};
+}
+
+describe('links tapped on the native adapter anchor', () => {
+  it('hands the URL under a click or a finger to the pane, which asks the user before opening it', async () => {
+    const {adapter, handlers, asked, target, tap} = await mounted();
+    // The pane registers before it attaches, and the taps follow the anchor.
+    adapter.registerLinks(handlers);
+    await adapter.attach(target);
+    tap(1, 0);
+    tap(1, 0, {pointerType: 'touch'});
+    await vi.waitFor(() => expect(handlers.openUrl).toHaveBeenCalledTimes(2));
+    expect(handlers.openUrl).toHaveBeenCalledWith('https://example.com/docs');
+    expect(asked).toEqual(Array(2).fill({kind: 'linkAt', cell: {x: 1, y: 0}}));
+    tap(5, 4);
+    await vi.waitFor(() => expect(asked).toHaveLength(3));
+    expect(handlers.openUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens a host path only when the host confirms the file, as the xterm.js backend does', async () => {
+    const {adapter, handlers, asked, target, tap} = await mounted();
+    await adapter.attach(target);
+    adapter.registerLinks(handlers);
+    handlers.hostPaths.exists.mockResolvedValueOnce(false);
+    tap(2, 3);
+    await vi.waitFor(() => expect(handlers.hostPaths.exists).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(handlers.hostPaths.open).not.toHaveBeenCalled();
+    tap(2, 3);
+    await vi.waitFor(() => expect(handlers.hostPaths.open).toHaveBeenCalledTimes(1));
+    const {range, ...rest} = handlers.hostPaths.open.mock.calls[0][0] as {range: unknown};
+    expect(rest).toEqual({text: 'src/main.rs:12', path: 'src/main.rs', line: 12, column: undefined});
+    expect(range).toEqual({start: {x: 3, y: 4}, end: {x: 16, y: 4}});
+    // Without a path check the pane has none to offer, and the tap opens nothing.
+    adapter.registerLinks({openUrl: handlers.openUrl});
+    tap(2, 3);
+    await vi.waitFor(() => expect(asked).toHaveLength(3));
+    expect(handlers.openUrl).not.toHaveBeenCalled();
+  });
+
+  it('leaves a hold, a drag, a double click, a shift-click, another button and a program that tracks the mouse alone', async () => {
+    const {adapter, handlers, asked, target, tap, fire} = await mounted({'1,0': docs}, '\x1b[?1000l');
+    adapter.registerLinks(handlers);
+    await adapter.attach(target);
+    vi.useFakeTimers();
+    fire('pointerdown', 15, 5, {pointerType: 'touch'});
+    vi.advanceTimersByTime(TOUCH_SELECTION_DELAY);
+    fire('pointerup', 15, 5, {pointerType: 'touch'});
+    fire('pointerdown', 15, 5, {pointerType: 'touch'}); fire('pointerup', 15 + 40, 5, {pointerType: 'touch'});
+    fire('pointerdown', 15, 5, {pointerType: 'touch'}); fire('pointercancel', 15, 5, {pointerType: 'touch'}); fire('pointerup', 15, 5, {pointerType: 'touch'});
+    fire('pointerdown', 15, 5, {pointerId: 1}); fire('pointerup', 15, 5, {pointerId: 2});
+    tap(1, 0, {detail: 2}); tap(1, 0, {shiftKey: true}); tap(1, 0, {button: 2});
+    vi.useRealTimers();
+    await adapter.write!(new TextEncoder().encode('\x1b[?1000h'));
+    tap(1, 0);
+    await Promise.resolve();
+    expect(asked).toEqual([]);
+    expect(handlers.openUrl).not.toHaveBeenCalled();
+  });
+
+  it('stops with its registration, with the anchor and with the terminal, and ignores an answer that arrives after', async () => {
+    const {adapter, handlers, asked, target, tap} = await mounted();
+    const registration = adapter.registerLinks(handlers);
+    await adapter.attach(target);
+    registration.dispose();
+    tap(1, 0);
+    await adapter.detach();
+    adapter.registerLinks(handlers);
+    tap(1, 0);
+    expect(asked).toEqual([]);
+    await adapter.attach(target);
+    tap(1, 0);
+    const pending = adapter.dispose();
+    await pending;
+    await Promise.resolve();
+    expect(handlers.openUrl).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing of a core that cannot read its own text', async () => {
+    const {adapter, handlers, target, tap} = await mounted({}, '', false);
+    expect(await adapter.linkAt({x: 0, y: 0})).toBeUndefined();
+    adapter.registerLinks(handlers);
+    await adapter.attach(target);
+    tap(1, 0);
+    await Promise.resolve();
+    expect(handlers.openUrl).not.toHaveBeenCalled();
+    await adapter.dispose();
+  });
+});

@@ -148,3 +148,138 @@ fn an_osc8_hyperlink_is_found_on_its_cells_and_only_on_screen() {
         "in view again"
     );
 }
+
+use lazysh_terminal_runtime::{CellPos, ControlAnswer, ControlQuery, LinkHit, TerminalRuntime};
+
+fn tap(rt: &TerminalRuntime, x: u16, y: usize) -> Option<LinkHit> {
+    rt.link_at(CellPos { x, y }).unwrap()
+}
+
+fn url(uri: &str) -> Option<LinkHit> {
+    Some(LinkHit::Url { uri: uri.into() })
+}
+
+#[test]
+fn a_tap_lands_on_the_url_or_path_under_it_and_on_nothing_else() {
+    let mut rt = runtime(60, 4);
+    feed(
+        &mut rt,
+        b"see https://example.com/a?b=1 or ~/src/main.rs:12:3 now",
+    );
+    let end = "see https://example.com/a?b=1".len() as u16 - 1;
+    assert_eq!(tap(&rt, 3, 0), None, "the space before");
+    for x in [4, 10, end] {
+        assert_eq!(tap(&rt, x, 0), url("https://example.com/a?b=1"), "x {x}");
+    }
+    assert_eq!(tap(&rt, end + 1, 0), None, "the space after");
+    let at = "see https://example.com/a?b=1 or ".len() as u16;
+    let Some(LinkHit::Path {
+        text,
+        path,
+        line,
+        column,
+        range,
+    }) = tap(&rt, at + 4, 0)
+    else {
+        panic!("a path under the tap");
+    };
+    assert_eq!(
+        (text.as_str(), path.as_str(), line, column),
+        ("~/src/main.rs:12:3", "~/src/main.rs", Some(12), Some(3))
+    );
+    assert_eq!((range.start.x, range.end.x), (at, at + 17));
+    assert_eq!(tap(&rt, at + 18, 0), None, "the space after the path");
+    assert_eq!(tap(&rt, 0, 0), None, "plain text");
+    assert_eq!(tap(&rt, 10, 3), None, "an empty row");
+    assert_eq!(tap(&rt, 99, 0), None, "past the columns");
+    assert_eq!(tap(&rt, 10, 99), None, "past the last row");
+}
+
+#[test]
+fn a_tap_on_any_row_of_a_wrapped_url_opens_all_of_it() {
+    let url_text = format!("https://example.com/{}", "a".repeat(30));
+    let mut rt = runtime(20, 5);
+    feed(&mut rt, format!("{url_text} tail").as_bytes());
+    // 20 columns: the URL fills rows 0 and 1 and takes the first ten cells of row 2.
+    for (x, y) in [(0, 0), (19, 0), (0, 1), (10, 1), (19, 1), (0, 2), (9, 2)] {
+        assert_eq!(tap(&rt, x, y), url(&url_text), "({x}, {y})");
+    }
+    assert_eq!(tap(&rt, 10, 2), None, "the space after it");
+    assert_eq!(tap(&rt, 12, 2), None, "the word after it");
+}
+
+#[test]
+fn a_program_s_osc8_hyperlink_beats_what_the_text_says_and_a_url_beats_a_path_inside_it() {
+    let mut rt = runtime(60, 6);
+    feed(
+        &mut rt,
+        concat!(
+            "\x1b]8;;https://example.com/docs\x1b\\the docs\x1b]8;;\x1b\\ and ",
+            // The label is itself a URL, the target another: the target is what opens, and what consent shows.
+            "\x1b]8;;https://evil.example/\x1b\\https://good.example/\x1b]8;;\x1b\\\r\n",
+            "https://example.com/src/main.rs:7\r\n",
+        )
+        .as_bytes(),
+    );
+    assert_eq!(tap(&rt, 0, 0), url("https://example.com/docs"));
+    assert_eq!(tap(&rt, 7, 0), url("https://example.com/docs"));
+    assert_eq!(tap(&rt, 8, 0), None, "the plain space after the label");
+    let label = "the docs and ".len() as u16;
+    assert_eq!(tap(&rt, label + 3, 0), url("https://evil.example/"));
+    assert_eq!(tap(&rt, 20, 1), url("https://example.com/src/main.rs:7"));
+}
+
+#[test]
+fn history_is_searched_by_row_and_only_the_screen_carries_hyperlinks() {
+    let mut rt = runtime(40, 3);
+    feed(
+        &mut rt,
+        b"\x1b]8;;https://example.com/osc\x1b\\label\x1b]8;;\x1b\\ https://example.com/printed",
+    );
+    let lines: String = (0..30).map(|i| format!("\r\nrow {i}")).collect();
+    feed(&mut rt, lines.as_bytes());
+    assert!(rt.viewport().unwrap().top > 0, "the first row is history");
+    assert_eq!(
+        tap(&rt, 2, 0),
+        None,
+        "a hyperlink in history is not asked of the viewport"
+    );
+    assert_eq!(tap(&rt, 10, 0), url("https://example.com/printed"));
+    rt.scroll_viewport(-100);
+    assert_eq!(tap(&rt, 2, 0), url("https://example.com/osc"));
+}
+
+#[test]
+fn the_control_query_answers_in_the_clients_shape() {
+    let mut rt = runtime(60, 3);
+    feed(&mut rt, b"https://example.com/x ./a/b.rs:4");
+    let ask = |x: u16| {
+        let answer = rt
+            .control_query(ControlQuery::LinkAt {
+                cell: CellPos { x, y: 0 },
+            })
+            .unwrap();
+        assert!(matches!(answer, ControlAnswer::Link(_)));
+        serde_json::to_value(answer).unwrap()
+    };
+    assert_eq!(
+        ask(3),
+        json!({"kind": "url", "uri": "https://example.com/x"})
+    );
+    assert_eq!(
+        ask(25),
+        json!({
+            "kind": "path", "text": "./a/b.rs:4", "path": "./a/b.rs", "line": 4,
+            "range": {"start": {"x": 22, "y": 0}, "end": {"x": 31, "y": 0}}
+        })
+    );
+    assert_eq!(ask(21), Value::Null);
+    let query: ControlQuery =
+        serde_json::from_value(json!({"kind": "linkAt", "cell": {"x": 1, "y": 2}})).unwrap();
+    assert_eq!(
+        query,
+        ControlQuery::LinkAt {
+            cell: CellPos { x: 1, y: 2 }
+        }
+    );
+}

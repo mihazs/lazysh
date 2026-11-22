@@ -13,6 +13,7 @@ use crate::runtime::{Error, TerminalRuntime};
 use crate::selection::{CellPos, CellRange};
 use ghostty_vt::{CellWide, ScreenTextRow};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
 /// A hard-wrapped URL rarely spans more than a handful of rows.
@@ -93,6 +94,24 @@ pub struct PathLink {
     pub line: Option<u64>,
     pub column: Option<u64>,
     pub range: CellRange,
+}
+
+/// What a tap on a cell lands on ([`TerminalRuntime::link_at`]), in the client's `NativeCoreLink` shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LinkHit {
+    /// Where an OSC 8 hyperlink points, or the URL printed there. Either goes to the client's consent flow.
+    Url { uri: String },
+    /// A host path printed there, as printed. Whether it names a file is for the host to say.
+    Path {
+        text: String,
+        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        line: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        column: Option<u64>,
+        range: CellRange,
+    },
 }
 
 fn blank(glyph: &Glyph) -> bool {
@@ -315,6 +334,41 @@ impl TerminalRuntime {
         Ok(self
             .vt()
             .viewport_hyperlink_uri(cell.x, (cell.y - view.top) as u32)?)
+    }
+
+    /// The link under `cell`, for a tap: the OSC 8 hyperlink the program drew there (only on the screen), else a URL
+    /// printed there, else a host path, so the first wins where they overlap, as in the xterm.js backend. Nothing for a
+    /// cell outside the screen's columns or past the last row.
+    pub fn link_at(&self, cell: CellPos) -> Result<Option<LinkHit>, Error> {
+        if let Some(uri) = self.hyperlink_at(cell)? {
+            return Ok(Some(LinkHit::Url { uri }));
+        }
+        // Reading order, both ends inclusive: every cell between the first and the last of a wrapped link belongs to it.
+        let under = |range: CellRange| {
+            (cell.y, cell.x) >= (range.start.y, range.start.x)
+                && (cell.y, cell.x) <= (range.end.y, range.end.x)
+        };
+        if cell.x >= self.size().cols {
+            return Ok(None);
+        }
+        if let Some(url) = self
+            .find_urls(cell.y)?
+            .into_iter()
+            .find(|url| under(url.range))
+        {
+            return Ok(Some(LinkHit::Url { uri: url.text }));
+        }
+        Ok(self
+            .find_paths(cell.y)?
+            .into_iter()
+            .find(|path| under(path.range))
+            .map(|path| LinkHit::Path {
+                text: path.text,
+                path: path.path,
+                line: path.line,
+                column: path.column,
+                range: path.range,
+            }))
     }
 
     /// Every match of `re` touching `row`, joined across soft wraps; `accept` refines or rejects

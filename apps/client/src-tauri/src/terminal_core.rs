@@ -741,6 +741,18 @@ pub async fn terminal_core_word_at(
     query(lease, session_id, word).await
 }
 
+/// The link a tap on `cell` opens: an OSC 8 hyperlink, a URL or a host path (`{kind: "url", uri}` or `{kind: "path", ...}`), `null`
+/// where there is none.
+#[tauri::command]
+pub async fn terminal_core_link_at(
+    lease: AccessLease,
+    session_id: String,
+    cell: Json,
+) -> AccessResult<Json> {
+    let link = serde_json::json!({"kind": "linkAt", "cell": cell});
+    query(lease, session_id, link).await
+}
+
 /// The whole soft-wrapped line that holds `row`.
 #[tauri::command]
 pub async fn terminal_core_line_at(
@@ -2576,6 +2588,7 @@ mod tests {
             "terminal_core_selection_text",
             "terminal_core_search",
             "terminal_core_word_at",
+            "terminal_core_link_at",
             "terminal_core_line_at",
             "terminal_core_buffer_range",
             "terminal_core_copy_screen",
@@ -2748,6 +2761,7 @@ mod tests {
                 )
                 .await,
                 terminal_core_word_at(lease(), id.clone(), json!({"x": 5, "y": 6})).await,
+                terminal_core_link_at(lease(), id.clone(), json!({"x": 7, "y": 8})).await,
                 terminal_core_line_at(lease(), id.clone(), 9).await,
                 terminal_core_buffer_range(lease(), id.clone()).await,
                 terminal_core_copy_screen(lease(), id).await,
@@ -2768,6 +2782,7 @@ mod tests {
                 json!({"kind": "selectionText", "range": range}),
                 json!({"kind": "search", "query": "needle", "direction": "backward", "from": 7}),
                 json!({"kind": "wordAt", "cell": {"x": 5, "y": 6}}),
+                json!({"kind": "linkAt", "cell": {"x": 7, "y": 8}}),
                 json!({"kind": "lineAt", "row": 9}),
                 json!({"kind": "bufferRange"}),
                 json!({"kind": "copyScreen"}),
@@ -2791,7 +2806,7 @@ mod tests {
         assert!(terminal_core_select(renderer, id(), None).await.is_err());
         assert_eq!(
             core.asked.lock().unwrap().len(),
-            8,
+            9,
             "a refusal asks nothing"
         );
         close("text-gated");

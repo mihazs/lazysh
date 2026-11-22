@@ -36,6 +36,11 @@ export type NativeCoreSnapshot = {state: NativeCoreState; window: NativeRowWindo
  */
 export type NativeCoreEvent = {type: 'changed'} | Extract<TerminalEvent, {type: 'title' | 'bell' | 'cwd' | 'clipboard' | 'failure'}>;
 
+/** What a tap on a cell opens: where an OSC 8 hyperlink points or the URL printed there, or a host path printed there (0-based absolute cells, both ends inclusive). */
+export type NativeCoreLink =
+  | {kind: 'url'; uri: string}
+  | {kind: 'path'; text: string; path: string; line?: number; column?: number; range: TerminalRange};
+
 /** A question about the buffer's text, which the core answers from its own state: absolute rows, both ends of a range inclusive. */
 export type NativeCoreQuery =
   | {kind: 'selectionText'; range: TerminalRange}
@@ -44,13 +49,16 @@ export type NativeCoreQuery =
   | {kind: 'wordAt'; cell: TerminalCell}
   | {kind: 'lineAt'; row: number}
   | {kind: 'bufferRange'}
-  | {kind: 'copyScreen'};
+  | {kind: 'copyScreen'}
+  /** The link a tap on `cell` opens: an OSC 8 hyperlink, else a URL, else a host path. */
+  | {kind: 'linkAt'; cell: TerminalCell};
 
-/** Text, a range or a hit: `null` where there is none (no match, an empty buffer). Never cells. */
+/** Text, a range, a hit or a link: `null` where there is none (no match, an empty buffer, nothing under the cell). Never cells. */
 export type NativeCoreAnswer<Q extends NativeCoreQuery> =
   Q extends {kind: 'selectionText' | 'copyScreen'} ? string
   : Q extends {kind: 'search'} ? TerminalSearchHit | null
   : Q extends {kind: 'bufferRange'} ? TerminalRange | null
+  : Q extends {kind: 'linkAt'} ? NativeCoreLink | null
   : TerminalRange;
 
 export interface NativeCoreBridge {
