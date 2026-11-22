@@ -197,6 +197,18 @@ over a delayed inventory. Its three-second wait does not cancel native SDK work;
 late results are ignored. Unknown events without a verified location are ignored.
 There is no background pagination or per-event lookup.
 
+Claude Code sends no hook when the person rejects a permission dialog (No or Esc): no `PostToolUse`,
+`PostToolUseFailure` or `Stop`, and its `PermissionDenied` hook covers only the auto mode classifier. A row
+left at an approval, a question or a plan would wait until the next prompt. So `lazysh-agent snapshot` reads
+the end of the session's conversation file (`projects/<project>/<session id>.jsonl` under `CLAUDE_CONFIG_DIR`,
+else `~/.claude`) for each such Claude Code row and marks it done, summary "Turn interrupted" as for Codex's
+`Interrupt`, when the last conversation record is Claude Code's interruption marker written after the wait
+began. A message or tool call after the marker, or a rejection older than the wait, settles nothing. Only the
+marker and its time are read; nothing from the file is stored or reported. When the companion cannot find the
+file, for example because `CLAUDE_CONFIG_DIR` is set in the agent's terminal but not in the environment of the
+snapshot (the Agent view's conversation list has the same limit), the row stays as the hooks left it until the
+next prompt or `SessionEnd`. A row nobody reads stays as it is until the next snapshot.
+
 Codex reports main-thread prompt/tool activity as working, permission requests as
 needing attention and Stop, Interrupt or SessionEnd as completed. SessionStart
 does not imply an active turn. Codex subagent hooks use the parent's session ID;
@@ -653,7 +665,7 @@ Remaining work is tracked in [#1527](https://github.com/mihazs/lazysh/issues/152
 
 | Agent | Observed natively | Not established | Blocked on |
 | --- | --- | --- | --- |
-| Claude Code | 2.1.316: one print turn against a local Anthropic-format mock, `working` then `done`. 2.1.322, private HOME, loopback mock, managed profile, `--permission-mode default`: a print turn with a `Read` and a background `Agent` child kept one session row and shared it with the child's own `Read` hooks, which arrived before the parent's `Stop` in one of two runs and after it in the other (the row went `done`, then `working` again); the child's completion then resumed the parent turn, `working` then `done`. In the normal TUI (folder trusted through the ordinary dialog) a `Write` that needs permission gave `needs_attention` with an approval wait, and after approval `working` then `done`. Rejecting the dialog (No or Esc) sent no hook, so the row stayed `needs_attention` until `SessionEnd` ([#1795](https://github.com/mihazs/lazysh/issues/1795)) | Which events carry a child identity (the run read the store, not the hook payloads), plan and auto permission modes, an elicitation question | Nothing account-bound |
+| Claude Code | 2.1.316: one print turn against a local Anthropic-format mock, `working` then `done`. 2.1.322, private HOME, loopback mock, managed profile, `--permission-mode default`: a print turn with a `Read` and a background `Agent` child kept one session row and shared it with the child's own `Read` hooks, which arrived before the parent's `Stop` in one of two runs and after it in the other (the row went `done`, then `working` again); the child's completion then resumed the parent turn, `working` then `done`. In the normal TUI (folder trusted through the ordinary dialog) a `Write` that needs permission gave `needs_attention` with an approval wait, and after approval `working` then `done`. Rejecting the dialog (No or Esc) sent no hook, so the row stayed `needs_attention` until `SessionEnd` ([#1795](https://github.com/mihazs/lazysh/issues/1795)); the snapshot now settles it from the conversation file (same version, with the hook entries of `claude-config` and the built companion on `PATH` instead of `hooks install`, and `lazysh-agent snapshot` run with the profile's `HOME`: `done`, "Turn interrupted", for No and for Esc, while a later dialog of the same session kept waiting, and approving gave `working` then `done`) | Which events carry a child identity (the run read the store, not the hook payloads), plan and auto permission modes, an elicitation question | Nothing account-bound |
 | Codex | 0.166.0, normal TUI with ordinary hook review: nothing delivered before review, `working` then `done` after it, nothing when disabled or after a changed definition, one parent with one child that kept the parent `working` until its own `Stop`. 0.167.0 (`--no-daemon -a on-request -s read-only`, hooks trusted through the review screen): a command that needs approval gave `working`, then `needs_attention` with an approval wait, then `working` and `done` after approval and the command ran; Esc on the dialog delivered `Interrupt` and the row became `done` ("Turn interrupted") | Child events on 0.167.0, other approval kinds (patches, network, permission profiles) | Nothing account-bound |
 | OpenCode | 1.19.5 and 2.2 loaders, root and child session deletion, and an attributed attention report | A full provider turn and an authenticated session | A provider account for the authenticated session |
 | Gemini CLI | 0.66.0, headless with a loopback endpoint: `working` then `done`; nothing when hooks are disabled or the folder is untrusted | Interactive readiness (the owned terminal stalled at theme selection), root and child attribution, authenticated Google behaviour | A Google account for the authenticated part |
