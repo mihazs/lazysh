@@ -1,5 +1,13 @@
 # @lazysh/apple-status
 
+## 1.96.0
+
+No changes in this release.
+
+## 1.95.7
+
+No changes in this release.
+
 ## 1.95.6
 
 No changes in this release.

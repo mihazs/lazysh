@@ -1,5 +1,6 @@
 //! Small owner-only JSON state files: bounded reads that never create state, and atomic locked writes.
 use crate::{Error, Result};
+use serde::de::DeserializeOwned;
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -83,6 +84,11 @@ fn open(path: &Path, write: bool) -> Result<File> {
 
 /// The bytes of `name`, or `None` when the directory or file is absent. Never creates state.
 pub(crate) fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>> {
+    read_limited(directory, name, MAX_CONFIG)
+}
+
+/// [`read`] for a file that may be larger than a settings file, up to `limit` bytes.
+pub(crate) fn read_limited(directory: &Path, name: &str, limit: u64) -> Result<Option<Vec<u8>>> {
     if !directory_exists(directory)? {
         return Ok(None);
     }
@@ -90,12 +96,12 @@ pub(crate) fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>> {
         Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         result => result?,
     };
-    if file.metadata()?.len() > MAX_CONFIG {
+    if file.metadata()?.len() > limit {
         return Err(Error::InvalidArgument);
     }
     let mut bytes = Vec::new();
-    file.take(MAX_CONFIG + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_CONFIG {
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
         return Err(Error::InvalidArgument);
     }
     Ok(Some(bytes))
@@ -131,6 +137,23 @@ pub(crate) fn write(directory: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(unix)]
     File::open(directory)?.sync_all()?;
     Ok(())
+}
+
+/// The strictly parsed `name`, or the compatibility defaults when it is absent. Never creates state.
+pub(crate) fn read_or_default<T: DeserializeOwned + Default>(
+    directory: &Path,
+    name: &str,
+    valid: impl FnOnce(&T) -> bool,
+) -> Result<T> {
+    let Some(bytes) = read(directory, name)? else {
+        return Ok(T::default());
+    };
+    let value: T = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidArgument)?;
+    if valid(&value) {
+        Ok(value)
+    } else {
+        Err(Error::InvalidArgument)
+    }
 }
 
 /// Check-and-set one revisioned file under its own lock. A busy lock or a stale revision is a `Settings` error.

@@ -36,6 +36,7 @@ lazysh-common = { path = "../../../packages/common", features = ["url", "reposit
 lazysh-companion-release = { path = "../../../packages/companion-release" }
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }
+lazysh-notification-client = { path = "../../../packages/notification-client" }
 lazysh-terminal-runtime = { path = "../../../packages/terminal-runtime", optional = true }
 lazysh-terminal-renderer-wgpu = { path = "../../../packages/terminal-renderer-wgpu", optional = true }
 # The cells of composing (IME preedit) text in the renderer host; both are in the lock through other crates.
@@ -92,6 +93,11 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# The JNI entry points that give the renderer host an Android surface (native_terminal_surface/android.rs).
+jni = "0.21"
+raw-window-handle = "0.6"
 
 [target.'cfg(all(any(target_os = "linux", target_os = "windows"), target_arch = "x86_64"))'.dependencies]
 lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime" }

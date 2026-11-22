@@ -160,3 +160,17 @@ it('sends hook discovery and setup for a local session to the native companion w
   for(const operation of [()=>api.connectMosh(id,{},()=>{}),()=>api.connectEt(id,{},()=>{})])await expect(operation()).rejects.toThrow('requires an SSH connection');
   expect(invoke).not.toHaveBeenCalled();
 });
+it('starts a session on the native data path with the core\'s own channel and binds the session it started',async()=>{
+  const events={};const bind=vi.fn();
+  invoke.mockResolvedValueOnce({sessionId:'local:9'});
+  await api.connectLocal(Object.assign(()=>{},{link:{events,bind}}));
+  expect(invoke).toHaveBeenLastCalledWith('local_connect',expect.objectContaining({events}),expect.anything());
+  expect(invoke.mock.calls.at(-1)![1].events).toBe(events);
+  await expect(bind.mock.calls[0][0]).resolves.toBe('local:9');
+});
+it('binds the failure of a native-path start so the core\'s commands do not wait for a session that never came',async()=>{
+  const bind=vi.fn();
+  invoke.mockRejectedValueOnce(new Error('refused'));
+  await expect(api.connectLocal(Object.assign(()=>{},{link:{events:{},bind}}))).rejects.toThrow('refused');
+  await expect(bind.mock.calls[0][0]).rejects.toThrow('refused');
+});

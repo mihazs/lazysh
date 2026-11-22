@@ -119,6 +119,32 @@ revocation or reconfiguration cannot recall an already accepted message. Actual
 Gotify server/client, Android background and physical-device delivery acceptance
 remain separate checks.
 
+### Receive Gotify events on the desktop app
+
+The desktop app can show a notification for the relay's Gotify events when it is not connected to the agent's host. It is off until you connect, and it reuses the Gotify destination above unchanged. It is the desktop counterpart of the Android receiver, with Gotify as its only transport for now; ntfy and the encrypted bound-event envelope are not received on the desktop (#1621 tracks the rest).
+
+1. Use a **dedicated Gotify user** for the relay. A Gotify client token is not read-only: it authorizes the Gotify API for its whole user, including every message, so a token for your everyday account is far more access than lazysh needs.
+2. In that Gotify user's web UI, create a **client** named for this computer and copy its token. The relay keeps using its separate application token.
+3. In lazysh open **Preferences, Notifications** (the remote push settings) and, under **Remote notifications on this computer**, enter your Gotify HTTPS address (a reverse-proxy path prefix is kept) and the client token, then **Connect**. lazysh asks the system for notification permission, makes one request to check the token and saves it in the operating system's credential store. The address and the on/off switch are saved separately and hold no secret.
+
+While the app runs and the receiver is on, it reads `GET /message?limit=20` every 15 seconds. After 401 or 403 it stops and shows a message instead of retrying; other failures back off to four minutes and recover on their own. The first reading after connecting or starting the app is only a baseline, so messages that were already there are never replayed and nothing sent while the app was closed is shown. If the server's ids go backwards, for example after restoring its database, the receiver starts a new baseline.
+
+Only the relay's own needs-attention event is accepted: title `lazysh`, priority 5 and a message of exactly `<alias>: needs_attention`, where the alias is one to 64 letters, digits, spaces, `_`, `-` or `.`. Anything else, such as a working or done state, extra text, control characters or another title, is ignored. The event must also be at most 300 seconds old and at most 60 seconds in the future. Ages use the Gotify server's own clock (its `Date` header against the message date), so a wrong clock on the desktop does not drop events, and a message that reached the server late is not shown after it expired.
+
+The notification follows the Android disclosure rule. Its text is fixed, **lazysh · Needs you** and **An agent needs your attention.**; the alias, state text, server date and Gotify message id never reach it. Several events found in one reading show one notification. It carries the existing **Open session** action when system notifications are enabled in the inbox. The event names no host or session, so the action cannot open one; it only brings lazysh forward.
+
+**Pause** stops all requests and keeps the saved token, so **Resume** needs no new entry. **Remove from this computer** stops the receiver and deletes the token and address here. That does not revoke the token on the server: delete the client in Gotify too. With the client deleted at the server, the next reading is rejected (401) and the receiver stops. The same applies when Gotify is restored from a backup that lacks the client. A start, resume or save that was still running when you paused or removed does nothing afterwards: it starts no polling and writes no settings or token, and when two requests overlap the newer one wins.
+
+Limits:
+
+- Only while lazysh is running; there is no tray icon, autostart or background service, so a closed app receives nothing.
+- A latency of up to 15 seconds, a polling interval, not a push subscription. There is no WebSocket and no new dependency for one.
+- The server must use HTTPS with a certificate that the bundled public roots trust. A private certificate authority, a self-signed certificate, an HTTP address and an HTTP proxy are not supported; the connection ignores proxy environment variables, as the relay does.
+- Gotify reports acceptance by its server, not display; the desktop's notification service can still drop an alert (the system's Do Not Disturb, for example).
+- A shared Gotify client token lets any program running as your account read it from the credential store. Treat it as a secret of that account.
+
+Verification: `tests::gotify_server::real_gotify_server_stores_all_finite_relay_states_over_verified_tls` also runs this receiver. It starts the pinned official Gotify 3.1.1 server, connects the receiver (a baseline), has the relay publish working, needs-attention and done events, and checks that the receiver reports exactly one event and no repeat, then deletes the client at the server and checks that the next reading is rejected. The `lazysh-notification-client` tests cover the closed schema, content limits, the expiry window, clock handling, baseline and replay rules, finite error classes and that a dropped watcher sends nothing; the app's tests cover one alert per new event and that a paused or rejected receiver contacts nothing, over a verified-TLS Gotify stand-in. These do not display a notification: the app's real **Desktop Notifications** path for a remote event, the credential-store save and the interface on the real window remain unexercised. Windows and macOS have not run it either.
+
 ## Deliver through Apprise
 
 Apprise delivery uses your own [Apprise API server](https://github.com/caronc/apprise-api)

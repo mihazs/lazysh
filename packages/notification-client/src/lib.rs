@@ -1,4 +1,5 @@
 pub mod client;
+pub mod gotify;
 mod private_files;
 mod wire;
 use sha2::{Digest, Sha256};

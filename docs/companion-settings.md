@@ -1,6 +1,6 @@
 # Host companion settings
 
-Disable or re-enable companion transcript discovery, recorded usage inspection or device tools for a host. You need an installed [companion](how-to/configure-companion.md) and access to the same remote operating-system user.
+Disable or re-enable companion transcript discovery, recorded usage inspection or device tools for a host, and, separately, live simulator streaming and the app's port scanning. You need an installed [companion](how-to/configure-companion.md) and access to the same remote operating-system user.
 
 The Agents panel shows host settings after a valid companion snapshot is available. It loads the settings over the selected verified SSH session. Controls appear only after a supported settings response; older companions show an update/setup message. Saving changes the remote operating-system user's companion configuration, shared by that user's lazysh clients. It does not save these switches in browser storage or change an agent's own configuration.
 
@@ -50,6 +50,33 @@ lazysh-agent settings host-browser update --expected-revision 0 --host-browser-e
 
 While it is off, or its file is unreadable, every host-browser command refuses before it starts a process. Turning it off does not stop a browser that already runs. `lazysh-agent host-browser --clear-data` removes the profile that **Keep profile** left, and works with the switch off. See the [reference](reference/companion-settings.md) for the file, the errors and the profile lifetime.
 
+## Forbid account quota reads on a host
+
+`lazysh-agent account-usage` reads each configured provider's quota with the host's own sign-ins and makes outbound requests to those providers. By default any connected lazysh app may ask for it. To forbid it on a host, run on that host (the app does not offer this switch yet):
+
+```sh
+lazysh-agent usage-collection show
+lazysh-agent usage-collection update --expected-revision 0 --account-quota-enabled false
+```
+
+Replace `0` with the revision `show` returned. While the switch is off, the AI account usage page and the status-bar item show that this host does not allow account usage reads, with **no percentage**: the quota is unknown, not zero. Nothing reads a credential file, starts a helper or contacts a provider. Turn it back on with `--account-quota-enabled true`; the next refresh uses it, with no restart. A stale revision returns `SettingsConflict`; reread and retry. A malformed `usage-collection.json` makes the quota read fail, not allow it: correct the file; the companion never rewrites it.
+
+The switch binds the host companion. A companion older than this switch ignores it, and the desktop app's own read of its local machine does not use the companion. It is stored in `usage-collection.json`, separate from the three switches above. See the [reference](reference/companion-settings.md#usage-collection-policy).
+
+## Record account quota samples in the background
+
+By default nothing is collected while the app is closed, so a refresh shows no history. To record one bounded sample of each account's quota on a schedule, run on the host:
+
+```sh
+lazysh-agent usage-collector enable --interval-minutes 30
+lazysh-agent usage-collector status --limit 5
+lazysh-agent usage-collector disable
+```
+
+**Read this first:** enabling makes the host contact each configured provider every interval, with the sign-ins the quota read already uses, while no lazysh app is open. That is why it is off by default and the shortest interval is 5 minutes. A sample holds only percentages, resets and staleness per account: no plan name, balance, credential, prompt or path. At most 1000 samples, 7 days and 1 MiB are kept, oldest first, in `usage-samples.json` in the companion state directory; delete that file to erase them. If account quota reads are [forbidden](#forbid-account-quota-reads-on-a-host), the collector reads nothing and records the skipped run.
+
+`enable` installs a user-level timer without sudo: a systemd user timer on Linux, a launchd agent on macOS, a Scheduled Task on Windows. `disable` removes only what `enable` wrote. Exit 41 means this account cannot hold a timer (no user service manager or login session) and nothing was changed; exit 42 means the system or a file of another origin refused it and the collector stays off. On Linux the user manager stops when the last session ends unless you run `loginctl enable-linger USER` yourself; `status` shows `linger`. While the host is suspended or off nothing is recorded; the first tick afterwards records one sample, so a gap stays a gap. An interval is rounded up to a multiple of five minutes. The usage page of the app shows the collector's state, its last run and the age of every sample under **Background collection** (it needs a companion that has `usage-collector`); it has no controls for it, so `enable` and `disable` are run on the host. See the [reference](reference/companion-settings.md#usage-collector) for the schema, bounds, per-system details and what was and was not tested.
+
 ## Quiet notifications for nested agents and an unlocked desktop
 
 If you opt in to the [relay](notification-relay.md#opt-in-the-host-companion), two more host switches decide which events may notify your phone. Both are **off** by default, so nothing changes until you turn one on, and they are not part of the three switches above. There is no control for them in the app yet; use the host terminal:
@@ -65,6 +92,28 @@ lazysh-agent settings notifications update --expected-revision 0 \
 - **Unlocked desktop (Linux only).** No notification while you sit at the host's unlocked desktop that already shows the agent. If the lock state is unknown (macOS, Windows, no `loginctl`, a remote or inactive session) you are notified.
 
 Both apply to the next hook run. The [reference](reference/companion-settings.md#notification-policy-nested-agents-and-an-unlocked-desktop) lists exactly which agents, platforms and cases are covered and which validation could not be run.
+
+## Turn off live streaming or port scanning for a host
+
+Two more switches have their own save button under **Host feature switches** in the same panel, because they are kept in a separate file with their own revision:
+
+- **Simulator and emulator streaming** stops new live Android and iOS video streams. Screenshots, input and the other device tools keep following **Device tools**.
+- **Port scanning from the app** stops the Preview panel from listing listeners and sending HTTP checks to this host. Because the app scans over its own SSH connection and not through the companion, only a lazysh app that reads this switch obeys it.
+
+Both default to enabled. They apply to new operations only: a stream that is already running continues until you stop it, and a scan already under way finishes. With the port scan off, **Discover listeners** reads the switch, scans nothing and says the scan is turned off on the host; an automatic refresh stops after that one read. Opening a preview by typing its port is not a scan and still works. A host whose companion is older or absent has no feature switches (the panel says so) and scans as before.
+
+The Preview panel also remembers, per saved host and on this device, whether you chose the HTTP check and the automatic refresh. The host switch wins over that memory.
+
+From the host terminal, with the revision `show` returns:
+
+```sh
+lazysh-agent settings features show
+lazysh-agent settings features update --expected-revision 0 \
+  --simulator-streaming-enabled false \
+  --port-scan-enabled true
+```
+
+A stream refused by the host fails with `SimulatorStreamingDisabled` before any Android or iOS tool starts. A stale revision returns `SettingsConflict`. See the [settings reference](reference/companion-settings.md#host-feature-switches).
 
 ## Companion updates
 

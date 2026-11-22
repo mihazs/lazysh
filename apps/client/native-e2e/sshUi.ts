@@ -8,6 +8,31 @@ type Terminal=Awaited<ReturnType<NonNullable<NativeGui['browser']>['$']>>;
 type Owner=Awaited<ReturnType<NativeGui['appOwner']>>;
 type OwnedHostLabel='Owned SSH GUI host'|'Owned SSH GUI second host';
 
+/** What the page shows right now: its dialogs, alerts and focused control, for a failure message that says what was on screen. */
+export async function describeUi(gui:NativeGui) {
+  try {
+    return JSON.stringify(await gui.browser!.execute(()=>{
+      const shown=(node:Element)=>(node as HTMLElement).getClientRects().length>0;
+      const active=document.activeElement as HTMLElement|null;
+      return {
+        dialogs:Array.from(document.querySelectorAll('[role="dialog"]')).map(node=>({label:node.getAttribute('aria-label'),shown:shown(node),inert:(node as HTMLElement).inert})),
+        alerts:Array.from(document.querySelectorAll('[role="alert"],[role="status"]')).filter(shown).map(node=>node.textContent?.trim().slice(0,200)),
+        active:active&&{tag:active.tagName,label:active.getAttribute('aria-label')??active.textContent?.trim().slice(0,60)},
+        busy:document.querySelectorAll('[aria-busy="true"]').length,
+      };
+    }));
+  } catch(error) {return `unavailable (${error})`;}
+}
+
+/** Runs `step`; when it fails, its error also carries what the page and `extra` show. */
+export async function withUiState<T>(gui:NativeGui,step:()=>Promise<T>,extra:()=>Promise<unknown>=async()=>undefined):Promise<T> {
+  try {return await step();}
+  catch(error) {
+    const detail=await extra().catch(failure=>`unavailable (${failure})`);
+    throw new Error(`${error instanceof Error?error.message:String(error)}; page ${await describeUi(gui)}${detail===undefined?'':`; ${JSON.stringify(detail)}`}`,{cause:error});
+  }
+}
+
 /** Use the visible public workspace menu; never adopt a hidden header control. */
 export async function workspaceAction(gui:NativeGui,name:string) {
   const browser=gui.browser!,opener=await browser.$('button[aria-label="Workspace tools"]');

@@ -1,4 +1,5 @@
 import {browser} from '@wdio/globals';
+import {inWebView} from './contexts';
 import {adbFor, APP_PACKAGE, setPermission} from './device';
 
 // App lifecycle through Appium `mobile:` commands and device.ts, never through the Appium adb_shell feature.
@@ -23,7 +24,11 @@ export async function relaunchApp() { await terminateApp(); await launchApp(); }
 export async function resetApp() {
   await browser.execute('mobile: clearApp', {appId: APP_PACKAGE});
   await launchApp();
+  await markGestureTourSeen();
 }
+
+/** Marks the first-run gesture tour as seen (same key and version as `gestureTourModel.ts`), so it never covers a session a test drives. */
+export const markGestureTourSeen = () => inWebView(() => browser.execute(() => localStorage.setItem('lazysh.gestureTour.v1', '999')));
 
 /** Runtime permissions change through device.ts, which restores the baseline afterwards. Revoking stops the app. */
 export const grantPermission = (permission: string) => setPermission(adbFor(serial()), permission, true);

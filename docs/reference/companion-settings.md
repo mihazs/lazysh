@@ -4,6 +4,8 @@
 | --- | --- |
 | `settings show` | Reads the current response, including revision; no absent-state creation. |
 | `settings update` | Requires `--expected-revision` and all three explicit boolean flags: `--transcript-discovery-enabled`, `--recorded-usage-enabled`, `--device-tools-enabled`. |
+| `settings features show` | Reads the [host feature switches](#host-feature-switches) and their revision; no absent-state creation. |
+| `settings features update` | Requires `--expected-revision` and both explicit boolean flags: `--simulator-streaming-enabled`, `--port-scan-enabled`. |
 
 | Setting | Commands affected |
 | --- | --- |
@@ -17,7 +19,7 @@ Every successful update increments the revision exactly once. Native SSH APIs fo
 
 The host browser switch has its own native commands, `get_host_browser_settings` and `update_host_browser_settings`, which run `lazysh-agent settings host-browser show` and `update --expected-revision R --host-browser-enabled true|false` on the same verified session with the same limits (4 KiB, schema version 1, revision below 2^53, unknown fields refused). They never carry the three switches above, and `get_companion_settings` and `update_companion_settings` never carry the host browser switch. A companion that predates the subcommand answers with clap's `error: unrecognized subcommand` usage error; that one error becomes the fixed kind `host_browser_companion_required`, which the app shows as an update message while it writes nothing. Every other failure, such as `SettingsConflict`, keeps its own text. The per-host confirmation is app-side only: one device-local list of host ids under `lazysh.hostBrowserConfirmed.v1`, outside the preferences that encrypted sync uploads.
 
-Changes apply to **new CLI operations**. An already running command, device stream or preview continues until it is stopped; settings do not signal or kill existing processes. Later refresh/capture requests use the new value. Port discovery and HTTP probing currently run through a separate native SSH implementation, so these switches do not affect them. There is no port-scan switch that lacks an enforcing implementation, and the nested-agent and unlocked-desktop switches are [separate](#notification-policy-nested-agents-and-an-unlocked-desktop).
+Changes apply to **new CLI operations**. An already running command, device stream or preview continues until it is stopped; settings do not signal or kill existing processes. Later refresh/capture requests use the new value. These three switches do not affect port discovery or HTTP probing, which run through the app's own SSH implementation; the [port-scan feature switch](#host-feature-switches) covers them. The nested-agent and unlocked-desktop switches are [separate](#notification-policy-nested-agents-and-an-unlocked-desktop).
 
 The response and persisted `settings.json` use this strict schema:
 
@@ -35,7 +37,35 @@ Unknown/missing fields, other schema versions, non-boolean switches, invalid rev
 
 Updates hold a private `settings.lock`, check the expected revision under that lock, and atomically replace the config using a private temporary file. The config is synced before replacement, and the containing directory is synced on Unix. Lock release is explicit on every exit path. On Unix the state directory must belong to the current user with no group/other permissions, and config/lock files must be owned regular files with one hard link and no group/other permissions. Parent directories must belong to the current user or root and resist group/other replacement; trusted sticky temporary directories are allowed. Leaf symlinks and special files are refused, with no-follow/nonblocking opens. New Unix directories use mode 0700 and files 0600. Other platforms use the operating system's user-state ACLs; this work does not independently verify Windows ACL enforcement for custom state-directory overrides.
 
-Native Cargo fixtures cover absent-file reads, persistent typed updates, concurrent/stale revision handling, CLI gates before unavailable transcript/SDK paths, permissions, links, FIFO rejection and bounds. Vitest covers versioned parsing, actual update payloads, unavailable companions, conflicts and late responses from an old SSH session. No developer's real settings or SDK/device is used by these tests.
+Native Cargo fixtures cover absent-file reads, persistent typed updates, concurrent/stale revision handling, CLI gates before unavailable transcript/SDK paths, permissions, links, FIFO rejection and bounds, and, for the feature switches, absent and stale reads, the streaming refusal against fake `adb`, `idb` and `ffmpeg` that log every start, and the older-companion reader. They are Unix-only for the fake SDK tools; no real Android emulator or iOS simulator was started for this change. Vitest covers versioned parsing, actual update payloads, unavailable companions, conflicts and late responses from an old SSH session. No developer's real settings or SDK/device is used by these tests.
+
+## Host feature switches
+
+Two further switches live in their own strict file, **`host-features.json`**, in the same state directory, with its own revision, its own lock (`host-features.lock`) and the same 4 KiB limit, mode 0600 and atomic-replace discipline as `settings.json`. They are not fields of `settings.json` for the reason in the last paragraph below.
+
+| Switch | Default | Effect |
+| --- | --- | --- |
+| `simulatorStreamingEnabled` | enabled | `lazysh-agent devices android ID stream` and `devices ios ID stream` fail with `SimulatorStreamingDisabled` before any SDK, `idb` or `ffmpeg` process starts. Inventory, probes, screenshots, input and lifecycle controls keep following **Device tools**, so a host can allow screenshots and forbid live video. A stream also still needs **Device tools** enabled: with both off the reason is `DeviceToolsDisabled`. |
+| `portScanEnabled` | enabled | When off, the Preview panel reads the file before every discovery, does not invoke `discover_preview_ports`, sends no HTTP check, and says the scan is turned off on the host. |
+
+**Port scanning is enforced by the app, not by the companion.** Listener discovery and the HTTP check run through the app's own native SSH connection (`ss`, `lsof`, then `HEAD /`); the companion is not involved and cannot refuse them. The switch therefore binds a lazysh app that reads `host-features.json` before scanning, which this app does, and nothing else: another SSH client, or an app version from before this change, is not stopped by it. Streaming, in contrast, is enforced by the companion itself.
+
+```json
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "simulatorStreamingEnabled": false,
+  "portScanEnabled": true
+}
+```
+
+Absent means both enabled, and `settings features show` then creates nothing (no directory, lock or file). `settings features update` takes the lock, checks `--expected-revision` under it and bumps the revision exactly once; a stale revision returns `SettingsConflict` and a held lock `SettingsBusy`, as for `settings update`. Unknown or missing fields, other schema versions, non-boolean values, invalid revisions and files above 4 KiB are refused, and a device stream then fails closed with `InvalidArgument` instead of reading the file as defaults.
+
+**Restart semantics.** Nothing is restarted or signalled. A change applies to **new operations**: the next `devices ... stream` command reads the file, and the Preview panel reads it at the start of each scan. A stream that is already running continues until it is stopped; a scan already issued finishes. An automatic scan that finds the switch off stops after that one read and resumes only when a later manual scan finds it on again.
+
+**An app without the file.** A host whose companion has no `settings features` (older, not installed, or a host the app cannot identify as Linux or macOS on x64 or arm64) has no feature switches, so every switch counts as enabled and the Preview panel scans as before. On a Linux or macOS host, a `host-features.json` the companion refuses makes the Preview panel report the error and not scan, and the Host companion settings panel then offers no feature switches while the other three stay editable.
+
+**Remembered Preview choices.** The Preview panel remembers whether the user chose the HTTP check and the automatic refresh, per saved host, in this device's local storage (`lazysh.preview.scan.<host id>`; the port filter keeps its own key). The remembered choice never overrides the host switch.
 
 **Update policy is not part of this schema.** The auto-update policy (see [Auto-update policy](#auto-update-policy)) lives in a separate strict `auto-update.json` with its own revision, lock and 4 KiB limit. `settings.json` keeps exactly the five fields above and `settings update` keeps its three boolean flags, because this schema refuses unknown fields and an older companion sharing the state directory would otherwise fail with `InvalidArgument`.
 
@@ -50,6 +80,97 @@ The gate fails closed. Every host-browser command except **Clear browser data** 
 
 The browser's profile lives under `host-browser/` in the state directory (mode 0700). Each launcher claims its profile with a marker `<name>.pid` that holds its pid, removes both when it ends, and removes the profiles of dead launchers when the next one starts. **Keep profile** (`--keep-profile`) uses the single profile `host-browser/kept`, which survives until `host-browser --clear-data` and is refused while a running launcher holds it (`BrowserProfileInUse`). A pid that the operating system has reused for another process keeps a crashed launcher's profile until a later start.
 
+## Usage collection policy
+
+The account quota read has its own strict file, `usage-collection.json`, with its own revision, `usage-collection.lock`, 4 KiB limit and the same owner-only, atomic, symlink-refusing storage as `settings.json` ([ADR 0005](../architecture/adr-0005-background-usage-collection.md)). It is separate for the same reason as the update policy: an older companion would refuse an unknown key in `settings.json`.
+
+| CLI operation | Contract |
+| --- | --- |
+| `usage-collection show` | Prints the policy, including its revision. An absent file reports the defaults and creates nothing. |
+| `usage-collection update` | Requires `--expected-revision` and `--account-quota-enabled true|false`. Exit 1 with `SettingsConflict` on a stale revision and `SettingsBusy` while another writer holds the lock. |
+
+```json
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "accountQuotaEnabled": false,
+  "collectorEnabled": false,
+  "collectorIntervalMinutes": 30
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `accountQuotaEnabled` | `true` | Whether `lazysh-agent account-usage` may read provider quotas on this host. Existing hosts keep reading. |
+| `collectorEnabled` | `false` | Whether the [usage collector](#usage-collector) records samples. Set by `usage-collector enable` and `disable`. |
+| `collectorIntervalMinutes` | `30` | The collector's interval, 5 to 1440. |
+
+With `accountQuotaEnabled` set to `false`, `lazysh-agent account-usage` answers `{"schemaVersion":1,"state":"disabled","source":null,"report":null}` and exits 0. It does so **before** it opens a credential file, starts `ai-usagebar` or a helper process, or makes a request. `disabled` means the quota is unknown because the host forbids reading it: there is no report, so the app shows no percentage and never zero. A policy file that is malformed, has another schema version, an interval outside 5 to 1440, unknown fields or more than 4 KiB makes `account-usage` fail (exit 1, no output), so a host that tried to forbid the read is never treated as allowing it; the file is not repaired.
+
+The change applies to the **next** `account-usage` call. A read already running finishes; nothing is signalled. The guarantee covers the host companion's `account-usage` command, which the app uses for every remote host. It does not govern a companion older than this switch (such a companion has no `usage-collection` command and exits with status 2), nor the desktop app's own read of the machine it runs on, which does not go through the companion.
+
+Native Cargo fixtures run the real binary with a fake `ai-usagebar` that records when it starts: the default policy starts it, a forbidden read does not, a re-enabled switch applies without a restart, and an unreadable policy fails closed. They also cover absent-file reads, persistent updates, stale revisions, strict parsing and file modes. Vitest covers the `disabled` state, which shows no meter and no percentage.
+
+## Usage collector
+
+`lazysh-agent usage-collector` records bounded samples of the account quota report while no lazysh app is open. It is **off by default**, nothing in it runs or is written until `enable`, and the design is [ADR 0005](../architecture/adr-0005-background-usage-collection.md).
+
+| CLI operation | Contract |
+| --- | --- |
+| `usage-collector enable [--interval-minutes N]` | Installs the user-level timer (below), then records `collectorEnabled: true` and the interval (5 to 1440; absent keeps the stored one, default 30) in `usage-collection.json`. Idempotent. Exit 41 when this account cannot hold a timer (nothing changed) and 42 when the system or an existing file refuses it (written files put back, the collector stays off). |
+| `usage-collector disable` | Records `collectorEnabled: false`, then removes the timer, and only files or tasks that carry the marker `lazysh-agent-managed: usage-collector`. A foreign file or task of the same name is left alone and gives exit 42. Recorded samples stay. |
+| `usage-collector status [--limit N]` | Read only, creates nothing. Prints the policy, the timer, the last run and a summary of the samples; with `--limit` (0 to 200) also the newest samples, newest first. |
+| `usage-collector run` | What the timer runs. Prints `{"schemaVersion":1,"outcome":"..."}` and exits 0 for every expected outcome. |
+
+`run` outcomes: `off` (the collector is off: nothing was read, nothing was written, not even a lock file), `notDue` (the last run is younger than the interval), `busy` (another run or a policy change holds a lock), `recorded` (one sample appended), `skipped` (the host forbids account quota reads, reason `accountQuotaDisabled`: nothing was read) and `unavailable` (the read produced no report, for example `timeout`: the run is recorded, no sample is). A run reads the policy first, reads the quota once with the same code, deadlines and gate as `account-usage`, then takes the policy lock again and re-reads the policy **before it writes**, so a run that was in flight when `disable` returned writes nothing. A malformed policy or sample file makes `run` exit 1 and is never repaired; the sample file is disposable (delete it to start over), the policy file is not.
+
+The timer ticks every five minutes. A run is due at the first tick that is at least the interval after the previous run, less one minute of slack (a run starts a moment after its tick, so a 5-minute interval would otherwise become 10). Intervals are therefore rounded up to a multiple of five minutes.
+
+`status` output:
+
+```json
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-11-14T12:05:00Z",
+  "policyRevision": 2,
+  "accountQuotaEnabled": true,
+  "collector": {"enabled": true, "intervalMinutes": 30, "timer": {"state": "installed", "linger": false}},
+  "lastRun": {"at": "2026-11-14T12:00:00Z", "outcome": "recorded", "reason": null},
+  "samples": {"state": "ok", "count": 1, "oldest": "2026-11-14T12:00:00Z", "newest": "2026-11-14T12:00:00Z", "bytes": 512},
+  "recent": []
+}
+```
+
+`timer.state` is `absent`, `installed` (the files or task are exactly what `enable` writes and the service manager has them loaded), `drift` (something is there that is not exactly that, or is not loaded) or `unsupported` (no user service manager). `timer.linger` is the Linux user manager's `Linger` property, `null` elsewhere or when unreadable. `observedAt` is the host's clock: the app ages every sample against it, not against the phone's clock. `samples.state` is `invalid` for an unreadable sample file (reported, not repaired).
+
+**Samples** live in `usage-samples.json` in the companion [state directory](companion-events.md#state-directory-and-retention) (mode 0600, atomic replace). A sample exists only for a read that produced a report:
+
+```json
+{"recordedAt": "2026-11-14T12:00:00Z", "source": "builtin", "truncated": false,
+ "entries": [{"id": "anthropic", "name": "Claude", "status": "ready", "stale": false, "fetchedAt": "2026-11-14T11:59:00Z",
+              "rows": [{"label": "Session", "percent": 42.5, "reading": "used", "resetAt": "2026-11-14T17:00:00Z", "windowSeconds": 18000}]}]}
+```
+
+`reading` says what `percent` measures (`used` or `left`). A reset or window the provider did not report is `null`, never zero. Only metric rows are kept: plan names, balances, free text, credentials, prompts, transcript text, session titles and paths are not, and at most 32 accounts with 16 rows each are kept (`truncated: true` when more existed). **Bounds:** at most 1000 samples, none older than 7 days and at most 1 MiB, oldest dropped first; at the 5-minute minimum interval the size and count bounds, not 7 days, limit the history. Nothing a user sets can grow the file. The bounds are fixed in this version.
+
+**The timer** only wakes `usage-collector run`. No sudo, no elevation, no resident process; its files are fixed templates around the absolute path of the executable that ran `enable`, and nothing else reaches them.
+
+| Host | Mechanism | Needs | Where |
+| --- | --- | --- | --- |
+| Linux | `systemd --user` service and timer, `OnCalendar=*:0/5`, `Persistent=true` | A reachable user manager (`systemctl --user show-environment`). The user manager only runs while the account has a session unless the owner runs `loginctl enable-linger USER`, which `enable` never does; `status` reports `linger`. A path with `"`, `\` or `%` is refused. | `$XDG_CONFIG_HOME/systemd/user/lazysh-usage-collector.{service,timer}` (default `~/.config`) |
+| macOS | launchd agent, `StartInterval` 300 | The user's GUI login domain (`launchctl print gui/UID`); an SSH-only account without one exits 41. | `~/Library/LaunchAgents/app.lazysh.usage-collector.plist` |
+| Windows | Scheduled Task of the current user, repeating every 5 minutes, `StartWhenAvailable` | An interactive logon: the task runs while the user is logged on. | Task `lazysh-usage-collector`, registered with `schtasks /Create /XML` |
+
+**In the app.** The usage page runs `usage-collector status --limit 24` over the session's SSH connection (a native command, `usage_collector_status`) and revalidates the host's answer before it reaches the page: schema version, every enumeration, bounds (at most 24 samples, 32 accounts and 16 rows each, 512 KiB), and text without control or bidirectional characters. A field it does not know is ignored. A companion without `usage-collector` (exit status 2, 126 or 127) is reported as needing an update. The page ages each time against `observedAt` (the host's clock), not the phone's. It shows no controls: the switches are changed on the host.
+
+**Suspend, shutdown and offline.** Nothing runs while the host is off or suspended, and no sample is invented for the gap. The first tick after it finds the interval elapsed and records **one** sample (systemd `Persistent=true`, launchd and Task Scheduler catch up the same way), never a burst. A tick while offline records an `unavailable` run and no sample. The gap stays visible in the timestamps.
+
+**Privacy boundary.** The one thing the collector adds is that the host contacts each configured provider on the user's interval while no lazysh app is open, with the credentials the quota read already uses, so it is off by default and has a 5-minute floor. It reads no transcript, writes nothing outside the state directory and the timer files, sends nothing anywhere itself, stores no credential and exports nothing: the app receives samples only through `usage-collector status` over the user's own SSH connection.
+
+**Restart semantics.** Nothing is resident, so nothing restarts. `enable`, `disable` and `usage-collection update` apply from the next tick or the next `account-usage` call. A read already running finishes; a run in flight when `disable` returned writes nothing. Updating the companion does not touch the timer: the units hold the absolute path of the executable, which an atomic replace keeps valid, but a companion moved or deleted leaves a timer pointing at nothing (`status` reports `drift`). `enable` and `disable` take one lifecycle lock (`usage-collector-lifecycle.lock`, taken only once the account is known to hold a timer) and wait for each other, so the timer and the policy never end up disagreeing. A failed re-enable leaves the collector that was already on in place, and `enable` refuses a launchd job with the collector's label that lazysh did not load instead of replacing it; an earlier launchd or systemd install is loaded again when a replacement fails.
+
+Native Cargo tests run the collector with an injected clock, quota reader and temporary state directory (off writes nothing, one sample per interval and the slack, projection and what never leaks, bounds, retention, count and size, forbidden and offline reads, suspend, a clock moved back, a policy change during a read, an unreadable file). Other tests run the real binary against stand-in `systemctl`, `launchctl`, `schtasks` and `loginctl`: files rendered and read back (`systemd-analyze verify` on the systemd units, an XML parser on the launchd and Task Scheduler documents), the exact commands issued, exit 41 and 42, foreign files left alone, drift, idempotence, and a real `usage-collector run` against a stand-in `ai-usagebar`. One manual run on a Linux desktop (systemd 262, lingering on) used the real user manager: `enable --interval-minutes 15` installed the units and `systemctl --user is-enabled` answered `enabled`, the timer was listed with the next five-minute tick, `systemctl --user start lazysh-usage-collector.service` ran `usage-collector run` (exit 0, `{"outcome":"off"}` because that unit reads the account's own state directory, where the collector is off), and `disable` removed both units and the timer. **Not exercised:** a real launchd or Task Scheduler, a real suspend and resume, a real tick followed by a recorded sample under the user manager, and any Windows or macOS host.
+
 ## Companion updates in the app
 
 `get_companion_settings` adds `autoUpdate: {revision, policy}` to the response when `lazysh-agent auto-update status` answers (`policy` is `off`, `notify` or `install`; a companion without the command has no `autoUpdate`, and a failed status read is that, not an error). `update_companion_settings` takes an optional `autoUpdate: {expectedRevision, policy}`, which the app only sends when the policy changed; the host's reply to `lazysh-agent auto-update set --expected-revision R --policy P` replaces the value shown, and a `SettingsConflict` is reported like the other settings. Every command the app runs on a Linux or macOS host sets `LAZYSH_APP_VERSION`; a `snapshot` reply's `update` field becomes the one-line row of the Agents panel (`started` and `running` show progress, `done` the new version, `failed` says the companion stays on its version, and `skipped` is shown only for `policyOff`, `policyNotify` and `activeTurn`). See [Companion update](companion-update.md#started-by-a-newer-app).
@@ -62,7 +183,6 @@ Two opt-in switches decide whether a lifecycle event may queue a [relay notifica
 | --- | --- |
 | `settings notifications show` | Reads the policy and revision; an absent file reports both switches off and creates nothing. |
 | `settings notifications update` | Requires `--expected-revision` and both `--nested-agent-suppression-enabled` and `--suppress-while-desktop-unlocked`. A stale revision is `NotificationPolicyConflict`, a busy lock `NotificationPolicyBusy`. |
-
 ```json
 {
   "schemaVersion": 1,

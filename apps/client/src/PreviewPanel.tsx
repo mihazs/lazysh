@@ -1,7 +1,7 @@
 import {t, useUi} from './i18n/core';
 import ToolHelp from './ToolHelp';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
-import {discoverPreviewListeners} from './previewDiscovery';
+import {discoverPreviewListeners, PORT_SCAN_DISABLED} from './previewDiscovery';
 import { observeCurrent } from "./asyncState";
 import { useAccessSnapshot, useMountedAccess, useProtectedInvoke } from './access';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -12,6 +12,18 @@ import { pickerId, type ElementSelection } from './previewAnnotations';
 
 type Preview = { id: string; remotePort: number; remoteAddress: string; localPort: number; url: string; pickerToken?: string | null };
 type Listener = { port: number; address: string; process: string | null; pid: number | null; http: boolean | null; framework?: 'nextJs' | null };
+
+const scanChoiceKey = (host: string) => `lazysh.preview.scan.${host}`;
+/** The probe and automatic-scan choices the user made for this host; a missing or damaged record means off. */
+function readScanChoice(host: string): { probe: boolean; automatic: boolean } {
+  try {
+    const value = JSON.parse(localStorage.getItem(scanChoiceKey(host)) ?? '{}') as Record<string, unknown>;
+    return { probe: value.probe === true, automatic: value.automatic === true };
+  } catch { return { probe: false, automatic: false }; }
+}
+function saveScanChoice(host: string, patch: Partial<ReturnType<typeof readScanChoice>>) {
+  try { localStorage.setItem(scanChoiceKey(host), JSON.stringify({ ...readScanChoice(host), ...patch })); } catch { /* The choice is a convenience. */ }
+}
 
 export function parseAllowedPorts(text: string): number[] | null {
   const value = text.trim().toLowerCase();
@@ -44,12 +56,14 @@ export function parsePreview(value: unknown): Preview {
   return row as Preview;
 }
 
-export default function PreviewPanel({ sessionId }: { sessionId: string }) {
+export default function PreviewPanel({ sessionId, hostKey }: { sessionId: string; hostKey?: string }) {
   useUi();
   const invoke = useProtectedInvoke();
   const {access, mounted} = useMountedAccess();
   const authority = useAccessSnapshot();
-  const [automatic, setAutomatic] = useState(false);
+  const host = hostKey ?? sessionId;
+  const [automatic, setAutomatic] = useState(() => readScanChoice(host).automatic);
+  const [scanDisabled, setScanDisabled] = useState(false);
   const [discoveryCycle, setDiscoveryCycle] = useState(0);
   const discoveryRevision = useRef(0);
   const working = useRef(false);
@@ -62,7 +76,7 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
   const [allowlist, setAllowlist] = useState(() => { try { return localStorage.getItem('lazysh.preview.ports') ?? 'all'; } catch { return 'all'; } });
-  const [probeHttp, setProbeHttp] = useState(false);
+  const [probeHttp, setProbeHttp] = useState(() => readScanChoice(host).probe);
   const [pagePath, setPagePath] = useState('/');
   const [selector, setSelector] = useState('');
   const [comment, setComment] = useState('');
@@ -75,7 +89,8 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
   const generation = useRef(0);
   useEffect(() => {
     const current = ++generation.current;
-    setAutomatic(false); discoveryRevision.current++; working.current = true;
+    const choice = readScanChoice(host);
+    setAutomatic(choice.automatic); setProbeHttp(choice.probe); setScanDisabled(false); discoveryRevision.current++; working.current = true;
     setPreviews([]); setSelected(''); setListeners([]); setError(''); setBusy(true);
     const loading = invoke<unknown[]>('list_previews', { sessionId }).then(rows => {
       if (!Array.isArray(rows) || rows.length > 4) throw new LocalUiError('previewInvalidList');
@@ -112,9 +127,11 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
     try {
       const allowPorts = parseAllowedPorts(allowlist);
       try { localStorage.setItem('lazysh.preview.ports', allowlist); } catch { /* Filter storage is optional. */ }
-      const rows = await discoverPreviewListeners(access, sessionId, allowPorts, probeHttp) as Listener[];
+      const answer = await discoverPreviewListeners(access, sessionId, allowPorts, probeHttp);
+      if (answer === PORT_SCAN_DISABLED) { if (accepts()) { setListeners([]); setScanDisabled(true); } return; }
+      const rows = answer as Listener[];
       if (!Array.isArray(rows) || rows.length > 256 || rows.some(row => !row || !Number.isInteger(row.port) || row.port < 1 || row.port > 65535 || typeof row.address !== 'string' || row.address.length > 100 || (row.process !== null && (typeof row.process !== 'string' || row.process.length > 256)) || (row.pid !== null && (!Number.isInteger(row.pid) || row.pid < 1)) || (row.http !== null && typeof row.http !== 'boolean') || (row.framework != null && (row.framework !== 'nextJs' || row.http !== true)))) throw new LocalUiError('previewInvalidListeners');
-      if (accepts()) setListeners(rows);
+      if (accepts()) { setListeners(rows); setScanDisabled(false); }
     } catch (e) { if (accepts()) setError(captureUiError(e)); }
     finally {
       if (owns()) { working.current = false; setBusy(false); setDiscoveryCycle(value => value + 1); }
@@ -126,15 +143,16 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
     return () => document.removeEventListener('visibilitychange', changed);
   }, []);
   useEffect(() => {
-    if (!automatic || busy || (document.visibilityState === 'hidden') || !access.current()) return;
+    if (!automatic || scanDisabled || busy || (document.visibilityState === 'hidden') || !access.current()) return;
     const timer = setTimeout(() => void discover(), 5000);
     return () => clearTimeout(timer);
-  }, [automatic, busy, discoveryCycle, authority, discover, access]);
+  }, [automatic, scanDisabled, busy, discoveryCycle, authority, discover, access]);
   function toggleAutomatic() {
     discoveryRevision.current++;
     if (!automatic) {
       try { parseAllowedPorts(allowlist); } catch (e) { setError(captureUiError(e)); return; }
     }
+    saveScanChoice(host, { automatic: !automatic });
     setAutomatic(value => !value);
   }
   async function close(id: string) {
@@ -160,9 +178,10 @@ export default function PreviewPanel({ sessionId }: { sessionId: string }) {
     <div className="tool-bar"><h3><Globe size={17} /> {t('previewTitle')}</h3><button className="subtle-button" disabled={busy} onClick={() => void discover()}>{t('previewDiscover')}</button></div>
     <p className="agent-note">{t(sessionId.startsWith('local:') ? 'previewConnectionHintLocal' : 'previewConnectionHint')}</p>
     <label className="preview-filter">{t('previewDiscoverPorts')} <input disabled={automatic} value={allowlist} onChange={event => { discoveryRevision.current++; setAllowlist(event.target.value); }} maxLength={2048} placeholder={t('previewPortsHint')} /></label>
-    <label className="preview-filter"><input type="checkbox" disabled={automatic} checked={probeHttp} onChange={event => { discoveryRevision.current++; setProbeHttp(event.target.checked); }} /> {t('previewProbe')}</label>
+    <label className="preview-filter"><input type="checkbox" disabled={automatic} checked={probeHttp} onChange={event => { discoveryRevision.current++; saveScanChoice(host, { probe: event.target.checked }); setProbeHttp(event.target.checked); }} /> {t('previewProbe')}</label>
     <label className="preview-filter"><input type="checkbox" checked={automatic} onChange={toggleAutomatic} /> {t('previewAutomatic')}</label>
     <ToolHelp label={t('previewAutomaticAbout')}>{t('previewAutomaticHint')}</ToolHelp>
+    {scanDisabled && <p className="agent-note" role="status">{t('previewScanDisabled')}</p>}
     <form className="preview-connect" onSubmit={event => { event.preventDefault(); void start(); }}><label>{t('previewLoopback')} <select value={address} onChange={event => setAddress(event.target.value)}><option value="127.0.0.1">IPv4</option><option value="::1">IPv6</option></select></label><label>{t('previewRemotePort')} <input type="text" inputMode="numeric" value={port} onChange={event => setPort(event.target.value)} maxLength={5} /></label><button className="subtle-button" disabled={busy || previews.length >= 4} type="submit">{t('previewOpen')}</button></form>
     <label className="preview-filter"><input type="checkbox" checked={annotations} onChange={event => setAnnotations(event.target.checked)} /> {t('previewEnablePicker')}</label>
     {error && <p className="inline-error" role="alert">{uiErrorText(error)}</p>}

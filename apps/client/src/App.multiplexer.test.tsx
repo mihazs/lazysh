@@ -175,6 +175,30 @@ it.each(['enter','stale-pane','hidden','locked','wrong-server'] as const)('enter
   expect(mocks.api.attachMultiplexer).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
 });
 
+it('keeps the Agent view when a Herdr agent picked in the left menu opens another display',async()=>{
+  mocks.api.listHosts.mockResolvedValue([host]);
+  mocks.api.connect.mockResolvedValue({sessionId:'navigation-source'});
+  mocks.api.attachMultiplexer.mockResolvedValue({sessionId:'navigation-adopted'});
+  const original=mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command,args)=>{
+    if(command==='multiplexer_tree')return Promise.resolve({tmuxAvailable:false,herdrAvailable:true,zellijAvailable:false,tools:[{kind:'herdr',version:'0.9.5',support:'full',missing:[]}],sessions:[]});
+    if(command==='multiplexer_sessions')return Promise.resolve([{name:'named-work'}]);
+    if(command==='herdr_tree')return Promise.resolve(herdrNavigationTree);
+    if(command==='herdr_action')return Promise.resolve(undefined);
+    return original(command,args);
+  });
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  await user.click(within(screen.getByRole('group',{name:'Session view'})).getByRole('button',{name:'Agent'}));
+  await screen.findByRole('region',{name:'Agent view'});
+  await user.click(screen.getByRole('button',{name:'Workspaces'}));
+  const browser=within(await screen.findByRole('region',{name:t('herdrNavigationTitle')}));
+  await user.click(await browser.findByRole('button',{name:/^builder/}));
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('herdr_action',expect.objectContaining({sessionId:'navigation-adopted'}),expect.anything()));
+  await waitFor(()=>expect(screen.getByRole('tab',{name:'Home / named-work'}).getAttribute('aria-selected')).toBe('true'));
+  expect(within(screen.getByRole('group',{name:'Session view'})).getByRole('button',{name:'Agent'}).getAttribute('aria-pressed')).toBe('true');
+  expect(screen.getByRole('region',{name:'Agent view'})).toBeTruthy();
+});
+
 it.each(['current','current-second-display','adopt','adopt-held-tree','adopt-held-reply','cancel-before-publication','cancel-after-publication','cancel-pending-reply','cancel-server','hidden-then-visible','missing','removed-on-host','stale','unsupported','limited'] as const)('navigates the exact Herdr display with %s ownership',async outcome=>{
   if(outcome==='unsupported')mocks.realAgents=true;
   const existing=outcome==='current'||outcome==='current-second-display'||outcome==='unsupported'||outcome==='removed-on-host';

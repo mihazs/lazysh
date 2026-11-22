@@ -10,6 +10,9 @@ inputs:
   link-source:
     description: Link the checkout's packages/herdr-upstream into the provisioning root, for jobs that build in the checkout
     default: 'false'
+  restore-only:
+    description: Restore main's Zig package downloads without ever saving them (release jobs)
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -32,7 +35,15 @@ runs:
     # every package against its pinned hash each time it unpacks one, so a changed entry fails
     # the build, and an unreadable one is dropped here so Zig downloads it again.
     - name: Restore Herdr's hash-addressed Zig package downloads
+      if: inputs.restore-only != 'true'
       uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/lazysh-herdr-native/zig-global/p
+        key: herdr-zig-packages-v1-${{ runner.os }}-zig0.16.0-${{ hashFiles('packages/herdr-upstream/vendor/libghostty-vt/build.zig.zon', 'packages/herdr-upstream/vendor/libghostty-vt/pkg/*/build.zig.zon') }}
+    # Release jobs run on main, so they can restore only main-saved entries; they never save.
+    - name: Restore main's Zig package downloads without saving
+      if: inputs.restore-only == 'true'
+      uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/lazysh-herdr-native/zig-global/p
         key: herdr-zig-packages-v1-${{ runner.os }}-zig0.16.0-${{ hashFiles('packages/herdr-upstream/vendor/libghostty-vt/build.zig.zon', 'packages/herdr-upstream/vendor/libghostty-vt/pkg/*/build.zig.zon') }}

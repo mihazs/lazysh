@@ -43,7 +43,7 @@ All tmux client invocations also select UTF-8 (`-u`), preserving literal metadat
 
 This follows documented [tmux named-server semantics](https://man.openbsd.org/tmux.1) and [upstream 3.4 socket-label construction](https://github.com/tmux/tmux/blob/3.4/tmux.c#L175-L219). The reference client help exposed `tmux:<server>`, but the exact private gateway meaning was not recovered. This is independent implementation from the public interface. Agent pane IDs alone do not establish server identity: transcript/approval identity remains explicit, and no pane-only routing is added. Notifications open their recorded existing native connection ID, never a first session-name match. Companion snapshots are host-wide: that connection is not proof of a matching agent pane/server, and this slice does not infer one. Desktop theme deep links do not attach multiplexers. Cold or warm saved-host CLI composition opens the exact requested tmux/Herdr picker through normal SSH authentication; see [launch usage](connections.md#multiplexer-picker-launches). Actual OS GUI acceptance remains tracked in issue #86.
 
-The workspace tree lists real session, window and pane IDs, current commands, directories and active state. Create/rename sessions and windows, choose a project directory, select windows/panes, split panes and toggle zoom. Refresh reads current host state. Actions use exact IDs instead of injecting prefix sequences into a foreground agent.
+The workspace tree lists real session, window and pane IDs, current commands, directories and active state. Create/rename sessions and windows, choose a project directory, select windows/panes, split panes and toggle zoom. Each pane row also shows its size in cells and its title, and has **Rename** (the pane title, `select-pane -T`), four **Move divider** arrows (`resize-pane -L|-R|-U|-D`, five cells each, clamped by tmux to what the layout allows) and **Close**; a session has **Close session**. Closing asks first, in a confirmation that names the pane (id, command and directory) or the session, and sends one `kill-pane` or `kill-session` by exact id only when confirmed; Cancel sends nothing. tmux reuses `$0` and `%0` after a server restart, so the tree read names its server instance (a random `@lazysh_server` option set once per server, `set-option -s -o`) and close, rename and resize carry that token back: each runs as `if-shell -F '#{==:#{@lazysh_server},<token>}' '<command>'` in one tmux invocation and fails with a "can't find pane" error on a replaced server instead of touching its same-numbered pane (#2044). A server that reports no token offers none of the four. Refresh reads current host state. A window closes from the [tab strip](#tab-strip). Pane close, rename and resize for Zellij, Herdr and rmux are tracked in [#1144](https://github.com/mihazs/lazysh/issues/1144). Actions use exact IDs instead of injecting prefix sequences into a foreground agent.
 
 Choose a list, accordion or grid layout; the client remembers it. Load recent projects from the host companion's real agent history, ordered by most recent event, then select a directory in the launcher. The companion remains optional: you can always enter a directory manually.
 
@@ -89,8 +89,8 @@ lazysh captures PID/TTY metadata on its own SSH attach channel immediately befor
 verified SSH control channel confirms that exact attached normal client. Every
 jump uses its captured generation and exact session/window IDs with a synchronous
 server-side client guard. It never reopens a control connection to follow a
-restarted server with reused IDs. Plain shells, externally attached/unbound
-terminals and Zellij do not gain this tmux tree. An absent or malformed handshake
+restarted server with reused IDs. Plain shells and externally attached/unbound
+terminals do not gain this tmux tree. A Zellij terminal has its own Jump To, described under [Zellij](#zellij). An absent or malformed handshake
 leaves the terminal usable and navigation unavailable rather than guessing.
 
 The extra `no-output,ignore-size` control client affects attached/client counts
@@ -351,7 +351,7 @@ Attached tmux and Herdr terminals also offer prefix shortcuts and numbered windo
 
 ## Zellij
 
-List running sessions or enter a name to create/attach one. The list names live sessions and exited ones (Zellij keeps a resurrectable layout, and attaching resurrects it); a host with Zellij and no session shows "No running zellij sessions." instead of an error, although Zellij itself exits with status 1 there. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. Zellij does not expose the tmux/Herdr Jump To tree here.
+List running sessions or enter a name to create/attach one. The list names live sessions and exited ones (Zellij keeps a resurrectable layout, and attaching resurrects it); a host with Zellij and no session shows "No running zellij sessions." instead of an error, although Zellij itself exits with status 1 there. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. A Zellij terminal also offers **Jump To**, below.
 
 The Zellij panel includes a tab 1–20 quick-access row alongside the existing manual
 tab-number form. These are explicit shortcuts, not a discovered tab list or a
@@ -363,7 +363,7 @@ drafts and do not dispatch actions, and retired owners cannot publish late resul
 The manual 1–1000 native index bound is unchanged. This implements the documented
 reference client numbered selector affordance (source URL omitted)
 without inheriting its documented multi-digit chord timing dependency. It does
-not establish current tabs, exact-client binding, automatic restoration, or physical
+not establish current tabs, exact-client binding, or physical
 device/runtime acceptance. Hiding/persisting this row remains separate work.
 
 ### Panes and sessions
@@ -426,6 +426,14 @@ shell's startup file puts on `PATH` can pass the check and still not start. Crea
 session, splitting an existing pane instead of opening a window, a Zellij tab, and rmux (which
 needs [#1140](https://github.com/mihazs/lazysh/issues/1140), tracked in [#1679](https://github.com/mihazs/lazysh/issues/1679)) are not part of this primitive yet,
 and no screen calls it yet.
+
+### Zellij Jump To
+
+On Zellij 0.45.1 (the version gate's `tree` capability; 0.44.x and others show no Jump To) a terminal attached to a Zellij session offers **Jump To** with that session's tabs, numbered from 1 like the tab strip. The list reads `zellij --session S action list-tabs --json` and `list-clients` (`zellij_jump_tabs`); a tab without a stable id is not listed. Host names are shown as text.
+
+Zellij cannot address a client from the command line: `go-to-tab-by-id` carries no client id and acts on whichever client the server picks, and with two clients on different tabs `list-tabs` marks both tabs active (#2046, reproduced on Zellij 0.45.1 and 0.46.0). So Jump To claims a current tab and jumps only while this terminal is the one attached client. Then exactly one row is **Current** (`aria-current="location"`), choosing it closes the panel without a command, and choosing another tab runs `zellij --session S action go-to-tab-by-id <id>` through the typed `zellij_action` `jump`, which counts the clients again first and fails with `zellij_client_ambiguous` unless there is exactly one. With another client attached the tabs are listed without a Current row, their buttons are disabled and the panel says why. A client that attaches between that count and the jump can still be moved: Zellij offers nothing atomic. A pane is not a destination: Zellij's `focus-pane-id` leaves the attached client where it was.
+
+Checked by Vitest (`zellijJump.test.ts`, `TmuxJumpPanel.test.tsx`), the Rust unit tests of `zellij.rs`, and Playwright `e2e/zellij-jump.spec.ts` on phone and desktop (one current row and a jump by tab id, a shared session without a current row or jump, no Jump To on a version without the capability).
 
 ## Tab strip
 
@@ -556,7 +564,7 @@ run on macOS and Windows.
 
 These Cargo tests create isolated temporary tmux sockets, Herdr configuration/server state and Zellij runtime/cache directories. They exercise actual lifecycle commands, tree parsing, hostile literal labels, pane splitting, focus and zoom, and (Zellij) the pane list, a pane rename, a divider move read back as the pane's width, a pane close, a session rename and a session close. They never target a pre-existing user multiplexer. Vitest checks session/pane identity and action/error behavior through the actual React panels.
 
-The client workspace handles saved tmux/Herdr attachment intents separately from these controls. Zellij restoration remains manual, matching the documented initial-attach boundary. Native device lifecycle, network-loss/reconnect and durable-process survival still require device acceptance under issue #7. Trees currently refresh explicitly.
+The client workspace handles saved tmux, Herdr and Zellij attachment intents separately from these controls. Reconnect and restore reattach a saved Zellij session with `zellij attach <name>` and never `--create`: they first confirm the name is among `zellij list-sessions --short`, so a session that no longer exists (a host restart, a kill) fails with the multiplexer-unavailable message instead of starting an empty one. Attaching from **Sessions** still creates a new session. `ssh::tmux_jump_fixture::real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap` runs this over owned OpenSSH with the pinned Zellij 0.45.1 in `native-linux-runtimes`: the second entry reattaches the same server and shell, and a reattach after the session is killed fails and leaves no session behind. Native device lifecycle, network-loss/reconnect and durable-process survival still require device acceptance under issue #7. Trees currently refresh explicitly.
 
 
 ### Owned SSH Herdr acceptance
@@ -642,4 +650,4 @@ not establish remote command exit, pending-buffer sizes or the failure cause.
 
 The Linux native GUI case `native-e2e/restore.spec.ts` runs the bundled app against an owned OpenSSH server whose tmux uses a private `TMUX_TMPDIR` inside the server's PID namespace. It saves the key in a disposable Secret Service, enters a saved tmux default and records the pane's `TMUX_PANE` and shell PID. After WebKit has written the workspace descriptor to the private on-disk profile, the test sends `SIGKILL` to the app and starts it again on the same profile. The relaunched app only offers **Restore previous workspace**: no terminal opens and no tmux client attaches until the click. Restoring uses the saved credentials and reattaches the same named session; the display must show the output written before the kill, and the same pane ID and shell PID. The credential item is unchanged.
 
-This case covers process death and GUI relaunch on Linux. It does not cover Herdr, Android process death, OS-vault prompts or network changes. The mocked Playwright case `e2e/workspace-relaunch.spec.ts` checks the restore order for tmux, Herdr, Zellij and plain-shell descriptors in both projects.
+This case covers process death and GUI relaunch on Linux. It does not cover Herdr, Android process death, OS-vault prompts or network changes. The mocked Playwright case `e2e/workspace-relaunch.spec.ts` checks the restore order for tmux, Herdr, Zellij and plain-shell descriptors in both projects, including that Zellij restores with `createIfMissing:false`; a Zellij variant of this native case is still open (#1145).

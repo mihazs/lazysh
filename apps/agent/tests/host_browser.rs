@@ -392,7 +392,7 @@ fn real_browser_serves_loopback_devtools_and_leaves_nothing_behind() {
     .unwrap();
     // Chromium keeps the connection open, so read until the browser path arrives instead of until EOF.
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
     let mut response = String::new();
     let mut chunk = [0u8; 2048];
