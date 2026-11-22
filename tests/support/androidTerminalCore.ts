@@ -4,12 +4,18 @@ import {OwnedProcess,SshFixture,androidSshCleanup,nativeReportCases,ownedDeviceC
 
 const nativeClass='app.lazysh.client.NativeTerminalCoreTest';
 const nativeCase='theCoreInsideTheAppParsesTheOutputOfARealShellAndReadsItBack';
+const compositionClass='app.lazysh.client.NativeTerminalCompositionTest';
+/** Every case this job runs, each of which must pass exactly once. */
+const nativeCases=[[nativeClass,nativeCase],
+  [compositionClass,'thePageShowsTheSurfaceThroughItsNativePaneWithItsOverlayAboveAndTheWebViewIsOpaqueAgainWhenItEnds'],
+  [compositionClass,'aPlacedSurfaceChangesNothingOnAPageThatIsNotANativePane'],
+  [compositionClass,'aRecreatedActivityStartsOpaqueAndShowsTheSurfaceAgainOnceItsPagePlacesIt']] as const;
 
-/** Requires the one on-device case to have run exactly once and passed, so a filtered, skipped or failed run cannot count. */
+/** Requires every on-device case to have run exactly once and passed, so a filtered, skipped or failed run cannot count. */
 export function validateTerminalCoreReport(text:string) {
   const {cases,failed}=nativeReportCases(text);
-  if(failed || cases.length!==1 || cases[0].className!==nativeClass || cases[0].name!==nativeCase)
-    throw new Error('The terminal core native case did not pass exactly once');
+  if(failed || cases.length!==nativeCases.length || !nativeCases.every(([className,name])=>cases.filter(found=>found.className===className && found.name===name).length===1))
+    throw new Error('The terminal core native cases did not pass exactly once');
 }
 
 /**
@@ -36,7 +42,7 @@ export async function androidTerminalCoreAcceptance(root=resolve(import.meta.dir
     await rm(report,{recursive:true,force:true});
     await new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug','-PlazyshTerminalCoreAcceptance=true',
-      `-Pandroid.testInstrumentationRunnerArguments.class=${nativeClass}#${nativeCase}`,
+      `-Pandroid.testInstrumentationRunnerArguments.class=${nativeClass}#${nativeCase},${compositionClass}`,
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root).finish('actual Android terminal core instrumentation',900_000);
     const reports=(await readdir(report,{recursive:true})).filter(name=>name.endsWith('.xml'));
     if(reports.length!==1)throw new Error('Expected one native terminal core report');

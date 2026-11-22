@@ -4,13 +4,17 @@ import {join} from 'node:path';
 import {androidTerminalCoreAcceptance,validateTerminalCoreReport} from './support/androidTerminalCore';
 
 const nativeCase='theCoreInsideTheAppParsesTheOutputOfARealShellAndReadsItBack';
+const composition=['thePageShowsTheSurfaceThroughItsNativePaneWithItsOverlayAboveAndTheWebViewIsOpaqueAgainWhenItEnds','aPlacedSurfaceChangesNothingOnAPageThatIsNotANativePane','aRecreatedActivityStartsOpaqueAndShowsTheSurfaceAgainOnceItsPagePlacesIt'];
 const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
 const row=(body='',name=nativeCase,className='app.lazysh.client.NativeTerminalCoreTest')=>`<testcase name="${name}" classname="${className}" time="1">${body}</testcase>`;
+const compositionRows=()=>composition.map(name=>row('',name,'app.lazysh.client.NativeTerminalCompositionTest'));
 
-test('the terminal core report counts only its one case passing exactly once',()=>{
-  expect(()=>validateTerminalCoreReport(report([row()]))).not.toThrow();
-  for(const rows of [[],[row(),row()],[row('<skipped/>')],[row('<failure message="x"/>')],[row('<error message="x"/>')],
-    [row('','otherCase')],[row('',nativeCase,'app.lazysh.client.NativeWorkspaceTest')]])
+test('the terminal core report counts only its cases, each passing exactly once',()=>{
+  expect(()=>validateTerminalCoreReport(report([row(),...compositionRows()]))).not.toThrow();
+  for(const rows of [[],[row()],compositionRows(),[row(),row(),...compositionRows()],[row(),...compositionRows(),...compositionRows().slice(1)],[row('<skipped/>'),...compositionRows()],
+    [row(),...compositionRows().slice(0,2),row('<failure message="x"/>',composition[2],'app.lazysh.client.NativeTerminalCompositionTest')],
+    [row('<error message="x"/>'),...compositionRows()],[row('','otherCase'),...compositionRows()],
+    [row('',nativeCase,'app.lazysh.client.NativeWorkspaceTest'),...compositionRows()]])
     expect(()=>validateTerminalCoreReport(report(rows))).toThrow('did not pass exactly once');
 });
 

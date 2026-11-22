@@ -9,17 +9,19 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.WebView
 import android.widget.FrameLayout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import java.lang.ref.WeakReference
+import java.util.WeakHashMap
 
 /**
  * The `SurfaceView` of one session, stacked below the WebView (docs/architecture/android-surface-composition-poc.md). Once detached it
  * ignores the window's late callbacks, which belong to a surface its session no longer has.
  */
-internal class SurfaceHost(activity: Activity, private val web: View, private val frame: FrameLayout, private val lifecycle: SurfaceLifecycle<Surface>, anchor: SurfaceAnchor, relay: InputRelay) {
+internal class SurfaceHost(activity: Activity, val web: View, private val frame: FrameLayout, private val lifecycle: SurfaceLifecycle<Surface>, anchor: SurfaceAnchor, relay: InputRelay) {
     val view = SurfaceView(activity)
     /** The keyboard's editor for this session (#1328): a one-pixel invisible view that takes focus and the `InputConnection`; the page never types into a DOM editor here. */
     val input = TerminalInputView(activity, relay, onComposing = relay::preedit).apply { alpha = 0f; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
@@ -59,6 +61,24 @@ internal class SurfaceHost(activity: Activity, private val web: View, private va
         (view.parent as? ViewGroup)?.removeView(view)
         (input.parent as? ViewGroup)?.removeView(input)
         lifecycle.destroyed()
+    }
+}
+
+/**
+ * Makes the WebView see-through while at least one native pane is placed beside it, and opaque again when none is. The surfaces are below the
+ * WebView, so the page can show one only where it paints nothing (`TerminalNativeSurface.css` clears every ancestor of a native pane), and a
+ * WebView's own background is opaque white unless it is told otherwise. An xterm.js session never places a surface, so its WebView is never touched,
+ * and a page that paints its own background (every page but a native pane) looks the same either way.
+ */
+internal object SeeThrough {
+    /** The WebViews made transparent. A recreated Activity has a new WebView, which starts opaque and is made transparent when its page places the session again. */
+    private val made = WeakHashMap<View, Boolean>()
+
+    fun set(web: View, seeThrough: Boolean) {
+        val webView = web as? WebView ?: return
+        if (seeThrough && made.put(web, true) == null) webView.setBackgroundColor(Color.TRANSPARENT)
+        // shortcut: opaque white is the WebView's own default (wry sets no background colour); read it back if the app ever configures one.
+        else if (!seeThrough && made.remove(web) != null) webView.setBackgroundColor(Color.WHITE)
     }
 }
 
@@ -122,18 +142,25 @@ internal object TerminalSurfaces {
             host.place(anchor)
             if (repaint) entry.lifecycle.redraw()
         } else {
-            host?.detach()
+            host?.let { release(it) }
             entry.host = SurfaceHost(activity, web, frame, entry.lifecycle, anchor, entry.relay)
         }
+        SeeThrough.set(web, true)
         return state(id)
     }
 
     /** The session is over: its surface goes and its generation count with it. */
     fun remove(id: String) {
         val entry = entries.remove(id) ?: return
-        entry.host?.detach()
+        entry.host?.let { release(it) }
         entry.relay.clear()
         (entry.client as? AutoCloseable)?.close()
+    }
+
+    /** Detaches a host, and gives the WebView its opaque background back when no other session is placed beside it. */
+    private fun release(host: SurfaceHost) {
+        host.detach()
+        if (entries.values.none { it.host?.web === host.web }) SeeThrough.set(host.web, false)
     }
 
     /** What the keyboard typed since the last call, once, in order; waits for the next input when there is none. */
@@ -166,7 +193,7 @@ internal object TerminalSurfaces {
         watched = WeakReference(activity)
         (activity as? LifecycleOwner)?.lifecycle?.addObserver(LifecycleEventObserver { _, event ->
             if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
-            for (entry in entries.values) if (entry.host?.view?.context === activity) { entry.host?.detach(); entry.host = null }
+            for (entry in entries.values) if (entry.host?.view?.context === activity) { val gone = entry.host; entry.host = null; gone?.let { release(it) } }
         })
     }
 }
