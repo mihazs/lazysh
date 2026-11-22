@@ -91,7 +91,7 @@ fn reported_session<'de, D: serde::Deserializer<'de>>(
     Ok(valid.then_some(reference))
 }
 
-fn text(value: &str, max: usize) -> Result<()> {
+pub(crate) fn text(value: &str, max: usize) -> Result<()> {
     crate::multiplexer::validate_text(value, max, "Invalid Herdr name or path")
 }
 
