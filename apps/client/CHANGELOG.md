@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.97.1
+
+### Patch Changes
+
+- fix(herdr): choosing a space, tab or agent waits for a terminal input already in progress ([#2338](https://github.com/mihazs/lazysh/pull/2338))
+
+  <details><summary>Details</summary>
+
+  Tapping a row in the Herdr Spaces or Agents list while a terminal input was being delivered failed with "Herdr terminal input is already in progress" and the focus did not move. The change now waits for that input to finish (up to 10 s) before moving the view; a turn that never ends still reports the busy message.
+
+  </details>
+- feat(terminal): type into a native terminal session on Android ([#2339](https://github.com/mihazs/lazysh/pull/2339))
+
+  <details><summary>Details</summary>
+
+  On a build where the native terminal engine is selected, the Android keyboard's editor is created with the session's surface: committed text, special keys and modifiers reach the core once and in order, and the text an input method is still composing is drawn at the cursor until it is committed. Native stays off by default, so nothing changes unless Settings, Terminal engine is set to Native.
+
+  </details>
+
 ## 1.97.0
 
 ### Minor Changes
