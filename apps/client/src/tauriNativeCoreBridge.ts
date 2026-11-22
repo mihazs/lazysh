@@ -122,6 +122,7 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
       await call('terminal_core_input', {input: {type: 'text', text}});
     },
     async key(input) { await call('terminal_core_input', {input}); },
+    async mouse(input) { await call('terminal_core_input', {input}); },
     query<Q extends NativeCoreQuery>({kind, ...args}: Q) {
       // One command per question: `selectionText` is `terminal_core_selection_text`, with the question's fields as its arguments.
       return call<NativeCoreAnswer<Q>>(`terminal_core_${kind.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)}`, args);

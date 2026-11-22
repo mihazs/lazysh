@@ -426,3 +426,35 @@ describe('native lifecycle', () => {
     expect(core.calls.filter(call => call === 'scroll')).toHaveLength(1);
   });
 });
+
+describe('native wheel and finger scrolling', () => {
+  async function open(output = '') {
+    const core = createHeadlessCore({feed: true});
+    const adapter = await openNativeTerminalAdapter(core);
+    await adapter.write!(text(output));
+    return {core, adapter};
+  }
+
+  it('sends a program that tracks the mouse one wheel report per notch, in the cell under the finger, and scrolls nothing', async () => {
+    const {core, adapter} = await open('\x1b[?1000h\x1b[?1006h');
+    const element = document.createElement('div');
+    document.body.append(element);
+    element.getBoundingClientRect = () => ({left: 0, top: 0, width: 800, height: 240, right: 800, bottom: 240, x: 0, y: 0, toJSON() {}});
+    await adapter.attach({kind: 'native', anchorId: (element.id = 'wheel-anchor')});
+    adapter.wheel({clientX: 85, clientY: 25, deltaY: 1, unit: 'line'});
+    adapter.wheel({clientX: 85, clientY: 25, deltaY: -40, unit: 'pixel'});
+    await sleep(10);
+    const {columns, rows} = adapter.size(), cell = {x: Math.floor(85 / (800 / columns)), y: Math.floor(25 / (240 / rows))};
+    expect(core.mice.map(m => [m.button, m.x, m.y])).toEqual([['wheelDown', cell.x, cell.y], ['wheelUp', cell.x, cell.y]]);
+    expect(core.calls).not.toContain('scroll');
+  });
+
+  it('scrolls the history by lines when the program does not track the mouse', async () => {
+    const {core, adapter} = await open(Array.from({length: 60}, (_, i) => `row ${i}\r\n`).join(''));
+    const bottom = adapter.viewport().top;
+    adapter.wheel({clientX: 0, clientY: 0, deltaY: -3, unit: 'line'});
+    await sleep(10);
+    expect(adapter.viewport().top).toBe(bottom - 3);
+    expect(core.mice).toEqual([]);
+  });
+});

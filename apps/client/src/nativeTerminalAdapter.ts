@@ -13,7 +13,7 @@ import {TerminalEvents} from './terminalEvents';
 import type {CoreKeyInput} from './terminalPlatformKeys';
 import {searchRows} from './terminalText';
 
-/** Honest for a core without a renderer (`ime` is xterm.js' input observation, which this backend does not have: its keyboards are the capture and the Android input view): it parses, scrolls and answers questions about the screen, and draws nothing. */
+/** Honest for a core without a renderer (`ime` is xterm.js' input observation and `mouseReporting` is its DOM wheel dispatch, which this backend does not have: its keyboards are the capture and the Android input view, and its wheel reports go to the core): it parses, scrolls and answers questions about the screen, and draws nothing. */
 export const nativeCapabilities: TerminalCapabilities = {
   nativeRendering: false, selection: true, scrollback: true, mouseReporting: false, ime: false, accessibility: false,
   screenInspection: true, canonicalMoshResize: false, customBoldColor: false,
@@ -257,9 +257,17 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   cursor() { return this.mirror.state.cursor; }
   followLive() { if (!this.mirror.state.viewport.following) this.scroll({kind: 'toBottom'}); }
 
-  wheel({deltaY, unit}: Parameters<TerminalAdapter['wheel']>[0]) {
-    // Mouse reports for programs that track the mouse come with the input slice (#1334); scrolling is what a wheel does otherwise.
-    if (this.mirror.state.modes.mouseTracking !== 'none') return;
+  wheel({clientX, clientY, deltaY, unit}: Parameters<TerminalAdapter['wheel']>[0]) {
+    if (this.mirror.state.modes.mouseTracking !== 'none') {
+      // A program that tracks the mouse gets a report per notch and nothing scrolls, as under xterm.js.
+      const {mouse} = this.bridge, cell = this.cellAt(clientX, clientY);
+      if (mouse && deltaY) {
+        const input = {type: 'mouse' as const, action: 'press' as const, button: deltaY < 0 ? 'wheelUp' as const : 'wheelDown' as const,
+          mods: {shift: false, ctrl: false, alt: false, meta: false}, x: cell?.x ?? 0, y: cell ? cell.y - this.mirror.state.viewport.top : 0};
+        this.send(() => mouse.call(this.bridge, input));
+      }
+      return;
+    }
     const lines = unit === 'line' ? deltaY : deltaY / (this.metrics().cellHeight || 16);
     this.scroll({kind: 'lines', delta: Math.round(lines) || Math.sign(lines)});
   }
