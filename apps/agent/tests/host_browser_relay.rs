@@ -1126,6 +1126,40 @@ fn a_real_browser_streams_the_fixture_page_and_leaves_nothing_behind() {
     assert_real_browser_is_gone(&profile);
 }
 
+/// A real browser writes the kept profile and a prompt stop keeps what the page wrote (#2045): the data survives
+/// reopening and is removed by Clear browser data.
+#[test]
+fn real_browser_kept_profile_persists_until_cleared() {
+    let Some(binary) = chrome() else {
+        eprintln!("skipped: no Chrome or Chromium on PATH");
+        return;
+    };
+    let page = "<!doctype html><script>const previous = localStorage.getItem('owned'); localStorage.setItem('owned', 'yes'); document.title = previous || 'fresh';</script>";
+    let (port, _server) = lazysh_common::test_support::loopback_page(page, 60);
+    let fixture = Fixture::enabled();
+    let url = format!("http://127.0.0.1:{port}/");
+    let run = |expected: &str| {
+        let mut relay = Relay::start(
+            &fixture.state,
+            &[],
+            &[
+                "--binary",
+                binary.to_str().unwrap(),
+                "--no-sandbox",
+                "--keep-profile",
+            ],
+        );
+        relay.open(&url);
+        relay.title(expected);
+        relay.stop();
+    };
+    run("fresh");
+    run("yes");
+    assert!(cleared(&clear_data(&fixture.state)));
+    run("fresh");
+    assert!(cleared(&clear_data(&fixture.state)));
+}
+
 /// The real browser takes the client's input through the relay: the page changes only because a tap, a scroll and
 /// typed text arrived, and a tap that came while Control was off did not.
 #[test]
