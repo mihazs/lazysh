@@ -517,7 +517,7 @@ rmux ([Helvesec/rmux](https://github.com/Helvesec/rmux), a Rust reimplementation
 
 Herdr support is decided by the version string alone: the Herdr API `schema_version` is not checked yet ([#1159](https://github.com/mihazs/lazysh/issues/1159)). Restoring sessions after a host reboot is out of scope for every multiplexer.
 
-What each multiplexer does on each client platform, with the CI job and test that prove it, is in the [multiplexer capability checklist](reference/parity-matrix.md#multiplexer-capability-checklist). On Windows, the client's multiplexer code is exercised by unit tests only; no job runs a Windows client against a real multiplexer ([#1747](https://github.com/mihazs/lazysh/issues/1747)).
+What each multiplexer does on each client platform, with the CI job and test that prove it, is in the [multiplexer capability checklist](reference/parity-matrix.md#multiplexer-capability-checklist). On Windows, the unit tests cover the version table, command building and tree parsing, and the `native-windows-linux-host` job runs a Windows client against a real tmux, Zellij and Herdr on a Linux host ([how](#a-windows-client-against-a-linux-host), [#1747](https://github.com/mihazs/lazysh/issues/1747)).
 
 ## History
 
@@ -593,6 +593,34 @@ These Cargo tests create isolated temporary tmux sockets, Herdr configuration/se
 
 The client workspace handles saved tmux, Herdr and Zellij attachment intents separately from these controls. Reconnect and restore reattach a saved Zellij session with `zellij attach <name>` and never `--create`: they first confirm the name is among `zellij list-sessions --short`, so a session that no longer exists (a host restart, a kill) fails with the multiplexer-unavailable message instead of starting an empty one. Attaching from **Sessions** still creates a new session. `ssh::tmux_jump_fixture::real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap` runs this over owned OpenSSH with the pinned Zellij 0.45.1 in `native-linux-runtimes`: the second entry reattaches the same server and shell, and a reattach after the session is killed fails and leaves no session behind. Native device lifecycle, network-loss/reconnect and durable-process survival still require device acceptance under issue #7. Trees currently refresh explicitly.
 
+
+### A Windows client against a Linux host
+
+The real-runtime cases above start their OpenSSH server and multiplexers on the machine that runs the test, and the windows-latest runner has neither a Linux host nor the Linux multiplexer binaries. The `native-windows-linux-host` job provides the host inside the runner instead: an Ubuntu 24.04 WSL 2 distribution (the `Vampire/setup-wsl` action, pinned by commit) with `openssh-server`, Ubuntu's tmux 3.4, the checksum-verified Zellij 0.45.1 release and the same-run stock Herdr. `.github/scripts/external-linux-host.sh` starts an unprivileged `sshd` on `127.0.0.1:2222` with an isolated `HOME`, Zellij and Herdr configuration that skips their first-run screens, `SHELL=/bin/sh`, and a Herdr server named `ext-default` with one workspace labelled `EXT_DEFAULT`. WSL 2 forwards that loopback listener to the Windows loopback, and the Rust client under test runs natively on Windows and reaches it as `127.0.0.1:2222`. The job sets `LAZYSH_TEST_EXTERNAL_SSH_PORT`, `_USER`, `_FINGERPRINT` and `_KEY` (and optionally `_HOST`) from the script's output and runs four `#[ignore]` cases in `ssh::tests::external_host_fixture`, one at a time:
+
+| Case | What it drives from the client |
+| --- | --- |
+| `external_host_discovery_reports_each_multiplexer_version_and_support` | `multiplexer_tree` reports tmux, Zellij and Herdr with the version each binary prints on the host and `support: full` |
+| `external_host_tmux_creates_splits_attaches_and_detaches_without_running_names` | create a session whose name holds quotes, `;` and `$(touch nope)` (nothing is run), split, zoom, new window, rename, read the tree, attach, type into the pane and see the shell's answer, detach and see no client left |
+| `external_host_zellij_creates_attaches_and_manages_tabs` | attach with create-if-missing, type and see the answer, list sessions, new tab, rename and close it by its id |
+| `external_host_herdr_lists_attaches_and_reads_the_workspace_tree` | list the sessions, attach and see the workspace label, read the tree, create and rename a workspace |
+
+Limits, so a green job is read for what it proves. The host is Linux in a VM on the same machine, reached over loopback: it proves the Windows client (russh transport, product command strings, process and terminal handling) against real multiplexer behaviour, not a Windows network path or a remote host. The Windows GUI and Mosh are not exercised, and a Windows OpenSSH host stays out of scope (discovery reports `unsupported_host_shell`). The owned Linux fixtures that start local processes (the tmux Jump To control-mode cases, the guarded Herdr and Mosh cases, `test:multiplexers`) are Unix-only and do not run here, so Jump To, confirmed input and the guarded Herdr binding have no Windows verification. WSL 1 also works on the runner but emulates the kernel, so the job uses WSL 2. The job runs on pushes to `main` only, like the other Windows and macOS jobs, and is non-blocking (`continue-on-error`) until its first pass on `main` is recorded on [#1747](https://github.com/mihazs/lazysh/issues/1747). The four cases passed on a hosted windows-latest run of the same host and composite action (run 43770703756, 2026-11-15, about 26 minutes with a cold Rust build); the Herdr executable there was the unverified artifact of an earlier `main` run, so the same-run Herdr verification steps in `checks.yml` have not yet run on Windows.
+
+To run the same cases on Linux or macOS, start the host and point the cases at it (the script needs `sshd`, `ssh-keygen` and tmux on `PATH`; Zellij and Herdr are configured only when found, and `LAZYSH_HOST_PATH` puts a private tool directory first on the host's `PATH`):
+
+```sh
+.github/scripts/external-linux-host.sh /tmp/lazysh-host 2222 /tmp/lazysh-host-share
+LAZYSH_TEST_EXTERNAL_SSH_PORT=2222 \
+  LAZYSH_TEST_EXTERNAL_SSH_USER=$(cat /tmp/lazysh-host-share/user) \
+  LAZYSH_TEST_EXTERNAL_SSH_FINGERPRINT=$(cat /tmp/lazysh-host-share/fingerprint) \
+  LAZYSH_TEST_EXTERNAL_SSH_KEY=/tmp/lazysh-host-share/key \
+  LAZYSH_EXPECT_MUX_SUPPORT='tmux=full zellij=full herdr=full' \
+  cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::external_host_fixture:: -- --ignored --test-threads=1
+kill "$(cat /tmp/lazysh-host/sshd.pid)"
+```
+
+The cases use the host's default tmux server and the sessions `ext-zellij` and `ext-default`, so point them only at a throwaway host. Stop its Herdr server (`herdr --session ext-default server stop`, run with the same environment) when you are done.
 
 ### Owned SSH Herdr acceptance
 

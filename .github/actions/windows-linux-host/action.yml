@@ -1,0 +1,59 @@
+name: Exercise a Windows client against a Linux host
+description: Start an Ubuntu WSL 2 host with OpenSSH, tmux, Zellij and Herdr, then run the external-host cases of the Rust client natively on Windows against it
+inputs:
+  herdr:
+    description: Windows path of the verified Linux Herdr executable to install into the host
+    required: true
+runs:
+  using: composite
+  steps:
+    # WSL 2 runs a real Linux kernel; a listener on its loopback is forwarded to the Windows loopback.
+    - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
+      with:
+        distribution: Ubuntu-24.04
+        wsl-version: 2
+        additional-packages: openssh-server tmux curl ca-certificates
+    - name: Install the pinned official Zellij 0.45.1 release and the verified Herdr into WSL
+      shell: wsl-bash {0}
+      # Release asset digest: https://api.github.com/repos/zellij-org/zellij/releases/tags/v0.45.1
+      run: |
+        curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 18729165 https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz -o /tmp/zellij.tar.gz
+        echo '40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc  /tmp/zellij.tar.gz' | sha256sum --check --strict
+        tar --extract --gzip --file /tmp/zellij.tar.gz --directory /usr/local/bin --no-same-owner --no-same-permissions zellij
+        test "$(zellij --version)" = 'zellij 0.45.1'
+        install -m 0755 "$(wslpath -a '${{ inputs.herdr }}')" /usr/local/bin/herdr
+        test "$(tmux -V)" = 'tmux 3.4'
+        uname -a
+    # WSL stops an instance, and the server in it, when its last session ends.
+    - name: Keep the WSL instance running before anything starts in it
+      shell: pwsh
+      run: Start-Process -WindowStyle Hidden -FilePath wsl.exe -ArgumentList '--distribution','Ubuntu-24.04','--exec','sleep','7200'
+    # The server runs as an unprivileged account, as the Linux fixtures' owned sshd does.
+    - name: Start the Linux host
+      shell: wsl-bash {0}
+      run: |
+        useradd --create-home --shell /bin/bash lazysh
+        mkdir -p /run/sshd
+        su lazysh -c "bash '$(wslpath -a '${{ github.workspace }}')/.github/scripts/external-linux-host.sh' /home/lazysh/host 2222 /home/lazysh/share"
+        mkdir -p "$(wslpath -a '${{ runner.temp }}')/lazysh-host"
+        cp /home/lazysh/share/key /home/lazysh/share/fingerprint /home/lazysh/share/user "$(wslpath -a '${{ runner.temp }}')/lazysh-host/"
+    - name: Exercise discovery, attach, tree and actions from a Windows client against real tmux, Zellij and Herdr
+      shell: bash
+      env:
+        LAZYSH_TEST_EXTERNAL_SSH_PORT: '2222'
+        LAZYSH_EXPECT_MUX_SUPPORT: tmux=full zellij=full herdr=full
+      run: |
+        export LAZYSH_TEST_EXTERNAL_SSH_USER="$(cat "$RUNNER_TEMP/lazysh-host/user")"
+        export LAZYSH_TEST_EXTERNAL_SSH_FINGERPRINT="$(cat "$RUNNER_TEMP/lazysh-host/fingerprint")"
+        export LAZYSH_TEST_EXTERNAL_SSH_KEY="$RUNNER_TEMP\\lazysh-host\\key"
+        # A renamed case must not turn this step into a zero-test pass.
+        cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tests::external_host_fixture:: -- --list --ignored | grep -c ': test$' | grep -Fx 4
+        status=0
+        for case_name in discovery_reports_each_multiplexer_version_and_support tmux_creates_splits_attaches_and_detaches_without_running_names zellij_creates_attaches_and_manages_tabs herdr_lists_attaches_and_reads_the_workspace_tree; do
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "ssh::tests::external_host_fixture::external_host_$case_name" -- --ignored --exact --nocapture || { echo "::error::$case_name failed"; status=1; }
+        done
+        exit $status
+    - name: Show the host's server logs
+      if: ${{ !cancelled() }}
+      shell: wsl-bash {0}
+      run: tail -n 40 /home/lazysh/host/sshd.log /home/lazysh/host/herdr.log || true
