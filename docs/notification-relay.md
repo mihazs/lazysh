@@ -133,7 +133,7 @@ Only the relay's own needs-attention event is accepted: title `lazysh`, priority
 
 The notification follows the Android disclosure rule. Its text is fixed, **lazysh · Needs you** and **An agent needs your attention.**; the alias, state text, server date and Gotify message id never reach it. Several events found in one reading show one notification. It carries the existing **Open session** action when system notifications are enabled in the inbox. The event names no host or session, so the action cannot open one; it only brings lazysh forward.
 
-**Pause** stops all requests and keeps the saved token, so **Resume** needs no new entry. **Remove from this computer** stops the receiver and deletes the token and address here. That does not revoke the token on the server: delete the client in Gotify too. With the client deleted at the server, the next reading is rejected (401) and the receiver stops. The same applies when Gotify is restored from a backup that lacks the client.
+**Pause** stops all requests and keeps the saved token, so **Resume** needs no new entry. **Remove from this computer** stops the receiver and deletes the token and address here. That does not revoke the token on the server: delete the client in Gotify too. With the client deleted at the server, the next reading is rejected (401) and the receiver stops. The same applies when Gotify is restored from a backup that lacks the client. A start, resume or save that was still running when you paused or removed does nothing afterwards: it starts no polling and writes no settings or token, and when two requests overlap the newer one wins.
 
 Limits:
 
