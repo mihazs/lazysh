@@ -5310,7 +5310,8 @@ mod tests {
             password_handle(&self._state, self.session.handle.origin.as_ref().unwrap()).await
         }
         pub(crate) fn respond_to_commands(&self, response: &[u8]) {
-            *self.server.scripted_exec.lock().unwrap() = Some((vec![response.to_vec()], 0));
+            *self.server.scripted_exec.lock().unwrap() =
+                Some((vec![response.to_vec()], Vec::new(), 0));
         }
         pub(crate) fn hold(&self) {
             self.server.hold_opens.store(true, Ordering::SeqCst);
