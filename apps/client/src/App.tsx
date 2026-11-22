@@ -217,6 +217,8 @@ async function prepareSession(
       pendingBytes = 0;
     }
   };
+  // On the native data path the transport starts on the core's Channel, so no output reaches onEvent and none is acknowledged here.
+  if (adapter.transport) Object.assign(onEvent, {link: adapter.transport}), adapter.transport.onEvent = onEvent;
   return { session, onEvent, establish };
 }
 

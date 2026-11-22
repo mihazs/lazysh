@@ -169,6 +169,16 @@ describe('the native core over the Tauri commands', () => {
     await opening.adapter.dispose();
   });
 
+  it('hands the transport\'s notices to the adapter\'s transport link and frees a core whose transport never started without waiting', async () => {
+    const opening = await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: 5000});
+    const notices = vi.fn();
+    opening.adapter.transport!.onEvent = notices;
+    opening.events.onmessage!({type: 'closed', message: 'gone'} as never);
+    expect(notices).toHaveBeenCalledExactlyOnceWith({type: 'closed', message: 'gone'});
+    await opening.adapter.dispose();
+    expect(commands()).toEqual(['terminal_core_open']);
+  });
+
   it('sends typed text and pasted bytes to the core as the text the program should receive', async () => {
     const {adapter} = await open();
     adapter.sendInput('ls\r', 'keyboard');
