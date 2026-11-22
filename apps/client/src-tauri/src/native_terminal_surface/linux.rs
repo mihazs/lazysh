@@ -4,9 +4,9 @@
 //! (docs/architecture/linux-surface-composition-poc.md). A surface of a session that has a native core is drawn
 //! by the renderer host with a wgpu swapchain on the subsurface (#1331); any other shows the pane background
 //! from a `wl_shm` buffer. Everything but [`display`] runs on the GTK main thread.
+use super::panes::look;
 use super::{Anchor, SurfaceState};
 use crate::native_renderer::Host as Renderer;
-use super::panes::look;
 use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
 use lazysh_terminal_renderer_wgpu::{Policy, Target, Window};
