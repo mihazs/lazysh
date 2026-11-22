@@ -458,3 +458,32 @@ describe('native wheel and finger scrolling', () => {
     expect(core.mice).toEqual([]);
   });
 });
+
+describe('native selection and typing', () => {
+  async function selected() {
+    const core = createHeadlessCore({feed: true});
+    const adapter = await openNativeTerminalAdapter(core);
+    await adapter.write!(text('hello world'));
+    adapter.select({start: {x: 6, y: 0}, end: {x: 10, y: 0}});
+    return {core, adapter};
+  }
+
+  it('clears the selection when the user types, as xterm.js does, and sends what was typed', async () => {
+    for (const type of [(a: Awaited<ReturnType<typeof selected>>['adapter']) => a.sendInput('x', 'ime'), (a: Awaited<ReturnType<typeof selected>>['adapter']) => a.sendInput('x', 'paste'),
+      (a: Awaited<ReturnType<typeof selected>>['adapter']) => a.sendKey({type: 'key', code: 'KeyA', key: 'a', mods: {shift: false, ctrl: false, alt: false, meta: false}, repeat: false, release: false, composing: false})]) {
+      const {core, adapter} = await selected();
+      expect(adapter.hasSelection()).toBe(true);
+      type(adapter);
+      expect(adapter.hasSelection()).toBe(false);
+      await sleep(5);
+      expect(core.inputs.length + core.keys.length).toBe(1);
+    }
+  });
+
+  it('keeps the selection for a terminal reply and for a key release', async () => {
+    const {adapter} = await selected();
+    adapter.sendInput('\x1b[0n', 'terminal-reply');
+    adapter.sendKey({type: 'key', code: 'KeyA', key: 'a', mods: {shift: false, ctrl: false, alt: false, meta: false}, repeat: false, release: true, composing: false});
+    expect(adapter.selectedText()).toBe('world');
+  });
+});
