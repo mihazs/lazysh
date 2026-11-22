@@ -7,6 +7,8 @@ mod commit;
 mod files;
 #[path = "../src/hook_setup/json.rs"]
 mod json;
+#[path = "../src/hook_setup/kimi_toml.rs"]
+mod kimi_toml;
 #[path = "../src/managed_directory_windows.rs"]
 mod managed_directory;
 #[path = "../src/hook_setup/record.rs"]
@@ -16,7 +18,7 @@ mod render;
 #[path = "../src/hook_setup/state.rs"]
 mod state;
 use files::Action;
-use lazysh_agent::{claude_config, hooks, Error, Result};
+use lazysh_agent::{claude_config, hooks, kimi_code, Error, Result};
 use lazysh_common::windows_acl::{self, Need};
 use serde_json::Value;
 use std::{
