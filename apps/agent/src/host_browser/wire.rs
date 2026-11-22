@@ -3,6 +3,7 @@
 //! Both directions carry messages of `length:u32be tag:u8 body`, where `length` counts the tag and the body. Tag
 //! 1 is a UTF-8 JSON object. Tag 2, relay to client only, is a frame: a 20 byte header and the JPEG bytes
 //! as they are, never base64.
+use super::ladder::Choice;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, ErrorKind, Read};
@@ -104,6 +105,10 @@ pub enum Client {
     // Struct variants, not unit ones: `deny_unknown_fields` does not reach a unit variant.
     Pause {},
     Resume {},
+    /// Let the relay choose the quality, or hold one rung of the ladder (Data saver holds the lowest).
+    Quality {
+        rung: Choice,
+    },
     /// Turns Control on or off. It is off when a session starts.
     Control {
         on: bool,
@@ -228,6 +233,36 @@ mod tests {
             json!({"type": "ack"}),
             json!({"type": "pause", "extra": true}),
             json!({"type": "open"}),
+        ] {
+            assert!(
+                serde_json::from_value::<Client>(bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn quality_names_one_rung_or_auto_and_nothing_else() {
+        use super::super::ladder::Choice;
+        for (name, choice) in [
+            ("auto", Choice::Auto),
+            ("high", Choice::High),
+            ("balanced", Choice::Balanced),
+            ("low", Choice::Low),
+            ("minimal", Choice::Minimal),
+        ] {
+            let message = json!({"type": "quality", "rung": name});
+            assert_eq!(
+                serde_json::from_value::<Client>(message).unwrap(),
+                Client::Quality { rung: choice }
+            );
+        }
+        for bad in [
+            json!({"type": "quality"}),
+            json!({"type": "quality", "rung": "ultra"}),
+            json!({"type": "quality", "rung": "High"}),
+            json!({"type": "quality", "rung": 1}),
+            json!({"type": "quality", "rung": "low", "quality": 100}),
         ] {
             assert!(
                 serde_json::from_value::<Client>(bad.clone()).is_err(),

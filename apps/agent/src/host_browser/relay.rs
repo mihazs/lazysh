@@ -13,6 +13,7 @@
 //! SIGHUP, or the browser exiting. Nothing about a page is logged or written to disk.
 use super::{
     allow, browser_command, find_binary, firefox, input,
+    ladder::{self, Ladder, Screencast},
     outbox::Outbox,
     profile, settings, terminate,
     wire::{self, Client, Viewport},
@@ -39,8 +40,9 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_BROWSER_MESSAGE: u64 = 8 << 20;
 pub(super) const MAX_TITLE: usize = 512;
 pub(super) const MAX_URL: usize = 2048;
-const QUALITY: u8 = 60;
 const TITLE_POLL: Duration = Duration::from_secs(1);
+/// How often the quality ladder and the idle time are looked at when nothing else wakes the relay.
+const TICK: Duration = Duration::from_millis(100);
 
 pub struct Serve<'a> {
     /// The companion state directory: where the setting and the profiles live.
@@ -50,6 +52,8 @@ pub struct Serve<'a> {
     pub no_sandbox: bool,
     /// Use the single kept profile instead of a private one, and leave it for `host-browser --clear-data`.
     pub keep_profile: bool,
+    /// How long a hidden view may keep the browser before the session ends with `IdleReleased`.
+    pub idle_release: Duration,
 }
 
 pub(super) enum Event {
@@ -230,6 +234,10 @@ fn session(
         target,
         viewport,
         paused: false,
+        paused_since: None,
+        idle_release: options.idle_release,
+        ladder: Ladder::new(Instant::now()),
+        quality: None,
         control: false,
         limit: input::Limit::new(Instant::now()),
         sequence: 0,
@@ -243,6 +251,7 @@ fn session(
         viewport,
         json!({"view": true, "control": true, "navigation": false, "tabs": false}),
     ));
+    relay.report_quality();
     relay.run()
 }
 
@@ -471,6 +480,12 @@ struct Relay {
     target: String,
     viewport: Viewport,
     paused: bool,
+    /// When the view was hidden, while it is.
+    paused_since: Option<Instant>,
+    idle_release: Duration,
+    ladder: Ladder,
+    /// The rung and whether it is pinned, as last told to the client.
+    quality: Option<(ladder::Rung, bool)>,
     /// Whether input reaches the browser. Off when a session starts, and it must be off again whenever the relay
     /// starts the browser anew: a client turns it on, never the relay.
     control: bool,
@@ -483,21 +498,46 @@ struct Relay {
     polled: Instant,
 }
 impl Relay {
+    /// Start the screencast at what the ladder wants now.
     fn start_screencast(&mut self) -> Result<()> {
-        let width = (self.viewport.width as f32 * self.viewport.scale).round() as u32;
-        let height = (self.viewport.height as f32 * self.viewport.scale).round() as u32;
+        let screencast = self.ladder.apply(Instant::now());
+        self.send_screencast(screencast)
+    }
+
+    fn send_screencast(&mut self, screencast: Screencast) -> Result<()> {
+        let size = |css: u32| {
+            (css as f32 * self.viewport.scale * screencast.percent as f32 / 100.0).round() as u32
+        };
         self.link.cdp.send(
             "Page.startScreencast",
             json!({
                 "format": "jpeg",
-                "quality": QUALITY,
-                "maxWidth": width,
-                "maxHeight": height,
-                "everyNthFrame": 1,
+                "quality": screencast.quality,
+                "maxWidth": size(self.viewport.width),
+                "maxHeight": size(self.viewport.height),
+                "everyNthFrame": screencast.every_nth,
             }),
             Some(&self.session),
         )?;
         Ok(())
+    }
+
+    /// Move a running screencast to other parameters; the browser takes them at a start.
+    fn restart_screencast(&mut self, screencast: Screencast) -> Result<()> {
+        self.link
+            .cdp
+            .send("Page.stopScreencast", json!({}), Some(&self.session))?;
+        self.send_screencast(screencast)
+    }
+
+    /// Tell the client the rung it sees and whether it is pinned, when that changed.
+    fn report_quality(&mut self) {
+        let quality = self.ladder.rung();
+        if self.quality != Some(quality) {
+            self.quality = Some(quality);
+            self.outbox
+                .control(json!({"type": "quality", "rung": quality.0, "pinned": quality.1}));
+        }
     }
 
     /// Handle events until the session ends; the value is the reason it ended.
@@ -512,13 +552,17 @@ impl Relay {
                     self.link.cdp.send("Target.getTargets", json!({}), None)?;
                 }
             }
+            if let Some(since) = self.paused_since {
+                if now >= since + self.idle_release {
+                    return Ok("IdleReleased");
+                }
+            } else if let Some(screencast) = self.ladder.tick(now) {
+                self.restart_screencast(screencast)?;
+            }
+            self.report_quality();
             let event = match self.link.backlog.pop_front() {
                 Some(event) => event,
-                None => match self
-                    .link
-                    .inbox
-                    .recv_timeout((self.polled + TITLE_POLL).saturating_duration_since(now))
-                {
+                None => match self.link.inbox.recv_timeout(TICK) {
                     Ok(event) => event,
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(CLIENT_CLOSED),
@@ -532,9 +576,15 @@ impl Relay {
 
     fn client(&mut self, body: &[u8]) -> Result<()> {
         match serde_json::from_slice::<Client>(body) {
-            Ok(Client::Ack { .. }) => self.outbox.ack(),
+            Ok(Client::Ack { .. }) => {
+                if self.outbox.ack() {
+                    self.ladder.delivered();
+                }
+            }
+            Ok(Client::Quality { rung }) => self.ladder.choose(rung, Instant::now()),
             Ok(Client::Pause {}) if !self.paused => {
                 self.paused = true;
+                self.paused_since = Some(Instant::now());
                 self.outbox.pause(true);
                 self.link
                     .cdp
@@ -544,6 +594,7 @@ impl Relay {
             }
             Ok(Client::Resume {}) if self.paused => {
                 self.paused = false;
+                self.paused_since = None;
                 self.outbox.pause(false);
                 self.start_screencast()?;
                 self.outbox
@@ -571,6 +622,7 @@ impl Relay {
             Err(reason) => self.refuse(reason),
             Ok(_) if !self.limit.take(Instant::now()) => self.refuse(input::RATE_LIMITED),
             Ok(calls) => {
+                self.ladder.input(Instant::now());
                 for (method, params) in calls {
                     self.link.cdp.send(method, params, Some(&self.session))?;
                 }
@@ -634,8 +686,12 @@ impl Relay {
         let Some(data) = params["data"].as_str() else {
             return Ok(());
         };
+        if self.paused {
+            return Ok(());
+        }
+        self.ladder.produced();
         // Base64 is a third larger than the bytes it carries.
-        if self.paused || data.len() > wire::MAX_JPEG / 3 * 4 + 4 {
+        if data.len() > wire::MAX_JPEG / 3 * 4 + 4 {
             return Ok(());
         }
         let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) else {

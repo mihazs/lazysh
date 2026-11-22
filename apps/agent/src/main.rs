@@ -419,6 +419,9 @@ enum HostBrowserCommand {
         /// Keep the browser profile (cookies, sessions) after the session, until `host-browser --clear-data`.
         #[arg(long)]
         keep_profile: bool,
+        /// End the session, and the browser with it, when the view has been hidden this many seconds.
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=86_400))]
+        idle_release: u64,
     },
 }
 #[derive(Subcommand)]
@@ -669,6 +672,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                     binary,
                     no_sandbox,
                     keep_profile,
+                    idle_release,
                 }),
             ..
         } => {
@@ -677,6 +681,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                 binary: binary.as_deref(),
                 no_sandbox,
                 keep_profile,
+                idle_release: std::time::Duration::from_secs(idle_release),
             })?;
             None
         }
