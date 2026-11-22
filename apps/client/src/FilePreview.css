@@ -5,6 +5,24 @@
   margin: 18px;
   object-fit: contain;
 }
+.file-media-frame {
+  display: block;
+  width: calc(100% - 36px);
+  margin: 18px;
+  border: 0;
+  border-radius: 7px;
+  background: #000;
+}
+.file-media-video {
+  aspect-ratio: 16 / 9;
+  max-height: 65vh;
+}
+.file-media-audio {
+  height: 54px;
+}
+.file-note {
+  margin: 18px;
+}
 .file-preview-toggle {
   margin: 12px 18px 0;
 }
