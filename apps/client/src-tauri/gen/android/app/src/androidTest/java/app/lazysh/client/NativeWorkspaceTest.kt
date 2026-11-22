@@ -6571,8 +6571,13 @@ class NativeWorkspaceTest {
                 println("lazysh parity: the share service configured, uploaded to, listed, thumbnailed, linked and deleted through the Share dialog over TLS")
             } finally {
                 Os.unsetenv("LAZYSH_TEST_SHARE_ROOT_PEM")
-                // Later cases open the hosts drawer, which Preferences would cover.
-                runCatching { closePreferences() }
+                // Later cases open the hosts drawer, which Preferences would cover. On a phone the category is a detail page
+                // whose header button returns to the list; Close Preferences is on the list.
+                runCatching {
+                    if (evaluate(scenario, workspaceElementVisible(".settings-detail-header button")) == "true")
+                        onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".settings-detail-header button")).perform(webClick())
+                    closePreferences()
+                }
             }
         }
     }
