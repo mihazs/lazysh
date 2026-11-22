@@ -116,7 +116,9 @@ EOF
   [ "$bumped" = true ]
 }
 
-if [ "${EVENT-}" = schedule ]; then
+if [ "${EVENT-}" = workflow_dispatch ] && [ -n "${AREAS-}" ]; then
+  add $AREAS # a manual run of the named areas only.
+elif [ "${EVENT-}" = schedule ]; then
   add nightly # only the device suite: main's push run is the parity evidence for everything else.
 elif [ "${EVENT-}" != pull_request ] || [ -z "${BASE-}" ] || [ -z "${HEAD-}" ]; then
   add all
@@ -171,9 +173,9 @@ for output in \
   "android_ntfy=$(flag any android push)" \
   "ios=$(flag has ios)" \
   "terminal_perf=$(flag has terminal_runtime)" \
-  "terminal_macos=$(flag has terminal_runtime)" \
+  "terminal_macos=$(flag any terminal_runtime terminal_apple)" \
   "linux_surface=$(flag any linux_surface)" \
-  "terminal_ios=$(flag has terminal_runtime)"; do
+  "terminal_ios=$(flag any terminal_runtime terminal_apple)"; do
   # The fast gate still runs for a pull request that selected only main-only jobs.
   case "$output" in *=true) native=true ;; esac
   name=${output%%=*}

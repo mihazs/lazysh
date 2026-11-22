@@ -7,6 +7,12 @@ on:
   # Nightly device run: native-changes.sh maps this event to the Appium jobs alone, and client and agent skip it.
   schedule:
     - cron: '41 3 * * *'
+  # Manual run of named areas only (default: the macOS and iOS terminal core jobs, which main pushes rarely finish).
+  workflow_dispatch:
+    inputs:
+      areas:
+        description: Space-separated native-changes.sh areas to run, nothing else
+        default: terminal_apple
 
 permissions:
   contents: read
@@ -68,6 +74,7 @@ jobs:
       - id: paths
         env:
           EVENT: ${{ github.event_name }}
+          AREAS: ${{ inputs.areas }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: sh .github/scripts/native-changes.sh | tee -a "$GITHUB_OUTPUT"
@@ -94,7 +101,7 @@ jobs:
     uses: ./.github/workflows/companion-artifacts.yml
 
   client:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       # moon derives the pull request's affected tasks from the merge base, so it needs history.
@@ -169,7 +176,7 @@ jobs:
           key: ${{ steps.moon-cache.outputs.cache-primary-key }}
 
   agent:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
