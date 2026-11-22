@@ -93,8 +93,11 @@ class GotifyAndroidTest {
             shell("am force-stop $gotify")
             launchGotify()
             node(emptyHistory())
-            phase = "background"
+            phase = "background-home"
             home()
+            phase = "background"
+            awaitCondition { key(uid, -1) in ownedKeys(uid) }
+            phase = "background-connected"
             awaitCondition { foregroundConnected(uid) }
             val baseline = ownedKeys(uid).toSet()
             stage(0, JSONObject().put("background", true))
@@ -181,15 +184,23 @@ class GotifyAndroidTest {
     private fun runtimePermissionGranted(dump: String, permission: String): Boolean =
         dump.lines().map { it.trim() }.filter { it.startsWith("$permission: granted=") }.singleOrNull()?.startsWith("$permission: granted=true") == true
 
+    // UiDevice.launcherPackageName resolves the HOME intent through the app's PackageManager, which hides the launcher (see
+    // permissionGranted) and answers null, so the launcher is read through the shell.
+    private val launcher by lazy { launcherPackage(shell("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME")) }
+
+    /** The package of the `package/.Activity` line that `resolve-activity --brief` prints last. */
+    private fun launcherPackage(output: String): String =
+        output.trim().lines().last().substringBefore('/').also { check(it.matches(Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+"))) { "Unrecognized launcher" } }
+
     private fun home() {
         check(device.pressHome())
-        awaitCondition { device.currentPackageName == device.launcherPackageName && device.currentPackageName != gotify }
+        awaitCondition { device.currentPackageName == launcher && device.currentPackageName != gotify }
     }
 
     private fun body(state: String) = "${input["alias"]}: $state"
 
     private fun showCard(state: String): UiObject2 {
-        check(device.currentPackageName == device.launcherPackageName)
+        check(device.currentPackageName == launcher)
         check(device.openNotification())
         val target = By.pkg("com.android.systemui").text(body(state))
         awaitCondition {
@@ -394,6 +405,8 @@ class GotifyAndroidTest {
             sample.replace("  uid=$uid", "  uid=0"),
             sample + "\n  key=$ownKey",
         )) check(!record(bad, ownKey, uid, 17, "working", started))
+        check(launcherPackage("priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true\ncom.android.launcher3/.uioverrides.QuickstepLauncher\n") == "com.android.launcher3")
+        check(runCatching { launcherPackage("No activity found") }.isFailure)
         val permission = Manifest.permission.POST_NOTIFICATIONS
         val granted = "    runtime permissions:\n      $permission: granted=true, flags=[ USER_SET]\n      android.permission.CAMERA: granted=false, flags=[ ]"
         check(runtimePermissionGranted(granted, permission))
