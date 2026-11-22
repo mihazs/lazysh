@@ -156,19 +156,30 @@ case "$*" in
     mkdir -p "$(dirname "$apk")" && echo "$flavor" > "$apk"
     echo "build $flavor" >> "$LOG" ;;
   .changeset/release-platform.ts*) echo "validate $2 $3 $(cat "$apk")" >> "$LOG" ;;
+  .github/scripts/apk-engine.ts*)
+    echo "engine $3 switch=$4 apk=$(cat "$2")" >> "$LOG"
+    [ "$3" != "$FAIL_ENGINE" ] || exit 8 ;;
   *) exit 3 ;;
 esac
 `, { mode: 0o755 });
-  const execute = (fail: string) => spawnText(workspace, ['bash', '-e', '-c', step.run], {
-    ...env, PATH: `${bin}:${process.env.PATH}`, LOG: log, FAIL: fail, NDK_HOME: '/ndk', RUNNER_TEMP: '/owned', GITHUB_WORKSPACE: project });
-  expect((await execute('')).code).toBe(0);
-  expect((await Bun.file(log).text()).trim().split('\n')).toEqual([
-    'build foss', 'validate android-foss-arm64 /owned/installation-files/android-foss-arm64 foss',
-    'build google', 'validate android-google-arm64 /owned/installation-files/android-google-arm64 google',
-  ]);
+  const execute = (fail: string, killSwitch = 'on', failEngine = '') => spawnText(workspace, ['bash', '-e', '-c', step.run], {
+    ...env, PATH: `${bin}:${process.env.PATH}`, LOG: log, FAIL: fail, FAIL_ENGINE: failEngine, LAZYSH_NATIVE_TERMINAL: killSwitch, NDK_HOME: '/ndk', RUNNER_TEMP: '/owned', GITHUB_WORKSPACE: project });
+  // Each flavor's own APK is held to the engine its flavor and the resolved kill switch call for before the next build, and never reads a stale one.
+  for (const killSwitch of ['on', 'off']) {
+    await writeFile(log, '');
+    expect((await execute('', killSwitch)).code).toBe(0);
+    expect((await Bun.file(log).text()).trim().split('\n')).toEqual([
+      'build foss', 'validate android-foss-arm64 /owned/installation-files/android-foss-arm64 foss', `engine foss switch=${killSwitch} apk=foss`,
+      'build google', 'validate android-google-arm64 /owned/installation-files/android-google-arm64 google', `engine google switch=${killSwitch} apk=google`,
+    ]);
+  }
   await writeFile(log, '');
   expect((await execute('foss')).code).not.toBe(0);
   expect(await Bun.file(log).text()).toBe('');
+  // An APK that does not carry what it should stops the release before the other flavor builds, let alone uploads.
+  expect((await execute('', 'on', 'foss')).code).toBe(8);
+  expect((await Bun.file(log).text()).trim().split('\n')).toEqual([
+    'build foss', 'validate android-foss-arm64 /owned/installation-files/android-foss-arm64 foss', 'engine foss switch=on apk=foss']);
   // Each flavor's validated bytes are uploaded under its own target receipt name.
   const uploads = android.job.steps.filter((item: any) => item.uses === 'actions/upload-artifact@v4')
     .map((item: any) => [item.with.name, item.with.path]);

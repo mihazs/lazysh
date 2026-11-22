@@ -1791,16 +1791,23 @@ jobs:
           retention-days: 7
 
   # The Google release APK with the native terminal engine (#2306): the release workflow's own build command (the release profile,
-  # unsigned) and the size ceiling it enforces, which release-artifacts.yml cannot show on a pull request. Selected only by a pull
-  # request that changes the release build configuration (native-changes.sh), never by a push. Nothing runs on a device here.
+  # unsigned), the size ceiling it enforces and the engine check it makes, which release-artifacts.yml cannot show on a pull request.
+  # Built twice, with the kill switch on and off (#1342): the rehearsal of the rollback of docs/install-and-update.md, "Maintainers".
+  # Selected only by a pull request that changes the release build configuration (native-changes.sh), never by a push. Nothing runs on a device here.
   native-android-release-core:
     needs: changes
     if: needs.changes.outputs.android_release_native == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    strategy:
+      # The kill switch (#1342) is rehearsed with the release: built with `off`, the very APK that carries the engine with `on` must not.
+      fail-fast: false
+      matrix:
+        kill-switch: [on, off]
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: '4'
       CARGO_BUILD_JOBS: '4'
+      LAZYSH_NATIVE_TERMINAL: ${{ matrix.kill-switch }}
     steps:
       - *source-checkout
       - *source-bun
@@ -1818,6 +1825,8 @@ jobs:
       - run: sh .github/scripts/native-lib-size.sh arm64-v8a
       - name: Hold the APK to the release size ceiling
         run: bun .github/scripts/apk-budget.ts android-google-arm64 apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+      - name: Hold the APK to the engine its kill switch calls for
+        run: bun .github/scripts/apk-engine.ts apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk google "$LAZYSH_NATIVE_TERMINAL"
 
   # Owned OpenSSH password, encrypted-key, rotated-key, bastion, agent-forwarding, Auto-fallback and
   # forced-ET parity cases (#985), the browser preview forward and teardown case (#994) and the

@@ -137,6 +137,29 @@ GitHub. Do not assume an F-Droid APK can update a developer-signed GitHub APK or
 vice versa. Choose one signing channel and follow its migration instructions.
 No F-Droid.org listing or automatic update is claimed at present; see #333/#424.
 
+### Maintainers: a release without the native terminal engine
+
+The Google APK carries the native terminal engine; the F-Droid-style APK (`foss` in the release assets) never does. If a release must
+stop users reaching the engine, build the next one with the kill switch ([#1342](https://github.com/mihazs/lazysh/issues/1342)),
+which needs no code change. The release builds then refuse the engine in the client and leave it out of the Android app: Native shows as
+disabled ("the native engine is disabled in this build") in Settings, Terminal engine, and every new session runs xterm.js whatever a user chose.
+
+1. Set the repository variable: `gh variable set LAZYSH_NATIVE_TERMINAL --body off --repo mihazs/lazysh`. Only `on` and `off` are accepted; the
+   release stops before building on anything else.
+2. Optional rehearsal that publishes nothing: `gh workflow run release-artifacts.yml --ref main -f platform=android -f native-terminal=off`
+   (the input beats the variable for that run). The android job builds both flavors and fails when an APK does not carry what its flavor and the
+   switch call for.
+3. Release a version. A release is cut by the Changesets version pull request, so merge a user-facing fragment first, for example
+   `fix(terminal): the native terminal engine is switched off in this release`. The release workflow reads the variable.
+4. Verify the published APKs before saying the rollback is done: download them with `SHA256SUMS`, check the sums, and for each run
+   `bun .github/scripts/apk-engine.ts <apk> google off` and `bun .github/scripts/apk-engine.ts <apk> foss off`. Both must exit 0. The same script with `google on` exits 0
+   only for an APK that carries the engine (the surface host's JNI entry points and the renderer's strings in `lib/arm64-v8a/liblazysh_lib.so`).
+5. To go back, delete the variable (`gh variable delete LAZYSH_NATIVE_TERMINAL --repo mihazs/lazysh`) and release another version; the next
+   release builds the engine again, and the same check with `google on` confirms it.
+
+The pull request job `native-android-release-core` builds the Google release APK with the switch on and off and runs the same check, so a change to the
+release build configuration cannot silently break either side. It is a rehearsal of the build, not of a device: no APK runs anywhere in it.
+
 ## Linux
 
 Use the Debian package with your package manager, or make the downloaded
