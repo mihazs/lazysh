@@ -416,3 +416,12 @@ fn with_system_fonts_text_is_drawn_from_a_font_and_follows_the_family_list() {
     // A session attached with the fonts on draws them from its first surface.
     Shown::new(&text, fonts).shows(&drawn, "the font's glyphs on a first surface");
 }
+
+#[test]
+fn the_shipping_policy_refuses_a_cpu_rasterizer_and_only_the_debug_switch_on_android_allows_one() {
+    assert!(!policy_for(false).allow_software);
+    assert!(policy_for(true).allow_software);
+    assert_eq!(policy_for(true).backends, Policy::for_platform().backends);
+    // No other build compiles the variable in, so a host has the shipping policy.
+    assert_eq!(policy(), Policy::for_platform());
+}

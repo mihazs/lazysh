@@ -167,9 +167,22 @@ pub(crate) fn select(
     window: Option<Window>,
     size: (u32, u32),
 ) -> Result<Selected, RenderError> {
+    select_seen(policy, window, size).0
+}
+
+/// [`select`], and every adapter the policy's backends listed whether or not one was chosen: what a probe
+/// reports when a device is refused.
+pub(crate) fn select_seen(
+    policy: &Policy,
+    window: Option<Window>,
+    size: (u32, u32),
+) -> (Result<Selected, RenderError>, Vec<AdapterInfo>) {
     let backends = policy.mask();
     if backends.is_empty() {
-        return Err(RenderError::Unsupported("the policy allows no backend"));
+        return (
+            Err(RenderError::Unsupported("the policy allows no backend")),
+            Vec::new(),
+        );
     }
     let mut descriptor = wgpu::InstanceDescriptor {
         backends,
@@ -191,8 +204,14 @@ pub(crate) fn select(
                 })
             }
         })
-        .transpose()
-        .map_err(|_| RenderError::Unsupported("no backend of the policy can draw on the window"))?;
+        .transpose();
+    let surface = match surface {
+        Ok(surface) => surface,
+        Err(_) => {
+            let why = RenderError::Unsupported("no backend of the policy can draw on the window");
+            return (Err(why), Vec::new());
+        }
+    };
     let adapters = pollster::block_on(instance.enumerate_adapters(backends));
     let infos: Vec<_> = adapters
         .iter()
@@ -215,15 +234,17 @@ pub(crate) fn select(
             ..Default::default()
         });
         if let Ok((device, queue)) = pollster::block_on(request) {
-            return Ok(Selected {
+            let selected = Selected {
                 info: infos[i].clone(),
                 device,
                 queue,
                 screen: surface.zip(config),
-            });
+            };
+            return (Ok(selected), infos);
         }
     }
-    Err(RenderError::Unsupported(refusal(policy, &infos)))
+    let why = RenderError::Unsupported(refusal(policy, &infos));
+    (Err(why), infos)
 }
 
 /// Why the policy ends up with no adapter. A machine whose only adapters are CPU rasterizers the
@@ -243,7 +264,14 @@ pub fn refusal(policy: &Policy, adapters: &[AdapterInfo]) -> &'static str {
 /// The check before a native terminal is offered (#1336): the adapter a renderer of this policy
 /// would run on, with its device created and dropped again, or why there is none.
 pub fn probe(policy: &Policy) -> Result<AdapterInfo, RenderError> {
-    select(policy, None, (1, 1)).map(|selected| selected.info)
+    probe_seen(policy).0
+}
+
+/// [`probe`], and every adapter the policy's backends listed, chosen or not (a device with only a CPU
+/// rasterizer lists it and is refused): the evidence of what a device offers.
+pub fn probe_seen(policy: &Policy) -> (Result<AdapterInfo, RenderError>, Vec<AdapterInfo>) {
+    let (selected, seen) = select_seen(policy, None, (1, 1));
+    (selected.map(|selected| selected.info), seen)
 }
 
 /// How to present on `surface` with `adapter` (vsync, opaque); `None` when the adapter cannot.
@@ -401,6 +429,18 @@ mod tests {
             )),
             Ok(info) => assert_eq!(probe(&strict), Ok(info)),
             Err(_) => assert!(probe(&strict).is_err()),
+        }
+    }
+
+    /// On this machine's real adapters, so it holds for a GPU and for a CI runner with only a rasterizer.
+    #[test]
+    fn the_probe_lists_every_adapter_of_the_policys_backends_chosen_or_not() {
+        let strict = Policy::for_platform();
+        let (chosen, seen) = probe_seen(&strict);
+        assert_eq!(seen, probe_seen(&strict.clone().with_software()).1);
+        assert_eq!(chosen, probe(&strict));
+        if let Ok(info) = chosen {
+            assert!(seen.contains(&info));
         }
     }
 

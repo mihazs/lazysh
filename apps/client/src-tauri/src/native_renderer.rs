@@ -23,7 +23,7 @@
 //! Nothing in the app attaches a surface yet: the first caller is a platform surface (#1327).
 #![cfg_attr(not(test), allow(dead_code))]
 
-use lazysh_terminal_renderer_wgpu::{FontLibrary, Target, WgpuRenderer};
+use lazysh_terminal_renderer_wgpu::{FontLibrary, Policy, Target, WgpuRenderer};
 use lazysh_terminal_runtime::{
     Appearance, BlinkClock, Cell, CellMetrics, CellStyle, CellWide, Frame, FramePacer, Overlay,
     RenderError, Session, SessionError, TerminalRenderer, Theme, BLINK_HALF_PERIOD,
@@ -51,6 +51,32 @@ fn now() -> Duration {
 
 fn blink() -> BlinkClock {
     BlinkClock::new(BLINK_HALF_PERIOD, Duration::ZERO)
+}
+
+/// The variable that lets a debug build on Android draw on a CPU rasterizer. The CI emulator has none other, and
+/// the shipping policy refuses one: a device keeps xterm.js unless the native engine beats it, which software cannot.
+#[cfg(all(debug_assertions, target_os = "android"))]
+pub(crate) const SOFTWARE_GPU: &str = "LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU";
+
+/// The adapter policy of the app's renderers and of its probe: the platform's shipping policy, with CPU rasterizers
+/// allowed only in a debug build on Android whose process sets [`SOFTWARE_GPU`] (the instrumentation does, before it
+/// drives the page). The variable is not compiled into any other build: `native-android-release-core` checks the
+/// release library for its name.
+pub(crate) fn policy() -> Policy {
+    #[cfg(all(debug_assertions, target_os = "android"))]
+    let software = std::env::var_os(SOFTWARE_GPU).is_some();
+    #[cfg(not(all(debug_assertions, target_os = "android")))]
+    let software = false;
+    policy_for(software)
+}
+
+fn policy_for(software: bool) -> Policy {
+    let policy = Policy::for_platform();
+    if software {
+        policy.with_software()
+    } else {
+        policy
+    }
 }
 
 /// What the user's preferences say a terminal looks like.
