@@ -134,6 +134,10 @@ class GotifyAndroidTest {
         node(By.res(gotify, "gotify_url_editext")).text = origin
         phase = "login-url-submit"
         node(By.res(gotify, "checkurl")).click()
+        // The official app warns about a plain-HTTP address in a modal dialog over the login form; its one button
+        // acknowledges the warning (the form is not reachable behind it).
+        awaitCondition { device.hasObject(By.res(gotify, "username_editext")) || device.hasObject(By.res("android", "button1").pkg(gotify)) }
+        device.findObject(By.res("android", "button1").pkg(gotify))?.click()
         phase = "login-auth-form"
         node(By.res(gotify, "username_editext")).text = input["username"] as String
         node(By.res(gotify, "password_editext")).text = input["password"] as String
