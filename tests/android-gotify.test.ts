@@ -189,7 +189,7 @@ test('installed APK proof binds actual package UID, one base path, bounded file 
     return (args:string[]):Promise<string>=>Promise.resolve((()=>{
       if(args[1]==='cmd')return `package:${name} uid:${fault==='uid'&&uidReads++>0?10236:10235}\n`;
       if(args[1]==='pm')return `package:${fault==='path'&&pathReads++>0?'/data/app/other/base.apk':path}\n${fault==='split'?'package:/data/app/other/split.apk\n':''}`;
-      if(args[1]==='stat')return `${fault==='owner'?'10235':'1000'}:${fault==='symlink'?'a1a4':'81a4'}:${fault==='hardlink'?'2':'1'}:${fault==='size'?'536870913':'100'}:8:${fault==='inode'&&statReads++>0?'1235':'1234'}\n`;
+      if(args[1]==='stat')return `${fault==='owner'?'10235':'1000'}:${fault==='symlink'?'a1a4':'81a4'}:${fault==='hardlink'?'2':'1'}:${fault==='size'?'2147483649':'100'}:8:${fault==='inode'&&statReads++>0?'1235':'1234'}\n`;
       if(args[1]==='sha256sum')return `${fault==='digest'?'c'.repeat(64):hash}  ${path}\n`;
       throw new Error('Unexpected APK readback');
     })());

@@ -260,7 +260,7 @@ export async function gotifyInstalledApk(adb:(args:string[])=>Promise<string>,na
   const stat=()=>adb(['shell','stat','-c','%u:%f:%h:%s:%d:%i',path]);
   const before=await stat(),fields=before.trim().split(':');
   if(fields.length!==6||!['0','1000'].includes(fields[0])||!/^[a-f0-9]+$/.test(fields[1])||
-    (Number.parseInt(fields[1],16)&0xf000)!==0x8000||fields[2]!=='1'||!fields.slice(3).every(value=>/^[1-9][0-9]*$/.test(value))||Number(fields[3])>536870912)throw rejection();
+    (Number.parseInt(fields[1],16)&0xf000)!==0x8000||fields[2]!=='1'||!fields.slice(3).every(value=>/^[1-9][0-9]*$/.test(value))||Number(fields[3])>2147483648)throw rejection();
   const proof=await adb(['shell','sha256sum',path]);
   if(!/^[a-f0-9]{64}$/.test(expected)||proof!==`${expected}  ${path}\n`||await stat()!==before||
     await adb(['shell','pm','path',name])!==mapping||packageUid(await adb(['shell','cmd','package','list','packages','-U',name]),name)!==uid)throw rejection();
@@ -377,7 +377,9 @@ async function runGotifyAndroid(root:string) {
   const run=async(label:GotifyFixturePhase,program:string,args:string[],milliseconds=10000,env=process.env)=>{
     phase=label;hostOperation='ownership';await ownership.check();hostOperation='command';const child=new OwnedProcess(program,args,root,env);processes.push(child);return child.finish(label,milliseconds);
   };
-  const shell=(args:string[])=>gotifyDeviceAction(continuous,()=>run(phase,adb,['-s',serial,...args]));
+  // Installing and hashing the debug app (it carries the native terminal engine and is several hundred MiB) outlasts the default window.
+  const slow=(args:string[])=>args[0]==='install'||args.includes('sha256sum');
+  const shell=(args:string[])=>gotifyDeviceAction(continuous,()=>run(phase,adb,['-s',serial,...args],slow(args)?300000:undefined));
   const guest=()=>emulatorContinuity(adb,serial,undefined,0);
   let original:{server:Awaited<ReturnType<typeof hostAdbServerIdentity>>;guest:Awaited<ReturnType<typeof guest>>}|undefined;
   let failedAdbdProbe:unknown;
