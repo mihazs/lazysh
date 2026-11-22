@@ -292,7 +292,9 @@ test.each([
   { owner:'unknown', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
   { owner:'', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:true, overflow:false },
   { owner:'tmux', mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false, adbServerLog:false },
-])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, voice = 0, fdroid, sdk, diagnosticFailure, overflow, adbServerLog = true }) => {
+  // A run still going after the watchdog's delay is captured while it runs, once, and the watchdog is gone when the run ends.
+  { mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false, watchdog:true },
+])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, voice = 0, fdroid, sdk, diagnosticFailure, overflow, adbServerLog = true, watchdog = false }) => {
   expect(commands).toHaveLength(1);
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-android-diagnostics-'));
   temporary.push(directory);
@@ -323,6 +325,7 @@ if [[ "$2" == test:android-qr ]]; then
   exit "$QR_EXIT"
 fi
 if [[ "$2" == test:android-voice ]]; then exit "$VOICE_EXIT"; fi
+if [[ -n "$INSTRUMENTATION_DELAY" ]]; then sleep "$INSTRUMENTATION_DELAY"; fi
 exit "$INSTRUMENTATION_EXIT"
 `);
   await writeFile(fakeAdb, `#!/bin/bash
@@ -351,6 +354,7 @@ exit "$SDK_EXIT"
       MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), QR_EXIT: String(qr), VOICE_EXIT: String(voice), FDROID_EXIT: String(fdroid), SDK_EXIT: String(sdk),
       ANDROID_SERIAL: 'emulator-5580', LAZYSH_ANDROID_RUNTIME_OWNER: owner, SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
       RUNNER_TEMP: directory, TMPDIR: directory, QR_PID_FILE: qrPidFile, LAZYSH_DIALOG_SETTLE_SECONDS: '0',
+      LAZYSH_ANDROID_WATCHDOG_SECONDS: watchdog ? '1' : '3480', INSTRUMENTATION_DELAY: watchdog ? '3' : '',
       DIAGNOSTIC_FAILURE: diagnosticFailure ? '1' : '0',
       DIAGNOSTIC_OVERFLOW: overflow ? '1' : '0' },
     stdout: 'pipe', stderr: 'pipe',
@@ -390,11 +394,16 @@ exit "$SDK_EXIT"
   expect(() => process.kill(pid, 0)).toThrow();
   const diagnostics = join(directory, 'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/system-diagnostics');
   const files = await readdir(diagnostics);
-  expect(files.length).toBe(expectedExit ? 11 : 4);
+  expect(files.length).toBe((expectedExit ? 11 : 4) + (watchdog ? 9 : 0));
   const status = await readFile(join(diagnostics, 'status.txt'), 'utf8');
   for (const name of files) expect((await stat(join(diagnostics, name))).size).toBeLessThanOrEqual(1024 * 1024);
   expect(status).toContain(`test exit=${expectedExit}`);
   expect(status).toContain('collector exit=143');
+  expect(status.includes('watchdog fired at')).toBe(watchdog);
+  if (watchdog) {
+    expect(files).toEqual(expect.arrayContaining(['watchdog-current-test.txt','watchdog-logcat.txt','watchdog-threads.txt','watchdog-activity.txt','watchdog-window.txt','watchdog-processes.txt','watchdog-ui.txt','watchdog-screen.png']));
+    expect(status.match(/watchdog fired at/g)!.length).toBe(1);
+  }
   if (expectedExit) {
     // A failed job keeps why the adb server dropped the emulator's transport; a passing job reads nothing.
     expect(status).toContain(adbServerLog ? 'adb-server-log exit=0' : 'adb-server-log exit=1');
