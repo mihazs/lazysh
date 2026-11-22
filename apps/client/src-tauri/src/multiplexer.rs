@@ -2025,11 +2025,20 @@ mod tests {
         );
         // The server is replaced on the same socket: tmux hands out the same ids again, and every action built from
         // the old server's tree is refused without touching the replacement (#2044).
-        let (stale, old_session, old_pane) = (
-            live(),
-            tree.sessions[0].id.clone(),
-            tree.sessions[0].windows[0].panes[0].id.clone(),
+        let stale = live();
+        run("tmux kill-server".into());
+        run(action_command(&TmuxAction::CreateSession {
+            name: "replacement".into(),
+            directory: temp.path().to_str().unwrap().into(),
+        })
+        .unwrap());
+        let replacement = read_tree();
+        // tmux numbers from zero on every server, so these are the ids the first server also used.
+        let (old_session, old_pane) = (
+            replacement.sessions[0].id.clone(),
+            replacement.sessions[0].windows[0].panes[0].id.clone(),
         );
+        assert_eq!((old_session.as_str(), old_pane.as_str()), ("$0", "%0"));
         let stale_actions = |token: &str| {
             [
                 action_command(&TmuxAction::ClosePane {
@@ -2054,15 +2063,6 @@ mod tests {
             ]
             .map(Result::unwrap)
         };
-        run("tmux kill-server".into());
-        run(action_command(&TmuxAction::CreateSession {
-            name: "replacement".into(),
-            directory: temp.path().to_str().unwrap().into(),
-        })
-        .unwrap());
-        let replacement = read_tree();
-        assert_eq!(replacement.sessions[0].id, old_session);
-        assert_eq!(replacement.sessions[0].windows[0].panes[0].id, old_pane);
         assert_ne!(replacement.server_token.as_deref(), Some(stale.as_str()));
         for command in stale_actions(&stale) {
             let output = scoped(command.clone()).output().unwrap();
