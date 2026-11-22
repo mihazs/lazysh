@@ -128,8 +128,9 @@ android {
         // Tauri exits its process when the last activity is finished. Keep the
         // shared native activity alive until AndroidJUnitRunner reports results.
         testInstrumentationRunnerArguments["waitForActivitiesToComplete"] = "false"
-        // A case that blocks (44894372565 attempt 3: onCreate never returned, 57 minutes silent) fails after 15 minutes instead of at the job limit.
-        testInstrumentationRunnerArguments["timeout_msec"] = "900000"
+        // A case that blocks fails after 7 minutes instead of at the job limit; the longest case runs 3 minutes. Once one case wedges the app every later
+        // case waits out its own limit too (44990852306: four 15-minute cases in a row ended the job at 75 minutes).
+        testInstrumentationRunnerArguments["timeout_msec"] = "420000"
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
