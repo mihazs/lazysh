@@ -1,5 +1,76 @@
 # @lazysh/client
 
+## 1.96.0
+
+### Minor Changes
+
+- feat(multiplexers): close, rename and resize tmux panes and close sessions from the Workspaces panel ([#1990](https://github.com/mihazs/lazysh/pull/1990))
+
+  <details><summary>Details</summary>
+
+  Each pane row shows its size and title and gains Rename, four divider arrows and Close, and each session gains Close session. Closing asks first with a confirmation that names the pane or session and sends one exact-id command only when confirmed. tmux reuses `$0` and `%0` after a server restart, so these four actions carry the identity of the tmux server the list was read from and tmux refuses them on a replaced server instead of acting on its same-numbered pane (#2044). No defaults change.
+
+  </details>
+- feat: Show Codex's permission requests in the Agent view dock on tmux ([#1965](https://github.com/mihazs/lazysh/pull/1965))
+
+  <details><summary>Details</summary>
+
+  The dock lists a `PermissionRequest` hook request of the Codex agent in the pane, for the session and pane its report names, and answers it with Allow, Deny or Deny with a message, re-checking the agent, session and pane right before the decision is sent. A Codex request lists no suggested permission updates. Nothing changes unless the Codex approval hook fragment is installed.
+
+  </details>
+- feat(zellij): reattach saved Zellij sessions on reconnect and restore without creating or resurrecting them ([#1978](https://github.com/mihazs/lazysh/pull/1978))
+
+  <details><summary>Details</summary>
+
+  Changed default: a lost Zellij tab now reconnects to the same session and **Restore previous workspace** reopens saved Zellij sessions, as it does for tmux and Herdr (#1145, part of #1138); before, restore skipped Zellij and a reconnect gave a plain host shell. The reattach runs `zellij attach <name>` without `--create` after the full session listing shows the name with a running server, so a session that no longer exists (a host restart, a kill) or that is only a serialized exited session fails with a message instead of starting an empty or resurrected one (#2047). Zellij has no attach that refuses to resurrect, so a session that exits between the listing and the attach can still be resurrected. Attaching from Sessions still creates a new session.
+
+  </details>
+- feat(zellij): Jump To lists the tabs of the attached session with one current row ([#1980](https://github.com/mihazs/lazysh/pull/1980))
+
+  <details><summary>Details</summary>
+
+  A terminal attached to a Zellij 0.45.1 session now offers **Jump To** with the session's tabs, numbered from 1; choosing a tab switches to it by its stable id (`go-to-tab-by-id`), in the same list, accordion and grid layouts as tmux (#1145, part of #1138). Zellij cannot address a client from the command line, so exactly one **Current** row shows and a jump is allowed only while this terminal is the one client attached to the session (#2046); with another client attached the tabs are listed without a current row and without a jump, because the jump could move that client instead. Zellij 0.44.x, which the version gate marks without the `tree` capability, shows no Jump To. Panes are not destinations.
+
+  </details>
+
+### Patch Changes
+
+- feat(agents): switch between live agents from the Agent view header in one tap ([#2324](https://github.com/mihazs/lazysh/pull/2324))
+
+  <details><summary>Details</summary>
+
+  Under Herdr the Agent view header shows the current agent with its status and opens a list of the live agents with their state. One tap, or Ctrl/Cmd+Shift+L, switches: the terminal follows that agent's pane and its composer shows.
+
+  </details>
+- build: Build libghostty-vt against the iPhoneOS and iPhoneSimulator SDKs and test the terminal core for iOS in a… ([#2139](https://github.com/mihazs/lazysh/pull/2139))
+
+  <details><summary>Details</summary>
+
+  Build libghostty-vt against the iPhoneOS and iPhoneSimulator SDKs and test the terminal core for iOS in a new report-only `terminal-ios` CI job on pushes to `main`: the runtime's tests are linked for `aarch64-apple-ios` and every test runs inside a booted iOS simulator for `aarch64-apple-ios-sim`, so a break that only shows on iOS no longer waits for a native surface to be written. The core is not wired into the app yet: no behaviour changes for users.
+
+  </details>
+- feat(android): draw the native session on the surface host through a JNI renderer client ([#2275](https://github.com/mihazs/lazysh/pull/2275))
+
+  <details><summary>Details</summary>
+
+  The Android surface host now hands each surface to the Rust renderer host through JNI, which draws the session's native core with wgpu and re-attaches it from a snapshot after stop and start, falling back to the pane background when it cannot draw. Only builds with the native terminal feature have the renderer; nothing selects the native engine yet, so terminal behaviour and defaults do not change.
+
+  </details>
+- refactor(terminal): reuse one native surface look for the Linux and Android hosts ([#2356](https://github.com/mihazs/lazysh/pull/2356))
+
+  <details><summary>Details</summary>
+
+  The Linux surface host and the platform-neutral pane bookkeeping each built the same font and theme; both now use one function. No behaviour change.
+
+  </details>
+- feat(browser): add the address bar, tab list and navigation controls to the host browser prototype ([#1993](https://github.com/mihazs/lazysh/pull/1993))
+
+  <details><summary>Details</summary>
+
+  Add the host browser's address bar, tab list, back, forward, reload and stop, page dialogs and denied-download and file-chooser notices as client components, driven in the developer-only prototype viewer and covered by a real-Chromium test. Typed addresses open only `http`, `https` and `about:blank`; the controls are not in the app until the host browser view ships and change no default.
+
+  </details>
+
 ## 1.95.7
 
 ### Patch Changes
