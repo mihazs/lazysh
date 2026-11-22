@@ -30,6 +30,8 @@ test('every release build resolves the switch into the environment before its bu
   const workflow = await document('.github/workflows/release-artifacts.yml');
   expect(workflow.on.workflow_call.inputs['native-terminal'].default).toBe('default');
   expect(workflow.on.workflow_dispatch.inputs['native-terminal'].options).toEqual(['default', 'on', 'off']);
+  // GitHub validates a dispatched value against the options read as YAML 1.1, where a bare on or off is a boolean and `-f native-terminal=off` is refused (HTTP 422): the quotes are part of the contract.
+  expect(await Bun.file(join(project, '.github/workflows/release-artifacts.yml')).text()).toContain('options: [default, "on", "off"]');
   for (const [job, build] of [['desktop', 'tauri build'], ['android', 'tauri android build'], ['ios', 'tauri ios build']] as const) {
     const steps = workflow.jobs[job].steps as any[];
     const resolve = steps.findIndex(step => step.name === 'Resolve the native terminal kill switch');

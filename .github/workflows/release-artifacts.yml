@@ -30,7 +30,7 @@ on:
       native-terminal:
         description: Native terminal engine kill switch for this build (default leaves it to the repository variable LAZYSH_NATIVE_TERMINAL, then on)
         type: choice
-        options: [default, on, off]
+        options: [default, "on", "off"]
         default: default
 
 permissions:
