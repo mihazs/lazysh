@@ -10,6 +10,12 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.97.3] - 2026-11-22
+
+### Fixed
+
+- **agent:** a loaded machine no longer makes the Agent view fail to read an OpenCode or Hermes conversation ([#2373](https://github.com/mihazs/lazysh/pull/2373))
+
 ## [1.97.2] - 2026-11-22
 
 ### New
