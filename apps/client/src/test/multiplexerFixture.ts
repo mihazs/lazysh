@@ -3,9 +3,9 @@ export const remoteMuxName = "agent {{name}} <b>世界</b>";
 export const remoteMuxDirectory = "/work/literal {{path}} 'quoted'";
 export const remoteMuxError = 'RAW_HOST_ERROR {{key}} <b>leave unchanged</b>';
 export const muxFixture = {
-  tmuxAvailable: true, herdrAvailable: true, zellijAvailable: true,
+  tmuxAvailable: true, herdrAvailable: true, zellijAvailable: true, serverToken: '0123456789abcdef0123456789abcdef',
   sessions: [{id:'$41',name:remoteMuxName,windows:[{id:'@52',index:2,name:'literal window',active:true,
-    panes:[{id:'%63',index:0,active:true,command:'remote-command',path:remoteMuxDirectory}]}]}],
+    panes:[{id:'%63',index:0,active:true,command:'remote-command',path:remoteMuxDirectory,width:80,height:24,title:'literal {{title}}'}]}]}],
 };
 export const herdrFixture = {
   workspaces:[{workspace_id:'w7',label:remoteMuxName,focused:true,agent_status:'working'}],
