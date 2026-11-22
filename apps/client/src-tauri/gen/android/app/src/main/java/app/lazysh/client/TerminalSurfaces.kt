@@ -81,11 +81,12 @@ internal class SurfaceUnavailable(message: String) : Exception(message)
  * Every session's surface, owned by the process and not by an Activity: a session keeps its generation count and its client through
  * stop and start (the window destroys and recreates the surface) and through Activity recreation, which only drops the host views; the
  * page of the new window places the session again. Which sessions may outlive their Activity is decided with the core (#1319), not
- * here. Developer-only: a release build refuses (see [enabled]). Everything runs on the UI thread.
+ * here. Open to release builds: the page asks for a surface only for a session whose backend the registry selected, which Auto never does (native is not
+ * auto-eligible), so a surface exists only when the user picked Native, the probe passed and the build kill switch is off (see [enabled]). Everything runs on the UI thread.
  */
 internal object TerminalSurfaces {
-    /** Developer builds only until the rollout stages open the native backend (docs/architecture/terminal-migration-plan.md). */
-    @JvmField var enabled: Boolean = BuildConfig.DEBUG
+    /** True in every build; the choice, the probe and the kill switch (`LAZYSH_NATIVE_TERMINAL=off`, refused in Rust) decide who reaches it. Tests turn it off to hold the refusal. */
+    @JvmField var enabled: Boolean = true
 
     /** Who draws a session's surface, given its id and the pane's background. The default is the Rust renderer host, which paints the background when it cannot draw. */
     @JvmField var clientFactory: (id: String, background: () -> Int) -> SurfaceClient<Surface> =
