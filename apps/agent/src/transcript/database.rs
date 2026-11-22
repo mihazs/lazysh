@@ -7,8 +7,30 @@ use rusqlite::{limits::Limit, Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, SystemTime},
 };
+
+/// What one connection may spend on a read. It meters CPU time, not elapsed time: a thread that a loaded
+/// machine leaves waiting for its turn has spent nothing, while a runaway query burns CPU and still trips it.
+const QUERY_BUDGET: Duration = Duration::from_secs(2);
+
+#[cfg(unix)]
+fn thread_cpu_time() -> Duration {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `now` is a valid out pointer and every unix target supports the per-thread CPU clock.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut now) };
+    Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
+}
+// shortcut: std has no thread CPU clock and this crate has no Win32 thread-times binding, so Windows keeps
+// the elapsed-time budget; bind GetThreadTimes if a loaded Windows runner ever trips it.
+#[cfg(not(unix))]
+fn thread_cpu_time() -> Duration {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    ORIGIN.get_or_init(std::time::Instant::now).elapsed()
+}
 
 pub(super) fn open_database(path: &Path) -> Result<Connection> {
     let _file = open_transcript(path)?;
@@ -22,13 +44,13 @@ pub(super) fn open_database(path: &Path) -> Result<Connection> {
     connection.set_limit(Limit::SQLITE_LIMIT_LENGTH, (MAX_LINE * 2) as i32)?;
     connection.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 65536)?;
     connection.set_limit(Limit::SQLITE_LIMIT_COLUMN, 128)?;
-    let started = Instant::now();
+    let started = thread_cpu_time();
     let mut callbacks = 0;
     connection.progress_handler(
         10000,
         Some(move || {
             callbacks += 1;
-            callbacks > 1000 || started.elapsed() > Duration::from_secs(2)
+            callbacks > 1000 || thread_cpu_time().saturating_sub(started) > QUERY_BUDGET
         }),
     )?;
     connection.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA query_only=ON; BEGIN;")?;
@@ -356,4 +378,33 @@ pub(super) fn discover_database(
         });
     }
     Ok(discovery)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A reader that a loaded runner leaves descheduled for longer than the budget is not a runaway query.
+    #[cfg(unix)]
+    #[test]
+    fn a_descheduled_reader_is_not_charged_its_wait_against_the_query_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("opencode.db");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE message(id TEXT)")
+            .unwrap();
+        let connection = open_database(&path).unwrap();
+        // Sleeping spends no CPU, as a starved thread spends none while it waits for its turn.
+        std::thread::sleep(QUERY_BUDGET + Duration::from_millis(200));
+        // Enough opcodes to reach the progress handler, far fewer than its step budget.
+        let counted: i64 = connection
+            .query_row(
+                "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<50000) SELECT count(*) FROM n",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(counted, 50000);
+    }
 }
