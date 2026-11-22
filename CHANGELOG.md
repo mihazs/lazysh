@@ -10,6 +10,31 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.96.0] - 2026-11-22
+
+### New
+
+- **multiplexers:** close, rename and resize tmux panes and close sessions from the Workspaces panel ([#1990](https://github.com/mihazs/lazysh/pull/1990))
+- Show Codex's permission requests in the Agent view dock on tmux ([#1965](https://github.com/mihazs/lazysh/pull/1965))
+- **zellij:** reattach saved Zellij sessions on reconnect and restore without creating or resurrecting them ([#1978](https://github.com/mihazs/lazysh/pull/1978))
+- **zellij:** Jump To lists the tabs of the attached session with one current row ([#1980](https://github.com/mihazs/lazysh/pull/1980))
+- **agents:** switch between live agents from the Agent view header in one tap ([#2324](https://github.com/mihazs/lazysh/pull/2324))
+- **android:** draw the native session on the surface host through a JNI renderer client ([#2275](https://github.com/mihazs/lazysh/pull/2275))
+- **browser:** add the address bar, tab list and navigation controls to the host browser prototype ([#1993](https://github.com/mihazs/lazysh/pull/1993))
+- **hooks:** manage OpenCode, Cline and Amp hook plugins on Windows hosts ([#1962](https://github.com/mihazs/lazysh/pull/1962))
+
+### Improved
+
+- **terminal:** reuse one native surface look for the Linux and Android hosts ([#2356](https://github.com/mihazs/lazysh/pull/2356))
+
+### Fixed
+
+- **agents:** stop a Claude Code row waiting for approval after you reject its permission dialog ([#1955](https://github.com/mihazs/lazysh/pull/1955))
+
+### Under the hood
+
+- Build libghostty-vt against the iPhoneOS and iPhoneSimulator SDKs and test the terminal core for iOS in a… ([#2139](https://github.com/mihazs/lazysh/pull/2139))
+
 ## [1.95.7] - 2026-11-22
 
 ### New
