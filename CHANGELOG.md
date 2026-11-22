@@ -10,6 +10,26 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.97.0] - 2026-11-22
+
+### New
+
+- **usage:** let a host forbid account quota reads ([#1823](https://github.com/mihazs/lazysh/pull/1823))
+- **android:** native terminal engine selectable in release builds ([#2353](https://github.com/mihazs/lazysh/pull/2353))
+- **notifications:** receive remote agent-attention notifications on the desktop ([#1811](https://github.com/mihazs/lazysh/pull/1811))
+- **onboarding:** add an animated tour that explains the session gestures on phones ([#1802](https://github.com/mihazs/lazysh/pull/1802))
+- **agents:** answer OpenCode permissions and questions through its local service ([#1841](https://github.com/mihazs/lazysh/pull/1841))
+- **devices:** show Devices in a local session for the Android SDK on this computer ([#1858](https://github.com/mihazs/lazysh/pull/1858))
+- **usage:** add host switches for simulator streaming and port scanning in their own host-features.json ([#1813](https://github.com/mihazs/lazysh/pull/1813))
+- **usage:** show the host usage collector on the usage page ([#1823](https://github.com/mihazs/lazysh/pull/1823))
+- **agents:** let the Agent view take the whole window, with one tap back ([#2325](https://github.com/mihazs/lazysh/pull/2325))
+- **usage:** record account quota samples on an opt-in user-level timer ([#1823](https://github.com/mihazs/lazysh/pull/1823))
+
+### Under the hood
+
+- **android:** keep the app's thread dump and ANR traces and the tmux server's own log for a failed Android run ([#2346](https://github.com/mihazs/lazysh/pull/2346))
+- **android:** wait until the staged QR fixture's MediaStore row stops changing before the picker opens ([#2342](https://github.com/mihazs/lazysh/pull/2342))
+
 ## [1.96.0] - 2026-11-22
 
 ### New

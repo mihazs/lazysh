@@ -1,5 +1,98 @@
 # @lazysh/client
 
+## 1.97.0
+
+### Minor Changes
+
+- feat(usage): let a host forbid account quota reads ([#1823](https://github.com/mihazs/lazysh/pull/1823))
+
+  <details><summary>Details</summary>
+
+  Let a host forbid account quota reads (#1588, slice of #18). `lazysh-agent usage-collection show` and `usage-collection update --expected-revision R --account-quota-enabled true|false` read and change a new `usage-collection.json` policy beside `settings.json`. With the switch off, `lazysh-agent account-usage` answers a new `disabled` state with no report before it opens a credential, starts a helper or contacts a provider, and the app shows that the host does not allow account usage reads, in English, Portuguese and Spanish, with no percentage. The default is on, so nothing changes for existing hosts; an unreadable policy fails the read closed.
+
+  </details>
+- feat(android): native terminal engine selectable in release builds ([#2353](https://github.com/mihazs/lazysh/pull/2353))
+
+  <details><summary>Details</summary>
+
+  Release builds no longer refuse the native terminal surface: Settings > Terminal engine can select Native when the device probe passes. Auto still uses xterm.js, so the default terminal is unchanged, and a build made with `LAZYSH_NATIVE_TERMINAL=off` still refuses it.
+
+  </details>
+- feat(notifications): receive remote agent-attention notifications on the desktop ([#1811](https://github.com/mihazs/lazysh/pull/1811))
+
+  <details><summary>Details</summary>
+
+  Receive the relay's remote needs-attention events on the desktop app, from your own Gotify server: an opt-in receiver in Preferences that shows one generic desktop notification per new event while the app runs, with pause and removal.
+
+  </details>
+- feat(onboarding): add an animated tour that explains the session gestures on phones ([#1802](https://github.com/mihazs/lazysh/pull/1802))
+
+  <details><summary>Details</summary>
+
+  The first time you open a connected session on a phone, a short tour opens with one step for each edge swipe (the left edge opens the side menu, the bottom edge opens the bottom menu, the right edge switches to the Agent view of a remote session and back) and one for the rule that swipes stay off while you type or edit text, with **Skip**, **Next**, **Done** and progress dots. It is drawn with CSS and SVG, with no video or image file, and loads on first use.
+
+  It opens once per device and again only when a later version changes a gesture, waits while you type, never delays connecting, and never opens on desktop, on the connection list, over another dialog, in screen-reader mode or when every swipe is switched off. A step for a swipe you switched off, or for the side menu while the top bar is on, says where to change that. The steps describe the shipped gestures: the side menu is the full-screen page that does not resize the terminal, Back closes it and the bottom menu, and each working step says how deep the strip is that the swipe starts in (**Swipe zone width**, 40 dp by default, 16 to 96 dp).
+
+  Replay it from **Preferences → Gestures** (under Help, with the same text as plain captions) or **Gesture tour** on the **Connections** tab of the side menu. With reduce motion on, it shows still pictures with an arrow for each swipe. It follows your **Gesture style**: with the handles of Android gesture navigation the finger starts at the handle, and **Gesture style: Off** counts as every swipe switched off. Available in English, Brazilian Portuguese and Spanish. No defaults change.
+
+  </details>
+- feat(agents): answer OpenCode permissions and questions through its local service ([#1841](https://github.com/mihazs/lazysh/pull/1841))
+
+  <details><summary>Details</summary>
+
+  Answer OpenCode permission requests and question forms, and stop a turn, from the Agent view through OpenCode's local background service, with the exact request checked again before every answer.
+
+  </details>
+- feat(devices): show Devices in a local session for the Android SDK on this computer ([#1858](https://github.com/mihazs/lazysh/pull/1858))
+
+  <details><summary>Details</summary>
+
+  Show Devices in a local session when an Android SDK `adb` (or, on macOS, `xcrun`) is found on this computer. The device commands and the Android and iOS video preview run the host companion as argv on this device, without SSH or a shell, and stop it and the tools it started when the preview stops, the session closes or the app locks. SSH sessions and defaults are unchanged.
+
+  </details>
+- feat(usage): add host switches for simulator streaming and port scanning in their own host-features.json ([#1813](https://github.com/mihazs/lazysh/pull/1813))
+
+  <details><summary>Details</summary>
+
+  Add host feature switches in their own `host-features.json`: `lazysh-agent settings features show|update` controls whether `devices ... stream` is allowed (it fails with `SimulatorStreamingDisabled` before any SDK process) and whether the app's port scanning is allowed; the Preview panel reads the port-scan switch before every discovery and says when the host turned it off, and Host companion settings offers both switches with a conflict-safe save. `settings.json` is unchanged, so an older companion keeps working. Changed default: the Preview panel now remembers the HTTP check and the automatic refresh for each saved host instead of resetting them on every visit.
+
+  </details>
+- feat(usage): show the host usage collector on the usage page ([#1823](https://github.com/mihazs/lazysh/pull/1823))
+
+  <details><summary>Details</summary>
+
+  Show the host's background usage collector on the usage page of a remote session (#1588): whether it is on, its timer, the last run and the age of every recorded sample against the host's clock, with unknown and stale labels, in English, Portuguese and Spanish. Read only; an older companion shows an update message.
+
+  </details>
+
+### Patch Changes
+
+- feat(agents): let the Agent view take the whole window, with one tap back ([#2325](https://github.com/mihazs/lazysh/pull/2325))
+
+  <details><summary>Details</summary>
+
+  A new Full window option in the Agent view options menu hides the app header, session tabs and footer so the conversation and composer fill the screen, below the status bar and above the navigation bar. The terminal keeps running underneath. The choice is remembered on this device, and Back leaves full window before it leaves the Agent view.
+
+  </details>
+- ci(android): keep the app's thread dump and ANR traces and the tmux server's own log for a failed Android run ([#2346](https://github.com/mihazs/lazysh/pull/2346))
+
+  <details><summary>Details</summary>
+
+  A blocked case or a tmux server that exits uncleanly left no trace of where it stopped. A failed run now captures the app's thread dump and ANR traces into the system diagnostics, and the tmux fixture's server logs into the tmux results. CI only. No user-visible behaviour changes.
+
+  </details>
+- test(android): wait until the staged QR fixture's MediaStore row stops changing before the picker opens ([#2342](https://github.com/mihazs/lazysh/pull/2342))
+
+  <details><summary>Details</summary>
+
+  The QR picker case failed intermittently with "The QR image could not be decoded": the page's own read of the chosen file rejected with NotReadableError, which Chromium raises when a file's size or modification time changed after it was chosen, and MediaProvider rewrites a published file's row after it leaves pending. The case now waits for the row to stay unchanged first, and a failure still reports the page's read and decode outcomes. Test only. No user-visible behaviour changes.
+
+  A case that blocks now fails after 7 minutes (runner argument `timeout_msec`, was 15), because once one case wedges the app every later case waits out its own limit.
+
+  If the page's read of the chosen image is refused once with NotReadableError, which Chromium raises when the file changed after it was chosen, the case chooses the image again once and still requires the decoded preview.
+
+  </details>
+
 ## 1.96.0
 
 ### Minor Changes
