@@ -1,0 +1,89 @@
+import { afterAll, expect, test } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { document, interpolate } from './support/workflowGraph';
+import { project, spawnText } from './support/gitFixture';
+
+const temporary: string[] = [];
+afterAll(() => Promise.all(temporary.map(path => rm(path, { recursive: true, force: true }))));
+const directory = async () => { const path = await mkdtemp(join(tmpdir(), 'lazysh-kill-switch-test-')); temporary.push(path); return path; };
+
+const resolver = join(project, '.github', 'scripts', 'native-terminal-switch.sh');
+test.each([
+  ['', '', 'on'], ['default', '', 'on'], ['', 'on', 'on'], ['', 'off', 'off'], ['default', 'off', 'off'],
+  ['off', '', 'off'], ['off', 'on', 'off'], ['on', 'off', 'on'], ['on', '', 'on'],
+])('input "%s" and repository variable "%s" build with the switch %s', async (input, variable, expected) => {
+  expect(await spawnText(project, ['sh', resolver, input, variable])).toEqual({ code: 0, stdout: `${expected}\n`, stderr: '' });
+});
+
+test.each([['maybe', '', 'native-terminal must be default, on or off, not "maybe"'], ['', 'OFF', 'LAZYSH_NATIVE_TERMINAL must be on or off, not "OFF"'],
+  ['default', 'false', 'not "false"']])('input "%s" and repository variable "%s" stop the release before it builds', async (input, variable, message) => {
+  const result = await spawnText(project, ['sh', resolver, input, variable]);
+  expect(result.code).toBe(1);
+  expect(result.stdout).toBe('');
+  expect(result.stderr).toContain(message);
+});
+
+// The step the release builds run, executed as Actions would: its env from the called workflow's input default and the repository variable.
+test('every release build resolves the switch into the environment before its build, from the input or the repository variable', async () => {
+  const workflow = await document('.github/workflows/release-artifacts.yml');
+  expect(workflow.on.workflow_call.inputs['native-terminal'].default).toBe('default');
+  expect(workflow.on.workflow_dispatch.inputs['native-terminal'].options).toEqual(['default', 'on', 'off']);
+  for (const [job, build] of [['desktop', 'tauri build'], ['android', 'tauri android build'], ['ios', 'tauri ios build']] as const) {
+    const steps = workflow.jobs[job].steps as any[];
+    const resolve = steps.findIndex(step => step.name === 'Resolve the native terminal kill switch');
+    expect(resolve, job).toBeGreaterThan(0);
+    expect(resolve, job).toBeLessThan(steps.findIndex(step => step.run?.includes(build)));
+    for (const [input, variable, expected] of [['default', undefined, 'on'], ['default', 'off', 'off'], ['on', 'off', 'on'], ['off', undefined, 'off']] as const) {
+      const root = await directory();
+      const env = join(root, 'github-env');
+      await writeFile(env, '');
+      const context = { inputs: { 'native-terminal': input }, vars: { LAZYSH_NATIVE_TERMINAL: variable } };
+      const step = steps[resolve];
+      const stepEnv = Object.fromEntries(Object.entries<any>(step.env).map(([key, value]) => [key, String(interpolate(value, context) ?? '')]));
+      const result = await spawnText(project, ['bash', '-e', '-c', step.run], { ...process.env, ...stepEnv, GITHUB_ENV: env });
+      expect(result.code, `${job} ${input} ${variable}`).toBe(0);
+      expect(await Bun.file(env).text(), `${job} ${input} ${variable}`).toBe(`LAZYSH_NATIVE_TERMINAL=${expected}\n`);
+    }
+  }
+});
+
+const engine = join(project, '.github', 'scripts', 'apk-engine.ts');
+const jni = 'Java_app_lazysh_client_JniSurface_nativeReady', renderer = 'wgpu_core::device::resource';
+/** An APK whose arm64 library holds the given bytes, built with Python's zipfile (a real ZIP, read back by `unzip`). */
+async function apk(library: string | null) {
+  const root = await directory();
+  const path = join(root, 'app.apk');
+  const script = 'import sys,zipfile\nz=zipfile.ZipFile(sys.argv[1],"w")\nz.writestr("classes.dex","dex")\nif sys.argv[2]!="-":z.writestr("lib/arm64-v8a/liblazysh_lib.so",sys.argv[2])\nz.close()';
+  const built = await spawnText(root, ['python3', '-I', '-c', script, path, library ?? '-']);
+  expect(built.code, built.stderr).toBe(0);
+  return path;
+}
+const check = (path: string, flavor: string, killSwitch?: string) => spawnText(project, ['bun', engine, path, flavor, ...(killSwitch ? [killSwitch] : [])], { ...process.env, GITHUB_STEP_SUMMARY: '' });
+const withEngine = `\n${jni}\nabc\n${renderer}\n${renderer}\n`, withoutEngine = '\nJava_app_lazysh_client_Other_native\nabc\n', half = `\n${jni}\nabc\n`;
+
+test.each([
+  ['google', 'on', withEngine, 0], ['google', undefined, withEngine, 0], ['google', 'on', withoutEngine, 1], ['google', 'on', half, 1],
+  ['google', 'off', withoutEngine, 0], ['google', 'off', withEngine, 1], ['google', 'off', half, 1],
+  ['foss', 'on', withoutEngine, 0], ['foss', 'off', withoutEngine, 0], ['foss', undefined, withEngine, 1], ['foss', 'on', half, 1],
+] as const)('the %s APK built with the kill switch %s and a library %#: exit %i', async (flavor, killSwitch, library, code) => {
+  const result = await check(await apk(library), flavor, killSwitch);
+  expect(result.code, result.stdout + result.stderr).toBe(code);
+  expect(result.stdout).toContain(`${library.includes(jni) ? 1 : 0} surface host entry points and ${(library.match(/wgpu/g) ?? []).length} wgpu strings`);
+});
+
+test('the verdict is added to the job summary', async () => {
+  const summary = join(await directory(), 'summary.md');
+  const result = await spawnText(project, ['bun', engine, await apk(withEngine), 'google', 'on'], { ...process.env, GITHUB_STEP_SUMMARY: summary });
+  expect(result.code).toBe(0);
+  expect(await Bun.file(summary).text()).toBe(`- ${result.stdout}`);
+});
+
+test.each([['a missing arm64 library', () => apk(null), 'google', 'on'], ['a file that is no APK', async () => join(project, 'package.json'), 'google', 'on'],
+  ['an APK that does not exist', async () => '/nonexistent/app.apk', 'foss', 'on'], ['an unknown flavor', () => apk(withEngine), 'huawei', 'on'], ['an unknown switch', () => apk(withEngine), 'google', 'maybe']])
+('%s is a usage or input error, never a verdict', async (_, path, flavor, killSwitch) => {
+  const result = await check(await path(), flavor, killSwitch);
+  expect(result.code).toBe(2);
+  expect(result.stdout).toBe('');
+});
