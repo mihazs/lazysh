@@ -240,7 +240,7 @@ test.each([
   ['shared common code', ['packages/common/src/hex_digest.rs'], { ...clientRun, ...agentRun }],
   ['the shared companion release crate', ['packages/companion-release/src/lib.rs'], { ...clientRun, ...agentRun }],
   ...(['apps/notification-service/src/lib.rs', 'packages/notification-client/src/lib.rs'] as const).map(path => [
-    `the notification relay (${path})`, [path], { ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2, 'native-android-gotify': 1 }] as const),
+    `the notification relay (${path})`, [path], { ...(path.startsWith('packages/') ? clientRun : {}), ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2, 'native-android-gotify': 1 }] as const),
   ['the Gotify acceptance owner and its host support', ['tests/android-gotify.test.ts', 'tests/support/androidGotify.ts'], { ...alwaysRun, 'native-android-gotify': 1 }],
   ['the native Gotify case', ['apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/GotifyAndroidTest.kt'], { ...androidRun, 'native-android-gotify': 1 }],
   ['the pinned official Gotify artifacts', ['apps/client/src-tauri/fixtures/gotify-provenance.json'], { ...clientRun, 'native-android-gotify': 1 }],

@@ -30,7 +30,8 @@
     ],
     "notification-client": [
       "push",
-      "relay"
+      "relay",
+      "gotify"
     ],
     "push-registration": [
       "android",
