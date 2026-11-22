@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
-import {Ellipsis,Maximize2,Minimize2,Search,TerminalSquare} from 'lucide-react';
+import {Ellipsis,Search,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation, type BoundRecords} from './ChatPanel';
 import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
@@ -327,7 +327,6 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
       </div>
       {reader && <button type="button" className="icon-button" aria-label={t('agentSearch')} title={t('agentSearch')} aria-pressed={reading.search} onClick={()=>changeReading({...reading,search:!reading.search,query:''})}><Search size={18} aria-hidden="true"/></button>}
       <button type="button" className="icon-button" aria-label={t('agentViewOptions')} title={t('agentViewOptions')} aria-expanded={menu} aria-controls={menuId} onClick={()=>setMenu(value=>!value)}><Ellipsis size={18} aria-hidden="true"/></button>
-      {onToggleFull && <button type="button" className="icon-button" aria-label={t('agentViewFull')} title={t('agentViewFull')} aria-pressed={!!full} onClick={onToggleFull}>{full?<Minimize2 size={18} aria-hidden="true"/>:<Maximize2 size={18} aria-hidden="true"/>}</button>}
       <button type="button" className="icon-button" aria-label={t('agentViewTerminal')} title={t('agentViewTerminal')} onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true"/></button>
     </header>
     {menu && <div id={menuId} className="agent-view-menu" role="group" aria-label={t('agentViewOptions')}>
@@ -338,6 +337,7 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
       {/* Resume stages the agent's own command for review in the terminal composer, like Start; it is never offered over a running agent. */}
       {selected?.history && selected.resume && !paneHasAgent && <button type="button" onClick={()=>{window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:selected.resume}}));setMenu(false);onShowTerminal();}}>{t('agentHistoryResume')}</button>}
       {selected && !selected.linked && <button type="button" onClick={back}>{t(herdrSession && linked ? 'agentViewThisPane' : 'agentViewBackSessions')}</button>}
+      {onToggleFull && <button type="button" aria-pressed={!!full} onClick={()=>{onToggleFull();setMenu(false);}}>{t('agentViewFull')}</button>}
       {reader && viewFolder && !selected?.history && <button type="button" onClick={()=>{setHistory(viewFolder);setMenu(false);}}>{t('agentHistoryOpen')}</button>}
       {enter && <EnterSessionButton server={selected.enter!.server} target={selected.enter!.target} lease={access} enabled={shown} onEnterHerdr={onEnterHerdr} owner={()=>()=>active.current.shown && active.current.sessionId===sessionId && access.current()}/>}
       {reader && <button type="button" aria-pressed={!reading.full} onClick={()=>changeReading({...reading,full:!reading.full})}>{t('agentConversationOnly')}</button>}

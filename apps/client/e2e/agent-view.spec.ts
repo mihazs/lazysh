@@ -809,7 +809,9 @@ test('the Agent view can take the whole window and give it back, remembering the
   await openHerdr(page,true);
   const agent=agentView(page),header=page.locator('.workspace-header');
   await expect(header).toBeVisible();
+  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await agent.getByRole('button',{name:'Full window',exact:true}).click();
+  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
   await expect(agent.getByRole('button',{name:'Full window',exact:true})).toHaveAttribute('aria-pressed','true');
   await expect(header).toBeHidden();
   expect(await page.evaluate(()=>localStorage.getItem('lazysh-agent-view-full'))).toBe('1');
