@@ -4,6 +4,7 @@ import {acquireDevice, adbFor, ensurePhoneScreen, ensureThreeButtonNavigation, r
 import {ENDPOINTS_ENV, hostKinds, startHosts, type OwnedHosts} from './support/hosts';
 import {config as shared, here, reports} from './wdio.conf';
 import {markGestureTourSeen} from './support/app';
+import {forbidPause} from './support/guards';
 import {failClosedBeforeSession, prepareSyncDevice} from './support/owned-sync-emulator';
 
 const serial = process.env.ANDROID_SERIAL;
@@ -79,7 +80,7 @@ export const config: WebdriverIO.Config = {
   }),
   // The first-run gesture tour opens over the first connected session and would cover the controls a test drives, so it is
   // marked seen before the first spec hook connects one.
-  before: async (capabilities, specs, driver) => { await shared.before?.(capabilities, specs, driver); await markGestureTourSeen(); },
+  before: async (_capabilities, _specs, driver) => { forbidPause(driver); await markGestureTourSeen(); },
   // Every worker runs one spec file: put the device back to the recorded baseline between files, even after a failure.
   after: async () => { await workerEmulator?.check(); await restoreFromJournal(serial); },
   // Hosts first (their forwards and processes), then the device baseline and lock, even when the first step fails.
