@@ -18,7 +18,9 @@ async function attachTmux(page:Page,command:string) {
   const env=ownedEnv({});
   expect(spawnSync(tmux,['-S',socket,'-f',config,'new-session','-d','-x','80','-y','24',command],{env}).status).toBe(0);
   const client=await attachPtyClient(page,`${shellQuote(tmux)} -S ${shellQuote(socket)} attach`,env);
-  return {async dispose(){await client.stop();spawnSync(tmux,['-S',socket,'kill-server']);rmSync(root,{recursive:true,force:true});}};
+  // What tmux itself reports about its panes, so a step can wait for the server's state instead of for the keys' arrival.
+  const pane=(format:string)=>spawnSync(tmux,['-S',socket,'list-panes','-a','-F',format],{env,encoding:'utf8'}).stdout.trim();
+  return {pane,async dispose(){await client.stop();spawnSync(tmux,['-S',socket,'kill-server']);rmSync(root,{recursive:true,force:true});}};
 }
 
 test.describe('real tmux',()=>{
@@ -33,9 +35,15 @@ test.describe('real tmux',()=>{
     await expect(page.locator('.terminal-canvas:visible .xterm-rows')).toContainText('COPY_TARGET');
     await page.locator('.terminal-canvas:visible .xterm-helper-textarea').focus();
     // The tmux "Copy mode" shortcut sends the prefix and `[`; the reader then searches and copies.
+    // Each key waits for the tmux state it produces: a key that outruns the previous one starts the selection on the wrong cell.
     await page.keyboard.press('Control+b');await page.keyboard.type('[');
+    await expect.poll(()=>session!.pane('#{pane_in_mode}')).toBe('1');
     await page.keyboard.type('?COPY_TARGET');await page.keyboard.press('Enter');
-    await page.keyboard.type(' e');await page.keyboard.press('Enter');
+    // The search leaves the cursor on the first letter of the match, after "alpha ".
+    await expect.poll(()=>session!.pane('#{copy_cursor_x}')).toBe('6');
+    await page.keyboard.type(' e');
+    await expect.poll(()=>session!.pane('#{copy_cursor_x}')).toBe('16');
+    await page.keyboard.press('Enter');
     await allowRemoteCopy(page,'COPY_TARGET');
   });
 
