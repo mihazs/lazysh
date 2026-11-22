@@ -82,6 +82,36 @@ impl Source {
         Ok(())
     }
 }
+/// True (`1`) only while the pane is exactly this session/window/pane, ready for input, and the one client that owns it is
+/// the original display. S resets inherited window/pane to this session's CURRENT context. L then matches the original
+/// client, including its actual session name against that same live session (names are unique within one server).
+/// User labels are format values, never embedded into format syntax.
+pub(crate) fn input_guard(identity: &Identity, session: &str, window: &str, pane: &str) -> String {
+    let client_checks = [
+        format!("#{{==:#{{client_tty}},{}}}", identity.tty),
+        "#{==:#{client_control_mode},0}".into(),
+        "#{==:#{m:*read-only*,#{client_flags}},0}".into(),
+        "#{==:#{m:*active-pane*,#{client_flags}},0}".into(),
+        "#{==:#{client_session},#{session_name}}".into(),
+    ];
+    let pane_checks = [
+        format!("#{{==:#{{session_id}},{session}}}"),
+        format!("#{{==:#{{window_id}},{window}}}"),
+        format!("#{{==:#{{pane_id}},{pane}}}"),
+        "#{==:#{pane_dead},0}".into(),
+        "#{==:#{pane_in_mode},0}".into(),
+        "#{==:#{synchronize-panes},0}".into(),
+    ];
+    let all = |checks: Vec<String>| {
+        checks
+            .into_iter()
+            .reduce(|a, b| format!("#{{&&:{a},{b}}}"))
+            .unwrap()
+    };
+    let client_condition = identity.only_this_client(&all(client_checks.into()));
+    let pane_condition = all(pane_checks.into());
+    format!("#{{==:#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}},1}}")
+}
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Destination {
@@ -641,36 +671,12 @@ impl Control {
         input: &Input,
         budget: &mut usize,
     ) -> Result<()> {
-        let client_checks = [
-            format!("#{{==:#{{client_pid}},{}}}", self.identity.pid),
-            format!("#{{==:#{{client_tty}},{}}}", self.identity.tty),
-            "#{==:#{client_control_mode},0}".into(),
-            "#{==:#{m:*read-only*,#{client_flags}},0}".into(),
-            "#{==:#{m:*active-pane*,#{client_flags}},0}".into(),
-            "#{==:#{client_session},#{session_name}}".into(),
-        ];
-        let pane_checks = [
-            format!("#{{==:#{{session_id}},{}}}", target.session_id),
-            format!("#{{==:#{{window_id}},{}}}", target.window_id),
-            format!("#{{==:#{{pane_id}},{}}}", target.pane_id),
-            "#{==:#{pane_dead},0}".into(),
-            "#{==:#{pane_in_mode},0}".into(),
-            "#{==:#{synchronize-panes},0}".into(),
-        ];
-        let all = |checks: Vec<String>| {
-            checks
-                .into_iter()
-                .reduce(|a, b| format!("#{{&&:{a},{b}}}"))
-                .unwrap()
-        };
-        let client_condition = all(client_checks.into());
-        let pane_condition = all(pane_checks.into());
-        // S resets inherited window/pane to this session's CURRENT context.
-        // L then matches the original client, including its actual session name
-        // against that same live session (names are unique within one server).
-        // User labels are format values, never embedded into format syntax.
-        let guard =
-            format!("#{{==:#{{S:#{{?{pane_condition},#{{L:#{{?{client_condition},1,}}}},}}}},1}}");
+        let guard = input_guard(
+            &self.identity,
+            &target.session_id,
+            &target.window_id,
+            &target.pane_id,
+        );
         let marker = format!("LAZYSH_INPUT_{}", uuid::Uuid::new_v4().simple());
         input.validate()?;
         let delivered = if let Some(text) = pasted(agent, input) {

@@ -878,6 +878,126 @@ async fn real_tmux_display_accepts_output_before_owned_identity() {
     fixture.local(&["kill-server"]);
 }
 
+/// tmux up to 3.7c copies a NULL `client_tty` and the whole server dies with SIGSEGV when `#{L:}` walks a client that has
+/// connected but not yet sent its terminal name (#2321). A socket connection that sends nothing is such a client; the
+/// guards must still tell the original display from every other client and leave the server standing.
+#[test]
+#[ignore = "requires tmux 3.4 to 3.7c (LAZYSH_TEST_TMUX); a connected client that has not identified itself"]
+fn real_tmux_jump_guards_skip_a_client_that_has_not_identified_itself() {
+    use crate::tmux_jump::{chat::input_guard, Identity};
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("tmux.sock");
+    let tmux = std::env::var("LAZYSH_TEST_TMUX").unwrap_or_else(|_| "tmux".into());
+    let command = || {
+        let mut command = Command::new(&tmux);
+        command
+            .args(["-u", "-f", "/dev/null", "-S"])
+            .arg(&socket)
+            .env_remove("TMUX")
+            .env("HOME", dir.path())
+            .env("SHELL", "/bin/sh");
+        command
+    };
+    let run = |args: &[&str]| {
+        let output = command().args(args).output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(output.status.success(), "tmux {args:?} failed: {stderr}");
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim_end()
+            .to_owned()
+    };
+    fn until(what: &str, mut done: impl FnMut() -> bool) {
+        for _ in 0..200 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("timed out waiting for {what}");
+    }
+    run(&["new-session", "-d", "-s", "owned", "sleep 300"]);
+    let ids = run(&[
+        "display-message",
+        "-p",
+        "-t",
+        "owned",
+        "#{session_id}|#{window_id}|#{pane_id}",
+    ]);
+    let [session, window, pane] = ids.split('|').collect::<Vec<_>>()[..] else {
+        panic!("unexpected ids {ids}");
+    };
+    // The original display: a real `tmux attach-session` in its own PTY, whose PID and terminal are its identity.
+    let pty = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut attach = CommandBuilder::new(&tmux);
+    attach.args(["-u", "-f", "/dev/null", "-S"]);
+    attach.arg(&socket);
+    attach.args(["attach-session", "-t", "owned"]);
+    attach.env_remove("TMUX");
+    attach.env("HOME", dir.path());
+    attach.env("SHELL", "/bin/sh");
+    let mut display = pty.slave.spawn_command(attach).unwrap();
+    drop(pty.slave);
+    let mut screen = pty.master.try_clone_reader().unwrap();
+    std::thread::spawn(move || std::io::copy(&mut screen, &mut std::io::sink()));
+    let pid = display.process_id().unwrap();
+    let tty = pty.master.tty_name().unwrap();
+    until("the display to attach", || {
+        run(&["list-clients", "-F", "#{client_pid}"])
+            .lines()
+            .any(|row| row == pid.to_string())
+    });
+    let identity = Identity::from_pty(pid, &tty).unwrap();
+    // Connected, silent and kept open for the rest of the probe; `L:` counts it with the display and this command's client.
+    let _unidentified = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+    until(
+        "the server to walk the silent client (tmux 3.8 no longer does)",
+        || run(&["display-message", "-p", "#{L:x}"]) == "xxx",
+    );
+    assert_eq!(run(&["display-message", "-p", &identity.guard()]), "1");
+    assert_eq!(
+        run(&["display-message", "-p", &identity.admission()]),
+        "1\t1"
+    );
+    assert_eq!(
+        run(&[
+            "display-message",
+            "-p",
+            &input_guard(&identity, session, window, pane)
+        ]),
+        "1"
+    );
+    // Still a guard: another PID or another terminal is not the original display.
+    for other in [
+        Identity::from_pty(pid + 1, &tty),
+        Identity::from_pty(pid, std::path::Path::new("/dev/pts/999999")),
+    ] {
+        let other = other.unwrap();
+        assert_eq!(run(&["display-message", "-p", &other.guard()]), "0");
+        assert_eq!(
+            run(&[
+                "display-message",
+                "-p",
+                &input_guard(&other, session, window, pane)
+            ]),
+            "0"
+        );
+    }
+    assert!(run(&["list-sessions", "-F", "#{session_name}"])
+        .lines()
+        .any(|name| name == "owned"));
+    display.kill().ok();
+    run(&["kill-server"]);
+}
+
 #[tokio::test]
 #[ignore = "requires owned local OpenSSH sshd and tmux 3.4+; fixture-only prototype"]
 async fn real_tmux_jump_identity_guard_and_replacement() {
