@@ -1334,6 +1334,9 @@ jobs:
   native-windows-linux-host:
     needs: [changes, herdr-native]
     if: needs.changes.outputs.desktop == 'true'
+    permissions:
+      contents: read
+      actions: read
     runs-on: windows-latest
     continue-on-error: true
     timeout-minutes: 90
