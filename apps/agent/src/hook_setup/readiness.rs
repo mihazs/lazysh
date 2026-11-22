@@ -6,9 +6,9 @@ use chrono::{DateTime, SecondsFormat};
 #[cfg(not(windows))]
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::{json, Value};
+use std::io;
 #[cfg(not(windows))]
 use std::{fs, os::unix::fs::MetadataExt, path::Path, time::Duration};
-use std::io;
 
 const NOT_CHECKED: &str = "notChecked";
 
@@ -39,7 +39,10 @@ fn local_event(agent: &str) -> Value {
 /// status stays `notChecked` there rather than read a file it cannot prove is its own.
 #[cfg(windows)]
 fn latest(_agent: &str) -> io::Result<Option<String>> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "Unsupported on Windows"))
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Unsupported on Windows",
+    ))
 }
 
 /// Reads the existing store only: an absent store is `None`, nothing is created, repaired or pruned.
