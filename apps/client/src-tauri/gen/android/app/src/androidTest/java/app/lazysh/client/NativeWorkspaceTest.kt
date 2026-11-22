@@ -1856,9 +1856,36 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "QR image fallback enabled", "Boolean(document.querySelector(${JSONObject.quote(file)}) && !document.querySelector(${JSONObject.quote(file)}).disabled)")
             assertEquals("No preview before a file is chosen", "true", evaluate(scenario, noPreview))
             val before = evaluate(scenario, saved)
-            fingerTapElement(scenario, file)
-            OwnedFileChooser.choose(instrumentation, name)
-            awaitDocument(scenario, "preview decoded from the chosen image", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'")
+            // Records only outcomes (byte count, error class, decode result kind) of the page's own read and decode calls, for the failure report.
+            evaluate(scenario, """(()=>{const rec=window.__lazyshQrDiag=[];const read=File.prototype.arrayBuffer;
+                File.prototype.arrayBuffer=function(){return read.call(this).then(b=>{rec.push('read:'+b.byteLength);return b;},e=>{rec.push('read-error:'+e.name+':'+String(e.message).slice(0,60));throw e;});};
+                const internals=window.__TAURI_INTERNALS__,invoke=internals&&internals.invoke;
+                if(invoke)internals.invoke=function(cmd,...rest){const p=invoke.call(this,cmd,...rest);
+                  if(cmd==='theme_qr_decode')p.then(r=>rec.push('decode:'+(r===null?'none':typeof r)),e=>rec.push('decode-error:'+String(e&&e.message||e).slice(0,60)));return p;};
+                return true;})()""")
+            // Chromium rejects the page's read of a chosen content file with NotReadableError when the file's state changed after it was chosen
+            // (44964180752, 44990852306: the picker listed only the fixture), and MediaProvider rewrites the fixture's row after the insert.
+            // The user's remedy is to choose the image again, so the case does that once, and only for that error; any other failure, or a
+            // second read failure, ends the case with both attempts' evidence.
+            var attempt = 0
+            var firstFailure: String? = null
+            while (true) {
+                attempt++
+                fingerTapElement(scenario, file)
+                OwnedFileChooser.choose(instrumentation, name)
+                try {
+                    awaitDocument(scenario, "preview decoded from the chosen image", "document.querySelector('.theme-preview h3')?.textContent==='QR fixture'")
+                    break
+                } catch (failure: Throwable) {
+                    val calls = runCatching { evaluate(scenario, "JSON.stringify(window.__lazyshQrDiag||[])") }.getOrDefault("unavailable")
+                    failure.addSuppressed(AssertionError("QR page calls (attempt $attempt): $calls"))
+                    firstFailure?.let { failure.addSuppressed(AssertionError("First attempt: $it")) }
+                    if (attempt >= 2 || !calls.contains("read-error:NotReadableError")) throw failure
+                    firstFailure = "${failure.message}; calls $calls"
+                    println("lazysh QR UI: the page's read of the chosen image failed once ($calls); choosing it again")
+                    evaluate(scenario, "(window.__lazyshQrDiag.length=0, true)")
+                }
+            }
             assertEquals("A chosen image must not apply itself", before, evaluate(scenario, saved))
             webButton("Cancel preview")
             awaitDocument(scenario, "chosen-image preview discarded", noPreview)
