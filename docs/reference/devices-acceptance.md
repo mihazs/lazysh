@@ -129,9 +129,10 @@ What the real run established that fixture tests could not:
 - A hosted runner's few CPUs are shared with the Simulator, and commands that take well under a second on an idle
   Mac passed the adapter's ten-second limit now and then: the first `simctl list` after CoreSimulatorService had
   been idle, a screenshot, a tap, and above all `simctl shutdown` (7 s in the passing run, 23 s and 66 s in
-  others, with the companion attached). The case retries repeatable commands up to twice and prints every timeout;
-  a timed-out shutdown request is reported rather than failed and the state discovery confirms is asserted.
-  The limit itself is tracked in [#1911](https://github.com/mihazs/lazysh/issues/1911).
+  others, with the companion attached). The case retries repeatable commands up to twice and prints every timeout.
+  A lifecycle request that `simctl` is still carrying out after ten seconds is answered `requested`
+  ([#1911](https://github.com/mihazs/lazysh/issues/1911)), so the case asserts that answer for shutdown and boot
+  and fails on `DeviceTimeout`; the state discovery then confirms is asserted.
 - Frame rate on the 3-core runner was between 2.4 and 5.8 frames per second reaching the adapter in earlier
   runs with controls active (the companion's own log said 8.0 to 8.7 at the start of a stream). One earlier run saw
   no changed frame within 30 seconds of launching Settings although the companion logged 8 frames per second; the

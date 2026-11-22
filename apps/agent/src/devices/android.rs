@@ -364,7 +364,7 @@ mod tests {
                 }
                 Ok(Vec::new())
             }
-            fn launch(&mut self, _: Tool, _: &[String]) -> Result<()> {
+            fn launch(&mut self, _: Tool, _: &[String], _: Duration) -> Result<bool> {
                 panic!("probe cannot launch a daemon");
             }
         }

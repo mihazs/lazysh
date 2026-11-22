@@ -497,7 +497,12 @@ mod tests {
                 Vec::new()
             })
         }
-        fn launch(&mut self, _tool: Tool, _args: &[String]) -> Result<()> {
+        fn launch(
+            &mut self,
+            _tool: Tool,
+            _args: &[String],
+            _: std::time::Duration,
+        ) -> Result<bool> {
             unreachable!("idb controls never launch a detached SDK process")
         }
     }
@@ -643,6 +648,19 @@ mod tests {
                 Err(Error::Device("DeviceTimeout")) => return None,
                 Err(error) => panic!("real simctl discovery failed: {error:?}"),
             };
+            // Discovery that stays slow after its retry answers with an empty list and this warning (#1911).
+            if inventory["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| {
+                    warning
+                        .as_str()
+                        .is_some_and(|w| w.starts_with("iOS Simulator discovery is slow"))
+                })
+            {
+                return None;
+            }
             let device = inventory["devices"]
                 .as_array()
                 .unwrap()
@@ -653,28 +671,21 @@ mod tests {
             assert_eq!(device["kind"], "simulator");
             device["state"].as_str().map(str::to_owned)
         };
-        // simctl shutdown took 23 to 66 s on the hosted runner with the companion attached, beyond
-        // the adapter's 10 s command limit (#1911). A DeviceTimeout answer is therefore reported,
-        // not failed, and the state that discovery then confirms is what the case asserts.
+        // simctl shutdown took 23 to 66 s on the hosted runner with the companion attached, beyond the adapter's
+        // 10 s command limit. The adapter hands such a request to the host and answers `requested` (#1911), so a
+        // DeviceTimeout answer is a failure here; the state discovery then confirms is what the case asserts.
         let lifecycle = |runner: &mut SdkRunner, command: DeviceCommand| {
             let started = Instant::now();
-            match super::super::execute(runner, command) {
-                Ok(result) => {
-                    assert_eq!(
-                        (&result["status"], &result["id"]),
-                        (&json!("requested"), &json!(id))
-                    );
-                    println!(
-                        "lifecycle requested in {:.1}s",
-                        started.elapsed().as_secs_f64()
-                    );
-                }
-                Err(Error::Device("DeviceTimeout")) => println!(
-                    "lifecycle request exceeded the adapter's command limit after {:.1}s",
-                    started.elapsed().as_secs_f64()
-                ),
-                Err(error) => panic!("lifecycle request failed: {error:?}"),
-            }
+            let result = super::super::execute(runner, command)
+                .unwrap_or_else(|error| panic!("lifecycle request failed: {error:?}"));
+            assert_eq!(
+                (&result["status"], &result["id"]),
+                (&json!("requested"), &json!(id))
+            );
+            println!(
+                "lifecycle requested in {:.1}s",
+                started.elapsed().as_secs_f64()
+            );
             started
         };
 
