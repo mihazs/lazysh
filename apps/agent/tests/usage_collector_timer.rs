@@ -44,7 +44,15 @@ impl Timer {
             timer.script(
                 name,
                 "printf '%s %s\\n' \"${0##*/}\" \"$*\" >> \"$FAKE_LOG\"\n\
-                 if [ -n \"$FAKE_FAIL\" ]; then case \"$*\" in *\"$FAKE_FAIL\"*) exit 1;; esac; fi\n",
+                 if [ -n \"$FAKE_FAIL\" ]; then case \"$*\" in *\"$FAKE_FAIL\"*) exit 1;; esac; fi\n\
+                 case \"$0 $*\" in *launchctl*)\n\
+                   # A label is loaded only after a bootstrap, as in launchd.\n\
+                   case \"$1\" in\n\
+                     print) case \"$2\" in */app.lazysh.usage-collector) [ -f \"$FAKE_TASK\" ] || exit 1;; esac;;\n\
+                     bootout) rm -f \"$FAKE_TASK\";;\n\
+                     bootstrap) touch \"$FAKE_TASK\";;\n\
+                   esac;;\n\
+                 esac\n",
             );
         }
         // Task Scheduler keeps the document it was given and prints it back; it has no task before.
