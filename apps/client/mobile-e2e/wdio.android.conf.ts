@@ -77,8 +77,9 @@ export const config: WebdriverIO.Config = {
     await workerEmulator?.check();
     await ensurePhoneScreen(adbFor(serial)); await ensureThreeButtonNavigation(adbFor(serial));
   }),
-  // The first-run gesture tour opens over the first connected session and would cover the controls a test drives.
-  beforeTest: async () => { await markGestureTourSeen(); },
+  // The first-run gesture tour opens over the first connected session and would cover the controls a test drives, so it is
+  // marked seen before the first spec hook connects one.
+  before: async (capabilities, specs, driver) => { await shared.before?.(capabilities, specs, driver); await markGestureTourSeen(); },
   // Every worker runs one spec file: put the device back to the recorded baseline between files, even after a failure.
   after: async () => { await workerEmulator?.check(); await restoreFromJournal(serial); },
   // Hosts first (their forwards and processes), then the device baseline and lock, even when the first step fails.
