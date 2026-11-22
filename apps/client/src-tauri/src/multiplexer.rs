@@ -459,7 +459,7 @@ struct RmuxControlMode {
     entrypoint: String,
 }
 // shortcut: rmux stays Limited until its Jump To control client and confirmed input are verified on a real rmux (#1675).
-const RMUX_MISSING: &[&str] = &["jump", "confirmedInput"];
+const RMUX_MISSING: &[&str] = &["jump", "confirmedInput", "history"];
 /// Admission from the binary contract and control mode, not from `rmux -V`; `daemon` is `stale` when the running
 /// daemon refused this client's protocol, which only a daemon restart fixes.
 fn rmux_tool(capabilities: &str, daemon: &str) -> Tool {
@@ -1463,7 +1463,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             serde_json::to_value(&tree).unwrap()["tools"],
-            serde_json::json!([{"kind":"rmux","version":"0.10.0","support":"degraded","missing":["jump","confirmedInput"]}])
+            serde_json::json!([{"kind":"rmux","version":"0.10.0","support":"degraded","missing":["jump","confirmedInput","history"]}])
         );
     }
     #[cfg(unix)]

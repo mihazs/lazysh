@@ -4364,7 +4364,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         (&tool["support"], &tool["missing"]),
         (
             &serde_json::json!("degraded"),
-            &serde_json::json!(["jump", "confirmedInput"])
+            &serde_json::json!(["jump", "confirmedInput", "history"])
         )
     );
     assert!(
