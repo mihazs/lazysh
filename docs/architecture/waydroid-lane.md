@@ -91,7 +91,7 @@ WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 apps/client/bench/waydr
 bun apps/client/bench/androidCompare.ts docs/architecture/benchmarks/terminal-lane-engine-xterm-waydroid-xterm-record.json   # one record per arm; they must share the run id
 ```
 
-The host app of the benchmark page (`bench/android-webview`, built by `--build` or already installed) must be in the guest; `--package app.lazysh.webviewbench` makes the lane thaw and stop that app instead of the real one. The lane gives the run an id (`runId` in its evidence, `engine-xterm-20261122T204011Z`: the label and the start time) and exports it to every `--bench` command as `LAZYSH_LANE_RUN_ID`; a record carries it, and the compare script refuses records of different runs or guests. The benchmark is heavy on the host: start it through `/tmp/lazysh-heavy` on this machine, and note that the guest shares the host CPU and GPU with whatever else runs (the record keeps the host's load average at the end).
+The host app of the benchmark page (`bench/android-webview`, built by `--build` or already installed) must be in the guest; `--package app.lazysh.webviewbench` makes the lane thaw and stop that app instead of the real one. The lane gives the run an id (`runId` in its evidence, for example `engine-xterm-20261122T204011Z`: the label and the start time) and exports it to every `--bench` command as `LAZYSH_LANE_RUN_ID`; a record carries it, and the compare script refuses records of different runs or guests. The benchmark is heavy on the host: start it through `/tmp/lazysh-heavy` on this machine, and note that the guest shares the host CPU and GPU with whatever else runs (the record keeps the host's load average at the end).
 
 ## Exit codes
 
