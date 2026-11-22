@@ -109,7 +109,9 @@ async fn check(app: &App, id: &str, directory: &Path) {
             &["workspace", "create", "--label", label, "--cwd", home],
         );
     }
-    let pane = lazysh_common::test_support::unfocused_herdr_pane(&run(directory, &["api", "snapshot"]));
+    let hidden =
+        lazysh_common::test_support::unfocused_herdr_pane(&run(directory, &["api", "snapshot"]));
+    let pane = hidden["pane_id"].as_str().unwrap().to_owned();
     report(directory, &pane, "working");
 
     let target = || WatchTarget::HerdrEvents {

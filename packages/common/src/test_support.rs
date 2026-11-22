@@ -177,14 +177,14 @@ mod tests {
     }
 }
 
-/// The id of the pane `herdr api snapshot` reports as not focused: the one a test reports an agent state for.
-pub fn unfocused_herdr_pane(snapshot_json: &[u8]) -> String {
+/// The pane `herdr api snapshot` reports as not focused: the one a test reports an agent state for.
+pub fn unfocused_herdr_pane(snapshot_json: &[u8]) -> serde_json::Value {
     let snapshot: serde_json::Value = serde_json::from_slice(snapshot_json).unwrap();
-    let pane = snapshot["result"]["snapshot"]["panes"]
+    snapshot["result"]["snapshot"]["panes"]
         .as_array()
         .unwrap()
         .iter()
         .find(|pane| pane["focused"] == false)
-        .unwrap();
-    pane["pane_id"].as_str().unwrap().to_owned()
+        .unwrap()
+        .clone()
 }
