@@ -414,6 +414,8 @@ pub fn run() {
                 companion_settings::update_host_browser_settings,
                 companion_notifications::get_notification_policy,
                 companion_notifications::update_notification_policy,
+                companion_settings::get_host_features,
+                companion_settings::update_host_features,
                 ssh::agent_transcript,
                 ssh::agent_usage,
                 ssh::agent_transcripts,

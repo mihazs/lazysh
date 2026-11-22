@@ -397,6 +397,21 @@ fn frame_ready(receiver: &std::sync::mpsc::Receiver<Result<()>>) -> Result<bool>
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(false),
     }
 }
+impl DeviceCommand {
+    /// The live video streams, the one device operation the host can withhold on its own.
+    pub fn is_stream(&self) -> bool {
+        matches!(
+            self,
+            Self::Android {
+                action: android::AndroidAction::Stream,
+                ..
+            } | Self::Ios {
+                action: idb::IosAction::Stream,
+                ..
+            }
+        )
+    }
+}
 pub fn run(command: DeviceCommand) -> Result<Value> {
     let cancelled = cancellation_signal()?;
     execute(&mut SdkRunner { cancelled }, command)

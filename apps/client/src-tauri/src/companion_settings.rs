@@ -50,6 +50,28 @@ pub struct Update {
     #[serde(default)]
     auto_update: Option<AutoUpdateChange>,
 }
+/// What `get_companion_settings` answers: the settings, and the feature switches when the companion has them.
+#[derive(Serialize)]
+pub struct SettingsView {
+    #[serde(flatten)]
+    settings: Settings,
+    features: Option<HostFeatures>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostFeatures {
+    schema_version: u8,
+    revision: u64,
+    simulator_streaming_enabled: bool,
+    port_scan_enabled: bool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FeaturesUpdate {
+    expected_revision: u64,
+    simulator_streaming_enabled: bool,
+    port_scan_enabled: bool,
+}
 const MAX_REVISION: u64 = 9_007_199_254_740_991;
 /// Bounded, strict and versioned: the same limits for every settings file the companion answers with.
 fn strict<T: serde::de::DeserializeOwned>(
@@ -89,6 +111,48 @@ fn expected_revision(revision: u64) -> Result<u64> {
 fn update_command(settings: &Update) -> Result<String> {
     Ok(format!("lazysh-agent settings update --expected-revision {} --transcript-discovery-enabled {} --recorded-usage-enabled {} --device-tools-enabled {}",expected_revision(settings.expected_revision)?,settings.transcript_discovery_enabled,settings.recorded_usage_enabled,settings.device_tools_enabled))
 }
+fn parse_features(text: &str) -> Result<HostFeatures> {
+    strict(text, |features: &HostFeatures| {
+        (features.schema_version, features.revision)
+    })
+}
+fn features_command(update: &FeaturesUpdate) -> Result<String> {
+    Ok(format!("lazysh-agent settings features update --expected-revision {} --simulator-streaming-enabled {} --port-scan-enabled {}",expected_revision(update.expected_revision)?,update.simulator_streaming_enabled,update.port_scan_enabled))
+}
+/// What a companion without `settings features` prints, so an absent or older one reads as "no host switches".
+const FEATURES_COMPANION_REQUIRED: &str = "lazysh-host-features-companion-required-v1";
+/// `None` when the companion cannot say: the host has none, or an older one. Both switches then count as enabled.
+/// This desktop's own companion is the app's version, so it always has them.
+async fn read_features(host: &Host, access: &AccessLease) -> Result<Option<HostFeatures>> {
+    let line = "lazysh-agent settings features show";
+    let session = match host {
+        Host::Remote(session) => session,
+        #[cfg(desktop)]
+        Host::Local(_) => {
+            // No local companion (or one without the switches) means no switches: a local session still scans.
+            return match host.companion(access, line.into()).await {
+                Ok(text) => parse_features(&text).map(Some),
+                Err(error) if error.kind() == "remote_command_failed" => Ok(None),
+                Err(error) => Err(error),
+            };
+        }
+    };
+    let unix = crate::companion::positive_unix(session, access).await?;
+    let command = crate::companion::required_command(
+        session,
+        line.into(),
+        FEATURES_COMPANION_REQUIRED,
+        access,
+    )
+    .await?;
+    match crate::ssh::exec_for_access(session, command, access).await {
+        Ok(text) if text.trim() == FEATURES_COMPANION_REQUIRED => Ok(None),
+        Ok(text) => parse_features(&text).map(Some),
+        // Only a positively identified Unix host proves that a failing companion is a real error.
+        Err(error) if !unix && error.kind() == "remote_command_failed" => Ok(None),
+        Err(error) => Err(error),
+    }
+}
 fn parse_auto_update(text: &str) -> Result<AutoUpdate> {
     let value: AutoUpdate = serde_json::from_str(text.trim())?;
     if text.len() > 4096 || value.schema_version != 1 || value.revision > 9_007_199_254_740_991 {
@@ -122,7 +186,7 @@ pub async fn get_companion_settings(
     local: State<'_, LocalState>,
     session_id: String,
     access: AccessLease,
-) -> std::result::Result<Guarded<Settings>, GuardedError<crate::ssh::SshError>> {
+) -> std::result::Result<Guarded<SettingsView>, GuardedError<crate::ssh::SshError>> {
     access
         .run(async {
             let host = Host::resolve(&state, &local, &session_id, &access).await?;
@@ -132,7 +196,9 @@ pub async fn get_companion_settings(
                     .await?,
             )?;
             settings.auto_update = current_auto_update(&host, &access).await;
-            Ok(settings)
+            // Unreadable feature switches must not hide the settings: the panel then offers none.
+            let features = read_features(&host, &access).await.unwrap_or(None);
+            Ok(SettingsView { settings, features })
         })
         .await
 }
@@ -167,6 +233,37 @@ pub async fn update_companion_settings(
                 None => current_auto_update(&host, &access).await,
             };
             Ok(saved)
+        })
+        .await
+}
+/// The host's feature switches, or `null` when its companion does not have them.
+#[tauri::command]
+pub async fn get_host_features(
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+    session_id: String,
+    access: AccessLease,
+) -> std::result::Result<Guarded<Option<HostFeatures>>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            read_features(&host, &access).await
+        })
+        .await
+}
+#[tauri::command]
+pub async fn update_host_features(
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+    session_id: String,
+    features: FeaturesUpdate,
+    access: AccessLease,
+) -> std::result::Result<Guarded<HostFeatures>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let command = features_command(&features)?;
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            parse_features(&host.companion(&access, command).await?)
         })
         .await
 }
@@ -304,6 +401,29 @@ mod tests {
             r#"{"schemaVersion":1,"revision":1,"transcriptDiscoveryEnabled":false,"recordedUsageEnabled":true,"deviceToolsEnabled":true,"extra":1}"#,
         ] {
             assert!(parse(text).is_err());
+        }
+    }
+    #[test]
+    fn feature_commands_only_format_typed_values_and_require_strict_responses() {
+        let update = FeaturesUpdate {
+            expected_revision: 3,
+            simulator_streaming_enabled: false,
+            port_scan_enabled: true,
+        };
+        assert_eq!(features_command(&update).unwrap(),"lazysh-agent settings features update --expected-revision 3 --simulator-streaming-enabled false --port-scan-enabled true");
+        assert!(features_command(&FeaturesUpdate {
+            expected_revision: MAX_REVISION,
+            ..update
+        })
+        .is_err());
+        assert!(parse_features(r#"{"schemaVersion":1,"revision":2,"simulatorStreamingEnabled":false,"portScanEnabled":true}"#).is_ok());
+        for text in [
+            r#"{"schemaVersion":2,"revision":2,"simulatorStreamingEnabled":false,"portScanEnabled":true}"#,
+            r#"{"schemaVersion":1,"revision":2,"simulatorStreamingEnabled":"no","portScanEnabled":true}"#,
+            r#"{"schemaVersion":1,"revision":2,"simulatorStreamingEnabled":false,"portScanEnabled":true,"extra":1}"#,
+            r#"{"schemaVersion":1,"revision":2,"simulatorStreamingEnabled":false}"#,
+        ] {
+            assert!(parse_features(text).is_err());
         }
     }
     #[test]
