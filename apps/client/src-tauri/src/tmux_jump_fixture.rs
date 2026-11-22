@@ -417,9 +417,17 @@ impl Fixture {
             .unwrap();
         // The terminal can emit output before the nonce frame; use the same bounded,
         // exact-marker and PID/TTY validation as the product attachment.
-        let frame = crate::tmux_jump::handshake(&mut channel, &mut bytes, &marker)
-            .await
-            .expect("owned attach identity frame missing or invalid");
+        let started = std::time::Instant::now();
+        let Some(frame) = crate::tmux_jump::handshake(&mut channel, &mut bytes, &marker).await
+        else {
+            // The handshake ends on its deadline, on a closed channel or on 64 KiB without the frame; show which.
+            panic!(
+                "owned attach identity frame missing or invalid after {:?} for {session}; received {} bytes: {:?}",
+                started.elapsed(),
+                bytes.len(),
+                String::from_utf8_lossy(&bytes[..bytes.len().min(2048)])
+            );
+        };
         assert!(
             frame.tty.len() < 128,
             "owned attach TTY exceeds fixture bound"
