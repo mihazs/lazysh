@@ -13,6 +13,7 @@ import type {
 } from './terminalAdapter';
 import {TerminalEvents} from './terminalEvents';
 import type {CoreKeyInput} from './terminalPlatformKeys';
+import {shareImportedFonts} from './nativeFonts';
 import {nativeSurface, type CellSize, type SurfaceLook} from './terminalSurfaceAnchor';
 import {searchRows} from './terminalText';
 
@@ -305,7 +306,8 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     if (sent === this.looked) return;
     this.looked = sent;
     const send = this.options.look ?? nativeSurface.look;
-    this.lookQueue = this.lookQueue.then(() => send(surface, look)).catch(() => { if (this.looked === sent) this.looked = undefined; });
+    // The imported fonts its family list names reach the app first, so the look can name them.
+    this.lookQueue = this.lookQueue.then(() => shareImportedFonts(look.fontFamily)).then(() => send(surface, look)).catch(() => { if (this.looked === sent) this.looked = undefined; });
   }
 
   /** The renderer applies fonts and colours; the input editor reads them for the preedit and `optionAsMeta` for its keys, and the core needs the theme to answer a program that asks what its colours are. */

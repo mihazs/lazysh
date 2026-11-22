@@ -100,6 +100,16 @@ pub(crate) struct Look {
     pub bold: BoldText,
     /// The cursor a program that chose none gets; `None` leaves the VT's own.
     pub cursor: Option<CursorDefault>,
+    /// The fonts imported in Preferences that `font_family` names (#2223), registered ahead of the machine's.
+    pub imported: Vec<crate::native_fonts::ImportedFont>,
+}
+
+/// The families of a CSS `font-family` list, preferred first, without their quotes.
+pub(crate) fn families(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(|family| family.trim().trim_matches(['\'', '"']).to_string())
+        .filter(|family| !family.is_empty())
+        .collect()
 }
 
 /// The cell the renderer draws, in device pixels, for a font of `font_px` CSS pixels on a display of `scale` device
@@ -116,24 +126,25 @@ impl Look {
     pub(crate) fn appearance(&self) -> Result<Appearance, RenderError> {
         Ok(Appearance {
             metrics: cell_metrics(self.font_px, self.scale)?,
-            font_families: self
-                .font_family
-                .split(',')
-                .map(|family| family.trim().trim_matches(['\'', '"']).to_string())
-                .filter(|family| !family.is_empty())
-                .collect(),
+            font_families: families(&self.font_family),
             theme: self.theme,
             bold: self.bold,
         })
     }
 
-    /// The fonts of `appearance`'s family list; none keeps the reference dot patterns.
+    /// The fonts of `appearance`'s family list, the imported ones first; none keeps the reference dot patterns.
     fn fonts(&self, appearance: &Appearance) -> FontLibrary {
-        if self.system_fonts {
+        let mut library = if self.system_fonts {
             FontLibrary::system(&appearance.font_families)
         } else {
             FontLibrary::new()
+        };
+        for font in &self.imported {
+            // shortcut: bytes the page sent that cannot be read were refused when it sent them; one that fails here
+            // (a font collection with no first font) is skipped and the family falls through to the others.
+            let _ = font.register(&mut library);
         }
+        library
     }
 }
 
@@ -369,7 +380,7 @@ impl Loop {
         }
         self.detach();
         let appearance = self.look.appearance().map_err(|e| e.to_string())?;
-        let target = if self.look.system_fonts {
+        let target = if self.look.system_fonts || !self.look.imported.is_empty() {
             target.with_fonts(self.look.fonts(&appearance))
         } else {
             target
@@ -409,7 +420,8 @@ impl Loop {
         let appearance = look.appearance().map_err(|e| e.to_string())?;
         // Another family list names other files: read them again.
         let fonts = (look.font_family != self.look.font_family
-            || look.system_fonts != self.look.system_fonts)
+            || look.system_fonts != self.look.system_fonts
+            || look.imported != self.look.imported)
             .then(|| look.fonts(&appearance));
         self.change(|renderer| {
             renderer.set_appearance(appearance.clone())?;

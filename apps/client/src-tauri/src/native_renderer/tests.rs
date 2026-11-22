@@ -4,6 +4,7 @@
 //! Presenting on a window is not exercised here: no test host has a display.
 
 use super::*;
+use crate::native_fonts::ImportedFont;
 use lazysh_terminal_renderer_wgpu::Policy;
 use lazysh_terminal_runtime::{
     CellPos, CellRange, Config, CursorVisualStyle, Hooks, Hub, HubConfig, Image, Offer, Origin,
@@ -37,6 +38,7 @@ fn look() -> Look {
         system_fonts: false,
         bold: BoldText::default(),
         cursor: None,
+        imported: Vec::new(),
     }
 }
 
@@ -130,6 +132,16 @@ struct Shown {
 impl Shown {
     fn new(output: &str, look: Look) -> Self {
         let (session, inbox) = session();
+        let host = Host::attach(session.clone(), inbox, target(&look), 1, look)
+            .expect("a GPU adapter is required");
+        prints(&session, output);
+        Self { host, session }
+    }
+
+    /// A session whose cursor is hidden before the host attaches, so the first picture with anything in it has the text in it.
+    fn without_cursor(output: &str, look: Look) -> Self {
+        let (session, inbox) = session();
+        prints(&session, "\x1b[?25l");
         let host = Host::attach(session.clone(), inbox, target(&look), 1, look)
             .expect("a GPU adapter is required");
         prints(&session, output);
@@ -597,4 +609,137 @@ fn the_shipping_policy_refuses_a_cpu_rasterizer_and_only_the_debug_switch_on_and
     assert_eq!(policy_for(true).backends, Policy::for_platform().backends);
     // No other build compiles the variable in, so a host has the shipping policy.
     assert_eq!(policy(), Policy::for_platform());
+}
+
+const DEJAVU: &[u8] = include_bytes!(
+    "../../../../../packages/terminal-renderer-wgpu/tests/fonts/DejaVuSansMono.subset.ttf"
+);
+const OBLIQUE: &[u8] = include_bytes!(
+    "../../../../../packages/terminal-renderer-wgpu/tests/fonts/DejaVuSansMono-Oblique.subset.ttf"
+);
+const CJK: &[u8] = include_bytes!(
+    "../../../../../packages/terminal-renderer-wgpu/tests/fonts/NotoSansMonoCJKjp.subset.otf"
+);
+
+fn imported(family: &str, cjk: bool, bytes: &'static [u8]) -> ImportedFont {
+    ImportedFont {
+        family: family.into(),
+        cjk,
+        bytes: bytes.into(),
+    }
+}
+
+/// A look that draws from the imported fonts alone (no machine fonts, so the pixels are the same everywhere), named first
+/// in its family list in the order given, as the page puts them.
+fn imported_look(fonts: Vec<ImportedFont>) -> Look {
+    let names: Vec<_> = fonts.iter().map(|font| font.family.as_str()).collect();
+    Look {
+        font_family: names.join(", "),
+        imported: fonts,
+        ..look()
+    }
+}
+
+/// What a host draws for `text` with `look`, once it draws something more than the empty screen.
+fn drawn_with(text: &str, look: Look) -> Image {
+    let (width, height) = size(&look);
+    let blank = Image::new(width, height, look.theme.background).unwrap();
+    let shown = Shown::without_cursor(text, look);
+    wait("the glyphs", || {
+        shown.image().is_some_and(|image| image != blank)
+    });
+    shown.image().unwrap()
+}
+
+#[test]
+fn an_imported_font_is_drawn_from_the_bytes_the_page_sent_whatever_its_name() {
+    let text = "imported text 123".to_string();
+    // The fonts register: nothing here is skipped silently.
+    let mut library = FontLibrary::new();
+    imported("lazysh-font-a-primary", false, OBLIQUE)
+        .register(&mut library)
+        .unwrap();
+    assert!(library
+        .families()
+        .any(|family| family == "lazysh-font-a-primary"));
+    let dots = drawn_with(&text, look());
+    let slanted = drawn_with(
+        &text,
+        imported_look(vec![imported("lazysh-font-a-primary", false, OBLIQUE)]),
+    );
+    let upright = drawn_with(
+        &text,
+        imported_look(vec![imported("lazysh-font-b-primary", false, DEJAVU)]),
+    );
+    assert_ne!(
+        slanted, dots,
+        "a font draws the text, not the reference's dots"
+    );
+    assert_ne!(slanted, upright, "the bytes decide the glyphs");
+    // The same bytes in another allocation under another name: the same pixels.
+    let again = imported_look(vec![imported("Some Other Name", false, OBLIQUE)]);
+    Shown::without_cursor(&text, again).shows(&slanted, "the same bytes, drawn the same");
+    // A family list that does not name the font does not draw it.
+    let unnamed = Look {
+        font_family: "monospace".into(),
+        imported: Vec::new(),
+        ..look()
+    };
+    Shown::without_cursor(&text, unnamed).shows(&dots, "a font nobody named draws nothing");
+}
+
+#[test]
+fn an_imported_cjk_font_draws_only_its_ranges_and_never_takes_latin_text_from_the_primary_font() {
+    let latin = "ABC abc 0".to_string();
+    let cjk = "日本語".to_string();
+    let primary = || imported("lazysh-font-p-primary", false, DEJAVU);
+    // The CJK font is named first, as the page does, and has Latin letters of its own.
+    let both = |restricted: bool| {
+        imported_look(vec![
+            imported("lazysh-font-c-cjk", restricted, CJK),
+            primary(),
+        ])
+    };
+    let latin_alone = drawn_with(&latin, imported_look(vec![primary()]));
+    Shown::without_cursor(&latin, both(true))
+        .shows(&latin_alone, "Latin stays with the primary font");
+    assert_ne!(
+        drawn_with(&latin, both(false)),
+        latin_alone,
+        "without the restriction the CJK font would draw the Latin letters"
+    );
+    let missing = drawn_with(&cjk, imported_look(vec![primary()]));
+    assert_ne!(
+        drawn_with(&cjk, both(true)),
+        missing,
+        "the CJK font draws the characters the primary font lacks"
+    );
+}
+
+#[test]
+fn changing_or_removing_the_imported_font_repaints_the_session() {
+    let text = "repaint me".to_string();
+    let slanted = imported_look(vec![imported("lazysh-font-a-primary", false, OBLIQUE)]);
+    let upright = imported_look(vec![imported("lazysh-font-a-primary", false, DEJAVU)]);
+    let (with_slant, with_upright) = (
+        drawn_with(&text, slanted.clone()),
+        drawn_with(&text, upright.clone()),
+    );
+    let dots = reference(&format!("\x1b[?25l{text}"), &look(), None);
+    let shown = Shown::without_cursor(&text, slanted.clone());
+    shown.shows(&with_slant, "the first font");
+    // The same family name with other bytes is another font: the look differs, so the host reads its fonts again.
+    shown.host.set_look(upright.clone()).unwrap();
+    shown.shows(&with_upright, "the font that replaced it");
+    // The family list stays, the font is gone: back to what a library without it draws.
+    shown
+        .host
+        .set_look(Look {
+            imported: Vec::new(),
+            ..upright
+        })
+        .unwrap();
+    shown.shows(&dots, "no font once it was removed");
+    shown.host.set_look(slanted).unwrap();
+    shown.shows(&with_slant, "and again");
 }

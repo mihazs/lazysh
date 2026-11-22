@@ -55,22 +55,34 @@ function open(): Promise<IDBDatabase> {
     request.onsuccess = () => {if (blocked) request.result.close(); else resolve(request.result);};
   });
 }
-async function records(): Promise<FontRecord[]> {
+/** One read of the font store: `ask` makes the request, `map` checks and shapes its result. */
+async function readStore<T, U>(ask: (store: IDBObjectStore) => IDBRequest<T>, map: (result: T) => U): Promise<U> {
   const db = await open();
   try {
-    return await new Promise((resolve, reject) => {
-      const transaction = db.transaction("fonts", "readonly");
-      const request = transaction.objectStore("fonts").getAll();
+    return await new Promise<U>((resolve, reject) => {
+      const request = ask(db.transaction("fonts", "readonly").objectStore("fonts"));
       request.onerror = () => reject(new LocalUiError('validationCannotReadSavedFonts'));
       request.onsuccess = () => {
-        try {
-          const fonts = request.result.map(validateRecord);
-          assertFontBudget(fonts.map(font => font.size));
-          resolve(fonts);
-        } catch (error) {reject(error);}
+        try { resolve(map(request.result)); } catch (error) { reject(error); }
       };
     });
   } finally {db.close();}
+}
+const records = () => readStore(store => store.getAll(), found => {
+  const fonts = found.map(validateRecord);
+  assertFontBudget(fonts.map(font => font.size));
+  return fonts;
+});
+/** A family name of this module, `lazysh-font-<id>-<role>`, as the WebView registers a selected font under it. */
+const familyName = /^lazysh-font-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})-(primary|cjk)$/;
+/** Whether `name` is the family of an imported font of this device. */
+export const isImportedFamily = (name: string) => familyName.test(name);
+/** The imported font a family name of this module stands for, read from storage; what the native renderer cannot read itself (#2223). `undefined` for any other name or a font that is gone. */
+export async function importedFontOf(name: string): Promise<{role: 'primary' | 'cjk'; bytes: ArrayBuffer} | undefined> {
+  const match = familyName.exec(name);
+  if (!match) return undefined;
+  const record = await readStore(store => store.get(match[1]) as IDBRequest<unknown>, found => found === undefined ? undefined : validateRecord(found));
+  return record && {role: match[2] as 'primary' | 'cjk', bytes: record.bytes};
 }
 function readSelection(): Selection {
   const value: unknown = JSON.parse(localStorage.getItem(selectionKey) ?? "{}");

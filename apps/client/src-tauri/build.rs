@@ -79,6 +79,8 @@ fn main() {
         "terminal_core_search",
         "terminal_core_word_at",
         "terminal_core_link_at",
+        "native_terminal_font_import",
+        "native_terminal_font_forget",
         "terminal_core_line_at",
         "terminal_core_buffer_range",
         "terminal_core_copy_screen",
