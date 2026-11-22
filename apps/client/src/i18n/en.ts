@@ -2245,6 +2245,7 @@ export const english = {
   devicesHeading: "Simulators and devices",
   devicesHint: "Uses the SDK installed on this SSH host. Screenshot refresh captures one frame per second. Optional iOS idb video uses a private local companion socket.",
   devicesAbout: "About device tools",
+  devicesHintLocal: "Uses the SDK installed on this device. Screenshot refresh captures one frame per second. Optional iOS idb video uses a private local companion socket.",
   devicesPlatform: "Platform",
   devicesSimulator: "iOS Simulator",
   devicesFind: "Find devices",

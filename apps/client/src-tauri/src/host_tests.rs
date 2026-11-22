@@ -2,7 +2,7 @@
 pub(crate) mod local {
     use crate::{
         app_lock::{AccessLease, AccessState, Guarded, GuardedError},
-        host::{Cmd, Host},
+        host::{process_gone, Chunk, Cmd, Host, LocalHost, LocalStream},
         local::{adopted_test_session, local_disconnect, LocalState},
         ssh::{AppState, SshError},
     };
@@ -649,6 +649,65 @@ pub(crate) mod local {
             .exec(&lease(), &command, Duration::from_secs(1), 1024)
             .await;
         assert_eq!(result.unwrap_err().kind(), "disconnected");
+        let stream = local_arm(&host).spawn_stream(&lease(), &command).await;
+        assert_eq!(stream.err().unwrap().kind(), "disconnected");
+    }
+
+    fn local_arm(host: &Host) -> &LocalHost {
+        match host {
+            Host::Local(local) => local,
+            Host::Remote(_) => panic!("a local session resolves to the local arm"),
+        }
+    }
+    async fn started(host: &Host, command: &Cmd) -> LocalStream {
+        local_arm(host)
+            .spawn_stream(&lease(), command)
+            .await
+            .unwrap()
+    }
+    /// All of a started command's output, and how it ended.
+    async fn drained(mut stream: LocalStream) -> (Vec<u8>, &'static str) {
+        let mut output = Vec::new();
+        loop {
+            match stream.next().await.unwrap() {
+                Chunk::Data(data) => output.extend(data),
+                Chunk::Failed => return (output, "failed"),
+                Chunk::Closed => return (output, "closed"),
+                Chunk::Other => {}
+            }
+        }
+    }
+    #[tokio::test]
+    async fn a_local_stream_hands_out_output_and_says_how_the_command_ended() {
+        let (_temp, _app, _id, host) = resolved().await;
+        let (output, end) =
+            drained(started(&host, &Cmd::new(&[], &["git", "--version"])).await).await;
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .starts_with("git version"));
+        assert_eq!(end, "closed");
+        let failing = Cmd::new(&[], &["git", "--no-such-flag"]);
+        let (output, end) = drained(started(&host, &failing).await).await;
+        assert!(output.is_empty());
+        assert_eq!(end, "failed");
+    }
+    #[tokio::test]
+    async fn closing_or_dropping_a_local_stream_removes_a_child_that_ignores_end_of_input() {
+        let (_temp, _app, _id, host) = resolved().await;
+        let closed = started(&host, &slow()).await;
+        let pid = closed.child.id().unwrap();
+        closed.close().await;
+        assert!(
+            process_gone(pid).await,
+            "closed child {pid} was not removed"
+        );
+        let dropped = started(&host, &slow()).await;
+        let pid = dropped.child.id().unwrap();
+        drop(dropped);
+        assert!(
+            process_gone(pid).await,
+            "dropped child {pid} was not removed"
+        );
     }
 
     #[cfg(unix)]
@@ -734,23 +793,10 @@ pub(crate) mod local {
             .trim()
             .parse()
             .unwrap();
-        #[cfg(unix)]
-        assert_eq!(
-            unsafe { libc::kill(pid as i32, 0) },
-            -1,
+        assert!(
+            process_gone(pid).await,
             "timed-out child {pid} was not reaped"
         );
-        #[cfg(windows)]
-        {
-            let listed = Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-                .output()
-                .unwrap();
-            assert!(
-                !String::from_utf8_lossy(&listed.stdout).contains(&format!("\"{pid}\"")),
-                "timed-out child {pid} is still running"
-            );
-        }
         // A successful command still runs after a timeout in the same session.
         let version = host
             .run(&access, &Cmd::new(&[], &["git", "--version"]))
@@ -1286,7 +1332,7 @@ exec "$@"
             let reported = serde_json::to_value(working.tools().await).unwrap();
             assert_eq!(
                 reported,
-                serde_json::json!({"files": true, "repository": true, "companion": false, "companionSource": null, "attachments": false, "previews": false})
+                serde_json::json!({"files": true, "repository": true, "companion": false, "companionSource": null, "attachments": false, "previews": false, "devices": false})
             );
             // `wsl.exe` fails when the distribution has no `git`.
             let missing = script(&temp.path().join("no-git.exe"), "#!/bin/sh\nexit 1\n");
@@ -1295,7 +1341,7 @@ exec "$@"
                 .await;
             assert_eq!(
                 serde_json::to_value(reported).unwrap(),
-                serde_json::json!({"files": false, "repository": false, "companion": false, "companionSource": null, "attachments": false, "previews": false})
+                serde_json::json!({"files": false, "repository": false, "companion": false, "companionSource": null, "attachments": false, "previews": false, "devices": false})
             );
         }
     }
@@ -1347,5 +1393,145 @@ mod herdr_install {
             with_herdr_install(Some(join(&[&empty])), Some(home)),
             Some(join(&[&empty]))
         );
+    }
+}
+
+mod sdk {
+    use std::{ffi::OsString, fs, path::Path};
+
+    fn adb_in(directory: &Path) {
+        fs::create_dir_all(directory).unwrap();
+        let name = if cfg!(windows) { "adb.exe" } else { "adb" };
+        let path = directory.join(name);
+        fs::write(&path, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn non_executable_adb_is_not_a_usable_device_capability() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("platform-tools");
+        adb_in(&dir);
+        let adb = dir.join("adb");
+        fs::set_permissions(&adb, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            std::process::Command::new(&adb).spawn().unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(!crate::host::adb_resolves(
+            Some(temp.path().into()),
+            &OsString::new(),
+            temp.path()
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn device_tool_follows_executable_symlinks_and_skips_unusable_path_entries() {
+        use std::os::unix::{
+            fs::{symlink, PermissionsExt},
+            process::CommandExt,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        adb_in(&first);
+        adb_in(&second);
+        fs::set_permissions(first.join("adb"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(second.join("adb"), b"#!/bin/sh\nexit 0\n").unwrap();
+        symlink(second.join("adb"), temp.path().join("linked-adb")).unwrap();
+        assert!(crate::host::device_tool(
+            &temp.path().join("linked-adb"),
+            temp.path()
+        ));
+        let sdk = temp.path().join("sdk");
+        fs::create_dir_all(sdk.join("platform-tools")).unwrap();
+        let link = sdk.join("platform-tools/adb");
+        symlink(first.join("adb"), &link).unwrap();
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        assert!(crate::host::device_tool_on_path("adb", &path, temp.path()));
+        assert!(!crate::host::adb_resolves(
+            Some(sdk.clone().into()),
+            &path,
+            temp.path()
+        ));
+        fs::remove_file(&link).unwrap();
+        symlink(second.join("adb"), &link).unwrap();
+        assert!(crate::host::adb_resolves(
+            Some(sdk.into()),
+            &path,
+            temp.path()
+        ));
+        let error = std::process::Command::new(temp.path().join("linked-adb"))
+            .arg0("adb")
+            .status()
+            .unwrap();
+        assert!(error.success());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn relative_sdk_and_path_are_checked_from_the_child_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let app = temp.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        adb_in(&home.join("sdk/platform-tools"));
+        fs::write(home.join("sdk/platform-tools/adb"), b"#!/bin/sh\nexit 0\n").unwrap();
+        let path = OsString::from("sdk/platform-tools");
+        assert!(crate::host::adb_resolves(None, &path, &home));
+        assert!(!crate::host::adb_resolves(None, &path, &app));
+        assert!(crate::host::adb_resolves(
+            Some("sdk".into()),
+            &OsString::new(),
+            &home
+        ));
+        assert!(!crate::host::adb_resolves(
+            Some("sdk".into()),
+            &OsString::new(),
+            &app
+        ));
+        assert!(std::process::Command::new("adb")
+            .env("PATH", &path)
+            .current_dir(&home)
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(
+            std::process::Command::new("adb")
+                .env("PATH", &path)
+                .current_dir(&app)
+                .status()
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        adb_in(&home);
+        assert!(crate::host::adb_resolves(None, &OsString::new(), &home));
+        assert!(!crate::host::adb_resolves(None, &OsString::new(), &app));
+    }
+    #[test]
+    fn adb_is_found_only_where_the_companion_looks_for_it() {
+        use crate::host::adb_resolves;
+        let temp = tempfile::tempdir().unwrap();
+        let (sdk, empty_sdk, bin) = (
+            temp.path().join("sdk"),
+            temp.path().join("empty-sdk"),
+            temp.path().join("bin"),
+        );
+        fs::create_dir_all(&empty_sdk).unwrap();
+        let path = std::env::join_paths([&bin]).unwrap();
+        let sdk_root = |root: &Path| Some(OsString::from(root));
+        assert!(!adb_resolves(None, &path, temp.path()));
+        adb_in(&sdk.join("platform-tools"));
+        // An SDK root is enough on its own, without any PATH.
+        assert!(adb_resolves(sdk_root(&sdk), &OsString::new(), temp.path()));
+        // adb on the PATH counts only when no SDK root is set: the companion never falls back.
+        adb_in(&bin);
+        assert!(adb_resolves(None, &path, temp.path()));
+        assert!(!adb_resolves(sdk_root(&empty_sdk), &path, temp.path()));
     }
 }

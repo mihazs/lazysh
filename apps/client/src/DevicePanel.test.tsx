@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import DevicePanel, { framePoint, parseFrame } from "./DevicePanel";
+import { t } from "./i18n/core";
 vi.mock("@tauri-apps/api/core", async original => (await import("./test/nativeCoreMock")).mockNativeCore(original));
 afterEach(cleanupNativeMocks);
 
@@ -281,4 +282,13 @@ it("refuses an Android probe whose input claim has no display size", async () =>
   fireEvent.click(screen.getByRole("button", { name: "Verify Android video tools" }));
   expect(await screen.findByRole("alert")).toBeTruthy();
   expect(startButton()).toHaveProperty("disabled", true);
+});
+it("says the SDK is on this device for a local session and on the SSH host for a remote one", () => {
+  const { unmount } = render(<DevicePanel sessionId="local:12345678-1234-4234-8234-123456789abc" />);
+  expect(screen.getByText(t("devicesHintLocal"))).toBeTruthy();
+  expect(screen.queryByText(t("devicesHint"))).toBeNull();
+  unmount();
+  render(<DevicePanel sessionId="ssh1" />);
+  expect(screen.getByText(t("devicesHint"))).toBeTruthy();
+  expect(screen.queryByText(t("devicesHintLocal"))).toBeNull();
 });

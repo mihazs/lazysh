@@ -295,7 +295,7 @@ export default function DevicePanel({ sessionId }: { sessionId: string }) {
   return (
     <section className="tool-panel" aria-label={t('devicesTitle')}>
       <h3>{t('devicesHeading')}</h3>
-      <ToolHelp label={t('devicesAbout')}>{t('devicesHint')}</ToolHelp>
+      <ToolHelp label={t('devicesAbout')}>{t(sessionId.startsWith('local:') ? 'devicesHintLocal' : 'devicesHint')}</ToolHelp>
       <div className="tool-bar">
         <label>
           {t('devicesPlatform')}

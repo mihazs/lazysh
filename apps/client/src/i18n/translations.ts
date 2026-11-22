@@ -2248,6 +2248,7 @@ const translations = {
   devicesHeading: ["Simuladores e dispositivos", "Simuladores y dispositivos"],
   devicesHint: ["Usa o SDK instalado neste servidor SSH. A atualização de capturas obtém um quadro por segundo. O vídeo opcional do idb no iOS usa um socket local privado do companion.", "Usa el SDK instalado en este servidor SSH. La actualización de capturas obtiene un fotograma por segundo. El vídeo opcional de idb en iOS usa un socket local privado del companion."],
   devicesAbout: ["Sobre as ferramentas de dispositivo", "Acerca de las herramientas de dispositivos"],
+  devicesHintLocal: ["Usa o SDK instalado neste dispositivo. A atualização de capturas obtém um quadro por segundo. O vídeo opcional do idb no iOS usa um socket local privado do companion.", "Usa el SDK instalado en este dispositivo. La actualización de capturas obtiene un fotograma por segundo. El vídeo opcional de idb en iOS usa un socket local privado del companion."],
   devicesPlatform: ["Plataforma", "Plataforma"],
   devicesSimulator: ["Simulador iOS", "Simulador de iOS"],
   devicesFind: ["Buscar dispositivos", "Buscar dispositivos"],
