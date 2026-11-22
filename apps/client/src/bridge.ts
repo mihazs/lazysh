@@ -1,7 +1,9 @@
 import { protectedInvoke as invoke, sessionOutput, guardAccessCallback } from './access';
 import { Channel, invoke as acknowledgeInvoke, isTauri } from "@tauri-apps/api/core";
+import type { RuntimeTransport } from './terminalAdapter';
 import type { AuthHint } from './authHints';
 import { registerSessionOutput } from './pendingSessions';
+import { zellijSnapshot, type ZellijJumpTabs } from './zellijJump';
 
 export type TransportMode = 'auto' | 'ssh' | 'mosh' | 'et';
 export type UsageFreshness = "fresh" | "stale" | "unknown";
@@ -67,6 +69,8 @@ export type TmuxJumpPane = { id: string; index: number; title: string; command: 
 export type TmuxJumpSnapshot = {
   generation: string;
   current: { sessionId: string; windowId: string; paneId?: string };
+  /** Zellij only: another client is attached, so no row is current for this terminal and a jump is refused (#2046). */
+  sharedClients?: true;
   sessions: { id: string; name: string; restoreName: string | null; windows: { id: string; index: number; name: string; zoomed?: boolean; panes?: TmuxJumpPane[] }[] }[];
 };
 
@@ -82,6 +86,13 @@ function remoteInvoke<T>(command:string, args:{sessionId:string}&Record<string,u
   return invoke<T>(command,args);
 }
 function createSession(command: string, args: Record<string,unknown>, onEvent: (event:SshEvent)=>void) {
+  // A session on the native data path starts on its core's Channel: the core reads the output in Rust, and `onEvent` only sees what is not output.
+  const link = (onEvent as {link?: RuntimeTransport}).link;
+  if (link) {
+    const started = invoke<{sessionId:string}>(command, {...args,events:link.events});
+    link.bind(started.then(result => result.sessionId));
+    return started;
+  }
   const events = new Channel<SshEvent>();
   const deliver = sessionOutput(onEvent); events.onmessage = deliver;
   return invoke<{sessionId:string}>(command, {...args,events}).then(result=>{
@@ -128,8 +139,9 @@ export const api = {
   openAuthUrl: (url: string, browser?: 'inApp' | 'system') => invoke<AuthUrlOutcome>("open_auth_url", { url, browser }),
   attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>,onEvent:(event:SshEvent)=>void) =>
     createRemoteSession('attach_multiplexer',{sessionId,...target,createIfMissing:true,cols:100,rows:30},onEvent),
-  attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void) => {
-    return createRemoteSession('attach_multiplexer', { sessionId, kind, name, cols: 100, rows: 30 },onEvent);
+  /** `reattach` (reconnect and restore) never creates the session: Zellij fails when it is gone instead of starting an empty one. */
+  attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void, reattach=false) => {
+    return createRemoteSession('attach_multiplexer', { sessionId, kind, name, cols: 100, rows: 30, ...(reattach ? {createIfMissing:false} : {}) },onEvent);
   },
   listHosts: () => invoke<Host[]>("list_hosts"),
   saveHost: (host: Host) => invoke<Host>("save_host", { host }),
@@ -200,6 +212,9 @@ export const api = {
     invoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>
     remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
+  zellijJumpSnapshot: async (sessionId: string, name: string) => zellijSnapshot(name, await remoteInvoke<ZellijJumpTabs>('zellij_jump_tabs', { sessionId, name })),
+  /** Jumps to a tab by its stable id; Zellij applies it a moment later, so the result is the caller's to show. */
+  zellijJump: (sessionId: string, name: string, tabId: number) => remoteInvoke<void>('zellij_action', { sessionId, name, action: { type: 'jump', tabId } }),
   tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),
   tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string, paneId?: string) =>
     remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId, ...(paneId === undefined ? {} : { paneId }) }),

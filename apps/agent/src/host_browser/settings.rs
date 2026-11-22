@@ -28,15 +28,9 @@ impl Default for HostBrowserSettings {
 
 /// Absent settings are the default (off) and create nothing. Malformed or unsupported settings are an error.
 pub fn read(directory: &Path) -> Result<HostBrowserSettings> {
-    let Some(bytes) = private_json::read(directory, FILE)? else {
-        return Ok(HostBrowserSettings::default());
-    };
-    let settings: HostBrowserSettings =
-        serde_json::from_slice(&bytes).map_err(|_| Error::InvalidArgument)?;
-    if settings.schema_version != 1 || settings.revision > private_json::MAX_REVISION {
-        return Err(Error::InvalidArgument);
-    }
-    Ok(settings)
+    private_json::read_or_default(directory, FILE, |settings: &HostBrowserSettings| {
+        settings.schema_version == 1 && settings.revision <= private_json::MAX_REVISION
+    })
 }
 
 pub fn update(

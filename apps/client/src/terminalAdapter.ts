@@ -1,3 +1,4 @@
+import type {SshEvent} from './bridge';
 /**
  * The contract between lazysh's UI and a terminal implementation. React owns the
  * layout around the terminal; an adapter owns the terminal state of ONE session:
@@ -135,11 +136,24 @@ export type TerminalSearchHit = {row: number; column: number; length: number};
 
 export interface Disposable {dispose(): void}
 
+/**
+ * A runtime-owned data path: the transport starts with `events` (a Tauri Channel; the core attaches to the session that
+ * starts on it, so its bytes never reach JS) and reports the new session through `bind`; `onEvent` takes what is not the
+ * core's (auth hints, closed).
+ */
+export type RuntimeTransport = {
+  events: unknown;
+  bind(session: Promise<string>): void;
+  onEvent?: (event: SshEvent) => void;
+};
+
 export interface TerminalAdapter {
   readonly backend: TerminalBackendId;
   readonly capabilities: TerminalCapabilities;
   /** Who receives transport bytes: the JS side (`write`) or a native runtime that owns the transport. */
   readonly dataPath: 'renderer' | 'runtime';
+  /** Present when `dataPath` is 'runtime': how the session's transport starts on this adapter's core. */
+  readonly transport?: RuntimeTransport;
 
   /** The session outlives any view: `detach` and `attach` keep every byte of state. */
   attach(target: TerminalMountTarget): Promise<void>;

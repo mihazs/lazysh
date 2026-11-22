@@ -18,7 +18,7 @@ it("saves actual host settings with the fetched revision and explicit booleans",
   await screen.findByText("Host settings saved for new operations.");
   expect(invoke).toHaveBeenLastCalledWith("update_companion_settings",{sessionId:"host-a",settings:{expectedRevision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:false,deviceToolsEnabled:true}}, { headers: { "X-Lazysh-Access": expect.any(String) } });
   expect(screen.getByText(/Existing previews and streams continue until stopped/)).toBeTruthy();
-  expect(screen.getByText(/Port discovery is a separate SSH feature/)).toBeTruthy();
+  expect(screen.getByText(/Port discovery is a separate SSH feature of this app/)).toBeTruthy();
 });
 it("shows the update policy only for a companion that has one, and saves a change with the fetched revision",async()=>{
   expect(parseCompanionSettings({...settings,autoUpdate:{revision:2,policy:"install"}}).autoUpdate).toEqual({revision:2,policy:"install"});
@@ -117,4 +117,41 @@ it('waits for an old host save after a keyed unmount and reports its failure on 
   expect(await screen.findByLabelText('Recorded usage inspection')).toHaveProperty('checked',false);
   expect(screen.getByRole('alert').textContent).toContain('Some settings may not have been saved');
   expect(calls('get_companion_settings')).toHaveLength(2);
+});
+
+const features={schemaVersion:1 as const,revision:3,simulatorStreamingEnabled:true,portScanEnabled:true};
+it("requires exact host feature switches when the companion reports them",()=>{
+  expect(parseCompanionSettings({...settings,features})).toEqual({...settings,features});
+  expect(parseCompanionSettings({...settings,features:null}).features).toBeNull();
+  for(const value of [{...features,extra:1},{...features,portScanEnabled:"true"},{...features,revision:-1},{...features,schemaVersion:2}])expect(()=>parseCompanionSettings({...settings,features:value})).toThrow();
+});
+it("saves the feature switches through their own revision without touching the host settings",async()=>{
+  answer({get_companion_settings:[{...settings,features}],update_host_features:[{...features,revision:4,simulatorStreamingEnabled:false}],update_companion_settings:[{...settings,revision:1,recordedUsageEnabled:false}]});
+  render(<CompanionSettingsPanel sessionId="host-a"/>);
+  fireEvent.click(await screen.findByLabelText("Simulator and emulator streaming"));
+  fireEvent.click(screen.getByRole("button",{name:"Save feature switches"}));
+  await screen.findByText("Host settings saved for new operations.");
+  expect(invoke).toHaveBeenLastCalledWith("update_host_features",{sessionId:"host-a",features:{expectedRevision:3,simulatorStreamingEnabled:false,portScanEnabled:true}},{ headers:{ "X-Lazysh-Access":expect.any(String) } });
+  expect(calls("update_companion_settings")).toHaveLength(0);
+  expect((screen.getByLabelText("Simulator and emulator streaming") as HTMLInputElement).checked).toBe(false);
+  expect((screen.getByLabelText("Port scanning from the app") as HTMLInputElement).checked).toBe(true);
+  // A later settings save must send the settings revision, not the feature revision.
+  fireEvent.click(screen.getByLabelText("Recorded usage inspection"));fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
+  await waitFor(()=>expect(invoke).toHaveBeenLastCalledWith("update_companion_settings",expect.objectContaining({settings:expect.objectContaining({expectedRevision:0})}),expect.anything()));
+});
+it("reports a stale feature revision, withdraws the switches and shows the host's values after a refresh",async()=>{
+  answer({get_companion_settings:[{...settings,features},{...settings,features:{...features,revision:4,portScanEnabled:false}}],update_host_features:[()=>Promise.reject({message:"SettingsConflict"})]});
+  render(<CompanionSettingsPanel sessionId="host-a"/>);
+  fireEvent.click(await screen.findByLabelText("Port scanning from the app"));fireEvent.click(screen.getByRole("button",{name:"Save feature switches"}));
+  await screen.findByText(/Refresh host settings before retrying/);
+  expect(screen.queryByText("Host settings saved for new operations.")).toBeNull();
+  expect(screen.queryByLabelText("Port scanning from the app")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"Refresh host settings"}));
+  await waitFor(()=>expect((screen.getByLabelText("Port scanning from the app") as HTMLInputElement).checked).toBe(false));
+});
+it.each([["a companion without feature switches",{...settings,features:null}],["an older answer without the field",settings]])("offers no feature switches for %s",async(_name,reported)=>{
+  answer({get_companion_settings:[reported]});render(<CompanionSettingsPanel sessionId="host-a"/>);
+  await screen.findByLabelText("Recorded usage inspection");
+  expect(screen.queryByLabelText("Port scanning from the app")).toBeNull();expect(screen.queryByRole("button",{name:"Save feature switches"})).toBeNull();
+  expect(screen.getByText(/Feature switches need an updated host companion/)).toBeTruthy();
 });

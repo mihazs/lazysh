@@ -1,5 +1,6 @@
 //! Small owner-only JSON state files: bounded reads that never create state, and atomic locked writes.
 use crate::{Error, Result};
+use serde::de::DeserializeOwned;
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -136,6 +137,23 @@ pub(crate) fn write(directory: &Path, name: &str, bytes: &[u8]) -> Result<()> {
     #[cfg(unix)]
     File::open(directory)?.sync_all()?;
     Ok(())
+}
+
+/// The strictly parsed `name`, or the compatibility defaults when it is absent. Never creates state.
+pub(crate) fn read_or_default<T: DeserializeOwned + Default>(
+    directory: &Path,
+    name: &str,
+    valid: impl FnOnce(&T) -> bool,
+) -> Result<T> {
+    let Some(bytes) = read(directory, name)? else {
+        return Ok(T::default());
+    };
+    let value: T = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidArgument)?;
+    if valid(&value) {
+        Ok(value)
+    } else {
+        Err(Error::InvalidArgument)
+    }
 }
 
 /// Check-and-set one revisioned file under its own lock. A busy lock or a stale revision is a `Settings` error.

@@ -9,6 +9,7 @@ import canonicalBedMode from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {aboutLocales} from './test/aboutData';
 import App from "./App";
 import {setGestureInsets, unknownInsets} from './gestureInsets';
+import {gestureTourKey,gestureTourVersion} from './gestureTourModel';
 
 it('opens AI account usage for the exact connected terminal and returns without duplicate history',async()=>{
   const user=await connectForNavigation('usage-owner');
@@ -318,7 +319,8 @@ describe('the navigation page and Android Back on a phone',()=>{
   const phone=()=>vi.stubGlobal('matchMedia',vi.fn((query:string)=>({matches:query.includes('max-width')||query.includes('coarse'),media:query,addEventListener:vi.fn(),removeEventListener:vi.fn()})));
   const page=()=>screen.getByRole('complementary',{name:'Hosts and connections'});
   const handle=()=>document.querySelector<HTMLElement>('[data-gesture-handle="left"]');
-  beforeEach(()=>{phone();act(()=>setGestureInsets({left:32,right:32,bottom:48,mandatoryBottom:48,navigation:'gesture'}));});
+  // The first-run tour opens 0.9 s after connecting and covers the page; these tests are about the page, not the tour.
+  beforeEach(()=>{phone();vi.mocked(localStorage.getItem).mockImplementation(key=>key===gestureTourKey?String(gestureTourVersion):null);act(()=>setGestureInsets({left:32,right:32,bottom:48,mandatoryBottom:48,navigation:'gesture'}));});
   afterEach(()=>{act(()=>setGestureInsets(unknownInsets));});
 
   it('shows the left handle while the page is closed and hides it while the page is open, and Back closes the page',async()=>{

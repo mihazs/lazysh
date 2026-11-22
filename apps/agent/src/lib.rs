@@ -13,10 +13,14 @@ pub mod herdr_pane_input;
 pub mod hook_setup;
 pub mod hooks;
 pub mod host_browser;
+pub mod host_features;
 pub mod installation;
 pub mod kimi_code;
 pub mod listeners;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod managed_directory;
+#[cfg(windows)]
+#[path = "managed_directory_windows.rs"]
 mod managed_directory;
 // The process table is read on Unix only; elsewhere only the declared parent session applies.
 #[cfg_attr(not(unix), allow(dead_code))]
@@ -25,6 +29,7 @@ pub mod notification_policy;
 mod pane_server;
 pub use pane_server::pane_server;
 mod private_json;
+pub mod rejected_dialog;
 pub mod relay;
 pub mod reported_history;
 pub mod review;

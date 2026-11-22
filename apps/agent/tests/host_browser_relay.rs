@@ -53,6 +53,13 @@ impl Message {
             Self::Frame { .. } => "frame",
         }
     }
+    /// The kind, with the whole message for a JSON one that is not routine page information (a `closed` has its reason).
+    fn describe(&self) -> String {
+        match self {
+            Self::Json(value) if self.kind() != "page" => value.to_string(),
+            _ => self.kind().to_string(),
+        }
+    }
 }
 
 /// One relay process and its two ends of the channel.
@@ -101,22 +108,38 @@ impl Relay {
     }
 
     fn send_bytes(&mut self, bytes: &[u8]) {
-        let input = self.input.as_mut().unwrap();
-        input.write_all(bytes).unwrap();
-        input.flush().unwrap();
+        self.try_send_bytes(bytes).unwrap();
     }
-    fn send(&mut self, value: Value) {
+    fn try_send_bytes(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        let input = self.input.as_mut().unwrap();
+        input.write_all(bytes)?;
+        input.flush()
+    }
+    fn frame(value: &Value) -> Vec<u8> {
         let body = value.to_string();
         let mut bytes = (body.len() as u32 + 1).to_be_bytes().to_vec();
         bytes.push(wire::JSON);
         bytes.extend_from_slice(body.as_bytes());
-        self.send_bytes(&bytes);
+        bytes
+    }
+    fn send(&mut self, value: Value) {
+        self.send_bytes(&Self::frame(&value));
     }
     fn open(&mut self, url: &str) {
         self.open_as("chrome", url);
     }
+    fn open_message(browser: &str, url: &str) -> Value {
+        json!({"type": "open", "browser": browser, "viewport": {"width": 412, "height": 915}, "url": url})
+    }
     fn open_as(&mut self, browser: &str, url: &str) {
-        self.send(json!({"type": "open", "browser": browser, "viewport": {"width": 412, "height": 915}, "url": url}));
+        self.send(Self::open_message(browser, url));
+    }
+    /// An open the relay refuses: it reports why and exits without reading its input, so the write may meet a closed pipe.
+    fn open_refused(&mut self, browser: &str, url: &str) {
+        match self.try_send_bytes(&Self::frame(&Self::open_message(browser, url))) {
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+            result => result.unwrap(),
+        }
     }
     fn control(&mut self, on: bool) {
         self.send(json!({"type": "control", "on": on}));
@@ -168,7 +191,7 @@ impl Relay {
             if message.kind() == kind {
                 return message;
             }
-            skipped.push(message.kind().to_string());
+            skipped.push(message.describe());
         }
         panic!("no {kind} message; saw {skipped:?}");
     }
@@ -340,7 +363,7 @@ fn a_switch_that_is_off_or_unreadable_starts_nothing() {
             let envs = [("FAKE_BROWSER_DIR", root)];
             let mut relay =
                 Relay::start(&state, &envs, &["--binary", fixture.fake.to_str().unwrap()]);
-            relay.open_as(browser, "about:blank");
+            relay.open_refused(browser, "about:blank");
             assert_eq!(closed(&relay)["reason"], reason, "{browser}");
             assert!(!relay.exit().success());
             assert_nothing_started(root, &state);

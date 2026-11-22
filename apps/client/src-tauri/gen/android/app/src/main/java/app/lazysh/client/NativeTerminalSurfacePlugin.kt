@@ -10,7 +10,7 @@ import org.json.JSONException
 
 /**
  * The renderer's way to the native terminal surface (#1327): the app commands `native_terminal_surface_*` reach these. Only the
- * developer-only native backend calls them; a release build refuses (`TerminalSurfaces.enabled`).
+ * native backend, which only an explicit Native choice selects, calls them; a disabled host refuses (`TerminalSurfaces.enabled`).
  */
 @TauriPlugin
 class NativeTerminalSurfacePlugin(private val owner: Activity) : Plugin(owner) {

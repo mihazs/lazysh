@@ -94,12 +94,54 @@ check. A companion reached through a symbolic link is refused, and on macOS
 `/tmp`, `/var` and `/etc` are symbolic links (the first hosted run failed on
 exactly this with a temporary directory); install the companion under a
 physical path such as your home directory or `/usr/local/bin`.
-Windows writes remain unsupported; preview is available without accessing a
-profile. Preview labels POSIX shell, Bun JavaScript or Cline JavaScript dialect.
-On Windows it returns the existing unbound print-only templates, explicitly
-without an executable binding or managed-setup support; it does not quote a
-Windows executable as a POSIX command. These limits do not disable the existing
+On a Windows host only the OpenCode, Cline and Amp plugins are managed (see
+below); every other agent's writes remain unsupported and its preview returns the
+existing unbound print-only templates, without an executable binding, and does
+not quote a Windows executable as a POSIX command. Preview labels POSIX shell,
+Bun JavaScript or Cline JavaScript dialect. These limits do not disable the existing
 print-only configuration commands below.
+
+### Windows hosts
+
+On a Windows host `lazysh-agent hooks status`, `install` and `remove` manage only the
+three providers whose hook is a JavaScript plugin that spawns the companion as an argument
+vector: OpenCode, Cline and Amp. The plugin holds the absolute `lazysh-agent.exe` path as a
+JSON string literal, so no shell dialect quotes it, and `hooks preview` reports
+`binaryBinding: currentExecutable` for these three. Every other provider (Claude Code,
+Codex, Droid, Gemini CLI, Cursor CLI, GitHub Copilot CLI) keeps the unbound print-only
+template (`binaryBinding: unboundTemplate`, `managedSetupSupported: false`), `hooks status`
+answers `HooksAclUnsupported` and `install` and `remove` refuse: a Windows path is never
+quoted as a POSIX command, and no launcher of those providers has been shown to run a path
+with spaces yet (tracked in #1959 and #1960). The additive `readiness` of `hooks status` reports its
+local-event fact as `notChecked` on Windows: the event store has no owner or link-count
+admission there, so it is not read.
+
+The same admission and commit rules as on Linux hold, expressed in Windows terms, on a local
+NTFS volume (another volume answers `HooksAclUnsupported`):
+
+- The profile directory is retained by a handle that denies rename and deletion, so neither
+  it nor an ancestor can be moved or replaced while a setup runs, and every path component
+  is checked for a symbolic link, junction or other reparse point, an alternate data stream
+  name (`name:stream`), a device name (`NUL`, `COM1`) and a trailing dot or space.
+- The profile directory, the provider file and the companion executable are admitted by owner
+  SID and DACL: the owner is the current user or an administrator, and no other account holds
+  a right that changes the object. The record and the lock file are private: no other account
+  has any access. A foreign owner, an Everyone-writable file, a hard link, a reparse point or
+  an ACL that cannot be read refuses the setup before anything is written. A staged file is
+  created with a private DACL, and a replaced provider file keeps the DACL it had.
+- The plugin is published by an exclusive rename that never replaces an existing name, or by
+  a replacing rename of the staged file when the previous plugin is the one lazysh owns. A
+  provider created between inspection and commit is preserved and reported as uncertain.
+- The companion must be a `.exe` regular file with one link, at most 64 MiB, in a directory
+  that other accounts cannot change.
+
+Qualified by `apps/agent/tests/hook_setup_windows.rs` on a hosted Windows runner (`windows-latest`,
+x86_64, NTFS, elevated), with the real `lazysh-agent.exe` and the real Bun launcher on a path
+with spaces, an apostrophe and non-ASCII characters. Not exercised: the real OpenCode, Cline
+and Amp CLIs on Windows (Bun stands for the plugin host), a non-elevated user, ReFS, FAT, a
+network drive, 32-bit and ARM64 Windows, and a Windows host reached from the app, which cannot
+discover or offer Windows profiles yet (#1961). A directory handle has no durability barrier on
+Windows, so the same no-atomic-compare-and-swap and no power-loss limits below apply.
 
 Configuration is separate from live reporting. Provider disable settings,
 selected-layer overrides and Codex trust review still apply. Lazysh never
@@ -196,6 +238,18 @@ inventory itself never creates agent rows. Live creation, moves and deletion win
 over a delayed inventory. Its three-second wait does not cancel native SDK work;
 late results are ignored. Unknown events without a verified location are ignored.
 There is no background pagination or per-event lookup.
+
+Claude Code sends no hook when the person rejects a permission dialog (No or Esc): no `PostToolUse`,
+`PostToolUseFailure` or `Stop`, and its `PermissionDenied` hook covers only the auto mode classifier. A row
+left at an approval, a question or a plan would wait until the next prompt. So `lazysh-agent snapshot` reads
+the end of the session's conversation file (`projects/<project>/<session id>.jsonl` under `CLAUDE_CONFIG_DIR`,
+else `~/.claude`) for each such Claude Code row and marks it done, summary "Turn interrupted" as for Codex's
+`Interrupt`, when the last conversation record is Claude Code's interruption marker written after the wait
+began. A message or tool call after the marker, or a rejection older than the wait, settles nothing. Only the
+marker and its time are read; nothing from the file is stored or reported. When the companion cannot find the
+file, for example because `CLAUDE_CONFIG_DIR` is set in the agent's terminal but not in the environment of the
+snapshot (the Agent view's conversation list has the same limit), the row stays as the hooks left it until the
+next prompt or `SessionEnd`. A row nobody reads stays as it is until the next snapshot.
 
 Codex reports main-thread prompt/tool activity as working, permission requests as
 needing attention and Stop, Interrupt or SessionEnd as completed. SessionStart
@@ -653,7 +707,7 @@ Remaining work is tracked in [#1527](https://github.com/mihazs/lazysh/issues/152
 
 | Agent | Observed natively | Not established | Blocked on |
 | --- | --- | --- | --- |
-| Claude Code | 2.1.316: one print turn against a local Anthropic-format mock, `working` then `done`. 2.1.322, private HOME, loopback mock, managed profile, `--permission-mode default`: a print turn with a `Read` and a background `Agent` child kept one session row and shared it with the child's own `Read` hooks, which arrived before the parent's `Stop` in one of two runs and after it in the other (the row went `done`, then `working` again); the child's completion then resumed the parent turn, `working` then `done`. In the normal TUI (folder trusted through the ordinary dialog) a `Write` that needs permission gave `needs_attention` with an approval wait, and after approval `working` then `done`. Rejecting the dialog (No or Esc) sent no hook, so the row stayed `needs_attention` until `SessionEnd` ([#1795](https://github.com/mihazs/lazysh/issues/1795)) | Which events carry a child identity (the run read the store, not the hook payloads), plan and auto permission modes, an elicitation question | Nothing account-bound |
+| Claude Code | 2.1.316: one print turn against a local Anthropic-format mock, `working` then `done`. 2.1.322, private HOME, loopback mock, managed profile, `--permission-mode default`: a print turn with a `Read` and a background `Agent` child kept one session row and shared it with the child's own `Read` hooks, which arrived before the parent's `Stop` in one of two runs and after it in the other (the row went `done`, then `working` again); the child's completion then resumed the parent turn, `working` then `done`. In the normal TUI (folder trusted through the ordinary dialog) a `Write` that needs permission gave `needs_attention` with an approval wait, and after approval `working` then `done`. Rejecting the dialog (No or Esc) sent no hook, so the row stayed `needs_attention` until `SessionEnd` ([#1795](https://github.com/mihazs/lazysh/issues/1795)); the snapshot now settles it from the conversation file (same version, with the hook entries of `claude-config` and the built companion on `PATH` instead of `hooks install`, and `lazysh-agent snapshot` run with the profile's `HOME`: `done`, "Turn interrupted", for No and for Esc, while a later dialog of the same session kept waiting, and approving gave `working` then `done`) | Which events carry a child identity (the run read the store, not the hook payloads), plan and auto permission modes, an elicitation question | Nothing account-bound |
 | Codex | 0.166.0, normal TUI with ordinary hook review: nothing delivered before review, `working` then `done` after it, nothing when disabled or after a changed definition, one parent with one child that kept the parent `working` until its own `Stop`. 0.167.0 (`--no-daemon -a on-request -s read-only`, hooks trusted through the review screen): a command that needs approval gave `working`, then `needs_attention` with an approval wait, then `working` and `done` after approval and the command ran; Esc on the dialog delivered `Interrupt` and the row became `done` ("Turn interrupted") | Child events on 0.167.0, other approval kinds (patches, network, permission profiles) | Nothing account-bound |
 | OpenCode | 1.19.5 and 2.2 loaders, root and child session deletion, and an attributed attention report | A full provider turn and an authenticated session | A provider account for the authenticated session |
 | Gemini CLI | 0.66.0, headless with a loopback endpoint: `working` then `done`; nothing when hooks are disabled or the folder is untrusted | Interactive readiness (the owned terminal stalled at theme selection), root and child attribution, authenticated Google behaviour | A Google account for the authenticated part |

@@ -21,7 +21,7 @@ export function registerNativeBackend(backends: Pick<typeof registry, 'register'
     capabilities: nativeCapabilities,
     autoEligible: false,
     probe,
-    // shortcut: the opening's events Channel and bind() are dropped, so no transport attaches to this core yet; the session start takes them when it is wired, and replaces this.
+    // The session start reads `adapter.transport` to start its transport on this core.
     create: async () => (await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: getPreferences().scrollback})).adapter,
   });
 }

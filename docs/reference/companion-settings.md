@@ -4,6 +4,8 @@
 | --- | --- |
 | `settings show` | Reads the current response, including revision; no absent-state creation. |
 | `settings update` | Requires `--expected-revision` and all three explicit boolean flags: `--transcript-discovery-enabled`, `--recorded-usage-enabled`, `--device-tools-enabled`. |
+| `settings features show` | Reads the [host feature switches](#host-feature-switches) and their revision; no absent-state creation. |
+| `settings features update` | Requires `--expected-revision` and both explicit boolean flags: `--simulator-streaming-enabled`, `--port-scan-enabled`. |
 
 | Setting | Commands affected |
 | --- | --- |
@@ -17,7 +19,7 @@ Every successful update increments the revision exactly once. Native SSH APIs fo
 
 The host browser switch has its own native commands, `get_host_browser_settings` and `update_host_browser_settings`, which run `lazysh-agent settings host-browser show` and `update --expected-revision R --host-browser-enabled true|false` on the same verified session with the same limits (4 KiB, schema version 1, revision below 2^53, unknown fields refused). They never carry the three switches above, and `get_companion_settings` and `update_companion_settings` never carry the host browser switch. A companion that predates the subcommand answers with clap's `error: unrecognized subcommand` usage error; that one error becomes the fixed kind `host_browser_companion_required`, which the app shows as an update message while it writes nothing. Every other failure, such as `SettingsConflict`, keeps its own text. The per-host confirmation is app-side only: one device-local list of host ids under `lazysh.hostBrowserConfirmed.v1`, outside the preferences that encrypted sync uploads.
 
-Changes apply to **new CLI operations**. An already running command, device stream or preview continues until it is stopped; settings do not signal or kill existing processes. Later refresh/capture requests use the new value. Port discovery and HTTP probing currently run through a separate native SSH implementation, so these switches do not affect them. There is no port-scan switch that lacks an enforcing implementation, and the nested-agent and unlocked-desktop switches are [separate](#notification-policy-nested-agents-and-an-unlocked-desktop).
+Changes apply to **new CLI operations**. An already running command, device stream or preview continues until it is stopped; settings do not signal or kill existing processes. Later refresh/capture requests use the new value. These three switches do not affect port discovery or HTTP probing, which run through the app's own SSH implementation; the [port-scan feature switch](#host-feature-switches) covers them. The nested-agent and unlocked-desktop switches are [separate](#notification-policy-nested-agents-and-an-unlocked-desktop).
 
 The response and persisted `settings.json` use this strict schema:
 
@@ -35,7 +37,35 @@ Unknown/missing fields, other schema versions, non-boolean switches, invalid rev
 
 Updates hold a private `settings.lock`, check the expected revision under that lock, and atomically replace the config using a private temporary file. The config is synced before replacement, and the containing directory is synced on Unix. Lock release is explicit on every exit path. On Unix the state directory must belong to the current user with no group/other permissions, and config/lock files must be owned regular files with one hard link and no group/other permissions. Parent directories must belong to the current user or root and resist group/other replacement; trusted sticky temporary directories are allowed. Leaf symlinks and special files are refused, with no-follow/nonblocking opens. New Unix directories use mode 0700 and files 0600. Other platforms use the operating system's user-state ACLs; this work does not independently verify Windows ACL enforcement for custom state-directory overrides.
 
-Native Cargo fixtures cover absent-file reads, persistent typed updates, concurrent/stale revision handling, CLI gates before unavailable transcript/SDK paths, permissions, links, FIFO rejection and bounds. Vitest covers versioned parsing, actual update payloads, unavailable companions, conflicts and late responses from an old SSH session. No developer's real settings or SDK/device is used by these tests.
+Native Cargo fixtures cover absent-file reads, persistent typed updates, concurrent/stale revision handling, CLI gates before unavailable transcript/SDK paths, permissions, links, FIFO rejection and bounds, and, for the feature switches, absent and stale reads, the streaming refusal against fake `adb`, `idb` and `ffmpeg` that log every start, and the older-companion reader. They are Unix-only for the fake SDK tools; no real Android emulator or iOS simulator was started for this change. Vitest covers versioned parsing, actual update payloads, unavailable companions, conflicts and late responses from an old SSH session. No developer's real settings or SDK/device is used by these tests.
+
+## Host feature switches
+
+Two further switches live in their own strict file, **`host-features.json`**, in the same state directory, with its own revision, its own lock (`host-features.lock`) and the same 4 KiB limit, mode 0600 and atomic-replace discipline as `settings.json`. They are not fields of `settings.json` for the reason in the last paragraph below.
+
+| Switch | Default | Effect |
+| --- | --- | --- |
+| `simulatorStreamingEnabled` | enabled | `lazysh-agent devices android ID stream` and `devices ios ID stream` fail with `SimulatorStreamingDisabled` before any SDK, `idb` or `ffmpeg` process starts. Inventory, probes, screenshots, input and lifecycle controls keep following **Device tools**, so a host can allow screenshots and forbid live video. A stream also still needs **Device tools** enabled: with both off the reason is `DeviceToolsDisabled`. |
+| `portScanEnabled` | enabled | When off, the Preview panel reads the file before every discovery, does not invoke `discover_preview_ports`, sends no HTTP check, and says the scan is turned off on the host. |
+
+**Port scanning is enforced by the app, not by the companion.** Listener discovery and the HTTP check run through the app's own native SSH connection (`ss`, `lsof`, then `HEAD /`); the companion is not involved and cannot refuse them. The switch therefore binds a lazysh app that reads `host-features.json` before scanning, which this app does, and nothing else: another SSH client, or an app version from before this change, is not stopped by it. Streaming, in contrast, is enforced by the companion itself.
+
+```json
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "simulatorStreamingEnabled": false,
+  "portScanEnabled": true
+}
+```
+
+Absent means both enabled, and `settings features show` then creates nothing (no directory, lock or file). `settings features update` takes the lock, checks `--expected-revision` under it and bumps the revision exactly once; a stale revision returns `SettingsConflict` and a held lock `SettingsBusy`, as for `settings update`. Unknown or missing fields, other schema versions, non-boolean values, invalid revisions and files above 4 KiB are refused, and a device stream then fails closed with `InvalidArgument` instead of reading the file as defaults.
+
+**Restart semantics.** Nothing is restarted or signalled. A change applies to **new operations**: the next `devices ... stream` command reads the file, and the Preview panel reads it at the start of each scan. A stream that is already running continues until it is stopped; a scan already issued finishes. An automatic scan that finds the switch off stops after that one read and resumes only when a later manual scan finds it on again.
+
+**An app without the file.** A host whose companion has no `settings features` (older, not installed, or a host the app cannot identify as Linux or macOS on x64 or arm64) has no feature switches, so every switch counts as enabled and the Preview panel scans as before. On a Linux or macOS host, a `host-features.json` the companion refuses makes the Preview panel report the error and not scan, and the Host companion settings panel then offers no feature switches while the other three stay editable.
+
+**Remembered Preview choices.** The Preview panel remembers whether the user chose the HTTP check and the automatic refresh, per saved host, in this device's local storage (`lazysh.preview.scan.<host id>`; the port filter keeps its own key). The remembered choice never overrides the host switch.
 
 **Update policy is not part of this schema.** The auto-update policy (see [Auto-update policy](#auto-update-policy)) lives in a separate strict `auto-update.json` with its own revision, lock and 4 KiB limit. `settings.json` keeps exactly the five fields above and `settings update` keeps its three boolean flags, because this schema refuses unknown fields and an older companion sharing the state directory would otherwise fail with `InvalidArgument`.
 
