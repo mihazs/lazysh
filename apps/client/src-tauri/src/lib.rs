@@ -42,6 +42,7 @@ mod native_program;
 mod native_renderer;
 mod native_terminal_surface;
 mod notifications;
+mod opencode_service;
 mod previews;
 mod private_keyboard;
 mod push;
@@ -288,6 +289,9 @@ pub fn run() {
                 sync::sync_apply,
                 approvals::agent_approvals,
                 approvals::resolve_agent_approval,
+                opencode_service::opencode_service_list,
+                opencode_service::opencode_service_reply,
+                opencode_service::opencode_service_abort,
                 notifications::notify_agent_attention,
                 notifications::notification_test,
                 remote_notifications::remote_notifications_status,

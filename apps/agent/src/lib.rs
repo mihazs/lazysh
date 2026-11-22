@@ -26,6 +26,7 @@ mod managed_directory;
 #[cfg_attr(not(unix), allow(dead_code))]
 pub mod nested_agent;
 pub mod notification_policy;
+pub mod opencode_service;
 mod pane_server;
 pub use pane_server::pane_server;
 mod private_json;

@@ -1012,6 +1012,25 @@ describe('OpenCode pane',()=>{
     expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
     expect(screen.getByRole('button',{name:'Show terminal'})).toBeTruthy();
   });
+
+  it('answers its permission request through the OpenCode service, with nothing typed into the terminal',async()=>{
+    const request={kind:'permission',id:'per_one',expectedHash:'a'.repeat(64),expiresAt:new Date(Date.now()+120_000).toISOString(),supported:true,action:'bash',resources:['rm -rf build'],save:[]};
+    vi.mocked(invoke).mockImplementation(async(command,args)=>{
+      if(command==='tmux_chat')return tmuxChatReply(command,args);
+      if(command==='agent_snapshot')return {schemaVersion:1,sessions:[opencodeRow()]};
+      if(command==='agent_transcripts')return opencodeDiscovery;
+      if(command==='agent_transcript')return opencodePage;
+      if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
+      if(command==='opencode_service_list')return {schemaVersion:1,service:{available:true,shape:'v2'},running:false,requests:[request]};
+      if(command==='opencode_service_reply')return {schemaVersion:1,accepted:true};
+      throw new Error(`Unexpected ${command}`);
+    });
+    await mountTmux();await advance(500);
+    const dock=screen.getByRole('region',{name:'OpenCode requests'});
+    await act(async()=>{fireEvent.click(within(dock).getByRole('button',{name:'Allow once'}));await vi.advanceTimersByTimeAsync(50);});
+    expect(calls('opencode_service_reply')).toEqual([{sessionId:'ssh',agentSessionId:opencodeSession,paneId:'%3',id:'per_one',expectedHash:'a'.repeat(64),expiresAt:request.expiresAt,decision:'once'}]);
+    expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
+  });
 });
 
 describe.each([['claude','Claude Code'],['codex','Codex']])('permission requests of the %s agent in this pane',(agent,label)=>{

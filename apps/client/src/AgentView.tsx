@@ -11,6 +11,7 @@ import AgentSwitcher from './AgentSwitcher';
 import {agentSwitchShortcut,useCapturedShortcut} from './keyboard';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
+import AgentOpenCodeDock from './AgentOpenCodeDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
 import AgentHistory from './AgentHistory';
 import {publishAnswerGuard, publishTaskGuard, useComposerControl} from './agentDialogAnswer';
@@ -382,6 +383,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     </section>}
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {((!selected && tmux) || herdrClaude) && <AgentApprovalDock sessionId={sessionId} shown={shown && fresh} row={row} herdr={herdrClaude} access={access} invoke={invoke} />}
+    {!selected && tmux && <AgentOpenCodeDock sessionId={sessionId} shown={shown && fresh} row={row} access={access} invoke={invoke} />}
     {herdrAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && selected?.status !== 'working'} terminal={herdrView} agent={agentNames[herdrAgent.agent]} answerable={hasDialogProfile(agentNames[herdrAgent.agent])} guard={herdrStillHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {zellijAgent && row && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && row.state !== 'working'} terminal={zellijView} agent={row.agent} answerable={hasDialogProfile(row.agent)} guard={zellijHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {reader && !selected && !zellijAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} agent={row?.agent} answerable={tmux && hasDialogProfile(row?.agent) && !!row?.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
