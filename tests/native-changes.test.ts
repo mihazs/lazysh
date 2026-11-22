@@ -11,15 +11,15 @@ afterAll(() => roots.cleanup());
 
 type Outputs = Record<string, string>;
 const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'terminal_bridge', 'terminal_windows', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_terminal_core', 'android_mosh',
-  'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf', 'terminal_macos', 'linux_surface'];
+  'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf', 'terminal_macos', 'linux_surface', 'terminal_ios'];
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
 const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false', android_release_native: 'false',
   ntfy_variants: '["fdroid","google"]', native: 'true', docs_only: 'false' };
 // Jobs that are not required to merge: pull requests never select them, pushes to main always do. terminal-perf is report-only
 // too, but it follows the terminal runtime area on a pull request (see the selection test below).
-const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_macos'];
+const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_macos', 'terminal_ios'];
 const mainOnlyJobs = ['companion-candidates', 'native-desktop', 'native-android-mosh', 'native-android-herdr-navigation',
-  'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator', 'terminal-macos'];
+  'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator', 'terminal-macos', 'terminal-ios'];
 const pullRequestEverything: Outputs = { ...everything, ...Object.fromEntries(mainOnlyOutputs.map(name => [name, 'false'])) };
 const onPullRequest = (jobs: Record<string, number>) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !mainOnlyJobs.includes(id)));
 const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])), android_appium_quarantine: 'false', android_release_native: 'false',
@@ -89,7 +89,7 @@ async function runningJobs(outputs: Outputs, event = 'push') {
 
 const neverNightly = "github.event_name != 'schedule'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
-const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-macos': 1, 'terminal-windows': 1, 'native-linux-surface': 1, 'native-linux': 1, 'native-terminal-bridge': 1, 'native-desktop': 2,
+const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-macos': 1, 'terminal-windows': 1, 'terminal-ios': 1, 'native-linux-surface': 1, 'native-linux': 1, 'native-terminal-bridge': 1, 'native-desktop': 2,
   'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-zellij': 1,
   'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-ios-simulator': 1,
   'native-android-biometric': 1, 'native-android-appium': 1 };
