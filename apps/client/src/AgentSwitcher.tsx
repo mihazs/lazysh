@@ -23,8 +23,7 @@ export default function AgentSwitcher({rows,current,open,onOpenChange,onSwitch}:
   return <>
     <button ref={trigger} type="button" className="agent-switch-trigger" aria-label={shown?`${t('agentSwitchLabel')}: ${nameOf(shown)}`:t('agentSwitchLabel')} aria-expanded={open} aria-controls={open?listId:undefined} aria-keyshortcuts={hint.keys}
       title={`${t('agentSwitchLabel')} (${hint.label})`} onClick={()=>onOpenChange(!open)}>
-      {shown && <StatusRing tone={herdrTones[shown.agent_status]}/>}
-      <span>{shown?nameOf(shown):t('agentSwitchLabel')}</span><ChevronDown size={16} aria-hidden="true"/>
+      {shown && <StatusRing tone={herdrTones[shown.agent_status]}/>}<ChevronDown size={16} aria-hidden="true"/>
     </button>
     {open && <div ref={list} id={listId} className="agent-switch-list" role="group" aria-label={t('agentSwitchLabel')}
       onKeyDown={event=>{

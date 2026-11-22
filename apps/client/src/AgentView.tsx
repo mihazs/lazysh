@@ -315,7 +315,8 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const listing=!!herdrSession && !selected && (!reader || choosing);
   return <section className="agent-view" data-testid="agent-view" data-history={reading.full?undefined:'conversation'} hidden={!shown} aria-label={t('agentViewTitle')}>
     <header className="agent-view-header">
-      {state && <StatusRing tone={state.tone} />}
+      {state && !canSwitch && <StatusRing tone={state.tone} />}
+      {canSwitch && <AgentSwitcher rows={switchRows} current={navigation.data?.snapshot?.panes.find(pane=>pane.focused)?.pane_id} open={switching} onOpenChange={setSwitching} onSwitch={switchTo}/>}
       <div className="agent-view-heading">
         <strong title={selected?.place ? `${title} · ${selected.place}` : title}>{title}</strong>
         <div className="agent-view-facts">
@@ -324,7 +325,6 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
           {reader && <AgentHeaderPills session={info}/>}
         </div>
       </div>
-      {canSwitch && <AgentSwitcher rows={switchRows} current={navigation.data?.snapshot?.panes.find(pane=>pane.focused)?.pane_id} open={switching} onOpenChange={setSwitching} onSwitch={switchTo}/>}
       {reader && <button type="button" className="icon-button" aria-label={t('agentSearch')} title={t('agentSearch')} aria-pressed={reading.search} onClick={()=>changeReading({...reading,search:!reading.search,query:''})}><Search size={18} aria-hidden="true"/></button>}
       <button type="button" className="icon-button" aria-label={t('agentViewOptions')} title={t('agentViewOptions')} aria-expanded={menu} aria-controls={menuId} onClick={()=>setMenu(value=>!value)}><Ellipsis size={18} aria-hidden="true"/></button>
       <button type="button" className="icon-button" aria-label={t('agentViewTerminal')} title={t('agentViewTerminal')} onClick={onShowTerminal}><TerminalSquare size={18} aria-hidden="true"/></button>

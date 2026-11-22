@@ -84,8 +84,7 @@
 }
 
 /* Agent switcher: the shown agent in the header, opening a list of the live agents. */
-.agent-switch-trigger { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; max-width: 45%; min-height: 44px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: inherit; }
-.agent-switch-trigger > span:not(.status-ring) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.agent-switch-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 2px; flex: 0 0 auto; min-width: 44px; min-height: 44px; margin-inline-start: -8px; padding: 0 6px; border: 0; border-radius: 999px; background: transparent; color: inherit; }
 .agent-switch-trigger > .status-ring { width: 18px; height: 18px; flex: 0 0 18px; }
 .agent-switch-trigger:hover { background: var(--av-row-hover); }
 .agent-switch-list { position: absolute; z-index: 6; top: 46px; inset-inline-start: 8px; inset-inline-end: 8px; max-width: 420px; max-height: min(60dvh, 420px); overflow-y: auto; display: grid; gap: 4px; padding: 8px; border-radius: 18px; background: var(--av-row-hover); box-shadow: 0 12px 32px rgb(0 0 0 / 32%); }
