@@ -50,4 +50,12 @@ class InputRelayTest {
         relay.take { got += it }
         assertTrue(got.isEmpty())
     }
+
+    @Test fun aPasteKeepsItsPlaceBetweenTypedText() {
+        val relay = InputRelay()
+        relay.text("a"); relay.paste("b\nc"); relay.text("d")
+        val got = ArrayList<List<SurfaceInput>>()
+        relay.take { got += it }
+        assertEquals(listOf(SurfaceInput.Text("a"), SurfaceInput.Paste("b\nc"), SurfaceInput.Text("d")), got.single())
+    }
 }

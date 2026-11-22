@@ -1,5 +1,6 @@
 package app.lazysh.client
 
+import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.text.InputType
@@ -55,7 +56,22 @@ class TerminalInputView(
     override fun onKeyDown(keyCode: Int, event: KeyEvent) = forward(event, release = false) || super.onKeyDown(keyCode, event)
     override fun onKeyUp(keyCode: Int, event: KeyEvent) = forward(event, release = true) || super.onKeyUp(keyCode, event)
 
+    /** The clipboard's text, or null when it holds none or the system withholds it. */
+    private fun clipboardText(): String? = try {
+        context.getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()?.takeIf { it.isNotEmpty() }
+    } catch (_: RuntimeException) { null }
+
+    /** Shift+Insert and Ctrl+Shift+V paste, as in xterm.js; a plain Ctrl+V is the program's own key. */
+    private fun isPaste(event: KeyEvent): Boolean {
+        val shift = event.isShiftPressed
+        return shift && (event.keyCode == KeyEvent.KEYCODE_INSERT && !event.isCtrlPressed || event.keyCode == KeyEvent.KEYCODE_V && event.isCtrlPressed)
+    }
+
     private fun forward(event: KeyEvent, release: Boolean): Boolean {
+        if (isPaste(event)) {
+            if (!release && event.repeatCount == 0) clipboardText()?.let { editor.paste(it); publish() }
+            return true
+        }
         val unicode = event.getUnicodeChar(event.metaState and TerminalKeys.NON_TEXT_META.inv())
         val key = TerminalKeys.key(event.keyCode, event.metaState, unicode, event.repeatCount > 0, release) ?: return false
         editor.key(key)
@@ -109,6 +125,13 @@ class TerminalInputView(
             val before = editor.textBeforeCursor(beforeLength)
             val selected = editor.selectedText() ?: ""
             return SurroundingText(before + selected + editor.textAfterCursor(afterLength), before.length, before.length + selected.length, editor.selectionStart - before.length)
+        }
+
+        // The keyboard's clipboard strip asks the editor to paste; the text goes as a paste so a program that enabled bracketed paste receives it as one.
+        override fun performContextMenuAction(id: Int): Boolean {
+            if (id != android.R.id.paste && id != android.R.id.pasteAsPlainText) return super.performContextMenuAction(id)
+            val pasted = clipboardText() ?: return false
+            return edit(editor.paste(pasted))
         }
 
         /** Enter, Backspace, arrows and the like arrive here from the keyboard; they are keys, not text. */

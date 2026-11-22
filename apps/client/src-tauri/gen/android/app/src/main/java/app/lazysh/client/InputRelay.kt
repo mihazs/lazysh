@@ -4,6 +4,7 @@ package app.lazysh.client
 sealed interface SurfaceInput {
     data class Text(val text: String) : SurfaceInput
     data class Key(val key: TerminalKey) : SurfaceInput
+    data class Paste(val text: String) : SurfaceInput
 
     /** The text the keyboard is composing (null: none), which the page draws at the cursor until it is committed or dropped. */
     data class Preedit(val text: String?) : SurfaceInput
@@ -21,6 +22,7 @@ class InputRelay : TerminalInputSink {
 
     override fun text(text: String) = push(SurfaceInput.Text(text))
     override fun key(key: TerminalKey) = push(SurfaceInput.Key(key))
+    override fun paste(pasted: String) = push(SurfaceInput.Paste(pasted))
 
     // The bridge keeps the text on the device for review; the page has no review surface yet.
     override fun unapplied(edit: UnappliedEdit?) {}

@@ -9,6 +9,7 @@ export type SurfaceAnchor = {x: number; y: number; width: number; height: number
 /** What the surface's keyboard editor delivered (Android, #1328): committed text, keys as the core takes them, and the composing text. */
 export type SurfaceInputEvent =
   | {type: 'text'; text: string}
+  | {type: 'paste'; text: string}
   | {type: 'key'; code: string; key: string; mods: {shift: boolean; ctrl: boolean; alt: boolean; meta: boolean}; repeat: boolean; release: boolean; composing: boolean}
   | {type: 'preedit'; text: string | null};
 
