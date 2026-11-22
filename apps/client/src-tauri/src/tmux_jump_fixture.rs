@@ -944,6 +944,8 @@ fn real_tmux_jump_guards_skip_a_client_that_has_not_identified_itself() {
     attach.env_remove("TMUX");
     attach.env("HOME", dir.path());
     attach.env("SHELL", "/bin/sh");
+    // A runner without TERM makes the client exit with "missing or unsuitable terminal".
+    attach.env("TERM", "xterm-256color");
     let mut display = pty.slave.spawn_command(attach).unwrap();
     drop(pty.slave);
     let mut screen = pty.master.try_clone_reader().unwrap();
@@ -951,6 +953,11 @@ fn real_tmux_jump_guards_skip_a_client_that_has_not_identified_itself() {
     let pid = display.process_id().unwrap();
     let tty = pty.master.tty_name().unwrap();
     until("the display to attach", || {
+        let exit = display.try_wait().unwrap();
+        assert!(
+            exit.is_none(),
+            "the display exited before it attached: {exit:?}"
+        );
         run(&["list-clients", "-F", "#{client_pid}"])
             .lines()
             .any(|row| row == pid.to_string())
