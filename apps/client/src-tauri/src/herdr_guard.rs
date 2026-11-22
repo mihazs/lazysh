@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 use tauri::State;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, Notify};
 use zeroize::{Zeroize, Zeroizing};
 
 const LIMIT: usize = 32768;
@@ -1221,11 +1221,13 @@ impl Control {
 pub(crate) struct Binding {
     requests: mpsc::Sender<Work>,
     busy: Arc<AtomicBool>,
+    released: Arc<Notify>,
 }
-pub(crate) struct Permit(Arc<AtomicBool>);
+pub(crate) struct Permit(Arc<AtomicBool>, Arc<Notify>);
 impl Drop for Permit {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
+        self.1.notify_waiters();
     }
 }
 struct Work {
@@ -1286,8 +1288,11 @@ pub(crate) fn start(startup: Startup, route: Route, mut cancel: watch::Receiver<
     Binding {
         requests,
         busy: Arc::default(),
+        released: Arc::default(),
     }
 }
+/// How long a view change waits for the input turn already in flight before it reports the display busy.
+const VIEW_CHANGE_WAIT: Duration = Duration::from_secs(10);
 impl Binding {
     async fn call(
         &self,
@@ -1302,7 +1307,23 @@ impl Binding {
         self.busy
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| Fault::Busy.error())?;
-        Ok(Arc::new(Permit(self.busy.clone())))
+        Ok(Arc::new(Permit(self.busy.clone(), self.released.clone())))
+    }
+    /// Like `reserve`, but a turn already in flight is waited for (it ends by itself) instead of refusing the caller.
+    async fn reserve_waiting(&self, limit: Duration) -> Result<Arc<Permit>> {
+        let wait = async {
+            loop {
+                // Registered before the check, so a release between the check and the wait is not missed.
+                let released = self.released.notified();
+                if let Ok(permit) = self.reserve() {
+                    return permit;
+                }
+                released.await;
+            }
+        };
+        tokio::time::timeout(limit, wait)
+            .await
+            .map_err(|_| Fault::Busy.error())
     }
     async fn call_reserved(
         &self,
@@ -1347,7 +1368,7 @@ pub(crate) async fn retire_for_view(
     let Some(binding) = binding else {
         return Ok(None);
     };
-    let permit = binding.reserve()?;
+    let permit = binding.reserve_waiting(VIEW_CHANGE_WAIT).await?;
     binding
         .call_reserved(
             lease,
