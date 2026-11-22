@@ -110,6 +110,7 @@ Matrices fail fast on pull requests and keep every verdict on `main`. The script
 new input, and map an uncertain path to more jobs, never fewer.
 Main's `checks` runs are mostly superseded while pending, so the macOS-only terminal core jobs (`terminal-macos`, `terminal-ios`) rarely finish there; prove them on demand with `gh workflow run checks --ref <branch>` (the `areas` input defaults to `terminal_apple` and runs only those two jobs).
 A Changesets version bump (every changed line a version line, root `package.json` bumped) selects no native job on a pull request; `main` still runs everything.
+Paths below `packages/` are mapped through the moon project graph: `.github/scripts/moon-areas.mjs` asks `moon query affected` and follows `dependsOn` to the dependents, and `.github/ci-areas.json` gives each project's areas and the dependency edges that do not carry a change; a new moon project must be added there (a test fails until it is), and any graph failure selects every job. A Changesets version bump (every changed line a version line, root `package.json` bumped) selects no native job on a pull request; `main` still runs everything.
 
 ### Required checks
 

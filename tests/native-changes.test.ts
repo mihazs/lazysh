@@ -322,9 +322,12 @@ test('every native job waits only for the gate and same-run Herdr bytes, and eve
   expect(await runningJobs(everything)).toEqual(fullRun);
   // The fast gate runs only after classification, only on pull requests that select native work.
   const steps = checks.jobs.changes.steps;
-  expect(steps.findIndex((step: any) => step.id === 'paths')).toBe(1);
-  expect(steps.length).toBeGreaterThan(2);
-  for (const step of steps.slice(2)) expect(step.if).toBe("github.event_name == 'pull_request' && steps.paths.outputs.native == 'true'");
+  // The two steps before it install Bun and the workspace so that the script can query the moon project graph.
+  const paths = steps.findIndex((step: any) => step.id === 'paths');
+  expect(paths).toBe(3);
+  for (const step of steps.slice(1, paths)) expect(step.if).toBe("github.event_name == 'pull_request'");
+  expect(steps.length).toBeGreaterThan(paths + 1);
+  for (const step of steps.slice(paths + 1)) expect(step.if).toBe("github.event_name == 'pull_request' && steps.paths.outputs.native == 'true'");
 });
 
 test('pull request matrices fail fast while main and release staging keep every verdict', async () => {
