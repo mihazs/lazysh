@@ -7,18 +7,18 @@ use super::{
     record::{self, FileState},
     state::{self, Observation},
 };
-use crate::{managed_directory::Directory, Error, Result};
+use crate::{
+    managed_directory::{open, Directory},
+    Error, Result,
+};
 use lazysh_common::fs as private;
 use serde::Serialize;
-use std::{
-    fs::File,
-    io::Write,
-    os::unix::{
-        fs::{MetadataExt, PermissionsExt},
-        io::AsRawFd,
-    },
-    path::Path,
+#[cfg(unix)]
+use std::os::unix::{
+    fs::{MetadataExt, PermissionsExt},
+    io::AsRawFd,
 };
+use std::{fs::File, io::Write, path::Path};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Boundary {
@@ -66,9 +66,8 @@ impl Drop for Stage<'_> {
         if !self.published
             && self
                 .directory
-                .open_file(&self.name, libc::O_RDONLY)
-                .and_then(|file| file.metadata())
-                .is_ok_and(|metadata| [metadata.dev(), metadata.ino()] == self.identity)
+                .open_file(&self.name, open::READ)
+                .is_ok_and(|file| files::file_id(&file) == Some(self.identity))
         {
             let _ = self.directory.remove(&self.name, false);
         }
@@ -78,19 +77,20 @@ impl<'a> Stage<'a> {
     fn new(directory: &'a Directory, contents: &str) -> Result<Self> {
         files::directory_admission(directory)?;
         let name = format!(".lazysh-hooks-stage-{}", uuid::Uuid::new_v4());
-        let file = directory.open_file(&name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL)?;
-        let metadata = file.metadata()?;
+        let file = directory.open_file(&name, open::CREATE_NEW)?;
+        let identity = files::file_id(&file).ok_or_else(|| rejected("HooksChangedStage"))?;
         let mut stage = Self {
             directory,
             name,
-            identity: [metadata.dev(), metadata.ino()],
+            identity,
             file,
             published: false,
         };
+        #[cfg(unix)]
         stage
             .file
             .set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        files::ordinary_acl(&stage.file)?;
+        files::ordinary_acl(&stage.file, true)?;
         stage.file.write_all(contents.as_bytes())?;
         stage.file.sync_all()?;
         Ok(stage)
@@ -106,18 +106,34 @@ impl<'a> Stage<'a> {
         }
         Ok(())
     }
-    fn permissions(&mut self, mode: u32, group: Option<u32>) -> Result<()> {
-        files::ordinary_acl(&self.file)?;
-        if let Some(group) = group {
-            if self.file.metadata()?.gid() != group {
-                // SAFETY: change only this owned staging descriptor; retain its current UID.
-                if unsafe { libc::fchown(self.file.as_raw_fd(), !0, group) } != 0 {
-                    return Err(std::io::Error::last_os_error().into());
+    /// Gives the stage the access the file it replaces has: mode and group on POSIX hosts, its DACL on
+    /// Windows, where `existing` names that file in the stage's directory.
+    fn permissions(&mut self, mode: u32, group: Option<u32>, existing: Option<&str>) -> Result<()> {
+        files::ordinary_acl(&self.file, true)?;
+        #[cfg(unix)]
+        {
+            let _ = existing;
+            if let Some(group) = group {
+                if self.file.metadata()?.gid() != group {
+                    // SAFETY: change only this owned staging descriptor; retain its current UID.
+                    if unsafe { libc::fchown(self.file.as_raw_fd(), !0, group) } != 0 {
+                        return Err(std::io::Error::last_os_error().into());
+                    }
                 }
             }
+            self.file
+                .set_permissions(std::fs::Permissions::from_mode(mode))?;
         }
-        self.file
-            .set_permissions(std::fs::Permissions::from_mode(mode))?;
+        #[cfg(windows)]
+        {
+            let _ = (mode, group);
+            if let Some(existing) = existing {
+                let existing = self.directory.open_file(existing, open::READ)?;
+                crate::managed_directory::copy_dacl(&existing, &self.file)?;
+                // The copied DACL is the replaced file's own, admitted again so a late grant is refused.
+                files::ordinary_acl(&self.file, false)?;
+            }
+        }
         self.file.sync_all()?;
         Ok(())
     }
@@ -207,11 +223,14 @@ pub(super) fn apply(
     files::directory_admission(&initial.profile)?;
     let lock = initial
         .profile
-        .open_file(".lazysh-hooks.lock", libc::O_RDWR | libc::O_CREAT)?;
-    if !private::owner_only(&lock.metadata()?, false) || lock.metadata()?.len() != 0 {
+        .open_file(".lazysh-hooks.lock", open::LOCK)?;
+    if !private::owner_only(&lock.metadata()?, false)
+        || lock.metadata()?.len() != 0
+        || files::file_identity(&lock)?.links != 1
+    {
         return Err(rejected("HooksUnsafeLock"));
     }
-    files::ordinary_acl(&lock)?;
+    files::ordinary_acl(&lock, true)?;
     lock.try_lock().map_err(|_| rejected("HooksBusy"))?;
     let _lock = Lock(lock);
     let current = files::inspect(target, source)?;
@@ -242,7 +261,7 @@ pub(super) fn apply(
                     .asset_directory()
                     .expect("whole-file agent"),
             )?;
-            current.profile.file.sync_all()?;
+            current.profile.sync()?;
             Some(
                 current.profile.child(
                     current
@@ -279,13 +298,13 @@ pub(super) fn apply(
     let work = (|| -> Result<()> {
         boundary(Boundary::BeforeRecord)?;
         verify(&current, provider, missing_parent, &plan.manifest, &plan)?;
-        staged_record.check(&receipt, 0o600, None)?;
+        staged_record.check(&receipt, files::NEW_FILE_MODE, None)?;
         staged_record.publish(
             &current.manifest_name(),
             plan.manifest == FileState::Missing,
         )?;
         metadata_committed = true;
-        current.profile.file.sync_all()?;
+        current.profile.sync()?;
         boundary(Boundary::AfterRecord)?;
         let prepared = files::read(&current.profile, &current.manifest_name(), true, 64 * 1024)?;
         if prepared.contents.as_deref() != Some(&receipt) {
@@ -293,10 +312,11 @@ pub(super) fn apply(
         }
         if let Some(stage) = &mut staged_provider {
             let mode = match &plan.provider {
-                FileState::Missing => 0o600,
+                FileState::Missing => files::NEW_FILE_MODE,
                 FileState::Present { identity, .. } => identity.mode & 0o777,
             };
-            stage.permissions(mode, plan.provider_group)?;
+            let existing = (plan.provider != FileState::Missing).then(|| current.provider_name());
+            stage.permissions(mode, plan.provider_group, existing)?;
         }
         boundary(Boundary::BeforeProvider)?;
         verify(&current, provider, missing_parent, &prepared.state, &plan)?;
@@ -304,7 +324,7 @@ pub(super) fn apply(
             match (&mut staged_provider, &after) {
                 (Some(stage), Some(text)) => {
                     let mode = match &plan.provider {
-                        FileState::Missing => 0o600,
+                        FileState::Missing => files::NEW_FILE_MODE,
                         FileState::Present { identity, .. } => identity.mode & 0o777,
                     };
                     stage.check(text, mode, plan.provider_group)?;
@@ -314,7 +334,7 @@ pub(super) fn apply(
                 _ => return Err(rejected("HooksInvalidPlan")),
             }
             provider_committed = true;
-            provider.file.sync_all()?;
+            provider.sync()?;
         }
         boundary(Boundary::AfterProvider)?;
         files::directory_admission(&current.profile)?;

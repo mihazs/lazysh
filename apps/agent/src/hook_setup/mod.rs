@@ -1,20 +1,20 @@
 //! Explicit, profile-scoped lifecycle hook setup; configuration is not reporting evidence.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod commit;
 mod discovery;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod files;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod json;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod kimi_toml;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod readiness;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod record;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod render;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod state;
 use crate::{Error, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -37,7 +37,7 @@ pub enum AgentProfile {
     #[serde(rename = "kimi-code")]
     KimiCode,
 }
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 impl AgentProfile {
     /// The name the agent's lifecycle events carry in the companion store.
     fn store_name(self) -> &'static str {
@@ -110,6 +110,16 @@ pub enum Command {
         expected_plan: String,
     },
 }
+/// Whether managed setup is qualified for `agent` on this host. A Windows host runs the plugin providers' hook
+/// as a JavaScript plugin that spawns the executable as an argument vector, so the quoted absolute path needs
+/// no shell dialect. Every other provider runs a command line through a launcher that has not been qualified.
+fn qualified(agent: AgentProfile) -> bool {
+    !cfg!(windows)
+        || matches!(
+            agent,
+            AgentProfile::Opencode | AgentProfile::Cline | AgentProfile::Amp
+        )
+}
 pub fn run(command: Command) -> Result<Value> {
     match command {
         Command::Discover { schema_version } => Ok(discovery::run(schema_version)),
@@ -117,9 +127,15 @@ pub fn run(command: Command) -> Result<Value> {
         other => manage(other),
     }
 }
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn preview(agent: AgentProfile) -> Result<Value> {
+    if !qualified(agent) {
+        return Ok(unbound_preview(agent));
+    }
     let source = std::env::current_exe()?;
+    if !record::valid_path(&source) {
+        return Err(Error::Installation("HooksInvalidBinary"));
+    }
     let agent = agent.agent();
     let (asset, dialect) = if agent == record::Agent::KimiCode {
         let entries = render::entries(agent, &source).map_err(Error::Installation)?;
@@ -163,8 +179,11 @@ fn preview(agent: AgentProfile) -> Result<Value> {
         json!({"schemaVersion":1,"agent":agent,"binary":source,"asset":asset,"dialect":dialect,"binaryBinding":"currentExecutable","reporting":"notChecked","trust":"notChecked"}),
     )
 }
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn preview(agent: AgentProfile) -> Result<Value> {
+    Ok(unbound_preview(agent))
+}
+fn unbound_preview(agent: AgentProfile) -> Value {
     // Reuse the original print-only templates, never quote a Windows path as POSIX.
     // These assets are not a Windows installer or a verified executable binding.
     let (asset, dialect) = match agent {
@@ -191,11 +210,9 @@ fn preview(agent: AgentProfile) -> Result<Value> {
             "kimi-code-toml-suffix",
         ),
     };
-    Ok(
-        json!({"schemaVersion":1,"agent":agent,"asset":asset,"dialect":dialect,"binaryBinding":"unboundTemplate","managedSetupSupported":false,"reporting":"notChecked","trust":"notChecked"}),
-    )
+    json!({"schemaVersion":1,"agent":agent,"asset":asset,"dialect":dialect,"binaryBinding":"unboundTemplate","managedSetupSupported":false,"reporting":"notChecked","trust":"notChecked"})
 }
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn manage(command: Command) -> Result<Value> {
     let source = std::env::current_exe()?;
     let (target, action) = match &command {
@@ -204,6 +221,9 @@ fn manage(command: Command) -> Result<Value> {
         Command::Remove { target, .. } => (target, Some(files::Action::Remove)),
         Command::Preview { .. } | Command::Discover { .. } => unreachable!(),
     };
+    if !qualified(target.agent) {
+        return unsupported(&command);
+    }
     let selected = files::Target {
         agent: target.agent.agent(),
         profile: target.profile_root.clone(),
@@ -250,8 +270,12 @@ fn manage(command: Command) -> Result<Value> {
         json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":install.digest()?,"removePlan":remove.digest()?,"binary":install.binary,"reporting":"notChecked","trust":"notChecked","readiness":readiness::report(target.agent)}),
     )
 }
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn manage(command: Command) -> Result<Value> {
+    unsupported(&command)
+}
+/// What a host answers for a provider whose managed setup is not qualified there.
+fn unsupported(command: &Command) -> Result<Value> {
     match command {
         Command::Status { .. } => Ok(
             json!({"schemaVersion":1,"supported":false,"reason":"HooksAclUnsupported","reporting":"notChecked","trust":"notChecked"}),
