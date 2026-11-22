@@ -75,7 +75,10 @@ impl RemoteState {
     /// is still the newest request; `None` when a newer one entered first. A native keychain call cannot be
     /// cancelled once it started, so the gate orders the whole change instead of trying to interrupt it.
     fn commit<T>(&self, ticket: u64, change: impl FnOnce() -> T) -> Option<T> {
-        let _gate = self.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gate = self
+            .1
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         (lock(&self.0).generation == ticket).then(change)
     }
     /// Starts the poller for `ticket`; false, and nothing started, when a newer request or a pause came first.
@@ -496,7 +499,12 @@ mod tests {
         let server = server().await;
         let state = RemoteState::default();
         let (older, newer) = (state.request(), state.request());
-        let rival = Reader::new(lazysh_notification_client::http_client().unwrap(), "https://gotify.example.com", "client-token").unwrap();
+        let rival = Reader::new(
+            lazysh_notification_client::http_client().unwrap(),
+            "https://gotify.example.com",
+            "client-token",
+        )
+        .unwrap();
         assert!(!state.start(older, rival, Duration::from_millis(20), || Ok(())));
         assert!(state.start(newer, server.reader, Duration::from_millis(20), || Ok(())));
         assert_eq!(state.snapshot(), (true, None));
@@ -526,7 +534,10 @@ mod tests {
         // The removal's ticket is already stale; a newer pause waits for the running change, then writes.
         assert_eq!(state.commit(removal, || ()), None);
         let pause = state.stop();
-        assert_eq!(state.commit(pause, || log.lock().unwrap().push("pause")), Some(()));
+        assert_eq!(
+            state.commit(pause, || log.lock().unwrap().push("pause")),
+            Some(())
+        );
         assert_eq!(slow.join().unwrap(), Some(()));
         assert_eq!(*log.lock().unwrap(), ["configure", "pause"]);
     }
@@ -537,10 +548,15 @@ mod tests {
         let shown = Arc::new(AtomicUsize::new(0));
         let state = RemoteState::default();
         let count = shown.clone();
-        state.start(state.request(), server.reader, Duration::from_millis(20), move || {
-            count.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        });
+        state.start(
+            state.request(),
+            server.reader,
+            Duration::from_millis(20),
+            move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
         assert_eq!(state.snapshot(), (true, None));
         until(|| server.requests.load(Ordering::SeqCst) >= 2).await;
         assert_eq!(
@@ -582,9 +598,12 @@ mod tests {
     ) {
         let server = server().await;
         let state = RemoteState::default();
-        state.start(state.request(), server.reader, Duration::from_millis(20), || {
-            Err("notification_permission")
-        });
+        state.start(
+            state.request(),
+            server.reader,
+            Duration::from_millis(20),
+            || Err("notification_permission"),
+        );
         until(|| server.requests.load(Ordering::SeqCst) >= 1).await;
         *server.messages.lock().unwrap() = page(&[(1, "build: needs_attention")]);
         until(|| state.snapshot().1 == Some("notification_permission")).await;
