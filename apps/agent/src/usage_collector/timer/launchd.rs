@@ -21,7 +21,10 @@ fn launchctl(args: &[&str]) -> bool {
     succeeds("launchctl", args)
 }
 
-pub fn install(exe: &str, before_write: &mut dyn FnMut() -> Result<(), Failure>) -> Result<(), Failure> {
+pub fn install(
+    exe: &str,
+    before_write: &mut dyn FnMut() -> Result<(), Failure>,
+) -> Result<(), Failure> {
     // Without a login session of the GUI domain (an SSH-only account) there is nowhere to load an agent.
     if !launchctl(&["print", &domain()]) {
         return Err(Failure::Unsupported);

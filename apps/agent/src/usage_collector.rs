@@ -173,7 +173,11 @@ fn lifecycle(directory: &Path) -> std::result::Result<private_json::Lock, timer:
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Ok(None) => return Err(busy),
-            Err(_) => return Err(timer::Failure::Refused("The collector state is unavailable")),
+            Err(_) => {
+                return Err(timer::Failure::Refused(
+                    "The collector state is unavailable",
+                ))
+            }
         }
     }
 }
