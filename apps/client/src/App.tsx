@@ -71,6 +71,7 @@ import {
 import {
   api as nativeApi,
   native,
+  type MultiplexerKind,
   type Credentials,
   type Host,
   type SshError,
@@ -82,6 +83,7 @@ import {
   type MultiplexerTool,
 } from "./bridge";
 import type { LiveSession } from "./terminal";
+import { isTmuxFamily } from "./multiplexerFamily";
 import { carryKeyboard } from "./softKeyboard";
 import {attachmentTerminalInput,type AttachmentPathPaste} from './attachmentPaste';
 import type { AppleUsageReport } from "./UsagePanel";
@@ -236,6 +238,8 @@ const fallbackErrors = new Set([
   'et_unsupported_route', 'et_agent_forwarding',
 ]);
 type Prepared = Awaited<ReturnType<typeof prepareSession>>;
+/** The optional `-L` label of an rmux attach; Herdr and Zellij calls keep their exact argument list. */
+const serverArgument=(tmuxServer?:string)=>tmuxServer===undefined ? [] as const : [tmuxServer] as const;
 async function selectTransport(
   shell: Prepared, host: Host, mode: TransportMode, options: AutoOptions,
   capabilities: {mosh: boolean; et: boolean; reason?: string},
@@ -269,7 +273,7 @@ async function selectTransport(
           ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name},child.onEvent)
           : entry.kind==='tmux'
             ? await api.attachTmux(shell.session.id,entry.name,child.onEvent,entry.tmuxServer)
-            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent,true)
+            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent,true,...serverArgument(entry.tmuxServer))
         : kind === 'mosh'
           ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent,...(entry?[entry] as const:[]))
           : await api.connectEt(shell.session.id, options.et, child.onEvent);
@@ -1471,7 +1475,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(!native || !active?.connected || active.local)return;
     let current=true;
     const sessionId=active.id;
-    const tmuxServer=active.attached?.kind==='tmux' ? active.attached.tmuxServer : undefined;
+    const tmuxServer=isTmuxFamily(active.attached?.kind) ? active.attached.tmuxServer : undefined;
     void invoke<{tools?:MultiplexerTool[]}>('multiplexer_tree',{sessionId,...(tmuxServer && tmuxServer!=='default'?{tmuxServer}:{})}).then(tree=>{
       if(current && lease.current() && Array.isArray(tree?.tools))setMuxTools(value=>({...value,[sessionId]:tree.tools!}));
     }).catch(()=>{});
@@ -1793,7 +1797,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       child = await prepareSession(host.id, `${host.name} / ${intent.attached.name}`, shell.session.destination, lease);
       const attached = intent.attached.kind === "tmux"
         ? await api.attachTmux(shell.session.id, intent.attached.name, child.onEvent, intent.attached.tmuxServer)
-        : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent, true);
+        : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent, true, ...serverArgument(intent.attached.tmuxServer));
       child.establish(attached.sessionId);
       owned.add(attached.sessionId);
       if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
@@ -2091,7 +2095,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   async function attachTmux(
     source: LiveSession,
     name: string,
-    kind: "tmux" | "herdr" | "zellij" = "tmux",
+    kind: MultiplexerKind = "tmux",
     tmuxServer?: string,
     owner:AccessLease=lease,
     beforePublish?:()=>void,
@@ -2112,7 +2116,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       const result =
         kind === "tmux"
           ? await sourceApi.attachTmux(source.id, name, pending.onEvent, tmuxServer)
-          : await sourceApi.attachMultiplexer(source.id, kind, name, pending.onEvent);
+          : tmuxServer === undefined
+            ? await sourceApi.attachMultiplexer(source.id, kind, name, pending.onEvent)
+            : await sourceApi.attachMultiplexer(source.id, kind, name, pending.onEvent, false, tmuxServer);
       pending.establish(result.sessionId);
       ownership.add(result.sessionId);
       pending.session.attached = { kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}) };
