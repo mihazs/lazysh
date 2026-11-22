@@ -2546,6 +2546,7 @@ export const english = {
   agentViewOtherPane: "Not this pane",
   agentViewChooseAgent: "Choose another agent",
   agentSwitchLabel: "Switch agent",
+  agentViewFull: "Full window",
   agentViewThisPane: "This pane's agent",
   agentViewPaneNoAgent: "No agent runs in the focused pane. Choose a live agent.",
   agentViewPaneNoConversation: "{{agent}} runs in the focused pane, but Herdr has not reported its conversation yet. It appears here as soon as it does, or choose another agent.",

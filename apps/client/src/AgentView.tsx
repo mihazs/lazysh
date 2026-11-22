@@ -60,8 +60,8 @@ const sameSource = (left: BoundConversation | BoundRecords | undefined, right: B
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, tmux, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
-  sessionId: string; shown: boolean; tmux: boolean; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
+export default function AgentView({sessionId, shown, full, onToggleFull, tmux, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
+  sessionId: string; shown: boolean; /** The Agent view has the whole window: the app bars around it are hidden. */full?: boolean; onToggleFull?: () => void; tmux: boolean; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
   onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
 }) {
   useUi();
@@ -338,6 +338,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
       {/* Resume stages the agent's own command for review in the terminal composer, like Start; it is never offered over a running agent. */}
       {selected?.history && selected.resume && !paneHasAgent && <button type="button" onClick={()=>{window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:selected.resume}}));setMenu(false);onShowTerminal();}}>{t('agentHistoryResume')}</button>}
       {selected && !selected.linked && <button type="button" onClick={back}>{t(herdrSession && linked ? 'agentViewThisPane' : 'agentViewBackSessions')}</button>}
+      {onToggleFull && <button type="button" aria-pressed={!!full} onClick={()=>{onToggleFull();setMenu(false);}}>{t('agentViewFull')}</button>}
       {reader && viewFolder && !selected?.history && <button type="button" onClick={()=>{setHistory(viewFolder);setMenu(false);}}>{t('agentHistoryOpen')}</button>}
       {enter && <EnterSessionButton server={selected.enter!.server} target={selected.enter!.target} lease={access} enabled={shown} onEnterHerdr={onEnterHerdr} owner={()=>()=>active.current.shown && active.current.sessionId===sessionId && access.current()}/>}
       {reader && <button type="button" aria-pressed={!reading.full} onClick={()=>changeReading({...reading,full:!reading.full})}>{t('agentConversationOnly')}</button>}

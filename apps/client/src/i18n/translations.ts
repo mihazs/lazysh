@@ -2552,6 +2552,7 @@ const translations = {
   agentViewOtherPane: ["Outro painel", "Otro panel"],
   agentViewChooseAgent: ["Escolher outro agente", "Elegir otro agente"],
   agentSwitchLabel: ["Trocar de agente", "Cambiar de agente"],
+  agentViewFull: ["Janela inteira", "Ventana completa"],
   agentViewThisPane: ["Agente deste painel", "Agente de este panel"],
   agentViewPaneNoAgent: ["Nenhum agente roda no painel em foco. Escolha um agente ativo.", "Ningún agente se ejecuta en el panel enfocado. Elige un agente activo."],
   agentViewPaneNoConversation: ["{{agent}} roda no painel em foco, mas o Herdr ainda não informou a conversa. Ela aparece aqui assim que informar; ou escolha outro agente.", "{{agent}} se ejecuta en el panel enfocado, pero Herdr aún no informó la conversación. Aparece aquí en cuanto la informe; o elige otro agente."],
