@@ -112,7 +112,7 @@ describe('the build-time kill switch of the native backend', () => {
 
 describe('release gate', () => {
   it('never gives native to Auto even when its probe passes, and gives it to an explicit choice', async () => {
-    const {r} = registry({probe: () => ({ok: true})});
+    const {r} = registry();
     expect((await r.select()).id).toBe('xterm');
     expect((await r.select({preference: 'native'})).id).toBe('native');
   });
