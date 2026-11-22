@@ -24,6 +24,13 @@
 //! `_search`, `_word_at`, `_line_at`, `_buffer_range` and `_copy_screen` answer with text, a range or a hit, and
 //! `terminal_core_select` hands the selection to the session, where a renderer host draws it. The logic is the runtime crate's (`control_*`, [`Doorbell`]), which the stdio
 //! harness shares; this module gates it behind the renderer's access lease.
+//!
+//! The way out (#1342): `terminal_core_release(events)` hands a session's transport back to the WebView. From the
+//! next chunk on, the output and the closing notice go to the new `events` Channel and the WebView acknowledges
+//! them; the core parses what it was fed before that, answers with an ANSI snapshot of its visible screen, cursor
+//! and modes (`terminal_core_ansi_snapshot` reads the same without releasing) and is freed. A chunk is never
+//! split, so a reader that replays the snapshot and then the Channel's data has every byte once, in order.
+//! Scrollback is not carried over.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
@@ -66,6 +73,9 @@ pub(crate) trait Core: Send + Sync {
     fn feed(&self, chunk: Vec<u8>) -> Result<(), String>;
     /// Text of the visible rows, on request: React never receives cells.
     fn viewport_text(&self) -> Result<String, String>;
+    /// Bytes that rebuild the visible screen, the cursor and the modes in a fresh terminal of the same size, and
+    /// how many bytes the core was fed and has not parsed yet (the snapshot is missing those).
+    fn ansi_snapshot(&self) -> Result<(String, usize), String>;
     /// The renderer's grid changed: the terminal's size, so the transport's output wraps as drawn.
     fn resize(&self, cols: u32, rows: u32) -> Result<(), String>;
     /// Encode one input event for the modes the program has set and queue the bytes on the transport
@@ -297,21 +307,41 @@ impl Link {
     }
 }
 
+/// A core and where its session's output goes once it was released: the Channel [`release`] was given. One
+/// delivery holds the lock, so a chunk goes whole to the core or whole to that Channel.
+#[derive(Clone)]
+struct Attached {
+    core: Arc<dyn Core>,
+    handed: Arc<Mutex<Option<Channel<SshEvent>>>>,
+}
+
+impl Attached {
+    fn handed(&self) -> std::sync::MutexGuard<'_, Option<Channel<SshEvent>>> {
+        self.handed.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// The core a session's output is routed to, and the id it is registered under, set at most once.
 #[derive(Default)]
-pub(crate) struct CoreSlot(OnceLock<(String, Arc<dyn Core>)>);
+pub(crate) struct CoreSlot(OnceLock<(String, Attached)>);
 
 impl CoreSlot {
-    /// A renderer must not acknowledge output a core consumes: the core alone returns that credit.
+    /// The core, while it still consumes the session's output.
+    fn consuming(&self) -> Option<&Attached> {
+        let (_, attached) = self.0.get()?;
+        attached.handed().is_none().then_some(attached)
+    }
+
+    /// A renderer must not acknowledge output a core consumes: the core alone returns that credit. After a
+    /// release the output is the WebView's again, and so is its acknowledgement.
     pub(crate) fn is_attached(&self) -> bool {
-        self.0.get().is_some()
+        self.consuming().is_some()
     }
 
     /// A resize the renderer sent to the transport, for the core to follow (a no-op without a core).
     pub(crate) fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
-        self.0
-            .get()
-            .map_or(Ok(()), |(_, core)| core.resize(cols, rows))
+        self.consuming()
+            .map_or(Ok(()), |attached| attached.core.resize(cols, rows))
     }
 
     /// Free the core of a session whose id the renderer will never receive (the connect failed or was
@@ -323,30 +353,38 @@ impl CoreSlot {
     }
 
     /// The sink for one delivery: output data goes to the core if attached, otherwise to the
-    /// Channel; the closing notice always goes to the Channel, which stays the control path.
+    /// Channel; the closing notice always goes to the Channel, which stays the control path. After a
+    /// release, both go to the Channel the session was released to.
     pub(crate) fn route<'a>(&'a self, channel: &'a Channel<SshEvent>) -> Routed<'a> {
         Routed {
             channel,
-            core: self.0.get().map(|(_, core)| core),
+            attached: self.0.get().map(|(_, attached)| attached),
         }
     }
 }
 
 pub(crate) struct Routed<'a> {
     channel: &'a Channel<SshEvent>,
-    core: Option<&'a Arc<dyn Core>>,
+    attached: Option<&'a Attached>,
 }
 
 impl OutputSink for Routed<'_> {
     fn data(&self, bytes: &[u8]) -> Result<(), String> {
-        match self.core {
-            Some(core) => core.feed(bytes.to_vec()),
-            None => self.channel.data(bytes),
+        let Some(attached) = self.attached else {
+            return self.channel.data(bytes);
+        };
+        match &*attached.handed() {
+            Some(channel) => channel.data(bytes),
+            None => attached.core.feed(bytes.to_vec()),
         }
     }
 
     fn closed(&self, message: String, lost: bool) -> Result<(), String> {
-        self.channel.closed(message, lost)
+        let handed = self.attached.and_then(|attached| attached.handed().clone());
+        handed
+            .as_ref()
+            .unwrap_or(self.channel)
+            .closed(message, lost)
     }
 }
 
@@ -379,8 +417,12 @@ impl Prepared {
     ) {
         let _ = self.link.credit.set(credit);
         let _ = self.link.input.set(input);
-        slot.0.set((id.to_owned(), self.core.clone())).ok();
-        registry().live.insert(id.to_owned(), self.core.clone());
+        let attached = Attached {
+            core: self.core.clone(),
+            handed: Arc::default(),
+        };
+        slot.0.set((id.to_owned(), attached.clone())).ok();
+        registry().live.insert(id.to_owned(), attached);
         self.attached = true;
     }
 }
@@ -404,7 +446,7 @@ const MAX_OFFERS: usize = 16;
 struct Registry {
     /// Offers by the id of the `Channel` the renderer will pass to the connect command.
     offered: VecDeque<(u32, Factory)>,
-    live: HashMap<String, Arc<dyn Core>>,
+    live: HashMap<String, Attached>,
 }
 
 impl Registry {
@@ -447,7 +489,7 @@ pub(crate) fn tests_keeping_cores() -> &'static std::sync::RwLock<()> {
     &KEEPING
 }
 
-pub(crate) fn live(id: &str) -> Result<Arc<dyn Core>, String> {
+fn attached(id: &str) -> Result<Attached, String> {
     registry()
         .live
         .get(id)
@@ -455,11 +497,46 @@ pub(crate) fn live(id: &str) -> Result<Arc<dyn Core>, String> {
         .ok_or_else(|| "No native terminal core for this session".into())
 }
 
+pub(crate) fn live(id: &str) -> Result<Arc<dyn Core>, String> {
+    attached(id).map(|attached| attached.core)
+}
+
 pub(crate) fn close(id: &str) {
-    let core = registry().live.remove(id);
-    if let Some(core) = core {
-        core.close();
+    let attached = registry().live.remove(id);
+    if let Some(attached) = attached {
+        attached.core.close();
     }
+}
+
+/// How long [`release`] waits for the core to parse what it was fed: at most one transport window, parsed in
+/// milliseconds, so this only ends a wait on a core that stopped.
+const RELEASE_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Hand the session's transport back to the WebView (#1342): its output goes to `events` from the next chunk on,
+/// and the answer is the core's ANSI snapshot once it has parsed every chunk it was fed before that. The core is
+/// freed either way. On an error the output already flows to `events`, with no screen to start from.
+pub(crate) async fn release(id: &str, events: Channel<SshEvent>) -> Result<String, String> {
+    let attached = attached(id)?;
+    {
+        let mut handed = attached.handed();
+        if handed.is_some() {
+            return Err("This session is already being released".into());
+        }
+        *handed = Some(events);
+    }
+    let started = std::time::Instant::now();
+    let snapshot = loop {
+        match attached.core.ansi_snapshot() {
+            Ok((snapshot, 0)) => break Ok(snapshot),
+            Ok(_) if started.elapsed() < RELEASE_DRAIN => {
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            }
+            Ok(_) => break Err("The terminal core did not finish its output".to_owned()),
+            Err(error) => break Err(error),
+        }
+    };
+    close(id);
+    snapshot
 }
 
 /// A renderer replacement ends every renderer-owned session; the cores they fed go with them,
@@ -469,7 +546,7 @@ pub(crate) fn close_all() {
     #[cfg(test)]
     let _exclusive = tests_keeping_cores().write();
     let live = std::mem::take(&mut registry().live);
-    live.values().for_each(|core| core.close());
+    live.values().for_each(|attached| attached.core.close());
 }
 
 /// What every native terminal command says in a build made with `LAZYSH_NATIVE_TERMINAL=off` (the kill switch, see `build.rs`).
@@ -544,6 +621,29 @@ pub async fn terminal_core_text(lease: AccessLease, session_id: String) -> Acces
     lease
         .run(async { live(&session_id)?.viewport_text() })
         .await
+}
+
+/// The visible screen, cursor and modes as bytes a fresh terminal of the same size replays (#1342); the scrollback
+/// is not part of it. Like `terminal_core_text` it belongs to the current renderer.
+#[tauri::command]
+pub async fn terminal_core_ansi_snapshot(
+    lease: AccessLease,
+    session_id: String,
+) -> AccessResult<String> {
+    lease
+        .run(async { Ok(live(&session_id)?.ansi_snapshot()?.0) })
+        .await
+}
+
+/// Hands the session's transport back to the WebView: see [`release`]. The renderer replays the answer into its
+/// terminal first, then the data of `events`, which it acknowledges like any Channel terminal's.
+#[tauri::command]
+pub async fn terminal_core_release(
+    lease: AccessLease,
+    session_id: String,
+    events: Channel<SshEvent>,
+) -> AccessResult<String> {
+    lease.run(release(&session_id, events)).await
 }
 
 /// The control plane (#1321) belongs to the current renderer like `terminal_core_text`: a locked app or a replaced
@@ -1042,6 +1142,16 @@ mod native {
                 .map_err(|error| error.to_string())
         }
 
+        fn ansi_snapshot(&self) -> Result<(String, usize), String> {
+            // Under the session lock no worker is mid-parse: nothing queued means everything fed is on the screen.
+            self.0
+                .with(|runtime| {
+                    Ok::<_, RuntimeError>((runtime.ansi_snapshot()?, runtime.ingress().queued()))
+                })
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())
+        }
+
         fn resize(&self, cols: u32, rows: u32) -> Result<(), String> {
             let size = Size::new(cols as u16, rows as u16);
             self.0
@@ -1479,6 +1589,86 @@ mod native {
             fixture.program_prints(b"\x1b[?1006h");
             assert_eq!(fixture.encode(press()), b"\x1b[<0;111;2M");
             fixture.core.close();
+        }
+
+        /// The handed-over session's terminal: small, so its lines scroll.
+        fn handed() -> Config {
+            Config {
+                size: Size::new(40, 6),
+                ..Config::default()
+            }
+        }
+
+        /// A terminal of the handed-over session's size that parsed `parts` in order.
+        fn replayed(parts: &[&[u8]]) -> TerminalRuntime {
+            let mut runtime = TerminalRuntime::new(handed()).unwrap();
+            for chunk in parts.iter().flat_map(|part| part.chunks(16 * 1024)) {
+                assert_eq!(runtime.offer(chunk.to_vec()), Offer::Accepted);
+                runtime.pump(usize::MAX);
+            }
+            runtime
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+        async fn a_released_real_core_hands_over_its_screen_cursor_and_modes_and_no_byte_is_lost() {
+            let _kept = tests_keeping_cores().read();
+            let lease = crate::app_lock::AccessState::disabled().lease(None);
+            let (core, link) = create(handed(), &lease.unwrap(), |_| {}).unwrap();
+            let prepared = Prepared::new(Arc::new(core), link);
+            // A program on the alternate screen with bracketed paste, drag tracking in the SGR encoding,
+            // application cursor keys and a hidden cursor, printing while the user switches engine.
+            let prelude = b"shell\r\n\x1b[?1049h\x1b[?2004h\x1b[?1002h\x1b[?1006h\x1b[?1h\x1b[?25l";
+            let mut released = fake::release_mid_stream("handed-real", prepared, prelude).await;
+            let (after, _) = fake::received(&mut released.second_events);
+            assert!(!after.is_empty(), "lines arrived after the release");
+            assert!(fake::received(&mut released.first_events).0.is_empty());
+            // The new Channel carries exactly what the core did not consume: its credit says where it stopped.
+            let start = Instant::now();
+            let consumed = released.delivered.len() - after.len();
+            while released.credited.load(std::sync::atomic::Ordering::SeqCst) < consumed {
+                assert!(start.elapsed() < Duration::from_secs(10), "credit missing");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                released.credited.load(std::sync::atomic::Ordering::SeqCst),
+                consumed
+            );
+            assert!(consumed > prelude.len(), "lines were parsed by the core");
+            assert_eq!(after, released.delivered[consumed..]);
+            // A fresh terminal that replays the snapshot and then the Channel shows what one that saw the whole
+            // stream shows, with the same cursor and modes.
+            let mut whole = replayed(&[&released.delivered]);
+            let mut resumed = replayed(&[released.snapshot.as_bytes(), &after]);
+            assert_eq!(
+                resumed.viewport_text().unwrap(),
+                whole.viewport_text().unwrap()
+            );
+            let (state, expected) = (
+                resumed.control_snapshot(6).unwrap().state,
+                whole.control_snapshot(6).unwrap().state,
+            );
+            assert_eq!(
+                (state.cursor, state.modes),
+                (expected.cursor, expected.modes)
+            );
+            assert!(state.modes.alternate_screen && state.modes.bracketed_paste);
+            assert_eq!(
+                resumed.ansi_snapshot().unwrap(),
+                whole.ansi_snapshot().unwrap()
+            );
+            // The snapshot alone is the screen at the release: the last line the core parsed, and none after it.
+            let mut at_release = replayed(&[released.snapshot.as_bytes()]);
+            let mut before = replayed(&[&released.delivered[..consumed]]);
+            assert_eq!(
+                at_release.viewport_text().unwrap(),
+                before.viewport_text().unwrap()
+            );
+            assert_eq!(
+                at_release.ansi_snapshot().unwrap(),
+                before.ansi_snapshot().unwrap()
+            );
+            assert!(live("handed-real").is_err(), "the released core is freed");
         }
 
         /// A real core whose event stream is recorded, opened under `lease`.
@@ -1989,6 +2179,15 @@ pub(crate) mod fake {
         }
 
         /// The parsed bytes as one row of text: enough to see what the commands do with a lease.
+        /// The stand-in's screen is every byte it parsed.
+        fn ansi_snapshot(&self) -> Result<(String, usize), String> {
+            let seen = self.seen.lock().unwrap();
+            Ok((
+                String::from_utf8_lossy(&seen).into_owned(),
+                self.queued.load(SeqCst),
+            ))
+        }
+
         fn control_snapshot(&self, _: &AccessLease, window: Option<usize>) -> Result<Json, String> {
             let text = String::from_utf8_lossy(&self.seen.lock().unwrap()).into_owned();
             Ok(serde_json::json!({"window": {"first": 0, "rows": [text]}, "asked": window}))
@@ -2083,6 +2282,99 @@ pub(crate) mod fake {
         assert!(rows.len() <= 1024, "a window is bounded");
     }
 
+    /// A session released while its transport keeps delivering: the Channels it had and was released to, what
+    /// the transport delivered, what the core returned as credit, and what `terminal_core_release` answered.
+    pub(crate) struct Released {
+        pub(crate) delivered: Vec<u8>,
+        pub(crate) snapshot: String,
+        pub(crate) credited: Arc<AtomicUsize>,
+        pub(crate) slot: Arc<CoreSlot>,
+        pub(crate) first: Channel<SshEvent>,
+        pub(crate) first_events: tokio::sync::mpsc::UnboundedReceiver<Json>,
+        pub(crate) second_events: tokio::sync::mpsc::UnboundedReceiver<Json>,
+    }
+
+    /// Attaches `prepared` as session `id`, has a transport thread deliver `prelude` and then one numbered line
+    /// per chunk without pause, releases the session while lines are in flight and stops the transport some
+    /// lines later.
+    pub(crate) async fn release_mid_stream(
+        id: &str,
+        prepared: Prepared,
+        prelude: &[u8],
+    ) -> Released {
+        use crate::ssh::test_support::json_events;
+        let (slot, credited) = (Arc::new(CoreSlot::default()), Arc::new(AtomicUsize::new(0)));
+        let counted = credited.clone();
+        let credit = move |bytes| {
+            counted.fetch_add(bytes, SeqCst);
+        };
+        prepared.attach(id, &slot, Arc::new(credit), Arc::new(|_, _| Ok(())));
+        let (first, first_events) = json_events();
+        let (second, second_events) = json_events();
+        let (lines, stop) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let transport = {
+            let (slot, first, lines, stop) =
+                (slot.clone(), first.clone(), lines.clone(), stop.clone());
+            let mut delivered = prelude.to_vec();
+            std::thread::spawn(move || {
+                slot.route(&first).data(&delivered).unwrap();
+                while stop.load(SeqCst) == 0 {
+                    let line = format!("line {}\r\n", lines.fetch_add(1, SeqCst));
+                    slot.route(&first).data(line.as_bytes()).unwrap();
+                    delivered.extend_from_slice(line.as_bytes());
+                    std::thread::sleep(std::time::Duration::from_micros(50));
+                }
+                delivered
+            })
+        };
+        let reached = |count: usize| {
+            let lines = lines.clone();
+            async move {
+                while lines.load(SeqCst) < count {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            }
+        };
+        reached(60).await;
+        assert!(
+            slot.is_attached(),
+            "the core acknowledges until the release"
+        );
+        let lease = crate::app_lock::AccessState::disabled()
+            .lease(None)
+            .unwrap();
+        let snapshot = terminal_core_release(lease, id.to_owned(), second)
+            .await
+            .unwrap()
+            .into_inner()
+            .unwrap();
+        reached(lines.load(SeqCst) + 60).await;
+        stop.store(1, SeqCst);
+        Released {
+            delivered: transport.join().unwrap(),
+            snapshot,
+            credited,
+            slot,
+            first,
+            first_events,
+            second_events,
+        }
+    }
+
+    /// The `data` bytes a Channel received so far, in order, and its other messages.
+    pub(crate) fn received(
+        events: &mut tokio::sync::mpsc::UnboundedReceiver<Json>,
+    ) -> (Vec<u8>, Vec<Json>) {
+        let (mut bytes, mut others) = (Vec::new(), Vec::new());
+        while let Ok(event) = events.try_recv() {
+            match event["data"].as_array() {
+                Some(data) => bytes.extend(data.iter().map(|byte| byte.as_u64().unwrap() as u8)),
+                None => others.push(event),
+            }
+        }
+        (bytes, others)
+    }
+
     /// Deterministic pseudo-random bytes (xorshift), so a checksum covers real entropy.
     pub(crate) fn workload(len: usize) -> Vec<u8> {
         let mut state = 0x9e37_79b9_7f4a_7c15_u64;
@@ -2137,6 +2429,8 @@ mod tests {
             "terminal_core_open",
             "terminal_core_input",
             "terminal_core_text",
+            "terminal_core_ansi_snapshot",
+            "terminal_core_release",
             "terminal_core_snapshot",
             "terminal_core_scroll",
             "terminal_core_resize",
@@ -2429,6 +2723,55 @@ mod tests {
             .unwrap()
             .into_inner()
             .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn a_release_hands_the_transport_to_the_new_channel_with_every_byte_once_and_in_order() {
+        let _kept = tests_keeping_cores().read();
+        let (core, prepared) = ChecksumCore::prepared();
+        let mut released = fake::release_mid_stream("handed-back", prepared, b"").await;
+        // The stand-in's snapshot is every byte it parsed: with the new Channel's data, the whole stream.
+        let (after, _) = fake::received(&mut released.second_events);
+        assert!(!released.snapshot.is_empty() && !after.is_empty());
+        assert_eq!(
+            fake::sha256(&[released.snapshot.as_bytes(), &after].concat()),
+            fake::sha256(&released.delivered)
+        );
+        assert_eq!(
+            fake::received(&mut released.first_events),
+            (vec![], vec![]),
+            "nothing reaches the Channel the session started with"
+        );
+        // The core returned the credit of what it consumed and is freed; the rest is the WebView's to acknowledge.
+        assert_eq!(
+            released.credited.load(std::sync::atomic::Ordering::SeqCst),
+            released.snapshot.len()
+        );
+        assert!(core.closed.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!released.slot.is_attached());
+        // A resize no longer reaches the freed core, and the closing notice follows the output.
+        released.slot.resize(100, 30).unwrap();
+        assert!(core.sizes.lock().unwrap().is_empty());
+        let routed = released.slot.route(&released.first);
+        routed.closed("Session ended".into(), false).unwrap();
+        let (_, notices) = fake::received(&mut released.second_events);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0]["message"], "Session ended");
+        assert_eq!(
+            fake::received(&mut released.first_events).1,
+            [] as [Json; 0]
+        );
+        // Released once: there is no core left to snapshot or release.
+        for result in [
+            terminal_core_release(lease(), "handed-back".into(), channel()).await,
+            terminal_core_ansi_snapshot(lease(), "handed-back".into()).await,
+        ] {
+            assert_eq!(
+                result.err().unwrap().into_inner().unwrap(),
+                "No native terminal core for this session"
+            );
+        }
     }
 
     #[tokio::test]

@@ -68,6 +68,8 @@ fn main() {
         "terminal_core_open",
         "terminal_core_input",
         "terminal_core_text",
+        "terminal_core_ansi_snapshot",
+        "terminal_core_release",
         "terminal_core_snapshot",
         "terminal_core_scroll",
         "terminal_core_resize",

@@ -484,3 +484,116 @@ fn a_session_holds_the_selection_and_its_view_draws_the_visible_part() {
     assert_eq!(session.selection_overlay().unwrap(), None);
     session.close();
 }
+
+/// What a snapshot must bring back: the visible text, the cursor, the modes, and (through a second snapshot) the
+/// styles and the mouse encoding.
+fn restored(program: &[u8]) -> lazysh_terminal_runtime::TerminalRuntime {
+    let mut rt = runtime(20, 5);
+    feed(&mut rt, program);
+    let snapshot = rt.ansi_snapshot().unwrap();
+    let mut fresh = runtime(20, 5);
+    feed(&mut fresh, snapshot.as_bytes());
+    assert_eq!(fresh.viewport_text().unwrap(), rt.viewport_text().unwrap());
+    let (state, expected) = (
+        fresh.control_snapshot(5).unwrap().state,
+        rt.control_snapshot(5).unwrap().state,
+    );
+    assert_eq!(
+        (state.cursor, state.modes),
+        (expected.cursor, expected.modes)
+    );
+    assert_eq!(fresh.modes().unwrap(), rt.modes().unwrap());
+    assert_eq!(fresh.ansi_snapshot().unwrap(), snapshot);
+    fresh
+}
+
+#[test]
+fn an_ansi_snapshot_rebuilds_the_visible_screen_cursor_and_modes_without_the_scrollback() {
+    // Forty rows on five: history above a full screen, a coloured word, the cursor left mid-row and hidden,
+    // bracketed paste, application cursor keys, focus reports and drag tracking in the SGR encoding.
+    let mut program: Vec<u8> = (0..40)
+        .flat_map(|i| format!("row {i}\r\n").into_bytes())
+        .collect();
+    program.extend(b"\x1b[1;31mred\x1b[0m plain\x1b[3;4H\x1b[?25l\x1b[?2004h\x1b[?1h\x1b[?1004h\x1b[?1002h\x1b[?1006h");
+    let mut fresh = restored(&program);
+    let state = fresh.control_snapshot(5).unwrap().state;
+    assert_eq!((state.cursor.x, state.cursor.y), (3, 2));
+    assert!(state.modes.bracketed_paste && state.modes.application_cursor_keys);
+    assert_eq!(
+        state.modes.mouse_tracking,
+        lazysh_terminal_runtime::MouseTracking::Drag
+    );
+    assert_eq!(
+        fresh.scrollback_rows().unwrap(),
+        0,
+        "the history is not carried over"
+    );
+
+    // A full-screen program: the alternate screen, its text and its cursor, and plain click tracking.
+    let mut fresh =
+        restored(b"shell\r\n\x1b[?1049h\x1b[2;3Heditor\x1b[5;1H-- INSERT --\x1b[4;7H\x1b[?1000h");
+    let state = fresh.control_snapshot(5).unwrap().state;
+    assert!(state.modes.alternate_screen && !state.modes.bracketed_paste);
+    assert_eq!((state.cursor.x, state.cursor.y), (6, 3));
+    // Leaving it shows a blank shell screen: the screen the program was not on is not carried over.
+    feed(&mut fresh, b"\x1b[?1049l");
+    assert_eq!(fresh.viewport_text().unwrap().trim(), "");
+}
+
+/// What a runtime shows: the cursor, the modes the control plane reports and the rows of the viewport.
+fn shown(rt: &mut lazysh_terminal_runtime::TerminalRuntime, rows: usize) -> Value {
+    let answer = serde_json::to_value(rt.control_snapshot(rows).unwrap()).unwrap();
+    let (top, first) = (
+        answer["state"]["viewport"]["top"].as_u64().unwrap() as usize,
+        answer["window"]["first"].as_u64().unwrap() as usize,
+    );
+    let lines = &answer["window"]["rows"].as_array().unwrap()[top - first..][..rows];
+    json!({"cursor": answer["state"]["cursor"], "modes": answer["state"]["modes"], "lines": lines})
+}
+
+/// The snapshot's bytes are what xterm.js replays when a session leaves the native engine, so they are a contract:
+/// `fixtures/ansi-snapshot.json` pins what the core writes for each program (`ANSI_SNAPSHOT_UPDATE=1` rewrites
+/// `snapshot`), and the core must show `expect` after the program and after the snapshot alone, as headless xterm.js
+/// does in `apps/client/src/xterm/ansiSnapshotFixture.test.ts`.
+#[test]
+fn the_ansi_snapshot_bytes_are_pinned_and_replay_to_the_screen_xterm_js_shows() {
+    let path = format!("{}/fixtures/ansi-snapshot.json", env!("CARGO_MANIFEST_DIR"));
+    let mut fixture: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let update = std::env::var_os("ANSI_SNAPSHOT_UPDATE").is_some();
+    for case in fixture["cases"].as_array_mut().unwrap() {
+        let id = case["id"].as_str().unwrap().to_owned();
+        let (cols, rows) = (
+            case["cols"].as_u64().unwrap(),
+            case["rows"].as_u64().unwrap(),
+        );
+        let mut program = replay(case);
+        let snapshot = program.ansi_snapshot().unwrap();
+        if update {
+            case["snapshot"] = json!(snapshot);
+        }
+        assert_eq!(
+            case["snapshot"],
+            json!(snapshot),
+            "{id}: the snapshot bytes"
+        );
+        let mut fresh = runtime(cols as u16, rows as u16);
+        feed(&mut fresh, snapshot.as_bytes());
+        for (name, rt) in [
+            ("after the program", &mut program),
+            ("after the snapshot", &mut fresh),
+        ] {
+            assert_eq!(shown(rt, rows as usize), case["expect"], "{id}, {name}");
+        }
+    }
+    if update {
+        let mut out = Vec::new();
+        let format = serde_json::ser::PrettyFormatter::with_indent(b" ");
+        serde::Serialize::serialize(
+            &fixture,
+            &mut serde_json::Serializer::with_formatter(&mut out, format),
+        )
+        .unwrap();
+        std::fs::write(&path, [out, b"\n".to_vec()].concat()).unwrap();
+    }
+}
