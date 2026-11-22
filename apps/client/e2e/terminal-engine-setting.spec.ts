@@ -152,9 +152,9 @@ for(const [locale,text] of Object.entries(translated))test(`the engine choice an
   await expect(page.getByRole('button',{name:text.report,exact:true})).toBeVisible();
 });
 
-test('Report a terminal problem opens the prefilled issue form in the browser and the app makes no request of its own',async({page})=>{
+test('Report a terminal problem opens the prefilled issue form in the browser and the app makes no request of its own',async({page,baseURL})=>{
   const outside:string[]=[];
-  page.on('request',request=>{if(new URL(request.url()).host!=='127.0.0.1:1420')outside.push(request.url());});
+  page.on('request',request=>{if(!request.url().startsWith(baseURL!))outside.push(request.url());});
   await openApp(page,notBuilt,{terminalEngine:'native'});
   await openEngineSettings(page);
   await page.getByRole('button',{name:'Report a terminal problem',exact:true}).click();
