@@ -79,6 +79,54 @@ it('mirrors a native session\'s rows for a screen reader while that preference i
   view.unmount();
   await adapter.dispose();
 });
+describe('selection on a native session',()=>{
+  async function nativePane(output:string) {
+    mocks.invoke.mockResolvedValue({});
+    const adapter=await openNativeTerminalAdapter(createHeadlessCore({rows:4,columns:20,feed:true}));
+    await adapter.write!(new TextEncoder().encode(output));
+    const view=render(<TerminalPane session={{id:'native',name:'Host',connected:true,adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+    const canvas=view.container.querySelector<HTMLElement>('.terminal-canvas')!;
+    // 20 columns of 10px and 4 rows of 10px.
+    canvas.getBoundingClientRect=()=>({left:0,top:0,width:200,height:40,right:200,bottom:40,x:0,y:0,toJSON(){}});
+    await adapter.attach({kind:'native',anchorId:canvas.id});
+    return {adapter,canvas,view};
+  }
+  const touch=(canvas:HTMLElement,type:string,x:number,y:number)=>canvas.dispatchEvent(Object.assign(new Event(type,{bubbles:true,cancelable:true}),{touches:type==='touchend'?[]:[{clientX:x,clientY:y}],changedTouches:[{clientX:x,clientY:y}]}));
+
+  /** A long press on "world" in the first row. */
+  async function selectWorld(canvas:HTMLElement,adapter:Awaited<ReturnType<typeof nativePane>>['adapter']) {
+    touch(canvas,'touchstart',72,5);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(700);});
+    touch(canvas,'touchend',72,5);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(20);});
+    expect(adapter.selectedText()).toBe('world');
+  }
+
+  it('selects the word under a long press, offers handles and Copy, copies the core\'s text and clears the selection',async()=>{
+    vi.useFakeTimers({shouldAdvanceTime:true});
+    const {adapter,canvas}=await nativePane('hello world');
+    await selectWorld(canvas,adapter);
+    expect(screen.getByLabelText('Selection start handle')).toBeTruthy();
+    expect(screen.getByLabelText('Selection end handle')).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('toolbar',{name:'Selection actions'})).getByRole('button',{name:'Copy'}));
+    await waitFor(()=>expect(navigator.clipboard.writeText).toHaveBeenCalledWith('world'));
+    expect(adapter.hasSelection()).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('extends the selection through the core when a handle is dragged', async()=>{
+    vi.useFakeTimers({shouldAdvanceTime:true});
+    const {adapter,canvas}=await nativePane('hello world');
+    await selectWorld(canvas,adapter);
+    const start=screen.getByLabelText('Selection start handle');
+    fireEvent.pointerDown(start,{pointerId:7,pointerType:'touch',button:0,clientX:0,clientY:0});
+    fireEvent.pointerMove(start,{pointerId:7,pointerType:'touch',clientX:-80,clientY:0});
+    fireEvent.pointerUp(start,{pointerId:7,pointerType:'touch'});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(20);});
+    expect(adapter.selectedText()).toBe('hello world');
+    vi.useRealTimers();
+  });
+});
 it('sizes the toolbar keys from the saved key height and follows a change without remounting',()=>{
   savePreferences({...defaults});
   mount();

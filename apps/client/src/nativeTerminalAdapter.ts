@@ -188,10 +188,17 @@ export class NativeTerminalAdapter implements TerminalAdapter {
       .then(() => { this.pulling = false; if (this.again) { this.again = false; this.ring(); } });
   }
 
-  sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) { this.send(() => this.bridge.input(data, origin)); }
+  sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) {
+    // Typing clears the selection, as xterm.js' selection service does on user input; a terminal's reply is not typing.
+    if (origin !== 'terminal-reply') this.clearSelection();
+    this.send(() => this.bridge.input(data, origin));
+  }
 
   /** A key as the DOM reports it, for the core to encode for the modes the program set; `sendInput` carries text. */
-  sendKey(input: CoreKeyInput) { this.send(() => this.bridge.key(input)); }
+  sendKey(input: CoreKeyInput) {
+    if (!input.release) this.clearSelection();
+    this.send(() => this.bridge.key(input));
+  }
 
   private send(run: () => Promise<void>) {
     // A refused write (input gated, app locked) is dropped by the transport on purpose: a stale key must not arrive later.
