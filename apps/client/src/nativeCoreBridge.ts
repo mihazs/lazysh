@@ -6,6 +6,12 @@
 import type {Disposable, TerminalCell, TerminalInputOrigin, TerminalModes, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalTheme, TerminalViewport} from './terminalAdapter';
 import type {CoreKeyInput} from './terminalPlatformKeys';
 
+/** The wire shape of a wheel notch for `terminal_core_input`: a cell of the live screen, row 0 its first row. */
+export type CoreMouseInput = {
+  type: 'mouse'; action: 'press'; button: 'wheelUp' | 'wheelDown';
+  mods: {shift: boolean; ctrl: boolean; alt: boolean; meta: boolean}; x: number; y: number;
+};
+
 export type NativeCoreState = {
   columns: number;
   rows: number;
@@ -55,6 +61,8 @@ export interface NativeCoreBridge {
   input(data: string | Uint8Array, origin: TerminalInputOrigin): Promise<void>;
   /** A key as the DOM reports it, after the platform rules; the core encodes it for the modes the program set. */
   key(input: CoreKeyInput): Promise<void>;
+  /** A mouse report for a program that tracks the mouse (wheel notches from a finger or a wheel); the core encodes it for the mode the program set. Absent: the adapter sends none. */
+  mouse?(input: CoreMouseInput): Promise<void>;
   /** Present only when the WebView hands transport bytes to the core (a core-only build, tests). A runtime that owns the transport has none. */
   feed?(bytes: Uint8Array): Promise<NativeCoreSnapshot>;
   /** Present when the WebView sizes the core itself; with a transport the core follows the PTY resize instead. */
