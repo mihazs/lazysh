@@ -148,9 +148,10 @@ async function prepareSession(
   name: string,
   destination: string,
   lease: AccessLease,
+  mosh = false,
 ) {
   const { createTerminalAdapter } = await import("./terminalBackends");
-  const { adapter, selection } = await createTerminalAdapter({ preference: getPreferences().terminalEngine });
+  const { adapter, selection } = await createTerminalAdapter({ preference: getPreferences().terminalEngine, mosh });
   lease.assert();
   const session: LiveSession = {
     id: "",
@@ -223,7 +224,11 @@ async function prepareSession(
     }
   };
   // On the native data path the transport starts on the core's Channel, so no output reaches onEvent and none is acknowledged here.
-  if (adapter.transport) Object.assign(onEvent, {link: adapter.transport}), adapter.transport.onEvent = onEvent;
+  if (adapter.transport) {
+    Object.assign(onEvent, {link: adapter.transport}), adapter.transport.onEvent = onEvent;
+    // The core applies Mosh's frames itself, so the data handler's failure check never runs: its refusal of one arrives as the adapter's event.
+    adapter.subscribe(failDisplay, ['failure']);
+  }
   return { session, onEvent, establish };
 }
 
@@ -257,7 +262,7 @@ async function selectTransport(
       const skip = host.jumpHostId ? t("appBastionRoutesUseSSH") : host.forwardAgent ? t("appSelectedIdentityForwardingRequiresSSH") : !capabilities[kind] ? capabilities.reason || t("appUnavailableInThisAppBuild") : '';
       if (skip) { reasons.push(`${name}: ${skip}`); continue; }
     }
-    const child = await prepareSession(host.id, entry?`${host.name} / ${entry.name}`:host.name, kind==='ssh'?shell.session.destination:`${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease);
+    const child = await prepareSession(host.id, entry?`${host.name} / ${entry.name}`:host.name, kind==='ssh'?shell.session.destination:`${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease, kind === 'mosh');
     try {
       ensureAlive();
       if (kind === 'mosh') {

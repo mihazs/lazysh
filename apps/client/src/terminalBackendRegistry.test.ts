@@ -48,6 +48,20 @@ describe('terminal backend selection', () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
+  it('gives a Mosh session only a backend that follows its frames, and tells the backend at creation that it is one', async () => {
+    const {r, probe} = registry({capabilities: {canonicalMoshResize: false}});
+    expect(await r.select({preference: 'native', mosh: true})).toMatchObject({id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'lacks canonicalMoshResize'}]});
+    expect(probe).not.toHaveBeenCalled();
+    expect(await r.select({preference: 'native'})).toMatchObject({id: 'native'});
+    const created = vi.fn(() => adapter('native'));
+    const capable = createBackendRegistry();
+    capable.register({id: 'xterm', capabilities: capabilities(), autoEligible: true, probe: () => ({ok: true}), create: () => adapter('xterm')});
+    capable.register({id: 'native', capabilities: capabilities(), autoEligible: false, probe: () => ({ok: true}), create: created});
+    await capable.create({preference: 'native', mosh: true});
+    await capable.create({preference: 'native'});
+    expect(created.mock.calls).toEqual([[{mosh: true}], [{mosh: undefined}]]);
+  });
+
   it('answers Settings with the reason a selection would record for a backend, or nothing when it is usable', async () => {
     expect(await registry().r.refusal('native')).toBeUndefined();
     expect(await registry({probe: {ok: false, reason: 'no Vulkan'}}).r.refusal('native')).toBe('no Vulkan');

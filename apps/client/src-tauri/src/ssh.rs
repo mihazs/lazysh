@@ -1078,6 +1078,10 @@ pub enum SshEvent {
     Clipboard {
         text: String,
     },
+    /// The Mosh display stopped following the transport: `invalid-frame` or `partial-frame` (the client's `TerminalFailure`).
+    Failure {
+        reason: &'static str,
+    },
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

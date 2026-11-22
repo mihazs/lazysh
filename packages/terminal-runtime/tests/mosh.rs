@@ -8,7 +8,7 @@
 mod support;
 
 use lazysh_terminal_runtime::{
-    Config, DisplayFailure, Hub, HubConfig, Offer, Size, SizeAuthority, SizeOutcome,
+    Config, ControlEvent, DisplayFailure, Hub, HubConfig, Offer, Size, SizeAuthority, SizeOutcome,
     TerminalRuntime,
 };
 use serde_json::Value;
@@ -414,6 +414,40 @@ fn a_failed_display_stops_following_the_transport_and_forwards_nothing() {
     assert_eq!(dims(&rt), (30, 6), "frames after a failure are ignored");
     assert_eq!(rt.request_size(size(50, 20)).unwrap(), SizeOutcome::Dropped);
     assert_eq!(rt.size_intent(), None, "nothing is recorded or forwarded");
+}
+
+#[test]
+fn a_failed_display_is_told_to_a_control_reader_once_as_the_adapters_failure_event() {
+    let failed = |reason| vec![ControlEvent::Failure { reason }];
+    let mut rt = mosh(40, 12);
+    feed(&mut rt, &frame(1, 30, 6, "ok"));
+    assert_eq!(
+        rt.take_control_events(),
+        vec![],
+        "a frame that applies fails nothing"
+    );
+    feed(&mut rt, b"\x1b]7777;lazysh-mosh;1;end;9\x1b\\");
+    let events = rt.take_control_events();
+    assert_eq!(events, failed(DisplayFailure::InvalidFrame));
+    assert_eq!(
+        serde_json::to_value(&events[0]).unwrap(),
+        serde_json::json!({"type": "failure", "reason": "invalid-frame"}),
+        "the shape of the client's `failure` event"
+    );
+    assert_eq!(rt.take_control_events(), vec![], "told once");
+    assert_eq!(rt.display_failure(), Some(DisplayFailure::InvalidFrame));
+    // A stream that ends inside a frame fails it too, and a plain session never fails a display.
+    let mut cut = mosh(40, 12);
+    feed(&mut cut, b"\x1b]7777;lazysh-mosh;1;begin;1;30;6\x1b\\half");
+    assert_eq!(cut.take_control_events(), vec![]);
+    cut.finish_canonical();
+    assert_eq!(
+        cut.take_control_events(),
+        failed(DisplayFailure::PartialFrame)
+    );
+    let mut plain = runtime(40, 12);
+    feed(&mut plain, b"\x1b]7777;lazysh-mosh;1;end;9\x1b\\");
+    assert_eq!(plain.take_control_events(), vec![]);
 }
 
 #[test]

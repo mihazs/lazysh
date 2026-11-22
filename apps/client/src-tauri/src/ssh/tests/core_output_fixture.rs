@@ -202,23 +202,14 @@ async fn attached(
     (id, session)
 }
 
-/// A real Mosh session whose output goes to a core. Mosh sends display frames, not the server's
-/// byte stream, so the check is that the final screen arrives: a marker only the command's output
-/// (never its echo) contains, printed after the whole workload, with the window credited back.
-async fn through_mosh(app: &App, parent: &str) -> (usize, usize) {
-    // The shell computes the OK, so the typed command line (which a frame may also carry) never
-    // contains the marker. A Mosh frame is a diff of cells: a cell that already holds the right
-    // character is skipped, which splits a marker that shares characters with the screen it
-    // replaces. The workload only prints digits, so a marker of letters is always written whole.
-    const DONE: &str = "FIN_OK";
+/// A real Mosh session on a free UDP port whose output goes to the core offered on `events`, with its input path started
+/// (the first write only does that).
+async fn start_mosh(app: &App, parent: &str, events: Channel<SshEvent>) -> (String, Arc<Session>) {
     let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let port = udp.local_addr().unwrap().port();
     drop(udp);
     let options =
         serde_json::from_value(serde_json::json!({"portMin":port,"portMax":port})).unwrap();
-    let (core, prepared) = ChecksumCore::prepared();
-    let (events, _rx) = json_events();
-    terminal_core::offer(&events, Box::new(move || Ok(prepared)));
     let (id, session) = attached(
         app,
         connect_mosh(
@@ -233,14 +224,102 @@ async fn through_mosh(app: &App, parent: &str) -> (usize, usize) {
         ),
     )
     .await;
-    // The first write only starts the Mosh input path; the second is the workload.
     write(app, &id, None).await;
+    (id, session)
+}
+
+/// A real Mosh session whose output goes to a core. Mosh sends display frames, not the server's
+/// byte stream, so the check is that the final screen arrives: a marker only the command's output
+/// (never its echo) contains, printed after the whole workload, with the window credited back.
+async fn through_mosh(app: &App, parent: &str) -> (usize, usize) {
+    // The shell computes the OK, so the typed command line (which a frame may also carry) never
+    // contains the marker. A Mosh frame is a diff of cells: a cell that already holds the right
+    // character is skipped, which splits a marker that shares characters with the screen it
+    // replaces. The workload only prints digits, so a marker of letters is always written whole.
+    const DONE: &str = "FIN_OK";
+    let (core, prepared) = ChecksumCore::prepared();
+    let (events, _rx) = json_events();
+    terminal_core::offer(&events, Box::new(move || Ok(prepared)));
+    let (id, session) = start_mosh(app, parent, events).await;
     let workload = format!("seq 1 {MOSH_LINES}; echo FIN_$(echo OK)");
     write(app, &id, command_line(workload)).await;
     let peak = settle(&core, &session, DONE).await;
     let received = core.seen.lock().unwrap().len();
     terminal_core::close(&id);
     (received, peak)
+}
+
+/// The real core's grid and the text of its rows, through the control commands the client reads them with.
+#[cfg(native_terminal_core)]
+async fn core_screen(id: &str) -> ((u64, u64), Vec<String>) {
+    let answer = terminal_core::terminal_core_snapshot(access_lease(), id.into(), None)
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    let state = &answer["state"];
+    let rows = answer["window"]["rows"].as_array().unwrap();
+    (
+        (
+            state["columns"].as_u64().unwrap(),
+            state["rows"].as_u64().unwrap(),
+        ),
+        rows.iter()
+            .map(|row| row.as_str().unwrap().to_owned())
+            .collect(),
+    )
+}
+
+/// A real Mosh session whose output goes to the real core, opened for Mosh frames as the client opens it. The core must follow
+/// the server's own display frames: the shell's marker reaches its screen, and after the product's resize command (which the
+/// transport sends to the server, the core only recording an intent) the grid becomes the size the server answers with.
+/// A frame the core refused would be a `failure` event on the Channel, and none arrives.
+#[cfg(native_terminal_core)]
+async fn through_mosh_into_real_core(app: &App, parent: &str) {
+    const MARKER: &str = "FIN_OK";
+    let (events, mut told) = json_events();
+    let mosh = terminal_core::CoreConfig {
+        canonical_frames: true,
+        ..Default::default()
+    };
+    terminal_core::terminal_core_open(access_lease(), events.clone(), 80, 24, None, Some(mosh))
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    let (id, _session) = start_mosh(app, parent, events).await;
+    write(app, &id, command_line("echo FIN_$(echo OK)".into())).await;
+    let until = |size: (u64, u64)| {
+        let id = id.clone();
+        async move {
+            timeout(Duration::from_secs(30), async {
+                loop {
+                    let (grid, rows) = core_screen(&id).await;
+                    if grid == size && rows.iter().any(|row| row == MARKER) {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("the core never showed {MARKER} on a {size:?} grid"))
+        }
+    };
+    until((80, 24)).await;
+    resize(access_lease(), app.state(), id.clone(), 100, 30)
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    until((100, 30)).await;
+    while let Ok(event) = told.try_recv() {
+        assert_ne!(
+            event["type"], "failure",
+            "the core refused a frame: {event}"
+        );
+    }
+    eprintln!("real Mosh into the real core: the grid followed the server to 100x30 with {MARKER} on screen");
+    terminal_core::close(&id);
 }
 
 /// The bytes of `seen` between the first `begin` and the first `end` after it.
@@ -330,6 +409,8 @@ async fn check(app: &App, id: &str) {
         eprintln!(
             "real Mosh, {MOSH_LINES} lines printed: {received} bytes of display frames reached the core, peak {peak} bytes queued"
         );
+        #[cfg(native_terminal_core)]
+        through_mosh_into_real_core(app, id).await;
     }
 }
 

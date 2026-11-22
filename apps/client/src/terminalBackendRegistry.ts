@@ -11,7 +11,13 @@ export type BackendRegistration = {
   autoEligible: boolean;
   /** Real hardware/surface detection; a failure is recorded with its reason, never ignored. */
   probe(): BackendProbe | Promise<BackendProbe>;
-  create(): TerminalAdapter | Promise<TerminalAdapter>;
+  create(session?: SessionOptions): TerminalAdapter | Promise<TerminalAdapter>;
+};
+
+/** What a backend must know about a session when it creates the terminal, because it cannot be changed later. */
+export type SessionOptions = {
+  /** The session's transport is Mosh: its frames decide the grid's size, so the terminal follows them from the first byte (`canonicalMoshResize`). */
+  mosh?: boolean;
 };
 
 export type BackendSelection = {
@@ -22,7 +28,7 @@ export type BackendSelection = {
   fallbacks: {id: TerminalBackendId; reason: string}[];
 };
 
-export type SelectOptions = {
+export type SelectOptions = SessionOptions & {
   preference?: BackendPreference;
   /** A developer's choice; it replaces `preference` but can never enable a backend whose probe failed. */
   override?: BackendPreference;
@@ -65,7 +71,8 @@ export function createBackendRegistry() {
     return probe.ok ? undefined : probe.reason;
   }
 
-  async function select({preference = 'auto', override, requires = []}: SelectOptions = {}): Promise<BackendSelection> {
+  async function select({preference = 'auto', override, requires: needs = [], mosh}: SelectOptions = {}): Promise<BackendSelection> {
+    const requires = mosh ? [...needs, 'canonicalMoshResize' as const] : needs;
     const wanted = override ?? preference;
     const source = override ? 'developer override' : 'preference';
     const order = wanted === 'auto' ? [...backends.values()].filter(backend => backend.autoEligible && backend.id !== FALLBACK).map(backend => backend.id) : [wanted];
@@ -91,7 +98,7 @@ export function createBackendRegistry() {
     refusal,
     async create(options?: SelectOptions) {
       const selection = await select(options);
-      return {selection, adapter: await backends.get(selection.id)!.create()};
+      return {selection, adapter: await backends.get(selection.id)!.create({mosh: options?.mosh})};
     },
   };
 }
