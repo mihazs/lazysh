@@ -1492,7 +1492,7 @@ esac
         link_system_tools(tools.path(), &["sh", "head", "tr", "grep"]);
         let discover = |server: &crate::tmux_server::TmuxServer| {
             let output = Command::new("/bin/sh")
-                .args(["-c", &discovery_command(server, false)])
+                .args(["-c", &discovery_command(server, Default::default(), false)])
                 .env_clear()
                 .env("PATH", tools.path())
                 .output()
@@ -1549,7 +1549,7 @@ esac
             entry.command().unwrap(),
             "rmux -u -L 'named '\\''server' attach-session -t '=work '\\''literal\\;'"
         );
-        let preflight = entry.preflight_command(false).unwrap();
+        let preflight = entry.preflight_command(Default::default(), false).unwrap();
         assert!(preflight.contains("rmux capabilities --json"));
         assert!(!preflight.contains("rmux -V") && !preflight.contains("tmux"));
         assert!(preflight.contains("has-session") && !preflight.contains("new-session"));
@@ -1874,7 +1874,9 @@ esac
             let tree =
                 parse_tree(&format!("tmux\t1\t\nherdr\t0\nzellij\t0\nrmux\t0\n{rows}")).unwrap();
             if matches!(binary, Binary::Rmux) {
-                let product = parse_tree(&run(discovery_command(&server, false))).unwrap();
+                let product =
+                    parse_tree(&run(discovery_command(&server, Default::default(), false)))
+                        .unwrap();
                 let product = serde_json::to_value(&product).unwrap();
                 // A pane's command changes from the multiplexer to its shell while it starts, and rmux names an unnamed
                 // window after that command, so two reads never compare either; an explicit window name is asserted below.

@@ -4428,6 +4428,7 @@ async fn real_ssh_rmux_discovers_attaches_and_acts_on_a_labelled_server() {
         24,
         events,
         None,
+        None,
     ))
     .await
     .unwrap()

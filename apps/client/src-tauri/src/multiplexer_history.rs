@@ -74,6 +74,7 @@ pub async fn multiplexer_history(
                         &crate::tmux_server::TmuxServer::for_session(
                             &session.bindings,
                             tmux_server.as_deref(),
+                            Some(crate::tmux_server::Binary::Tmux),
                         )?,
                         MAX_LINES,
                     )?,
