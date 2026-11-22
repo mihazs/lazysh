@@ -2,6 +2,6 @@
 "@lazysh/client": patch
 ---
 
-ci(android): end a stalled instrumentation step in 60 minutes and keep thread dumps and tmux logs for a failed run
+ci(android): keep the app's thread dump and ANR traces and the tmux server's own log for a failed Android run
 
-A case that blocked held the job until its 75 minute limit, which discards the artifacts. The instrumentation step now ends at 60 minutes, and a failed run keeps the app's thread dump and ANR traces and the tmux server's own log. CI only. No user-visible behaviour changes.
+A blocked case or a tmux server that exits uncleanly left no trace of where it stopped. A failed run now captures the app's thread dump and ANR traces into the system diagnostics, and the tmux fixture's server logs into the tmux results. CI only. No user-visible behaviour changes.
