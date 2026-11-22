@@ -237,13 +237,33 @@ pub async fn share_forget(
 }
 
 fn client() -> Result<Client> {
-    Client::builder()
+    build(test_root())
+}
+fn build(extra_root: Option<reqwest::Certificate>) -> Result<Client> {
+    let builder = Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(45))
-        .build()
-        .map_err(|_| "Cannot initialize sharing service connection".into())
+        .timeout(Duration::from_secs(45));
+    match extra_root {
+        Some(root) => builder.add_root_certificate(root),
+        None => builder,
+    }
+    .build()
+    .map_err(|_| "Cannot initialize sharing service connection".into())
+}
+/// Debug builds only: an instrumented test host serves the real sharing service behind a
+/// throwaway certificate and names its root here. Release builds compile this out, so a
+/// shipped app trusts only the bundled public roots.
+#[cfg(debug_assertions)]
+fn test_root() -> Option<reqwest::Certificate> {
+    std::env::var("LAZYSH_TEST_SHARE_ROOT_PEM")
+        .ok()
+        .and_then(|pem| reqwest::Certificate::from_pem(pem.as_bytes()).ok())
+}
+#[cfg(not(debug_assertions))]
+fn test_root() -> Option<reqwest::Certificate> {
+    None
 }
 async fn response(mut response: Response, expected: reqwest::StatusCode) -> Result<Vec<u8>> {
     if response.status() != expected {
