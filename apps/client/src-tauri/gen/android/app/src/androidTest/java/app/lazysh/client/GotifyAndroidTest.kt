@@ -146,7 +146,12 @@ class GotifyAndroidTest {
         node(By.res(gotify, "client_name_editext")).text = "lazysh-gotify-$nonce"
         node(By.res("android", "button1").pkg(gotify)).click()
         phase = "notification-permission"
-        node(By.res("com.android.permissioncontroller", "permission_allow_button")).click()
+        // The system dialog names its button by resource id on stock images and by its label elsewhere; a grant that already
+        // happened needs no click.
+        val allow = By.res("com.android.permissioncontroller", "permission_allow_button")
+        val allowLabel = By.pkg("com.android.permissioncontroller").text(java.util.regex.Pattern.compile("Allow", java.util.regex.Pattern.CASE_INSENSITIVE))
+        awaitCondition { permissionGranted() || device.hasObject(allow) || device.hasObject(allowLabel) }
+        if (!permissionGranted()) (device.findObject(allow) ?: device.findObject(allowLabel))?.click()
         awaitCondition { permissionGranted() }
         phase = "alarm-permission"
         awaitCondition {
