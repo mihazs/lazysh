@@ -69,3 +69,9 @@ export function useCapturedShortcut<T>(match: (event: KeyboardEvent) => T | unde
     return () => window.removeEventListener('keydown', keydown, true);
   }, []);
 }
+
+/** Ctrl/Cmd+Shift+L opens the Agent view's agent switcher, also from its composer. */
+export function agentSwitchShortcut(event: KeyboardEvent): boolean {
+  return shiftedChord(event, true) === 'l';
+}
+export const agentSwitchHint = () => shiftedChordHint('L');

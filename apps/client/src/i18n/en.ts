@@ -2487,6 +2487,7 @@ export const english = {
   agentViewLinkedNote: "Herdr links this conversation to the focused pane of this terminal: {{place}}. It never sends input by itself; use Stage in terminal.",
   agentViewOtherPane: "Not this pane",
   agentViewChooseAgent: "Choose another agent",
+  agentSwitchLabel: "Switch agent",
   agentViewThisPane: "This pane's agent",
   agentViewPaneNoAgent: "No agent runs in the focused pane. Choose a live agent.",
   agentViewPaneNoConversation: "{{agent}} runs in the focused pane, but Herdr has not reported its conversation yet. It appears here as soon as it does, or choose another agent.",
