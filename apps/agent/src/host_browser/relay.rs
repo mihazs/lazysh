@@ -22,7 +22,6 @@ use super::{
     terminate,
     wire::{self, Client, Viewport},
 };
-pub(super) use tabs::bounded;
 use crate::{Error, Result};
 use base64::Engine;
 use serde_json::{json, Value};
@@ -35,6 +34,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+pub(super) use tabs::bounded;
 
 /// Chrome 111 added the origin check and the pipe behavior this relay relies on.
 const MIN_VERSION: u32 = 111;
