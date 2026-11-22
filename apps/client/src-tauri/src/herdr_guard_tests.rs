@@ -461,11 +461,39 @@ async fn view_retirement_keeps_input_reserved_after_actor_reply_until_view_finis
     assert!(!binding.busy.load(Ordering::SeqCst));
 }
 
+#[tokio::test]
+async fn a_view_change_waits_for_the_turn_in_flight_instead_of_being_refused() {
+    let (binding, _queue, _lease) = queued_binding();
+    let turn = binding.reserve().unwrap();
+    // An input call is refused while the turn runs, a view change waits for it to end.
+    assert!(binding.reserve().is_err());
+    let waiting = {
+        let binding = binding.clone();
+        tokio::spawn(async move { binding.reserve_waiting(Duration::from_secs(30)).await.map(|_| ()) })
+    };
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    drop(turn);
+    waiting.await.unwrap().unwrap();
+    // A turn that never ends still ends the wait with the busy refusal.
+    let _held = binding.reserve().unwrap();
+    assert_eq!(
+        binding
+            .reserve_waiting(Duration::from_millis(20))
+            .await
+            .err()
+            .unwrap()
+            .kind(),
+        "herdr_chat_busy"
+    );
+}
+
 fn queued_binding() -> (Binding, mpsc::Receiver<Work>, AccessLease) {
     let (requests, queue) = mpsc::channel(1);
     let binding = Binding {
         requests,
         busy: Arc::default(),
+        released: Arc::default(),
     };
     let lease = crate::app_lock::AccessState::disabled()
         .lease(None)
