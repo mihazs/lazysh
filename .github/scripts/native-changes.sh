@@ -57,6 +57,8 @@ classify() {
     # The probe's harness also drives the real app's surface host in native-terminal-bridge.
     packages/terminal-runtime/prototypes/linux-surface/scripts/*) add linux_surface terminal_bridge ;;
     packages/*/*) package "$1" ;;
+    # The release APK's build configuration: only a pull request touching it builds a release APK with the native engine.
+    .github/workflows/release-artifacts.yml | .github/actions/ghostty-zig/* | .changeset/release-artifacts.ts | .github/scripts/apk-budget.ts | tests/apk-budget.test.ts) add all android_release ;;
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
     apps/client/src-tauri/gen/android/*) add android ;;
     apps/client/src-tauri/apple/*) add ios ;;
@@ -160,6 +162,7 @@ for output in \
   "android=$(flag any client android)" \
   "android_runtime=$android_runtime" \
   "android_terminal_core=$(flag any client android android_core)" \
+  "android_release_native=$(case "$areas" in *" android_release "*) echo true ;; *) echo false ;; esac)" \
   "android_mosh=$(flag has mosh)" \
   "android_herdr=$android_herdr" \
   "android_appium=$android_appium" \

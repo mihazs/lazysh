@@ -95,6 +95,7 @@ that list plus `terminal-perf`. The macOS surface probe (`terminal-macos-surface
 | Linux composition probe: `packages/terminal-runtime/prototypes/linux-surface/**` | Linux composition probe only (`native-linux-surface`: headless sway and Xvfb, the compositor's pixels read back) |
 | The probe's harness: `packages/terminal-runtime/prototypes/linux-surface/scripts/**` | Linux composition probe, and the native-terminal bridge (`native-terminal-bridge` runs the harness against the real app's surface host) |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
+| Release APK build configuration: `.github/workflows/release-artifacts.yml`, `.github/actions/ghostty-zig/**`, `.changeset/release-artifacts.ts` | everything the next row selects, plus `native-android-release-core` (a pull request only, never a push): the Google release APK built with `native-terminal` and held to the size ceiling of `release-artifacts.ts` |
 | Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | every required job and `terminal-perf`, with both ntfy variants |
 
 The Appium suite (`native-android-appium`, `apps/client/mobile-e2e`) is **report-only**: it runs on the paths above, on `main` (plus its

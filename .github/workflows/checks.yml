@@ -46,6 +46,7 @@ jobs:
       android: ${{ steps.paths.outputs.android }}
       android_runtime: ${{ steps.paths.outputs.android_runtime }}
       android_terminal_core: ${{ steps.paths.outputs.android_terminal_core }}
+      android_release_native: ${{ steps.paths.outputs.android_release_native }}
       android_mosh: ${{ steps.paths.outputs.android_mosh }}
       android_herdr: ${{ steps.paths.outputs.android_herdr }}
       android_appium: ${{ steps.paths.outputs.android_appium }}
@@ -1661,6 +1662,35 @@ jobs:
             apps/client/src-tauri/gen/android/app/build/outputs/apk/androidTest/universal/debug/app-universal-debug-androidTest.apk
           if-no-files-found: error
           retention-days: 7
+
+  # The Google release APK with the native terminal engine (#2306): the release workflow's own build command (the release profile,
+  # unsigned) and the size ceiling it enforces, which release-artifacts.yml cannot show on a pull request. Selected only by a pull
+  # request that changes the release build configuration (native-changes.sh), never by a push. Nothing runs on a device here.
+  native-android-release-core:
+    needs: changes
+    if: needs.changes.outputs.android_release_native == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      CARGO_BUILD_JOBS: '4'
+    steps:
+      - *source-checkout
+      - *source-bun
+      - *pinned-download-cache
+      - *ghostty-zig-checkout
+      - *android-toolchains
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - run: bun install --frozen-lockfile
+      - name: Build the Google release APK with the native terminal engine, as release-artifacts.yml does
+        run: |
+          export CMAKE_ANDROID_NDK="$NDK_HOME" ANDROID_NDK_HOME="$NDK_HOME" WHISPER_DONT_GENERATE_BINDINGS=1
+          sh .github/scripts/retry-zig-fetch.sh bun run --cwd apps/client tauri android build --target aarch64 --apk --ci --features parakeet-android,native-terminal -- --locked
+      - run: sh .github/scripts/native-lib-size.sh arm64-v8a
+      - name: Hold the APK to the release size ceiling
+        run: bun .github/scripts/apk-budget.ts android-google-arm64 apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
 
   # Owned OpenSSH password, encrypted-key, rotated-key, bastion, agent-forwarding, Auto-fallback and
   # forced-ET parity cases (#985), the browser preview forward and teardown case (#994) and the
