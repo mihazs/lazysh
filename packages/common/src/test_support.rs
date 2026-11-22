@@ -150,6 +150,18 @@ pub fn loopback_page(body: &'static str, seconds: u64) -> (u16, std::thread::Joi
     (port, server)
 }
 
+/// The pane `herdr api snapshot` reports as not focused: the one a test reports an agent state for.
+pub fn unfocused_herdr_pane(snapshot_json: &[u8]) -> serde_json::Value {
+    let snapshot: serde_json::Value = serde_json::from_slice(snapshot_json).unwrap();
+    snapshot["result"]["snapshot"]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pane| pane["focused"] == false)
+        .unwrap()
+        .clone()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -184,16 +196,4 @@ mod tests {
         let directory = super::private_tempdir();
         assert_eq!(directory.path().canonicalize().unwrap(), directory.path());
     }
-}
-
-/// The pane `herdr api snapshot` reports as not focused: the one a test reports an agent state for.
-pub fn unfocused_herdr_pane(snapshot_json: &[u8]) -> serde_json::Value {
-    let snapshot: serde_json::Value = serde_json::from_slice(snapshot_json).unwrap();
-    snapshot["result"]["snapshot"]["panes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|pane| pane["focused"] == false)
-        .unwrap()
-        .clone()
 }
