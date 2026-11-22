@@ -11,6 +11,16 @@ import {attestQrCamera,readQrMetadata} from './androidQrOwnership';
 
 const rejection=()=>new Error('Owned Gotify acceptance rejected');
 const digest=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex');
+/** Streams an APK: the debug app now carries the native terminal engine and is larger than any buffer the metadata reader holds. */
+async function apkDigest(path:string,limit=2147483648) {
+  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  try {
+    if(!(await file.stat()).isFile())throw rejection();
+    const hash=createHash('sha256');let total=0;
+    for await(const chunk of file.createReadStream({autoClose:false,start:0})){total+=chunk.length;if(total>limit)throw rejection();hash.update(chunk);}
+    return hash.digest('hex');
+  }finally{await file.close();}
+}
 export const gotifyStates=['working','needs_attention','done'] as const;
 export const gotifyCase='ownedOfficialGotifyDisplaysFiniteEventsWhileBackgrounded';
 const gotifyNativeFailures=['admission','parser-calibration','fixture-input','fixture-identity','fresh-permission','record-calibration','workspace','login',
@@ -456,7 +466,7 @@ async function runGotifyAndroid(root:string) {
     // step with the same flags (as the ntfy owner does) so both come from one signing identity and the connected run only reinstalls it.
     await run('android-client-build',join(android,'gradlew'),[':app:assembleUniversalDebug',...gradleArguments],300000);
     const nativeApk=join(android,'app/build/outputs/apk/universal/debug/app-universal-debug.apk');
-    const nativeHash=digest(await readQrMetadata(nativeApk,536870912));
+    const nativeHash=await apkDigest(nativeApk);
     phase='android-gotify-install';await installed.install('com.github.gotify',apk,pins.android.sha256);
     phase='android-client-install';await installed.install('app.lazysh.client',nativeApk,nativeHash);
     phase='android-package-identity';
@@ -484,7 +494,7 @@ async function runGotifyAndroid(root:string) {
     await stage(0);
     const testApks=(await readdir(join(android,'app/build/outputs/apk/androidTest'),{recursive:true})).filter(path=>path.endsWith('.apk'));
     if(testApks.length!==1)throw rejection();
-    const testApk=join(android,'app/build/outputs/apk/androidTest',testApks[0]),testHash=digest(await readQrMetadata(testApk,536870912));
+    const testApk=join(android,'app/build/outputs/apk/androidTest',testApks[0]),testHash=await apkDigest(testApk);
     phase='android-installed-artifacts';const executed=await installed.bindRunningArtifacts(testHash),executedApp=executed.app,executedTest=executed.test;
     if(executedApp.uid!==targetUid)throw rejection();
     const ids:number[]=[];
@@ -504,7 +514,7 @@ async function runGotifyAndroid(root:string) {
     await stage(4);phase='android-instrumentation-result';await native.finish('actual official Gotify Android acceptance',Math.max(1,until-performance.now()+60000));
     const files=(await readdir(reports,{recursive:true})).filter(name=>name.endsWith('.xml'));
     if(files.length!==1)throw rejection();const result=gotifyNativeReport((await readQrMetadata(join(reports,files[0]),262144)).toString());
-    if(digest(await readQrMetadata(nativeApk,536870912))!==nativeHash||digest(await readQrMetadata(testApk,536870912))!==testHash)throw rejection();
+    if(await apkDigest(nativeApk)!==nativeHash||await apkDigest(testApk)!==testHash)throw rejection();
     phase='android-final-identity';for(const [name,bound] of [['app.lazysh.client',executedApp],['app.lazysh.client.test',executedTest]] as const)
       if((await gotifyInstalledApk(shell,name,bound.sha256,bound.uid)).identity!==bound.identity)throw rejection();
     const head=(await run('source checkout','git',['rev-parse','HEAD'])).trim();if(!/^[a-f0-9]{40}$/.test(head))throw rejection();
