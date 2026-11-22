@@ -314,7 +314,10 @@ fn zellij_sessions_command() -> Cmd {
 }
 
 fn zellij_full_sessions_command() -> Cmd {
-    Cmd::new(&[("LC_ALL", "C")], &["zellij", "list-sessions", "--no-formatting"])
+    Cmd::new(
+        &[("LC_ALL", "C")],
+        &["zellij", "list-sessions", "--no-formatting"],
+    )
 }
 
 /// The names of the sessions whose server is running, from the unshortened listing. Each line is
@@ -1044,10 +1047,16 @@ mod tests {
     #[test]
     fn zellij_reattach_quotes_a_hostile_name_and_never_creates() {
         let hostile = "a'$(touch pwned);`id`\"x";
-        let command = reattach_entry(MultiplexerKind::Zellij, hostile).command().unwrap();
+        let command = reattach_entry(MultiplexerKind::Zellij, hostile)
+            .command()
+            .unwrap();
         assert_eq!(command, "zellij attach 'a'\\''$(touch pwned);`id`\"x'");
-        assert!(reattach_entry(MultiplexerKind::Zellij, "-c").command().is_err());
-        assert!(reattach_entry(MultiplexerKind::Zellij, "a\nb").command().is_err());
+        assert!(reattach_entry(MultiplexerKind::Zellij, "-c")
+            .command()
+            .is_err());
+        assert!(reattach_entry(MultiplexerKind::Zellij, "a\nb")
+            .command()
+            .is_err());
     }
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;

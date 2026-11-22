@@ -2017,7 +2017,9 @@ async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bo
     .await
     .unwrap();
     assert!(
-        listed.lines().all(|line| line.is_empty() || line.contains("(EXITED")),
+        listed
+            .lines()
+            .all(|line| line.is_empty() || line.contains("(EXITED")),
         "no session may have been created or resurrected: {listed}"
     );
     disconnect_inner(&state, gone.session_id.clone())
