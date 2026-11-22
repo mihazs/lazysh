@@ -418,21 +418,34 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
-        let pane = String::from_utf8(
-            run(&format!(
+        // The session answers `run` with nothing while it is still settling its first pane; the pane id is what it
+        // prints once the pane exists, so wait for that and say what it printed if it never does.
+        let mut answer = None;
+        let mut last = None;
+        for _ in 0..250 {
+            let output = run(&format!(
                 "zellij --session={} run --name agent -- {}",
                 quote(&name),
                 quote(script.to_str().unwrap())
-            ))
-            .stdout,
-        )
-        .unwrap();
-        let agent: u32 = pane
-            .trim()
-            .strip_prefix("terminal_")
-            .unwrap()
-            .parse()
-            .unwrap();
+            ));
+            let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if let Some(id) = text
+                .strip_prefix("terminal_")
+                .and_then(|id| id.parse::<u32>().ok())
+            {
+                answer = Some(id);
+                break;
+            }
+            last = Some((
+                output.status,
+                text,
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            ));
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let agent: u32 = answer.unwrap_or_else(|| {
+            panic!("zellij never printed the agent pane id; last run: {last:?}")
+        });
         let target = |pane| Target {
             zellij_session: name.clone(),
             pane,
