@@ -27,6 +27,16 @@ test('Zellij readback survives one unreadable answer but not a topology that sta
   expect(changed.reads()).toBe(3);
 });
 
+test('Zellij readback retries a failing command and a command that keeps failing surfaces its own error',async()=>{
+  const owned=JSON.stringify([{position:0,name:'alpha',active:true},{position:1,name:'beta',active:false}]);
+  let reads=0;
+  expect(await zellijActiveTabSettled(async()=>{if(++reads<3)throw new Error('Owned fixture failed: owned Zellij observation; exit=1');return owned;})).toBe(0);
+  expect(reads).toBe(3);
+  reads=0;
+  await expect(zellijActiveTabSettled(async()=>{reads++;throw new Error('Owned fixture failed: owned Zellij observation; exit=1');},4)).rejects.toThrow('exit=1');
+  expect(reads).toBe(4);
+});
+
 test('Zellij attach history requires attach, Tab 2, detach, reattach on that tab, Tab 1 and the final detach in order',()=>{
   expect(zellijTabHistoryVerified([null,0,1,null,1,0,null])).toBe(true);
   for(const history of [[],[null,0,1,null],[null,0,1,null,1,0],[null,0,null,0,null],[null,0,1,null,0,1,null],[0,1,null,1,0,null],[null,0,1,null,1,0,null,0]])

@@ -338,12 +338,12 @@ it('enters the exact selected Herdr pane without reading a conversation',async()
   await advance(5000);expect(invoke).not.toHaveBeenCalled();
   view.rerender(<AgentView sessionId="ssh" shown tmux={false} herdrSession="owned" onEnterHerdr={enter} onShowTerminal={()=>{}}/>);
   await advance(0);
-  expect(screen.getByText('builder')).toBeTruthy();expect(screen.getByText('other')).toBeTruthy();
+  expect(screen.getAllByText('builder').length).toBeGreaterThan(0);expect(screen.getAllByText('other').length).toBeGreaterThan(0);
   expect(screen.getByLabelText('Herdr server')).toHaveProperty('disabled',true);
   expect(screen.queryByText('No agent conversation for this terminal.')).toBeNull();
   expect(calls('agent_reported_history')).toEqual([]);expect(calls('agent_transcript')).toEqual([]);
   expect(screen.queryByRole('button',{name:'Open conversation'})).toBeNull();
-  fireEvent.click(within(screen.getByText('builder').closest('article')!).getByRole('button',{name:'Enter session'}));
+  fireEvent.click(within(within(screen.getByRole('region',{name:'Live Herdr agents'})).getByText('builder').closest('article')!).getByRole('button',{name:'Enter session'}));
   expect(enter).toHaveBeenCalledExactlyOnceWith('owned',{kind:'pane',workspace:'w2E',tab:'w2E:tC',pane:'w2E:pF',terminal:'term-one'},expect.anything(),expect.any(Function));
   expect(calls('agent_transcript')).toEqual([]);
 });
@@ -621,13 +621,17 @@ it('lets the user look at another agent and come back to the pane\'s own, keepin
   expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toHaveProperty('value','Keep this draft');
 });
 
-it('focuses the pane of an agent chosen in the Agent view so its composer shows',async()=>{
-  const state={focus:'w2E:p3'};server(state);
+/** A Herdr server whose focus moves to the pane a focus action names, as the real server does. */
+function focusFollowsActions(state:{focus:string}) {
   const base=vi.mocked(invoke).getMockImplementation()!;
   vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
     if(command==='herdr_action'){state.focus=(args as {action:{target:string}}).action.target;return {};}
     return base(command,args,options);
   });
+}
+it('focuses the pane of an agent chosen in the Agent view so its composer shows',async()=>{
+  const state={focus:'w2E:p3'};server(state);
+  focusFollowsActions(state);
   render(view());await advance(0);
   expect(screen.queryByRole('textbox',{name:'Draft for this terminal'})).toBeNull();
   fireEvent.click(within(screen.getByText('/work/two').closest('article')!).getByRole('button',{name:/Open conversation/}));await advance(0);await advance(0);
@@ -635,6 +639,36 @@ it('focuses the pane of an agent chosen in the Agent view so its composer shows'
   expect(screen.getByText('Answer of session-two')).toBeTruthy();
   expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toBeTruthy();
   expect(screen.queryByText('Not this pane')).toBeNull();
+});
+
+it('switches agent from the header switcher: marks the current one, focuses the pane and shows its composer',async()=>{
+  const state={focus:'w2E:p1'};server(state);
+  focusFollowsActions(state);
+  render(view());await advance(0);
+  const trigger=screen.getByRole('button',{name:/^Switch agent/});
+  expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(trigger);
+  const list=screen.getByRole('group',{name:'Switch agent'});
+  const rows=within(list).getAllByRole('button');
+  expect(rows).toHaveLength(2);
+  expect(rows[0].getAttribute('aria-current')).toBe('true');expect(rows[1].getAttribute('aria-current')).toBeNull();
+  expect(rows[1].textContent).toContain('Working');
+  fireEvent.click(rows[1]);await advance(0);await advance(0);
+  expect(screen.queryByRole('group',{name:'Switch agent'})).toBeNull();
+  expect(calls('herdr_action')).toEqual([{sessionId:'ssh',name:'owned',action:{type:'focusPane',target:'w2E:p2'}}]);
+  expect(screen.getByText('Answer of session-two')).toBeTruthy();
+  expect(screen.getByRole('textbox',{name:'Draft for this terminal'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:/^Switch agent/}));
+  expect(within(screen.getByRole('group',{name:'Switch agent'})).getAllByRole('button')[1].getAttribute('aria-current')).toBe('true');
+  fireEvent.keyDown(screen.getByRole('group',{name:'Switch agent'}),{key:'Escape'});
+  expect(screen.queryByRole('group',{name:'Switch agent'})).toBeNull();
+});
+
+it('opens the switcher with its shortcut only when there is another agent to switch to',async()=>{
+  const state={focus:'w2E:p1',agents:['w2E:p1']};server(state);
+  render(view());await advance(0);
+  fireEvent.keyDown(window,{key:'L',ctrlKey:true,shiftKey:true});
+  expect(screen.queryByRole('group',{name:'Switch agent'})).toBeNull();
 });
 
 it('drops a hand-picked conversation when focus moves to another pane',async()=>{
@@ -980,10 +1014,11 @@ describe('OpenCode pane',()=>{
   });
 });
 
-describe('permission requests of the agent in this pane',()=>{
-  const approval=(id:string,paneId:string,sessionId='Claude Code-session')=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
+describe.each([['claude','Claude Code'],['codex','Codex']])('permission requests of the %s agent in this pane',(agent,label)=>{
+  // A Codex request lists no suggestions, so it carries an empty `options` and offers a denial message.
+  const approval=(id:string,paneId:string,sessionId=`${label}-session`,as=agent)=>({id,expectedHash:'a'.repeat(64),agent:as,sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},...(as==='codex'?{options:[]}:{}),createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
   function approvals(requests:unknown[],pane=()=>'%3') {
-    host('claude',[row('Claude Code','%3','needs_attention')],'available',[turn('Prompt','Answer')]);
+    host(agent,[row(label,'%3','needs_attention')],'available',[turn('Prompt','Answer')]);
     const fallback=vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async(command,args,options)=>{
       if(command==='agent_approvals')return {schemaVersion:1,requests};
@@ -998,13 +1033,13 @@ describe('permission requests of the agent in this pane',()=>{
     mount();await advance(0);
     const dock=screen.getByRole('region',{name:'Pending approvals'});
     expect(within(dock).getAllByRole('article')).toHaveLength(1);expect(dock.textContent).toContain('run 11111111-1111-4111-8111-111111111111');expect(dock.textContent).not.toContain('run 22222222');
+    expect(!!within(dock).queryByRole('button',{name:'Deny with a message'})).toBe(agent==='codex');
     const deny=within(dock).getByRole('button',{name:'Deny request'});
     expect(deny.hasAttribute('disabled')).toBe(true);fireEvent.click(deny);expect(calls('resolve_agent_approval')).toEqual([]);
     await advance(400);expect(deny.hasAttribute('disabled')).toBe(false);
     await act(async()=>{fireEvent.click(deny);await vi.advanceTimersByTimeAsync(0);});
-    expect(calls('resolve_agent_approval')).toEqual([{sessionId:'ssh',id:'11111111-1111-4111-8111-111111111111',expectedHash:'a'.repeat(64),agentSessionId:'Claude Code-session',paneId:'%3',decision:'deny'}]);
+    expect(calls('resolve_agent_approval')).toEqual([{sessionId:'ssh',id:'11111111-1111-4111-8111-111111111111',expectedHash:'a'.repeat(64),agentSessionId:`${label}-session`,paneId:'%3',decision:'deny'}]);
     // Nothing was typed into the terminal: the decision is the hook's, not a key. The composer binds the pane but sends no input.
-    // Nothing was typed into the terminal: the decision is the hook's, not a key.
     expect(calls('tmux_chat').some(args=>(args as {action:{kind:string}}).action.kind==='input')).toBe(false);
     expect(screen.queryByRole('region',{name:'Pending approvals'})).toBeNull();
   });
@@ -1015,6 +1050,11 @@ describe('permission requests of the agent in this pane',()=>{
     pane='%4';
     await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
     expect(calls('resolve_agent_approval')).toEqual([]);expect(within(screen.getByRole('region',{name:'Pending approvals'})).getByRole('alert')).toBeTruthy();
+  });
+  it('never offers a request of the other agent, even for the same session id and pane',async()=>{
+    approvals([approval('11111111-1111-4111-8111-111111111111','%3',`${label}-session`,agent==='codex'?'claude':'codex')]);
+    mount();await advance(0);await advance(400);
+    expect(screen.queryByRole('region',{name:'Pending approvals'})).toBeNull();
   });
 });
 

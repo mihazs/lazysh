@@ -976,8 +976,16 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             None
         }
         Command::Snapshot { limit } => {
-            let mut snapshot = Store::open(&lazysh_agent::state_directory()?)?
-                .snapshot(limit, chrono::Utc::now())?;
+            let directory = lazysh_agent::state_directory()?;
+            let mut store = Store::open(&directory)?;
+            // Claude Code sends no hook when a permission dialog is rejected (#1795).
+            let admission = store.admission(
+                &directory,
+                Agent::Claude,
+                &lazysh_agent::notification_policy::System,
+            )?;
+            store.settle_rejected_dialogs(chrono::Utc::now(), admission)?;
+            let mut snapshot = store.snapshot(limit, chrono::Utc::now())?;
             snapshot.update = update;
             Some(serde_json::to_value(snapshot).map_err(|_| Error::InvalidEvent)?)
         }

@@ -76,7 +76,7 @@ skip the gate and run every job with the full matrix, which is the parity eviden
 
 Most jobs that are not required to merge never run on a pull request, whatever its paths:
 companion candidates, desktop (macOS, Windows), iOS simulator, Android Mosh, Herdr navigation,
-auxiliary, ntfy and the terminal core and renderer on macOS (`terminal-macos`, report-only). They run on pushes to `main`, and `main-verdict.yml` reports them there. The
+auxiliary, ntfy, the terminal core and renderer on macOS (`terminal-macos`, report-only) and the terminal core on iOS (`terminal-ios`, report-only). They run on pushes to `main`, and `main-verdict.yml` reports them there. The
 terminal performance gate (`terminal-perf`, report-only) is the exception: it also runs on a pull request that selects the
 terminal runtime area, so a regression shows on the pull request that causes it. The
 table below lists what a change can affect, and a pull request runs only the required jobs of
@@ -95,6 +95,7 @@ that list plus `terminal-perf`. The macOS surface probe (`terminal-macos-surface
 | Linux composition probe: `packages/terminal-runtime/prototypes/linux-surface/**` | Linux composition probe only (`native-linux-surface`: headless sway and Xvfb, the compositor's pixels read back) |
 | The probe's harness: `packages/terminal-runtime/prototypes/linux-surface/scripts/**` | Linux composition probe, and the native-terminal bridge (`native-terminal-bridge` runs the harness against the real app's surface host) |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
+| Release APK build configuration: `.github/workflows/release-artifacts.yml`, `.github/actions/ghostty-zig/**`, `.changeset/release-artifacts.ts` | everything the next row selects, plus `native-android-release-core` (a pull request only, never a push): the Google release APK built with `native-terminal` and held to the size ceiling of `release-artifacts.ts` |
 | Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | every required job and `terminal-perf`, with both ntfy variants |
 
 The Appium suite (`native-android-appium`, `apps/client/mobile-e2e`) is **report-only**: it runs on the paths above, on `main` (plus its
@@ -105,6 +106,7 @@ separate, never-gating `native-android-appium-quarantine` job.
 Matrices fail fast on pull requests and keep every verdict on `main`. The script and
 `tests/native-changes.test.ts` are the exact mapping; extend both when a job gains a
 new input, and map an uncertain path to more jobs, never fewer.
+Main's `checks` runs are mostly superseded while pending, so the macOS-only terminal core jobs (`terminal-macos`, `terminal-ios`) rarely finish there; prove them on demand with `gh workflow run checks --ref <branch>` (the `areas` input defaults to `terminal_apple` and runs only those two jobs).
 A Changesets version bump (every changed line a version line, root `package.json` bumped) selects no native job on a pull request; `main` still runs everything.
 
 ### Required checks

@@ -6,7 +6,7 @@
 # consumers are uncertain it must select more jobs, never fewer.
 # Exception: a pull request never selects the jobs that are not required to merge (companion
 # candidates, macOS and Windows desktop, iOS simulator, Mosh, Herdr navigation, auxiliary
-# Android, ntfy, terminal core on macOS). They run on pushes to main, where main-verdict.yml reports their verdict.
+# Android, ntfy, terminal core on macOS and iOS). They run on pushes to main, where main-verdict.yml reports their verdict.
 # The terminal performance gate (terminal_perf) is report-only too, but a pull request that selects the terminal runtime area runs it.
 set -u
 
@@ -57,6 +57,8 @@ classify() {
     # The probe's harness also drives the real app's surface host in native-terminal-bridge.
     packages/terminal-runtime/prototypes/linux-surface/scripts/*) add linux_surface terminal_bridge ;;
     packages/*/*) package "$1" ;;
+    # The release APK's build configuration: only a pull request touching it builds a release APK with the native engine.
+    .github/workflows/release-artifacts.yml | .github/actions/ghostty-zig/* | .changeset/release-artifacts.ts | .github/scripts/apk-budget.ts | tests/apk-budget.test.ts) add all android_release ;;
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
     apps/client/src-tauri/gen/android/*) add android ;;
     apps/client/src-tauri/apple/*) add ios ;;
@@ -114,7 +116,9 @@ EOF
   [ "$bumped" = true ]
 }
 
-if [ "${EVENT-}" = schedule ]; then
+if [ "${EVENT-}" = workflow_dispatch ] && [ -n "${AREAS-}" ]; then
+  add $AREAS # a manual run of the named areas only.
+elif [ "${EVENT-}" = schedule ]; then
   add nightly # only the device suite: main's push run is the parity evidence for everything else.
 elif [ "${EVENT-}" != pull_request ] || [ -z "${BASE-}" ] || [ -z "${HEAD-}" ]; then
   add all
@@ -145,7 +149,7 @@ case "$linux$linux_runtimes$android_runtime$android_herdr$android_appium" in *tr
 if has push; then variants='["fdroid","google"]'; else variants='["google"]'; fi
 
 # Outputs of jobs that are not required to merge and that no pull request selects: pushes keep them.
-main_only=' companion desktop android_mosh android_herdr android_auxiliary android_ntfy ios terminal_macos '
+main_only=' companion desktop android_mosh android_herdr android_auxiliary android_ntfy ios terminal_macos terminal_ios '
 
 native=false
 for output in \
@@ -160,6 +164,7 @@ for output in \
   "android=$(flag any client android)" \
   "android_runtime=$android_runtime" \
   "android_terminal_core=$(flag any client android android_core)" \
+  "android_release_native=$(case "$areas" in *" android_release "*) echo true ;; *) echo false ;; esac)" \
   "android_mosh=$(flag has mosh)" \
   "android_herdr=$android_herdr" \
   "android_appium=$android_appium" \
@@ -168,8 +173,9 @@ for output in \
   "android_ntfy=$(flag any android push)" \
   "ios=$(flag has ios)" \
   "terminal_perf=$(flag has terminal_runtime)" \
-  "terminal_macos=$(flag has terminal_runtime)" \
-  "linux_surface=$(flag any linux_surface)"; do
+  "terminal_macos=$(flag any terminal_runtime terminal_apple)" \
+  "linux_surface=$(flag any linux_surface)" \
+  "terminal_ios=$(flag any terminal_runtime terminal_apple)"; do
   # The fast gate still runs for a pull request that selected only main-only jobs.
   case "$output" in *=true) native=true ;; esac
   name=${output%%=*}

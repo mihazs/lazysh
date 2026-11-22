@@ -45,6 +45,7 @@ mod notifications;
 mod previews;
 mod private_keyboard;
 mod push;
+mod remote_notifications;
 mod repository;
 mod routing;
 mod session_background;
@@ -148,6 +149,7 @@ pub fn run() {
         .manage(sync::SyncState::default())
         .manage(local::LocalState::default())
         .manage(account_usage::UsageState::default())
+        .manage(remote_notifications::RemoteState::default())
         .manage(desktop_launch::LaunchState::new(directory))
         .setup(|app| {
             use tauri::Manager;
@@ -168,6 +170,7 @@ pub fn run() {
                 app.path().app_data_dir()?.join("voice-models"),
             )?);
             app_lock::install(app)?;
+            remote_notifications::install(app);
             theme_links::install(app)?;
             Ok(())
         })
@@ -285,6 +288,11 @@ pub fn run() {
                 approvals::resolve_agent_approval,
                 notifications::notify_agent_attention,
                 notifications::notification_test,
+                remote_notifications::remote_notifications_status,
+                remote_notifications::remote_notifications_configure,
+                remote_notifications::remote_notifications_pause,
+                remote_notifications::remote_notifications_resume,
+                remote_notifications::remote_notifications_forget,
                 edge_gestures::edge_gesture_exclusion,
                 edge_gestures::edge_gesture_insets,
                 native_terminal_surface::native_terminal_surface_place,
@@ -352,6 +360,7 @@ pub fn run() {
                 zellij::zellij_action,
                 zellij::zellij_tabs,
                 zellij::zellij_panes,
+                zellij::zellij_jump_tabs,
                 multiplexer::multiplexer_sessions,
                 multiplexer::tmux_action,
                 ssh::attach_multiplexer,

@@ -129,18 +129,18 @@ export async function sameIdentity(saved:OwnedPid) {
   const current=await identity(saved.pid);
   return current?.start===saved.start && current.parent===saved.parent && !['Z','X'].includes(current.state);
 }
-export async function descendants(parent:OwnedPid,seen:OwnedPid[]=[]):Promise<OwnedPid[]> {
+export async function descendants(parent:OwnedPid,seen:OwnedPid[]=[],read:typeof readFile=readFile):Promise<OwnedPid[]> {
   if(!await sameIdentity(parent))return seen;
   let children:string;
-  try {children=await readFile(`/proc/${parent.pid}/task/${parent.pid}/children`,'utf8');}
-  catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return seen;throw error;}
+  try {children=await read(`/proc/${parent.pid}/task/${parent.pid}/children`,'utf8');}
+  catch(error){if(['ENOENT','ESRCH'].includes((error as NodeJS.ErrnoException).code??''))return seen;throw error;}
   if(children.length>4096)throw new Error('Owned fixture descendant bound exceeded');
   for(const value of children.trim().split(/\s+/).filter(Boolean)) {
     if(!await sameIdentity(parent))return seen;
     const child=await identity(Number(value));
     if(!child || child.parent!==parent.pid || !await sameIdentity(parent))continue;
     if(seen.length>=64)throw new Error('Owned fixture descendant count exceeded');
-    seen.push(child);await descendants(child,seen);
+    seen.push(child);await descendants(child,seen,read);
   }
   return seen;
 }

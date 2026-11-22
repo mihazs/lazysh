@@ -31,9 +31,11 @@ function watchPointer(callback: () => void) {
 }
 const hasTouchPointer = () => typeof window.matchMedia === 'function' && window.matchMedia(coarse).matches;
 
+export const useTouchScreen = () => useSyncExternalStore(watchPointer, hasTouchPointer, () => false);
+
 /** A phone is a narrow window with a touch screen: a narrowed desktop window keeps its top bar, as nothing there could swipe. */
 export function useSideMenuMode(hasSession: boolean, narrow: boolean) {
-  const touch = useSyncExternalStore(watchPointer, hasTouchPointer, () => false);
+  const touch = useTouchScreen();
   const topBar = useShowTopBar();
   return hasSession && narrow && touch && !topBar;
 }
