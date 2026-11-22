@@ -127,6 +127,10 @@ class GotifyAndroidTest {
     }
 
     private fun login(origin: String) {
+        // The app asks for this through a platform Settings screen that this lane does not qualify; allow it the way that screen
+        // does (a uid-mode change of the app op) before the app asks, so only the app's own behavior is under test.
+        phase = "alarm-permission"
+        shell("cmd appops set --uid $gotify SCHEDULE_EXACT_ALARM allow")
         phase = "login-launch"
         launchGotify()
         phase = "login-url"
@@ -154,27 +158,11 @@ class GotifyAndroidTest {
         phase = "notification-permission-grant"
         awaitCondition { permissionGranted() }
         phase = "alarm-permission"
-        // The list view is hidden while the history is empty (the app flips to its "no messages" view), so either one ends the wait.
+        // The grant above made the app check its alarm permission, which was allowed before the launch: the app's own prompt must
+        // not appear. The list view is hidden while the history is empty (the app flips to its "no messages" view), so either ends the wait.
         awaitCondition {
-            if (device.hasObject(By.res(gotify, "messages_view")) || device.hasObject(emptyHistory())) true
-            else {
-                val grant = device.findObject(By.res("android", "button1").pkg(gotify).text("Grant"))
-                if (grant != null) {
-                    check(device.hasObject(By.pkg(gotify).text("Gotify requires permission to schedule reconnecting after connection is lost.")))
-                    grant.click()
-                    phase = "alarm-permission-settings"
-                    node(By.pkg("com.android.settings").text("Allow setting alarms and reminders"))
-                    node(By.pkg("com.android.settings").text("Gotify"))
-                    val toggle = node(By.pkg("com.android.settings").res("android:id/switch_widget"))
-                    check(!toggle.isChecked)
-                    toggle.click()
-                    // Settings repaints the switch a moment after the tap.
-                    awaitCondition { device.findObject(By.pkg("com.android.settings").res("android:id/switch_widget"))?.isChecked == true }
-                    device.pressBack()
-                    phase = "alarm-permission"
-                }
-                false
-            }
+            check(!device.hasObject(By.res("android", "button1").pkg(gotify).text("Grant"))) { "Alarm prompt appeared" }
+            device.hasObject(By.res(gotify, "messages_view")) || device.hasObject(emptyHistory())
         }
         // An empty official history is required before the host may publish anything.
         node(emptyHistory())

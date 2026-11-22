@@ -22,8 +22,10 @@ package identity, then starts the unmodified server with two loopback listeners:
 - **Plain HTTP, no redirect** for the official app only, reached through one owned `adb reverse` pair. The app manifest
   already permits cleartext traffic (`usesCleartextTraffic` and a `base-config` with `cleartextTrafficPermitted=true`).
 
-The native case (`GotifyAndroidTest`) logs in through the app's public UI, grants only the notifications and alarm
-permissions the app asks for, sends the app to the background and, for each of `working`, `needs_attention` and `done`,
+The native case (`GotifyAndroidTest`) logs in through the app's public UI, answers the app's notification permission
+dialog and allows the alarm permission the app also asks for through the app-op change its Settings screen makes
+(`cmd appops set --uid ... SCHEDULE_EXACT_ALARM allow`), because that platform screen is not what this lane qualifies.
+It then sends the app to the background and, for each of `working`, `needs_attention` and `done`,
 requires the relay receipt, the server message, the Android notification record, a visible SystemUI card and finally the
 app's own message history. Android shows a foreground-service notification only when notification permission preceded the
 service start, and the official app starts its service before its own permission prompt, so the case restarts the logged-in
