@@ -35,7 +35,7 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
   const atStart = os.loadavg();
   test.skip(browserName !== 'chromium', 'CDP process metrics need Chromium.');
   // Reading the guest's counters over adb takes seconds per sample, which the smoke scale's default budget does not allow for.
-  if (androidSerial) test.setTimeout(30 * 60_000);
+  if (androidSerial) test.setTimeout(120 * 60_000);
   results.length = 0;
   await page.goto('about:blank');
   await page.goto(benchUrl(baseURL, `renderer=${candidate}&write=${writePath}`));
@@ -68,6 +68,8 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
     }
     const correct = collected.every(entry => entry.correct === true);
     results.push({ workload: id, title, variant: variant ?? null, runs: collected, median: medianOf(collected as never), correct, notes });
+    // A run on the guest takes the better part of an hour: say how far it is.
+    if (androidSerial) console.log(`${new Date().toISOString()} ${id} ${variant ?? title} done (${runs} runs)`);
     if (!correct) console.log(JSON.stringify(collected.map(({ cost: _, ...rest }) => rest)));
     expect(correct, `${id}${variant ? ` ${variant}` : ''} must end on the expected screen`).toBe(true);
     // A missing number is recorded as null by the harness, never zero: reject NaN/Infinity in what was measured.

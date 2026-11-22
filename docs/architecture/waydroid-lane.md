@@ -71,7 +71,7 @@ apps/client/bench/waydroid-lane.sh --out <evidence.json> --label <name> \
 ```sh
 apps/client/bench/waydroid-lane.sh --out docs/architecture/benchmarks/terminal-lane-programs-waydroid.json --label programs \
   --build apps/client/bench/android-webview/build.sh \
-  --bench programs 'cd apps/client && LAZYSH_BENCH_OUT="$LAZYSH_LANE_OUT/programs.json" bun run bench:terminal -- --project desktop e2e/terminal-programs.spec.ts'
+  --bench programs 'cd apps/client && LAZYSH_BENCH_OUT="$LAZYSH_LANE_OUT/programs.json" bun run bench:terminal -- e2e/terminal-programs.spec.ts --project=desktop'
 ```
 
 The spec fails when the WebView host loses the window focus, so nothing else may use the guest during the run. **This command has not been run:** the session did not start on the day it was written (see [Known blockers](#known-blockers)). The same workloads run on the native core with `examples/program_workloads.rs`, which is a host binary: no run of the core inside the guest exists, so the lane cannot yet put the two engines side by side in one guest.
@@ -79,6 +79,19 @@ The spec fails when the WebView host loses the window focus, so nothing else may
 ### The lane never skips
 
 An instrumentation class fails the lane when it runs no test, when a test is ignored or ends on an assumption (`INSTRUMENTATION_STATUS_CODE` -3 or -4), when a test fails or errors (-1, -2), or when the instrumentation does not finish (a crash, or a runner or class that is not installed). A benchmark fails on a non-zero exit, and also when it exits zero but leaves no result file in `LAZYSH_LANE_OUT` (a Playwright spec that skipped itself measured nothing). A run that could not start produces no evidence at all, so a missing file is never mistaken for a pass.
+
+### The engine comparison on the lane
+
+`apps/client/bench/androidEngineBench.ts` is the xterm.js arm of the same-run comparison of the native engine with xterm.js ([G14, G15 and the idle half of G16](terminal-benchmarks.md#same-run-comparison-on-the-waydroid-lane-g14-g15-g16-idle)). It runs the baseline spec (W0 to W4, W9, W12) in the guest's WebView, reads the guest's own counters (CPU and thread wakeups of the app and its WebView renderer processes, SurfaceFlinger frames, PSS) and writes one `android-engine-comparison` record. The native engine's driver writes the same record into the same lane run; `androidCompare.ts` then sets them side by side and exits non-zero when native loses:
+
+```sh
+WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 apps/client/bench/waydroid-lane.sh \
+  --out docs/architecture/benchmarks/terminal-lane-engine-xterm-waydroid.json --label engine-xterm --package app.lazysh.webviewbench \
+  --bench xterm 'cd apps/client && bun bench/androidEngineBench.ts --out "$LAZYSH_LANE_OUT/record.json" --label engine-xterm'
+bun apps/client/bench/androidCompare.ts docs/architecture/benchmarks/terminal-lane-engine-xterm-waydroid-xterm-record.json   # one record per arm; they must share the run id
+```
+
+The host app of the benchmark page (`bench/android-webview`, built by `--build` or already installed) must be in the guest; `--package app.lazysh.webviewbench` makes the lane thaw and stop that app instead of the real one. The lane gives the run an id (`runId` in its evidence, `engine-xterm-20261122T204011Z`: the label and the start time) and exports it to every `--bench` command as `LAZYSH_LANE_RUN_ID`; a record carries it, and the compare script refuses records of different runs or guests. The benchmark is heavy on the host: start it through `/tmp/lazysh-heavy` on this machine, and note that the guest shares the host CPU and GPU with whatever else runs (the record keeps the host's load average at the end).
 
 ## Exit codes
 

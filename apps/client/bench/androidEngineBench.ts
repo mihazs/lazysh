@@ -50,7 +50,7 @@ if (import.meta.main) {
     for (const renderer of renderers) {
       const file = path.join(work, `xterm-${renderer}.json`);
       // The release build of the page, the spec's own full scale, in the guest's WebView; one renderer per invocation.
-      const run = spawnSync('bun', ['run', 'bench:terminal', '--', '--project', 'desktop', 'e2e/terminal-bench.spec.ts'], {
+      const run = spawnSync('bun', ['run', 'bench:terminal', '--', 'e2e/terminal-bench.spec.ts', '--project=desktop'], {
         cwd: client, stdio: 'inherit', env: { ...process.env, LAZYSH_BENCH_ANDROID: serial, LAZYSH_BENCH_RENDERER: renderer, LAZYSH_BENCH_OUT: file },
       });
       if (run.status !== 0) { console.error(`androidEngineBench: the baseline spec failed for the ${renderer} renderer (exit ${run.status}); no record written`); process.exit(1); }
