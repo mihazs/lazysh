@@ -1,7 +1,6 @@
 //! Linux: a `systemd --user` service and timer in the user's configuration directory.
 use super::{
-    ours, place, remove_ours, render, render::NAME, replaced, succeeds, tool, undo, Failure,
-    State,
+    ours, place, remove_ours, render, render::NAME, replaced, succeeds, tool, undo, Failure, State,
 };
 use std::path::PathBuf;
 
@@ -27,7 +26,10 @@ fn reachable() -> bool {
     systemctl(&["show-environment"])
 }
 
-pub fn install(exe: &str, before_write: &mut dyn FnMut() -> Result<(), Failure>) -> Result<(), Failure> {
+pub fn install(
+    exe: &str,
+    before_write: &mut dyn FnMut() -> Result<(), Failure>,
+) -> Result<(), Failure> {
     if !reachable() {
         return Err(Failure::Unsupported);
     }
