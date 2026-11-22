@@ -1,8 +1,6 @@
 package app.lazysh.client
 
 import android.Manifest
-import android.content.ComponentName
-import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
 import android.os.ParcelFileDescriptor
@@ -92,6 +90,8 @@ class GotifyAndroidTest {
             phase = "login-restart"
             shell("am force-stop $gotify")
             launchGotify()
+            awaitCondition { device.currentPackageName == gotify }
+            phase = "login-restart-history"
             node(emptyHistory())
             phase = "background-home"
             home()
@@ -173,8 +173,9 @@ class GotifyAndroidTest {
 
     private fun emptyHistory() = By.pkg(gotify).text("There are no messages, yet.\nSend a message to Gotify\nand it will appear here.")
 
-    private fun launchGotify() = context.startActivity(Intent().setComponent(ComponentName(gotify, "$gotify.init.InitializationActivity"))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    // Started through the shell, as a user's launcher would: after the force-stop the instrumented app has no window in the
+    // foreground, and Android only sometimes lets such an app start another app's activity.
+    private fun launchGotify() = shell("am start -W -n $gotify/$gotify.init.InitializationActivity")
 
     // Read through the shell: the app's own PackageManager hides a package that its manifest declares no <queries> for (it lists only
     // UnifiedPush distributor intents), so checkPermission(..., gotify) answers "denied" however the dialog was answered.
