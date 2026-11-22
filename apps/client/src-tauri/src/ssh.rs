@@ -6815,7 +6815,8 @@ mod tests {
         state.config().unwrap().hosts.push(host.clone());
         let (events, _rx) = event_channel(|json| json);
         let parent = password_terminal(&state, &host, events).await;
-        *server.scripted_exec.lock().unwrap() = Some((vec![listing.as_bytes().to_vec()], 0));
+        *server.scripted_exec.lock().unwrap() =
+            Some((vec![listing.as_bytes().to_vec()], Vec::new(), 0));
         server.commands.lock().unwrap().clear();
         let app = tauri::test::mock_app();
         app.manage(state.clone());
@@ -6830,6 +6831,7 @@ mod tests {
             24,
             Channel::new(|_| Ok(())),
             create_if_missing,
+            None,
         )
         .await;
         let commands = server.commands.lock().unwrap().clone();

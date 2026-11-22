@@ -2002,6 +2002,7 @@ async fn real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bo
         24,
         super::test_support::json_events().0,
         Some(false),
+        None,
     )
     .await
     .expect_err("a reattach to a vanished session must fail");
@@ -4222,7 +4223,7 @@ async fn real_ssh_managed_herdr_runs_every_native_call_and_never_the_system_one(
             &source,
             "owned-managed",
             MultiplexerKind::Herdr,
-            true,
+            Some(true),
         )
         .await;
         owned_terminal_output(&app, &child.session_id, &mut events, b"OWNED_MANAGED").await;
@@ -4291,7 +4292,7 @@ async fn real_ssh_managed_guarded_herdr_binds_the_display_through_the_managed_ex
         &source,
         "owned-guarded",
         crate::multiplexer::MultiplexerKind::Herdr,
-        false,
+        Some(false),
     )
     .await;
     owned_terminal_output(&app, &child.session_id, &mut events, b"OWNED_GUARDED").await;
