@@ -81,6 +81,8 @@ async function open(page:Page) {
       const opencode=(window as unknown as {opencodeFixture?:{session:string;database:string;discovery:unknown;page:unknown}}).opencodeFixture;
       // A records-only adapter's pane: the host lists the adapter's records, which name the reported session, and reads them as records.
       const recordsOnly=(window as unknown as {recordsFixture?:{agent:string;adapter:string;session:string;path:string;discovery:unknown;page:unknown}}).recordsFixture;
+      // A Codex row mounts the approval dock, which polls the approvals store: nothing is pending in this fixture.
+      if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:opencode?.session??recordsOnly?.session??'codex-thread',agent:opencode?'OpenCode':recordsOnly?.agent??(window as unknown as {reportedAgent?:string}).reportedAgent??'Codex',project:'/work',state:fixture.state,updatedAt:new Date().toISOString(),summary:fixture.summary??'Working on your prompt',paneId:'%3',eventCount:4}]};
       if(command==='agent_transcripts' && opencode && args.agent==='opencode')return opencode.discovery;
       if(command==='agent_transcripts' && recordsOnly && args.agent===recordsOnly.adapter)return recordsOnly.discovery;

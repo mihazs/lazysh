@@ -117,6 +117,7 @@
     "allow-zellij-agent-screen",
     "allow-zellij-tabs",
     "allow-zellij-panes",
+    "allow-zellij-jump-tabs",
     "allow-multiplexer-history",
     "allow-generate-identity",
     "allow-inspect-identity",

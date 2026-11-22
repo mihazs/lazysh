@@ -4,7 +4,7 @@ import {cycleFocus, focusableWithin} from './focus';
 import {announceAuthHint, type AuthHint} from './authHints';
 import {SideMenuChoices} from './SideMenuChoices';
 import {useSideMenuGestures} from './useSideMenuGestures';
-import {useSideMenuMode} from './sideMenuMode';
+import {useShowTopBar, useSideMenuMode, useTouchScreen} from './sideMenuMode';
 import WorkspaceSessions from './WorkspaceSessions';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {formatNumber, t, useUi} from './i18n/core';
@@ -97,6 +97,7 @@ import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import TerminalEngineNotice from "./TerminalEngineNotice";
 import {describeTerminalEngine} from "./terminalEngineReason";
+import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTourModel";
 import { useClientAppearance } from "./appearance";
 import { getPreferences, usePreferences } from "./preferences";
 import { usePrivateKeyboard } from "./privateKeyboard";
@@ -127,6 +128,8 @@ const AttachmentPanel = lazy(() => import("./AttachmentPanel"));
 const VoicePanel = lazy(() => import("./VoicePanel"));
 const SyncPanel = lazy(() => import("./SyncPanel"));
 const SharePanel = lazy(() => import("./SharePanel"));
+const GestureTour = lazy(() => import("./GestureTour"));
+const GestureTourHelp = lazy(() => import("./GestureTour").then(({GestureTourHelp}) => ({default: GestureTourHelp})));
 const AboutPanel = lazy(() => import("./AboutPanel"));
 const DevicePanel = lazy(() => import("./DevicePanel"));
 const PushSettingsPanel = lazy(() => import('./PushSettingsPanel'));
@@ -218,6 +221,8 @@ async function prepareSession(
       pendingBytes = 0;
     }
   };
+  // On the native data path the transport starts on the core's Channel, so no output reaches onEvent and none is acknowledged here.
+  if (adapter.transport) Object.assign(onEvent, {link: adapter.transport}), adapter.transport.onEvent = onEvent;
   return { session, onEvent, establish };
 }
 
@@ -263,7 +268,7 @@ async function selectTransport(
           ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name},child.onEvent)
           : entry.kind==='tmux'
             ? await api.attachTmux(shell.session.id,entry.name,child.onEvent,entry.tmuxServer)
-            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent)
+            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent,true)
         : kind === 'mosh'
           ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent,...(entry?[entry] as const:[]))
           : await api.connectEt(shell.session.id, options.et, child.onEvent);
@@ -1199,7 +1204,8 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [lease] = useState(captureAccess);
   const api = useMemo(() => bindProtectedApi(nativeApi, lease), [lease]);
   useClientAppearance();
-  const {sessionLayout,usageItem='follow',usageProvider=''} = usePreferences();
+  const preferencesState = usePreferences();
+  const {sessionLayout,usageItem='follow',usageProvider=''} = preferencesState;
   usePrivateKeyboard();
   const shell=useRef<HTMLDivElement>(null);
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -1442,8 +1448,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     const host=hosts.find(item=>item.id===lost?.hostId);
     if(!lost || !host || !mounted.current || !lease.current())return {retry:false,hint:'appConnectionClosed'};
     const intent=sessionIntent(lost);
-    // Restore does not reattach Zellij either; the host shell comes back and Sessions reopens it.
-    if(intent.attached?.kind==='zellij')delete intent.attached;
     if(!host.credentialsStored){setSignInRecovery({sessionId:id,host,intent});return {retry:false,hint:'recoverySignInToReconnect'};}
     const owned=new PendingSessions();
     const fresh=await openSavedIntent(intent,host,owned);
@@ -1511,7 +1515,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const mobileToolButton=toolButton();
 
   const sidebarShown=wideSidebar || sidebar;
-  const navigationCovered=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
+  const otherDialogOpen=!!fileRecovery || !!editor || !!connectingHost || !!deleting || palette || switcher || pushSettings || preferences || sync || sharing || mobileTools || about || inbox;
+  // The first-run tour opens over the first connected phone session only (remote, like the Agent view swipe): never on desktop, the connection list, over another dialog or with every gesture off.
+  const touchScreen=useTouchScreen(),gesturePhone=!wideSidebar && touchScreen;
+  const tourNotes=gestureTourNotes(preferencesState,useShowTopBar());
+  const gestureTour=useGestureTour(!!active?.connected && !active.local && gesturePhone && !otherDialogOpen && gestureTourUseful(tourNotes));
+  // The tour is a dialog like the others: no edge swipe acts behind it.
+  const navigationCovered=otherDialogOpen || gestureTour.open;
   // Phones in a connected session swipe between the terminal and the Agent view; the Terminal|Agent buttons stay.
   const swipeEnabled=useEdgeGestureMode('viewSwitch')==='gesture' && !!active && active.connected && !active.local && view==='terminal' && !wideSidebar && !sidebar && !navigationCovered;
   const swipeFrom=useViewSwipe({enabled:swipeEnabled,scope:active?.id??'',page:activeSessionView==='terminal'?'terminal':'agent',body:sessionBody,onSwitch:page=>{if(active)chooseSessionView(active,page);}});
@@ -1549,8 +1559,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const herdrIntent=herdrNavigationIntent.current;
   if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
   navigationOwner.current={sessionId:activeId,agents:agentsVisible,activity:agentsVisible&&agentSection==='activity'};
-  const jumpSupported=!!muxTools[active?.id ?? '']?.some(tool=>tool.kind==='tmux' && !tool.missing.includes('jump'));
-  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && jumpSupported && view!=='sessions';
+  // Jump To lists tmux windows or, from the version gate's `tree` capability, the tabs of the attached Zellij session.
+  const jumpKind=active?.attached?.kind==='tmux' || active?.attached?.kind==='zellij' ? active.attached.kind : undefined;
+  const jumpSupported=!!muxTools[active?.id ?? '']?.some(tool=>tool.kind===jumpKind && !tool.missing.includes(jumpKind==='tmux'?'jump':'tree'));
+  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && jumpSupported && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
     pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
   const currentPickerOwner=pickerOwner.current;
@@ -1776,7 +1788,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       child = await prepareSession(host.id, `${host.name} / ${intent.attached.name}`, shell.session.destination, lease);
       const attached = intent.attached.kind === "tmux"
         ? await api.attachTmux(shell.session.id, intent.attached.name, child.onEvent, intent.attached.tmuxServer)
-        : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent);
+        : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent, true);
       child.establish(attached.sessionId);
       owned.add(attached.sessionId);
       if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
@@ -1822,7 +1834,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         continue;
       }
       const host = hosts.find((item) => item.id === intent.hostId);
-      if (!host || intent.attached?.kind === "zellij") {
+      if (!host) {
         remaining.push(intent);
         continue;
       }
@@ -2184,7 +2196,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       }}
     ><X size={18} aria-hidden="true" /></button>
     </div>
-    {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</p>}
+    {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsMultiplexersReattach")}</p>}
   </>;
   /** The tool groups of the phone control surfaces: the Workspace tools sheet pages them, the side menu stacks them. */
   const workspaceToolsPages: WorkspaceToolPage[] = [
@@ -2197,11 +2209,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <p className="terminal-engine-line" role="note">{t('terminalEngineOfSession',{engine:describeTerminalEngine(active.selection)})}</p>
         {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
         {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-        {!sideMenuMode && active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+        {!sideMenuMode && active.connected && !active.local && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
         {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
       </div>}]:[]),
       {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
         <button type="button" onClick={()=>{closeTools();setPreferences(true);}}>{t('appPreferences')}</button>
+        {gesturePhone && <button type="button" onClick={()=>{closeTools();gestureTour.show();}}>{t('gestureTourTitle')}</button>}
         <button onClick={()=>{closeTools();setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
         <button
          
@@ -2393,7 +2406,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             <div className="sidebar-heading"><span>{t('appWorkspaceTools')}</span></div>
             {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && remoteActive)).map(toolButton('subtle-button'))}
           </>}
-          {pickerVisible && active && <Suspense fallback={<p role="status">{t('appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={snapshot=>tmuxJumped(active.id,snapshot)} onBusyChange={busy=>{
+          {pickerVisible && active && <Suspense fallback={<p role="status">{t(jumpKind==='zellij'?'appReadingZellijDestinations':'appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} zellij={active.attached?.kind==='zellij'?active.attached.name:undefined} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={jumpKind==='tmux'?snapshot=>tmuxJumped(active.id,snapshot):undefined} onBusyChange={busy=>{
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
           }}/></Suspense>}
         </div>}
@@ -2764,6 +2777,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             {id:'security',section:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
             {id:'sync',section:'security',title:t('appEncryptedSync'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSync(true);}},
             {id:'sharing',section:'general',title:t('appShareableUploads'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSharing(true);}},
+            ...(gesturePhone?[{id:'gestures',section:'help',title:t('gestureHelpTitle'),content:<Suspense fallback={null}><GestureTourHelp notes={tourNotes} play={()=>{setPreferences(false);gestureTour.show();}}/></Suspense>}]:[]),
             {id:'about',section:'help',title:t('appAboutLazysh'),onSelect:()=>{setPreferences(false);setAbout(true);}},
           ]}/>
           </div>
@@ -2786,6 +2800,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           <NotificationPanel sessions={inboxSessions} />
         </Dialog>
       )}
+      {gestureTour.open && <Dialog title={t("gestureTourTitle")} close={gestureTour.dismiss} initialFocus={()=>document.querySelector<HTMLElement>('.gt .primary-button')}>
+        <Suspense fallback={null}><GestureTour notes={tourNotes} finish={gestureTour.dismiss}/></Suspense>
+      </Dialog>}
       {about && (
         <Dialog mobilePresentation="page" title={t("appAboutLazysh")} close={() => setAbout(false)}>
           <Suspense fallback={<p>{t("appLoadingLicense")}</p>}>

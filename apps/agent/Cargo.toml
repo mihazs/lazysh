@@ -34,6 +34,8 @@ lazysh-notification-client = { path = "../../packages/notification-client" }
 tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time", "io-std", "io-util"] }
 lazysh-common = { path = "../../packages/common", features = ["repository-review"] }
 clap = { version = "4.6", features = ["derive"] }
+# Validates Kimi's foreign config.toml before and after the owned hook suffix is appended; never rewrites it.
+toml_edit = "0.25.17"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "7"
 rusqlite = { version = "0.41", features = ["bundled", "hooks", "limits"] }
@@ -48,8 +50,6 @@ tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-# Validates Kimi's foreign config.toml before and after the owned hook suffix is appended; never rewrites it.
-toml_edit = "0.25.17"
 
 [dev-dependencies]
 lazysh-companion-release = { path = "../../packages/companion-release", features = ["test-support"] }
@@ -69,4 +69,4 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem"] }

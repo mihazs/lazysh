@@ -82,3 +82,15 @@
   .agent-view .agent-status-bar > button, .agent-view .agent-plan-chip > button { min-height: 36px; }
   .agent-view .agent-tool > summary, .agent-view .agent-turn-activity > summary, .agent-view .agent-thinking > summary { min-height: 40px; }
 }
+
+/* Agent switcher: the shown agent in the header, opening a list of the live agents. */
+.agent-switch-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 2px; flex: 0 0 auto; min-width: 44px; min-height: 44px; margin-inline-start: -8px; padding: 0 6px; border: 0; border-radius: 999px; background: transparent; color: inherit; }
+.agent-switch-trigger > .status-ring { width: 18px; height: 18px; flex: 0 0 18px; }
+.agent-switch-trigger:hover { background: var(--av-row-hover); }
+.agent-switch-list { position: absolute; z-index: 6; top: 46px; inset-inline-start: 8px; inset-inline-end: 8px; max-width: 420px; max-height: min(60dvh, 420px); overflow-y: auto; display: grid; gap: 4px; padding: 8px; border-radius: 18px; background: var(--av-row-hover); box-shadow: 0 12px 32px rgb(0 0 0 / 32%); }
+.agent-switch-list > button { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 10px; border: 0; border-radius: 12px; background: transparent; color: inherit; text-align: start; }
+.agent-switch-list > button[aria-current="true"] { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.agent-switch-list > button > .status-ring { width: 22px; height: 22px; flex: 0 0 22px; }
+.agent-switch-name { display: grid; min-width: 0; flex: 1; }
+.agent-switch-name > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-switch-name > small { color: var(--muted); }

@@ -222,6 +222,7 @@ fn main() {
         "zellij_action",
         "zellij_tabs",
         "zellij_panes",
+        "zellij_jump_tabs",
         "multiplexer_sessions",
         "attach_multiplexer",
         "tmux_action",

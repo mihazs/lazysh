@@ -1,7 +1,9 @@
 //! The surface a native terminal draws on. On Android (#1327) the renderer places a session's `SurfaceView`
 //! behind the transparent WebView at a DOM anchor and asks for its state; the Kotlin plugin owns the
-//! surface and its lifecycle, Rust owns the session state and will own the renderer. Developer-only:
-//! nothing in the app calls these yet, and a release build refuses every command (`native_surface_disabled`).
+//! surface and its lifecycle, Rust owns the session state and the renderer: with the `native-terminal` feature the
+//! JNI entry points of [`android`] draw a session's core on the surface (`JniSurface.kt`); without it, or when no
+//! GPU or core is there, the pane keeps its background. Developer-only: a release build refuses every command
+//! (`native_surface_disabled`).
 //! On Linux (#1331) the same three commands place a Wayland subsurface below the web view ([`linux`]), in a
 //! build with the `native-terminal` feature only. Every other build has no surface.
 use serde::{Deserialize, Serialize};
@@ -9,8 +11,12 @@ use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
 
+#[cfg(all(target_os = "android", native_terminal_core))]
+mod android;
 #[cfg(all(target_os = "linux", native_terminal_core))]
 pub(crate) mod linux;
+#[cfg(native_terminal_core)]
+mod panes;
 
 /// Longest session id the shell accepts; the renderer's ids are UUIDs, a local terminal's `local:` and a UUID.
 const MAX_SESSION_LEN: usize = 64;

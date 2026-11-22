@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HostBrowserSession, parseEndpoint, type Frame, type FrameMetadata } from './cdp';
+import { HostBrowserControls } from './HostBrowserControls';
 import { HostBrowserInput } from './HostBrowserInput';
 import type { InputMessage } from './input';
+import { emptyView, type Blocked, type PageDialog, type View } from './model';
 
 const SIZE = { width: 390, height: 700 };
 /** `scrollY` and `pageScale` are what the browser reported in the latest frame, not what was sent. */
@@ -23,6 +25,9 @@ export function HostBrowserDev() {
   const [endpoint, setEndpoint] = useState('');
   const [state, setState] = useState('idle');
   const [stats, setStats] = useState<Stats>({ frames: 0, fps: 0, tapToChangeMs: null, scrollY: 0, pageScale: 1 });
+  const [view, setView] = useState<View>(emptyView);
+  const [dialog, setDialog] = useState<PageDialog | null>(null);
+  const [blocked, setBlocked] = useState<Blocked[]>([]);
   const canvas = useRef<HTMLCanvasElement>(null);
   const session = useRef<HostBrowserSession | null>(null);
   const last = useRef<FrameMetadata>({ deviceWidth: SIZE.width, deviceHeight: SIZE.height, offsetTop: 0, timestamp: 0 });
@@ -50,6 +55,8 @@ export function HostBrowserDev() {
     try {
       setState('connecting');
       session.current = await HostBrowserSession.connect(parseEndpoint(endpoint), () => setState('closed'));
+      // A kind is reported once until it is dismissed, however many times the page tries.
+      session.current.listener = { view: setView, dialog: setDialog, blocked: kind => setBlocked(kinds => (kinds.includes(kind) ? kinds : [...kinds, kind])) };
       await session.current.start(SIZE, (frame, acknowledge) => void draw(frame, acknowledge));
       setState('live');
     } catch (error) { setState(`failed: ${(error as Error).message}`); }
@@ -66,6 +73,8 @@ export function HostBrowserDev() {
     <label>DevTools WebSocket URL <input style={{ width: '100%' }} value={endpoint} onChange={event => setEndpoint(event.target.value)} placeholder="ws://127.0.0.1:9222/devtools/browser/…" /></label>
     <p><button onClick={() => void connect()} disabled={state === 'connecting' || state === 'live'}>Connect</button></p>
     <p role="status" id="hb-state">{state}</p>
+    {session.current && state === 'live' && <HostBrowserControls view={view} dialog={dialog} blocked={blocked} navigation={session.current}
+      onDismiss={kind => setBlocked(kinds => kinds.filter(item => item !== kind))} />}
     <HostBrowserInput active={state === 'live'} frame={() => last.current} send={send}>
       <canvas ref={canvas} aria-label="Host browser page" width={SIZE.width} height={SIZE.height} />
     </HostBrowserInput>
