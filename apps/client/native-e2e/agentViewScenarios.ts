@@ -25,7 +25,7 @@ export function reportingAgentCases(multiplexer:string,start:()=>Promise<Reporti
       const agent=await start(),{browser,terminal}=agent;
       await agent.type('hold the build');
       await browser.waitUntil(async()=>(await agent.log()).includes('HOLD'),{timeout:20_000,timeoutMsg:'The held turn did not start'});
-      expect(await agent.submitted()).toEqual(['hold the build']);
+      await agent.expectSubmitted(['hold the build']);
       const before={pane:await agent.pane(),keys:await agent.keys(),node:terminal.elementId};
       expect(before.pane.count).toBe(1);
 
@@ -67,6 +67,8 @@ export function reportingAgentCases(multiplexer:string,start:()=>Promise<Reporti
       agent.gui.stage='owned prompt sent from the Agent view';
       const draft=await view.$('textarea[aria-label="Draft for this terminal"]');
       await draft.setValue('Add a test');
+      // The harness types through WebDriver: a character it drops here is not the pane's loss, so say which side lost it.
+      await browser.waitUntil(async()=>await draft.getValue()==='Add a test',{timeout:5_000,timeoutMsg:`WebDriver left ${JSON.stringify(await draft.getValue())} in the composer, not the typed prompt`});
       const send=await view.$('button[aria-label="Send to the agent"]');
       await browser.waitUntil(()=>send.isEnabled(),{timeout:20_000,timeoutMsg:'The Agent view composer did not bind to the pane'});
       await send.click();
@@ -77,7 +79,7 @@ export function reportingAgentCases(multiplexer:string,start:()=>Promise<Reporti
       }
       expect(await browser.$$(turns)).toHaveLength(2);
       // The pane's process got the prompt and one Enter; a second delivery would log a second submission.
-      expect(await agent.submitted()).toEqual(['first question','Add a test']);
+      await agent.expectSubmitted(['first question','Add a test']);
       // The guarded send ends the line with Enter, which the pane's tty delivers as CR or LF.
       const keys=(await agent.keys()).slice(keysBefore);
       expect(keys.slice(0,-1)).toEqual(keyCodes('Add a test'));expect(['13','10']).toContain(keys.at(-1));
@@ -109,7 +111,7 @@ export function reportingAgentCases(multiplexer:string,start:()=>Promise<Reporti
       // One 2 second follow interval plus the SSH exec round trip and the shared runner's slack.
       expect(latency).toBeLessThan(5000);
       expect(await browser.$$(turns)).toHaveLength(2);
-      expect(await agent.submitted()).toEqual(['first question','Typed here']);
+      await agent.expectSubmitted(['first question','Typed here']);
     },180_000);
   });
 }
