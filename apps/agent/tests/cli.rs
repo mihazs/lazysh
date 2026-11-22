@@ -1519,7 +1519,11 @@ fn hook_previews_label_their_dialect_and_platform_binding_without_creating_state
                 5000
             );
         }
-        if cfg!(any(target_os = "linux", target_os = "macos")) {
+        // A Windows host binds only the plugin providers (`qualified` in hook_setup/mod.rs); every other
+        // provider stays a print-only template there.
+        let bound = cfg!(any(target_os = "linux", target_os = "macos"))
+            || (cfg!(windows) && matches!(agent, "opencode" | "amp"));
+        if bound {
             assert_eq!(preview["binaryBinding"], "currentExecutable");
             assert!(Path::new(preview["binary"].as_str().unwrap()).is_absolute());
         } else {
