@@ -1,3 +1,4 @@
+import {systemScreenReader} from './androidScreenReader';
 import {getPreferences} from './preferences';
 import {nativeCapabilities} from './nativeTerminalAdapter';
 import {createNativeTerminalAdapter, probeNativeCore} from './tauriNativeCoreBridge';
@@ -67,13 +68,16 @@ export function developerBackendOverride(): BackendPreference | undefined {
 /** A session read with a screen reader needs a backend whose content that reader can reach. */
 export const screenReaderRequirements = (screenReader: boolean): NonNullable<SelectOptions['requires']> => screenReader ? ['accessibility'] : [];
 
+/** What a new session needs of its terminal: reachable by a screen reader when the preference says one is used or Android reports one (TalkBack, #1329). */
+const readerRequirements = async (preference: boolean) => screenReaderRequirements(preference || await systemScreenReader());
+
 /** The engine Auto gives a new session on this device now. */
-export const defaultTerminalEngine = async (backends: Pick<typeof registry, 'select'> = registry) => (await backends.select({requires: screenReaderRequirements(getPreferences().screenReader)})).id;
+export const defaultTerminalEngine = async (backends: Pick<typeof registry, 'select'> = registry) => (await backends.select({requires: await readerRequirements(getPreferences().screenReader)})).id;
 
 /** Why a new session cannot use `id` now, as the registry would record it (undefined: it can); Settings shows it beside the choice. */
-export const backendRefusal = (id: TerminalBackendId, screenReader: boolean) => registry.refusal(id, screenReaderRequirements(screenReader));
+export const backendRefusal = async (id: TerminalBackendId, screenReader: boolean) => registry.refusal(id, await readerRequirements(screenReader));
 
 /** The terminal of one new session, from the backend selection rules. */
-export function createTerminalAdapter(options: SelectOptions = {}, backends = registry) {
-  return backends.create({override: developerBackendOverride(), ...options, requires: [...(options.requires ?? []), ...screenReaderRequirements(getPreferences().screenReader)]});
+export async function createTerminalAdapter(options: SelectOptions = {}, backends = registry) {
+  return backends.create({override: developerBackendOverride(), ...options, requires: [...(options.requires ?? []), ...await readerRequirements(getPreferences().screenReader)]});
 }

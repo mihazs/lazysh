@@ -14,6 +14,13 @@ const choices = [['auto', 'preferencesTerminalEngineAuto'], ['native', 'terminal
 export default function TerminalEngineChoice({engine, screenReader, update}: {engine: Preferences['terminalEngine']; screenReader: boolean; update: (patch: Partial<Preferences>) => unknown}) {
   // Undefined until the registry has answered; Native stays off meanwhile rather than offer what may be refused.
   const [answer, setAnswer] = useState<{reason?: string; failed?: string}>();
+  // A screen reader is turned on in Android's own settings: the answer is asked again when the user returns to the app.
+  const [returns, setReturns] = useState(0);
+  useEffect(() => {
+    const returned = () => setReturns(count => count + 1);
+    window.addEventListener('focus', returned); document.addEventListener('visibilitychange', returned);
+    return () => { window.removeEventListener('focus', returned); document.removeEventListener('visibilitychange', returned); };
+  }, []);
   useEffect(() => {
     let current = true;
     // The registry loads with the first session, not with the settings list: its xterm.js adapter is a chunk of its own.
@@ -21,7 +28,7 @@ export default function TerminalEngineChoice({engine, screenReader, update}: {en
       .catch((error: unknown) => ({reason: String(error)}))
       .then(next => { if (current) setAnswer(next); });
     return () => { current = false; };
-  }, [screenReader]);
+  }, [screenReader, returns]);
   const off = !answer || answer.reason !== undefined;
   return <>
     <fieldset className="cursor-picker" aria-describedby="terminal-engine-help"><legend>{t('preferencesTerminalEngine')}</legend><div>{choices.map(([value, label]) =>
