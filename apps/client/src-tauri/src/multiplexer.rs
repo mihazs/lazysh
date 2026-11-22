@@ -64,23 +64,24 @@ fn server_token(value: &str) -> Result<&str> {
 fn fresh_server_token() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
-/// One tmux command string, the words quoted for tmux's own parser (single quotes, `#` doubled for formats).
-fn tmux_command_string(words: &[&str]) -> String {
+/// One tmux command string, the words quoted for the server's own parser (single quotes, `#` doubled for tmux's formats;
+/// rmux keeps a name as typed).
+fn tmux_command_string(binary: crate::tmux_server::Binary, words: &[&str]) -> String {
     words
         .iter()
-        .map(|word| format!("'{}'", word.replace('#', "##").replace('\'', "'\\''")))
+        .map(|word| format!("'{}'", binary.literal_name(word).replace('\'', "'\\''")))
         .collect::<Vec<_>>()
         .join(" ")
 }
 /// Runs `inner` only on the tmux server that carries `token`; on any other it fails with "can't find pane" and does
 /// nothing. The check and the command are one tmux invocation, so a server replaced in between cannot be targeted.
-fn fenced(token: &str, inner: &[&str]) -> Result<Vec<String>> {
+fn fenced(binary: crate::tmux_server::Binary, token: &str, inner: &[&str]) -> Result<Vec<String>> {
     server_token(token)?;
     Ok(vec![
         "if-shell".into(),
         "-F".into(),
         format!("#{{==:#{{{SERVER_TOKEN}}},{token}}}"),
-        tmux_command_string(inner),
+        tmux_command_string(binary, inner),
         "select-pane -t '%lazysh-stale-server'".into(),
     ])
 }
@@ -775,10 +776,11 @@ fn discovery_command(
     };
     let rmux = rmux_server.probe_prefix();
     let rmux_probe = format!("if command -v rmux >/dev/null 2>&1; then c=$(rmux capabilities --json 2>/dev/null | tr -d '\\r\\n' | head -c 65536); d=ok; if {rmux} list-sessions 2>&1 | grep -Eq 'incompatible protocol|unsupported RMUX wire version'; then d=stale; fi; printf 'rmux\\t1\\t%s\\t%s\\n' \"$c\" \"$d\"; else printf 'rmux\\t0\\n'; fi");
-    // Both families name the server first (see `SERVER_TOKEN`), then list its panes; rmux's `-N` never starts a daemon.
+    // Both families name the server first (see `SERVER_TOKEN`), then list its panes; rmux's `-N` never starts a daemon, and where
+    // tmux stays quiet about an already named server rmux exits 1, which must not stop the listing.
     let token = fresh_server_token();
     let listing = if matches!(server.binary(), crate::tmux_server::Binary::Rmux) {
-        format!("if command -v rmux >/dev/null 2>&1; then {rmux} set-option -s -o -q {SERVER_TOKEN} {token} 2>/dev/null && {rmux} list-panes -a -F {panes} 2>/dev/null || true; fi")
+        format!("if command -v rmux >/dev/null 2>&1; then {rmux} set-option -s -o -q {SERVER_TOKEN} {token} >/dev/null 2>&1; {rmux} list-panes -a -F {panes} 2>/dev/null || true; fi")
     } else {
         let tmux = server.prefix();
         format!("if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} set-option -s -o -q {SERVER_TOKEN} {token} && {tmux} list-panes -a -F {panes}; fi")
@@ -1091,11 +1093,11 @@ pub(crate) fn action_cmd(
         }
         TmuxAction::CloseSession { target, server } => {
             id(target, '$')?;
-            fenced(server, &["kill-session", "-t", target])?
+            fenced(binary, server, &["kill-session", "-t", target])?
         }
         TmuxAction::ClosePane { target, server } => {
             id(target, '%')?;
-            fenced(server, &["kill-pane", "-t", target])?
+            fenced(binary, server, &["kill-pane", "-t", target])?
         }
         TmuxAction::RenamePane {
             target,
@@ -1104,7 +1106,7 @@ pub(crate) fn action_cmd(
         } => {
             id(target, '%')?;
             text(value, 200)?;
-            fenced(server, &["select-pane", "-t", target, "-T", value])?
+            fenced(binary, server, &["select-pane", "-t", target, "-T", value])?
         }
         TmuxAction::ResizePane {
             target,
@@ -1123,6 +1125,7 @@ pub(crate) fn action_cmd(
                 ResizeDirection::Down => "-D",
             };
             fenced(
+                binary,
                 server,
                 &["resize-pane", "-t", target, flag, &amount.to_string()],
             )?
@@ -1738,7 +1741,8 @@ printf '%s\n' "$*" >> {calls}
 case "$*" in
   "capabilities --json") printf '{{\n  "version": "0.10.0",\n  "binary_contract_version": 1,\n  "wire_version": 8,\n  "public_contract": ["cli", "control-mode"],\n  "control_mode": {{"entrypoint": "rmux -C"}}\n}}\n';;
   *list-sessions*) if [ -e {stale} ]; then echo 'rmux: unsupported RMUX wire version 7; supported range is 8..=8' >&2; exit 1; fi; echo 'work: 1 windows';;
-  *list-panes*) printf '$0\twork\t@1\t0\tsh\t1\t%%0\t0\t1\tsh\t/tmp\n';;
+  *set-option*) ;;
+  *list-panes*) printf '$0\twork\t@1\t0\tsh\t1\t%%0\t0\t1\tsh\t/tmp\t\t80\t24\tsh\n';;
   *) exit 9;;
 esac
 "#,
@@ -2298,11 +2302,16 @@ esac
         let run =
             |command: String| lazysh_common::test_support::successful_output(&mut scoped(command));
         let read_tree = || {
-            // As a discovery read does: name the server, then list its panes.
+            // As a discovery read does: name the server (rmux exits 1 when it is already named), then list its panes.
             run(format!(
-                "{} set-option -s -o -q {SERVER_TOKEN} {}",
+                "{} set-option -s -o -q {SERVER_TOKEN} {}{}",
                 server.prefix(),
-                fresh_server_token()
+                fresh_server_token(),
+                if matches!(binary, Binary::Rmux) {
+                    " || true"
+                } else {
+                    ""
+                }
             ));
             let rows = run(format!(
                 "{} list-panes -a -F {}",
