@@ -5,7 +5,6 @@
 use super::transcript_watch_fixture::{collector, frame_of, old_companion, until};
 use super::*;
 use crate::transcript_watch::{agent_watch_start, agent_watch_stop, WatchTarget};
-use serde_json::Value;
 use std::{path::Path, process::Command, process::Stdio, time::Instant};
 use tauri::Manager;
 
