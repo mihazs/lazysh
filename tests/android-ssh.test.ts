@@ -1925,7 +1925,7 @@ test('past-bottom passive actual-owner receipt waits for trusted same-contact DO
   good.fire('touchmove',72);expect(good.receipt.read()).toMatchObject({moves:1,ends:0,distance48:false});
   good.fire('touchmove',44);expect(good.receipt.read()).toMatchObject({moves:2,ends:0,distance48:true,monotonicUp:true});
   good.document.activeElement=null;good.fire('touchend',44);
-  expect(good.receipt.read()).toEqual({available:true,retained:true,starts:1,moves:2,ends:1,cancels:0,overflow:false,trusted:true,sameContact:true,insideOwner:true,monotonicUp:true,distance48:true,screenBack:0,clientBack:0,focused:false});
+  expect(good.receipt.read()).toEqual({available:true,retained:true,starts:1,moves:2,ends:1,cancels:0,overflow:false,trusted:true,sameContact:true,insideOwner:true,monotonicUp:true,distance48:true,screenBack:0,clientBack:0,focused:false,trace:[['start',600,100,NaN],['move',572,72,NaN],['move',544,44,NaN],['end',544,44,NaN]]});
   good.receipt.dispose();expect(good.hooks.size).toBe(0);
   for(const [extra,field] of [[{isTrusted:false},'trusted'],[{currentTarget:null},'insideOwner'],[{composedPath:()=>[]},'insideOwner']] as const){
     const sample=create();sample.fire('touchstart',100,extra);expect(sample.receipt.read()[field]).toBe(false);sample.receipt.dispose();

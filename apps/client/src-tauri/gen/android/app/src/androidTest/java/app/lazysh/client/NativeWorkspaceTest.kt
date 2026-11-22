@@ -7527,7 +7527,7 @@ class NativeWorkspaceTest {
             function ownedPastBottomTouchReceipt(owner) {
               const root=owner.ownerDocument,area=owner.querySelector('.xterm-helper-textarea');
               let starts=0,moves=0,ends=0,cancels=0,unavailable=!area,overflow=false;
-              let trusted=true,sameContact=true,insideOwner=true,monotonicUp=true,distance48=false,id=null,startY=0,lastScreenY=0,lastClientY=0,screenBack=-Infinity,clientBack=-Infinity;
+              let trusted=true,sameContact=true,insideOwner=true,monotonicUp=true,distance48=false,id=null,startY=0,lastScreenY=0,lastClientY=0,screenBack=-Infinity,clientBack=-Infinity,trace=[];
               const record=(kind,event)=>{try{
                 trusted=trusted&&event.isTrusted===true;
                 insideOwner=insideOwner&&event.currentTarget===owner&&event.composedPath().includes(owner);
@@ -7535,6 +7535,7 @@ class NativeWorkspaceTest {
                 const touches=Array.from(kind==='touchend'?event.changedTouches:event.touches),touch=touches[0];
                 sameContact=sameContact&&touches.length===1&&(kind!=='touchend'||event.touches.length===0);
                 if(!touch||!Number.isInteger(touch.identifier)||!Number.isFinite(touch.clientY)){unavailable=true;return;}
+                if(trace.length<8)trace.push([kind.slice(5),touch.screenY,touch.clientY,Math.round(event.timeStamp)]);
                 if(kind==='touchstart'){starts++;id=touch.identifier;startY=touch.clientY;lastScreenY=touch.screenY;lastClientY=startY;}
                 else {
                   sameContact=sameContact&&touch.identifier===id&&starts===1;
@@ -7546,7 +7547,7 @@ class NativeWorkspaceTest {
               const hooks=['touchstart','touchmove','touchend','touchcancel'].map(kind=>[kind,event=>record(kind,event)]);
               for(const [kind,handler] of hooks)owner.addEventListener(kind,handler,{capture:true,passive:true});
               return {read:()=>({available:!unavailable,retained:owner.isConnected&&owner.ownerDocument===root&&root===document&&document.querySelector('.terminal-canvas')===owner,
-                starts:Math.min(starts,8),moves:Math.min(moves,8),ends:Math.min(ends,8),cancels:Math.min(cancels,8),overflow,trusted,sameContact,insideOwner,monotonicUp,distance48,screenBack:Number.isFinite(screenBack)?screenBack:null,clientBack:Number.isFinite(clientBack)?clientBack:null,
+                starts:Math.min(starts,8),moves:Math.min(moves,8),ends:Math.min(ends,8),cancels:Math.min(cancels,8),overflow,trusted,sameContact,insideOwner,monotonicUp,distance48,screenBack:Number.isFinite(screenBack)?screenBack:null,clientBack:Number.isFinite(clientBack)?clientBack:null,trace,
                 focused:!!area&&document.activeElement===area&&!area.readOnly}),
                 dispose:()=>{for(const [kind,handler] of hooks)owner.removeEventListener(kind,handler,true);}};
             }
