@@ -6,7 +6,9 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import org.json.JSONArray
 import org.json.JSONException
+import org.json.JSONObject
 
 /**
  * The renderer's way to the native terminal surface (#1327): the app commands `native_terminal_surface_*` reach these. Only the
@@ -43,5 +45,31 @@ class NativeTerminalSurfacePlugin(private val owner: Activity) : Plugin(owner) {
 
     @Command fun remove(invoke: Invoke) = onUi(invoke) { _, id, _ -> TerminalSurfaces.remove(id); null }
 
+    /** Long poll: resolves with what the keyboard typed since the last call (a list of `text`, `key` and `preedit` events), once each. */
+    @Command fun input(invoke: Invoke) {
+        val activity = currentActivity(owner)
+        activity.runOnUiThread {
+            try {
+                val id = invoke.getArgs().getString("session")
+                if (id.isEmpty() || id.length > 64) throw SurfaceUnavailable("native_surface_session")
+                TerminalSurfaces.takeInput(id) { events -> invoke.resolve(JSObject().apply { put("events", JSONArray(events.map(::eventJson))) }) }
+            } catch (error: SurfaceUnavailable) { invoke.reject(error.message)
+            } catch (_: JSONException) { invoke.reject("native_surface_arguments") }
+        }
+    }
+
+    @Command fun focus(invoke: Invoke) = onUi(invoke) { _, id, args -> TerminalSurfaces.focus(id, args.getBoolean("focused")); null }
+
     @Command fun state(invoke: Invoke) = onUi(invoke) { _, id, _ -> TerminalSurfaces.state(id) }
+}
+
+/** The page's `CoreKeyInput` for a key, so it goes to the core as it is. */
+internal fun eventJson(event: SurfaceInput): JSONObject = when (event) {
+    is SurfaceInput.Text -> JSONObject().put("type", "text").put("text", event.text)
+    is SurfaceInput.Preedit -> JSONObject().put("type", "preedit").put("text", event.text ?: JSONObject.NULL)
+    is SurfaceInput.Key -> with(event.key) {
+        JSONObject().put("type", "key").put("code", code).put("key", key)
+            .put("mods", JSONObject().put("shift", shift).put("ctrl", ctrl).put("alt", alt).put("meta", meta))
+            .put("repeat", repeat).put("release", release).put("composing", false)
+    }
 }

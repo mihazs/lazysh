@@ -163,6 +163,8 @@ fn main() {
         "native_terminal_surface_place",
         "native_terminal_surface_remove",
         "native_terminal_surface_state",
+        "native_terminal_surface_input",
+        "native_terminal_surface_focus",
         "open_notification_settings",
         "request_notification_permission",
         "voice_models",

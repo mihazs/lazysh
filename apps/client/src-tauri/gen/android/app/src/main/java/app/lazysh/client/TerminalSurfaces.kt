@@ -19,12 +19,14 @@ import java.lang.ref.WeakReference
  * The `SurfaceView` of one session, stacked below the WebView (docs/architecture/android-surface-composition-poc.md). Once detached it
  * ignores the window's late callbacks, which belong to a surface its session no longer has.
  */
-internal class SurfaceHost(activity: Activity, private val web: View, private val frame: FrameLayout, private val lifecycle: SurfaceLifecycle<Surface>, anchor: SurfaceAnchor) {
+internal class SurfaceHost(activity: Activity, private val web: View, private val frame: FrameLayout, private val lifecycle: SurfaceLifecycle<Surface>, anchor: SurfaceAnchor, relay: InputRelay) {
     val view = SurfaceView(activity)
+    /** The keyboard's editor for this session (#1328): a one-pixel invisible view that takes focus and the `InputConnection`; the page never types into a DOM editor here. */
+    val input = TerminalInputView(activity, relay, onComposing = relay::preedit).apply { alpha = 0f; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
     private var detached = false
 
     init {
-        // Touch, focus, IME and accessibility belong to #1328 and #1329: until then the page above owns every touch and the pane is not announced.
+        // The page above owns every touch and the pane is not announced (#1329); the keyboard goes to [input], not to this view.
         view.isFocusable = false
         view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         // A SurfaceView asks for RGB_565 unless told otherwise, which would band a terminal's colours; the pane is drawn in 8-bit channels.
@@ -36,6 +38,7 @@ internal class SurfaceHost(activity: Activity, private val web: View, private va
         })
         // Index 0 draws first, so the WebView paints over the surface and every DOM overlay stays on top of it.
         frame.addView(view, 0, params(anchor))
+        frame.addView(input, FrameLayout.LayoutParams(1, 1, Gravity.TOP or Gravity.LEFT))
     }
 
     /** Margins are from the padding box, so the surface moves with every inset that moves the WebView; only the page's own layout needs a new anchor. */
@@ -54,6 +57,7 @@ internal class SurfaceHost(activity: Activity, private val web: View, private va
         if (detached) return
         detached = true
         (view.parent as? ViewGroup)?.removeView(view)
+        (input.parent as? ViewGroup)?.removeView(input)
         lifecycle.destroyed()
     }
 }
@@ -97,6 +101,7 @@ internal object TerminalSurfaces {
         var host: SurfaceHost? = null
         val client = factory(id) { background }
         val lifecycle = SurfaceLifecycle(client)
+        val relay = InputRelay()
     }
 
     private val entries = HashMap<String, Entry>()
@@ -118,7 +123,7 @@ internal object TerminalSurfaces {
             if (repaint) entry.lifecycle.redraw()
         } else {
             host?.detach()
-            entry.host = SurfaceHost(activity, web, frame, entry.lifecycle, anchor)
+            entry.host = SurfaceHost(activity, web, frame, entry.lifecycle, anchor, entry.relay)
         }
         return state(id)
     }
@@ -127,7 +132,26 @@ internal object TerminalSurfaces {
     fun remove(id: String) {
         val entry = entries.remove(id) ?: return
         entry.host?.detach()
+        entry.relay.clear()
         (entry.client as? AutoCloseable)?.close()
+    }
+
+    /** What the keyboard typed since the last call, once, in order; waits for the next input when there is none. */
+    fun takeInput(id: String, deliver: (List<SurfaceInput>) -> Unit) {
+        (entries[id] ?: throw SurfaceUnavailable("native_surface_session")).relay.take(deliver)
+    }
+
+    /** Gives the session's keyboard editor focus and opens the soft keyboard, or takes focus away and closes it. */
+    fun focus(id: String, focused: Boolean) {
+        val input = entries[id]?.host?.input ?: throw SurfaceUnavailable("native_surface_session")
+        val imm = input.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+        if (focused) {
+            input.requestFocus()
+            imm?.showSoftInput(input, 0)
+        } else {
+            input.clearFocus()
+            imm?.hideSoftInputFromWindow(input.windowToken, 0)
+        }
     }
 
     fun state(id: String): SurfaceState {

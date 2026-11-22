@@ -16,8 +16,8 @@ import androidx.core.view.inputmethod.EditorInfoCompat
 /**
  * The keyboard's editor for a native terminal surface: a focusable view that is the soft keyboard's `InputConnection`
  * and receives hardware keys, with no pixels of its own. It replaces xterm's hidden textarea and the `terminalIme.ts`
- * layer over it for a surface the WebView does not draw; the DOM path is untouched. Developer builds only until a
- * renderer exists: nothing creates one yet.
+ * layer over it for a surface the WebView does not draw; the DOM path is untouched. Developer builds only: the surface host creates one
+ * per native session and a page forwards what it delivers to the core.
  *
  * Editor setup follows the page's terminal editor: plain text without autocorrect or capitalisation, and while
  * [PrivateKeyboard] is on a visible-password field with no suggestions and no personalised learning. Enter is an
@@ -27,6 +27,8 @@ class TerminalInputView(
     context: Context,
     sink: TerminalInputSink,
     acceptsInput: () -> Boolean = { true },
+    /** The composing text after every change (null: none), for the page to draw at the cursor. */
+    private val onComposing: (String?) -> Unit = {},
 ) : View(context) {
     private val imm = context.getSystemService(InputMethodManager::class.java)
     val editor = TerminalImeEditor(sink, acceptsInput, resync = { imm?.restartInput(this) })
@@ -64,22 +66,24 @@ class TerminalInputView(
     // The WebView-side terminal drops its editor when it is blurred; so does this one, including text still composing.
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
-        if (!gainFocus) editor.revoke()
+        if (!gainFocus) { editor.revoke(); onComposing(null) }
     }
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (!hasWindowFocus) editor.revoke()
+        if (!hasWindowFocus) { editor.revoke(); onComposing(null) }
     }
 
     override fun onDetachedFromWindow() {
         editor.revoke()
+        onComposing(null)
         super.onDetachedFromWindow()
     }
 
     /** Tell the keyboard where the cursor and the composing text now are, as an editing view does after every change. */
     private fun publish() {
         imm?.updateSelection(this, editor.selectionStart, editor.selectionEnd, editor.composingStart, editor.composingEnd)
+        onComposing(editor.composing)
     }
 
     private inner class Connection : BaseInputConnection(this@TerminalInputView, false) {

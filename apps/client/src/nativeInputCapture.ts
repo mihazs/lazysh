@@ -19,28 +19,37 @@ export type NativeInputOptions = {
   preferences(): TerminalPreferences | undefined;
 };
 
+/** The overlay for the text an input method is composing, inside the container; `restore` removes it and the positioning it needed. */
+export function mountPreedit(anchor: HTMLElement) {
+  const preedit = document.createElement('div');
+  preedit.setAttribute('data-terminal-preedit', '');
+  preedit.setAttribute('aria-hidden', 'true');
+  preedit.hidden = true;
+  Object.assign(preedit.style, {position: 'absolute', whiteSpace: 'pre', pointerEvents: 'none', textDecoration: 'underline', zIndex: '1'});
+  const positioned = getComputedStyle(anchor).position === 'static';
+  if (positioned) anchor.style.position = 'relative';
+  anchor.append(preedit);
+  return {preedit, restore() { preedit.remove(); if (positioned) anchor.style.position = ''; }};
+}
+
 export class NativeInputCapture implements Disposable {
   readonly element = document.createElement('textarea');
-  private readonly preedit = document.createElement('div');
+  private readonly mounted: ReturnType<typeof mountPreedit>;
+  private readonly preedit: HTMLElement;
   private readonly pressed = new Map<string, CoreKeyInput>();
   private readonly cursor: Disposable;
   private composing = false;
   private settling: ReturnType<typeof setTimeout> | undefined;
-  private positioned = false;
 
   constructor(private readonly adapter: NativeTerminalAdapter, private readonly anchor: HTMLElement, private readonly options: NativeInputOptions) {
-    const {element, preedit} = this;
+    this.mounted = mountPreedit(anchor); this.preedit = this.mounted.preedit;
+    const {element} = this;
     element.setAttribute('data-terminal-editor', '');
     element.setAttribute('aria-label', 'Terminal input');
     for (const [name, value] of [['autocapitalize', 'off'], ['autocomplete', 'off'], ['autocorrect', 'off'], ['spellcheck', 'false'], ['rows', '1']]) element.setAttribute(name, value);
     // Invisible but laid out at the cursor, where an input method puts its candidate window; 16px stops iOS from zooming on focus.
     Object.assign(element.style, {position: 'absolute', left: '0', top: '0', width: '1px', height: '1px', margin: '0', padding: '0', border: '0', opacity: '0', resize: 'none', overflow: 'hidden', pointerEvents: 'none', zIndex: '-1', fontSize: '16px'});
-    preedit.setAttribute('data-terminal-preedit', '');
-    preedit.setAttribute('aria-hidden', 'true');
-    preedit.hidden = true;
-    Object.assign(preedit.style, {position: 'absolute', whiteSpace: 'pre', pointerEvents: 'none', textDecoration: 'underline', zIndex: '1'});
-    if (getComputedStyle(anchor).position === 'static') { anchor.style.position = 'relative'; this.positioned = true; }
-    anchor.append(element, preedit);
+    anchor.append(element);
     for (const [name, listener] of this.listeners) element.addEventListener(name, listener as EventListener);
     anchor.addEventListener('pointerup', this.pointerup);
     this.cursor = adapter.subscribe(() => { if (this.composing) this.place(); }, ['output', 'viewport', 'geometry']);
@@ -53,8 +62,7 @@ export class NativeInputCapture implements Disposable {
     clearTimeout(this.settling);
     this.cursor.dispose();
     this.anchor.removeEventListener('pointerup', this.pointerup);
-    this.element.remove(); this.preedit.remove();
-    if (this.positioned) this.anchor.style.position = '';
+    this.element.remove(); this.mounted.restore();
   }
 
   private key(event: KeyboardEvent) { return coreKeyInput(event, keyboardPlatform(), !!this.options.preferences()?.optionAsMeta); }

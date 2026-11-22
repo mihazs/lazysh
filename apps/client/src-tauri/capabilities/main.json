@@ -75,6 +75,8 @@
     "allow-native-terminal-surface-place",
     "allow-native-terminal-surface-remove",
     "allow-native-terminal-surface-state",
+    "allow-native-terminal-surface-input",
+    "allow-native-terminal-surface-focus",
     "allow-open-notification-settings",
     "allow-request-notification-permission",
     "notification:allow-is-permission-granted",

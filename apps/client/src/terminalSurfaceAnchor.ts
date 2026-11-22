@@ -6,10 +6,19 @@ export type SurfaceState = {placed: boolean; ready: boolean; generation: number;
 /** An element's `getBoundingClientRect()` in CSS pixels and the page's `devicePixelRatio`. */
 export type SurfaceAnchor = {x: number; y: number; width: number; height: number; dpr: number};
 
-/** The three app commands; the renderer never reaches the Kotlin plugin directly. */
+/** What the surface's keyboard editor delivered (Android, #1328): committed text, keys as the core takes them, and the composing text. */
+export type SurfaceInputEvent =
+  | {type: 'text'; text: string}
+  | {type: 'key'; code: string; key: string; mods: {shift: boolean; ctrl: boolean; alt: boolean; meta: boolean}; repeat: boolean; release: boolean; composing: boolean}
+  | {type: 'preedit'; text: string | null};
+
+/** The app commands; the renderer never reaches the Kotlin plugin directly. */
 export const nativeSurface = {
   place: (session: string, anchor: SurfaceAnchor, background: number) => invoke<SurfaceState>('native_terminal_surface_place', {session, anchor, background}),
   remove: (session: string) => invoke<void>('native_terminal_surface_remove', {session}),
+  /** Waits for what the keyboard typed since the last call; each event comes once. */
+  takeInput: (session: string) => invoke<{events: SurfaceInputEvent[]}>('native_terminal_surface_input', {session}),
+  focus: (session: string, focused: boolean) => invoke<void>('native_terminal_surface_focus', {session, focused}),
   state: (session: string) => invoke<SurfaceState>('native_terminal_surface_state', {session}),
 };
 
