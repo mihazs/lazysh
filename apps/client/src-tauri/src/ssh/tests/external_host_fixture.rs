@@ -115,8 +115,17 @@ impl ExternalHost {
             .to_owned()
     }
     async fn tree(&self) -> Value {
-        let tree =
-            done(multiplexer_tree(self.app.state(), self.id(), None, self.lease.clone()).await);
+        let tree = done(
+            multiplexer_tree(
+                self.app.state(),
+                self.app.state(),
+                self.id(),
+                None,
+                None,
+                self.lease.clone(),
+            )
+            .await,
+        );
         serde_json::to_value(tree).unwrap()
     }
     async fn tmux(&self, action: Value) {
@@ -124,8 +133,10 @@ impl ExternalHost {
         done(
             tmux_action(
                 self.app.state(),
+                self.app.state(),
                 self.id(),
                 action,
+                None,
                 None,
                 self.lease.clone(),
             )
@@ -143,8 +154,16 @@ impl ExternalHost {
     }
     /// Names of the sessions the product lists for a Zellij or Herdr host.
     async fn session_names(&self, kind: MultiplexerKind) -> Vec<Value> {
-        let rows =
-            done(multiplexer_sessions(self.app.state(), self.id(), kind, self.lease.clone()).await);
+        let rows = done(
+            multiplexer_sessions(
+                self.app.state(),
+                self.app.state(),
+                self.id(),
+                kind,
+                self.lease.clone(),
+            )
+            .await,
+        );
         let rows = serde_json::to_value(rows).unwrap();
         rows.as_array()
             .unwrap()
@@ -153,8 +172,16 @@ impl ExternalHost {
             .collect()
     }
     async fn zellij_tabs(&self, name: &str) -> Vec<Value> {
-        let tabs =
-            done(zellij_tabs(self.app.state(), self.id(), name.into(), self.lease.clone()).await);
+        let tabs = done(
+            zellij_tabs(
+                self.app.state(),
+                self.app.state(),
+                self.id(),
+                name.into(),
+                self.lease.clone(),
+            )
+            .await,
+        );
         serde_json::to_value(tabs)
             .unwrap()
             .as_array()
@@ -165,6 +192,7 @@ impl ExternalHost {
         let action = serde_json::from_value(action).unwrap();
         done(
             zellij_action(
+                self.app.state(),
                 self.app.state(),
                 self.id(),
                 name.into(),
@@ -204,6 +232,7 @@ impl ExternalHost {
                 24,
                 events,
                 Some(create),
+                None,
             )
             .await,
         );
