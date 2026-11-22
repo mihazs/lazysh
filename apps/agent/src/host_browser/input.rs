@@ -19,7 +19,7 @@ const CLIPBOARD: &str = "PermissionRefused";
 pub type Call = (&'static str, Value);
 
 /// The most text one message carries, in bytes.
-const MAX_TEXT: usize = 4096;
+pub const MAX_TEXT: usize = 4096;
 /// The most a wheel message scrolls on one axis, in CSS pixels; the client sends one per frame.
 const MAX_WHEEL: f64 = 10_000.0;
 /// The range of page scale the browser takes.
