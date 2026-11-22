@@ -3,7 +3,7 @@ import {join} from 'node:path';
 import {expect,it} from 'vitest';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
 import {NativeGui} from './fixture';
-import {openOwnedSsh,ownedSshGui} from './sshUi';
+import {describeUi,openOwnedSsh,ownedSshGui} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -44,7 +44,11 @@ it('opens an explicitly selected owned Herdr agent session through the native re
   await (await agentView.$('button[aria-label="Agent view options"]')).click();
   // The pane's focus is read back on the next poll, so the link appears a moment after the conversation does.
   try {await browser.waitUntil(async()=>(await agentView.getText()).includes('Herdr links this conversation to the focused pane of this terminal'),{timeout:20_000});}
-  catch {throw new Error('The chosen Herdr agent was not linked to the focused pane: '+await agentView.getText());}
+  catch {
+    // Tell a focus that never moved (the server still has another pane) from a view that has not read it back.
+    const server=await herdr.run(['api','snapshot']).then(text=>JSON.parse(text)?.result?.snapshot?.focused_pane_id,error=>`unavailable (${error})`);
+    throw new Error(`The chosen Herdr agent was not linked to the focused pane (agent pane ${pane}, server focus ${server}; page ${await describeUi(gui)}): `+await agentView.getText());
+  }
   expect(await agentView.$('input[aria-label="Transcript path"]').isExisting()).toBe(false);
   // The pane is focused now, so its composer is shown; nothing was typed into it.
   expect(await agentView.$('[aria-label="Terminal input"]').isExisting()).toBe(true);
