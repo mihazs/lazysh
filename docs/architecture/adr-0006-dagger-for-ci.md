@@ -1,6 +1,6 @@
-# ADR 0006: Dagger for the hosted-Linux CI checks, with measured conditions
+# ADR 0006: Dagger for the hosted-Linux CI checks (evaluated and rejected)
 
-- Status: **Accepted, conditional**, 2026-11-19. The conditions below are checked by every migration slice, and a slice that misses them is reverted to YAML.
+- Status: **Rejected, not adopted**, 2026-11-21. Owner decision: "If dagger is slower, remove it, do not implement". The measurements below show it is slower on ephemeral hosted runners. The earlier status (Accepted, conditional, 2026-11-19) is kept below as the record; its conditions and delivery plan are void.
 - Decision makers: repository maintainer. Tracking: [#2172](https://github.com/mihazs/lazysh/issues/2172), slice 1 of epic [#2171](https://github.com/mihazs/lazysh/issues/2171).
 - Related: [CONTRIBUTING: which CI jobs a pull request runs](../../CONTRIBUTING.md#which-ci-jobs-a-pull-request-runs) · [release tag gate](../release-tag-gate.md) · [release artifacts](../release-artifacts.md)
 
@@ -57,7 +57,7 @@ Also learned:
 - The state directory must be archived with `tar -p` as root. Running `chown` on it would change file ownership inside the container images stored there.
 - jscpd reports zero clones with the module committed: `dagger init` writes `dagger/.gitignore` for the generated `sdk/` (5.8 MB), and the hand-written module is far below the clone thresholds.
 
-## Decision
+## Decision (superseded by the rejection above; kept as the record)
 
 1. **Adopt Dagger for the hosted-Linux checks, conditionally.** TypeScript SDK on Bun (the repository is Bun and TypeScript), Dagger 0.21.12 pinned exactly (the latest stable 0.21.x on 2026-11-19; the 1.0 beta is not used for required checks), `dagger/dagger-for-github@v8.4.1`.
 2. **The engine is Docker on the hosted runner, state is persisted with `actions/cache`, and pull requests restore but never save.** Main saves, as the repository does for the Rust cache. The archive is made with `sudo tar --zstd -cpf`.
@@ -82,7 +82,7 @@ Also learned:
 - **Persist only Dagger cache volumes, not the whole engine state.** A smaller state, but not yet shown to be possible; it is what condition 4.2 asks #2174 to prove.
 - **A Go or Python module.** Rejected: a second toolchain for contributors.
 
-## Delivery
+## Delivery (void: nothing was built, the scaffold PR #2190 was closed)
 
 1. This ADR (docs only), closing [#2172](https://github.com/mihazs/lazysh/issues/2172).
 2. [#2173](https://github.com/mihazs/lazysh/issues/2173) scaffolds the module and [#2174](https://github.com/mihazs/lazysh/issues/2174) adds the setup action and proves the state pruning; then [#2175](https://github.com/mihazs/lazysh/issues/2175), [#2176](https://github.com/mihazs/lazysh/issues/2176) and [#2178](https://github.com/mihazs/lazysh/issues/2178), then [#2177](https://github.com/mihazs/lazysh/issues/2177); the rest of epic [#2171](https://github.com/mihazs/lazysh/issues/2171) follows.
@@ -97,3 +97,7 @@ Dagger has no stable 1.x: the newest stable is 0.21.12 and the newest tag is `v1
 - **Migration.** 1.0 splits `dagger.json` into `dagger-module.toml` and `dagger.toml`, and `dagger init` creates a workspace ([migrate to 1.0](https://docs.dagger.io/migrate-to-v1)). The TypeScript SDK page's GitHub Actions example pins `v1.0.0-beta.29`, a tag that did not exist when checked.
 
 Decision: no beta trial and no change to the conditions above. Revisit when stable 1.0 ships or Dagger documents an ephemeral-runner cache; re-evaluate only with a persistent self-hosted engine.
+
+## Reopening
+
+Reopen only when both hold: a stable Dagger 1.0 exists, and Dagger documents restoring the engine cache between ephemeral runners without Dagger Cloud within the 2 GiB budget (or the repository has a persistent self-hosted engine). Until then do not add Dagger modules, setup actions or workflow steps.

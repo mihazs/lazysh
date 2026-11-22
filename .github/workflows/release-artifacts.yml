@@ -125,16 +125,23 @@ jobs:
         with:
           targets: aarch64-linux-android
       - *cargo-registry
+      # Zig 0.16.0 and the admitted Ghostty archives: the Google flavor links libghostty-vt through the native-terminal feature.
+      # The FOSS flavor stays without it until the F-Droid recipe builds the same engine (docs/architecture/terminal-migration-plan.md).
+      - uses: ./.github/actions/ghostty-zig
+        with:
+          link-source: 'true'
+          restore-only: 'true'
       - name: Build each release flavor with the configured signer, validating each APK before the next build
         run: |
-          export CMAKE_ANDROID_NDK="$NDK_HOME" WHISPER_DONT_GENERATE_BINDINGS=1
+          # The runner image presets ANDROID_NDK_HOME to its own NDK, which libghostty-vt's Zig build reads first.
+          export CMAKE_ANDROID_NDK="$NDK_HOME" ANDROID_NDK_HOME="$NDK_HOME" WHISPER_DONT_GENERATE_BINDINGS=1
           outputs=apps/client/src-tauri/gen/android/app/build
           for variant in foss google; do
             rm -rf -- "$outputs"
             # Only the Google flavor links the prebuilt ONNX Runtime for Parakeet; the FOSS flavor builds every native library from source.
-            features=(--features parakeet-android)
+            features=(--features parakeet-android,native-terminal)
             if [ "$variant" = foss ]; then features=(--features fdroid); fi
-            sh "$GITHUB_WORKSPACE/.github/scripts/retry-gradle-resolution.sh" bun run --cwd apps/client tauri android build --target aarch64 --apk --ci "${features[@]}" -- --locked
+            sh "$GITHUB_WORKSPACE/.github/scripts/retry-gradle-resolution.sh" sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" bun run --cwd apps/client tauri android build --target aarch64 --apk --ci "${features[@]}" -- --locked
             bun .changeset/release-platform.ts "android-$variant-arm64" "$RUNNER_TEMP/installation-files/android-$variant-arm64"
           done
       - uses: actions/upload-artifact@v4

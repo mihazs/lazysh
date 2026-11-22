@@ -220,6 +220,8 @@ async function prepareSession(
       pendingBytes = 0;
     }
   };
+  // On the native data path the transport starts on the core's Channel, so no output reaches onEvent and none is acknowledged here.
+  if (adapter.transport) Object.assign(onEvent, {link: adapter.transport}), adapter.transport.onEvent = onEvent;
   return { session, onEvent, establish };
 }
 
@@ -265,7 +267,7 @@ async function selectTransport(
           ? await api.attachDefaultMultiplexer(shell.session.id,{kind:entry.kind,name:entry.name},child.onEvent)
           : entry.kind==='tmux'
             ? await api.attachTmux(shell.session.id,entry.name,child.onEvent,entry.tmuxServer)
-            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent)
+            : await api.attachMultiplexer(shell.session.id,entry.kind,entry.name,child.onEvent,true)
         : kind === 'mosh'
           ? await api.connectMosh(shell.session.id, options.mosh, child.onEvent,...(entry?[entry] as const:[]))
           : await api.connectEt(shell.session.id, options.et, child.onEvent);
@@ -1445,8 +1447,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     const host=hosts.find(item=>item.id===lost?.hostId);
     if(!lost || !host || !mounted.current || !lease.current())return {retry:false,hint:'appConnectionClosed'};
     const intent=sessionIntent(lost);
-    // Restore does not reattach Zellij either; the host shell comes back and Sessions reopens it.
-    if(intent.attached?.kind==='zellij')delete intent.attached;
     if(!host.credentialsStored){setSignInRecovery({sessionId:id,host,intent});return {retry:false,hint:'recoverySignInToReconnect'};}
     const owned=new PendingSessions();
     const fresh=await openSavedIntent(intent,host,owned);
@@ -1558,8 +1558,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const herdrIntent=herdrNavigationIntent.current;
   if(herdrIntent && (view!=='terminal' || !herdrNavigationVisible || (activeId!==herdrIntent.source && activeId!==herdrIntent.destination) || navigation[activeId??'']!==herdrIntent.navigation))herdrNavigationIntent.current=null;
   navigationOwner.current={sessionId:activeId,agents:agentsVisible,activity:agentsVisible&&agentSection==='activity'};
-  const jumpSupported=!!muxTools[active?.id ?? '']?.some(tool=>tool.kind==='tmux' && !tool.missing.includes('jump'));
-  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && active?.attached?.kind==='tmux' && jumpSupported && view!=='sessions';
+  // Jump To lists tmux windows or, from the version gate's `tree` capability, the tabs of the attached Zellij session.
+  const jumpKind=active?.attached?.kind==='tmux' || active?.attached?.kind==='zellij' ? active.attached.kind : undefined;
+  const jumpSupported=!!muxTools[active?.id ?? '']?.some(tool=>tool.kind===jumpKind && !tool.missing.includes(jumpKind==='tmux'?'jump':'tree'));
+  const pickerVisible=sidebarShown && !navigationCovered && remoteActive && navigationEntry.mode==='workspaces' && jumpSupported && view!=='sessions';
   if(pickerOwner.current.source!==(activeId??'') || pickerOwner.current.visible!==pickerVisible)
     pickerOwner.current={source:activeId??'',visible:pickerVisible,revision:pickerOwner.current.revision+1};
   const currentPickerOwner=pickerOwner.current;
@@ -1785,7 +1787,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       child = await prepareSession(host.id, `${host.name} / ${intent.attached.name}`, shell.session.destination, lease);
       const attached = intent.attached.kind === "tmux"
         ? await api.attachTmux(shell.session.id, intent.attached.name, child.onEvent, intent.attached.tmuxServer)
-        : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent);
+        : await api.attachMultiplexer(shell.session.id, intent.attached.kind, intent.attached.name, child.onEvent, true);
       child.establish(attached.sessionId);
       owned.add(attached.sessionId);
       if (!mounted.current) throw {kind:'cancelled',message:t("appWorkspaceRestorationCancelled")};
@@ -1831,7 +1833,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         continue;
       }
       const host = hosts.find((item) => item.id === intent.hostId);
-      if (!host || intent.attached?.kind === "zellij") {
+      if (!host) {
         remaining.push(intent);
         continue;
       }
@@ -2193,7 +2195,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       }}
     ><X size={18} aria-hidden="true" /></button>
     </div>
-    {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsTmuxAndHerdrReattachOpenZellij")}</p>}
+    {restoreDetails && <p className="workspace-restore-help">{t("appUsesSavedCredentialsMultiplexersReattach")}</p>}
   </>;
   /** The tool groups of the phone control surfaces: the Workspace tools sheet pages them, the side menu stacks them. */
   const workspaceToolsPages: WorkspaceToolPage[] = [
@@ -2206,7 +2208,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <p className="terminal-engine-line" role="note">{t('terminalEngineOfSession',{engine:describeTerminalEngine(active.selection)})}</p>
         {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
         {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
-        {!sideMenuMode && active.connected && !active.local && active.attached?.kind==='tmux' && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
+        {!sideMenuMode && active.connected && !active.local && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
         {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
       </div>}]:[]),
       {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
@@ -2403,7 +2405,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             <div className="sidebar-heading"><span>{t('appWorkspaceTools')}</span></div>
             {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && remoteActive)).map(toolButton('subtle-button'))}
           </>}
-          {pickerVisible && active && <Suspense fallback={<p role="status">{t('appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={snapshot=>tmuxJumped(active.id,snapshot)} onBusyChange={busy=>{
+          {pickerVisible && active && <Suspense fallback={<p role="status">{t(jumpKind==='zellij'?'appReadingZellijDestinations':'appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} zellij={active.attached?.kind==='zellij'?active.attached.name:undefined} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={jumpKind==='tmux'?snapshot=>tmuxJumped(active.id,snapshot):undefined} onBusyChange={busy=>{
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
           }}/></Suspense>}
         </div>}

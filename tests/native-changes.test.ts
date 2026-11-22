@@ -11,22 +11,22 @@ afterAll(() => roots.cleanup());
 
 type Outputs = Record<string, string>;
 const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'terminal_bridge', 'terminal_windows', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_terminal_core', 'android_mosh',
-  'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf', 'terminal_macos', 'linux_surface'];
+  'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf', 'terminal_macos', 'linux_surface', 'terminal_ios'];
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
-const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false',
+const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false', android_release_native: 'false',
   ntfy_variants: '["fdroid","google"]', native: 'true', docs_only: 'false' };
 // Jobs that are not required to merge: pull requests never select them, pushes to main always do. terminal-perf is report-only
 // too, but it follows the terminal runtime area on a pull request (see the selection test below).
-const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_macos'];
+const mainOnlyOutputs = ['companion', 'desktop', 'android_mosh', 'android_herdr', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_macos', 'terminal_ios'];
 const mainOnlyJobs = ['companion-candidates', 'native-desktop', 'native-android-mosh', 'native-android-herdr-navigation',
-  'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator', 'terminal-macos'];
+  'native-android-auxiliary', 'native-android-ntfy', 'native-ios-simulator', 'terminal-macos', 'terminal-ios'];
 const pullRequestEverything: Outputs = { ...everything, ...Object.fromEntries(mainOnlyOutputs.map(name => [name, 'false'])) };
 const onPullRequest = (jobs: Record<string, number>) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !mainOnlyJobs.includes(id)));
-const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])), android_appium_quarantine: 'false',
+const nothing: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'false'])), android_appium_quarantine: 'false', android_release_native: 'false',
   ntfy_variants: '["google"]', native: 'false' };
 
 /** Commit `paths` (and `moves` of seeded files) over a base commit and classify the range as checks.yml does. */
-async function classify(paths: string[], { event = 'pull_request', seed = [] as string[], moves = [] as [string, string][], contents = {} as Record<string, string>, seedContents = {} as Record<string, string> } = {}) {
+async function classify(paths: string[], { event = 'pull_request', seed = [] as string[], moves = [] as [string, string][], contents = {} as Record<string, string>, seedContents = {} as Record<string, string>, areas = '' } = {}) {
   const { root, env } = await roots.create();
   Object.assign(env, { GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' });
   const repo = join(root, 'repo');
@@ -47,7 +47,7 @@ async function classify(paths: string[], { event = 'pull_request', seed = [] as 
   }
   await git('add', '-A'); await git('commit', '-q', '--allow-empty', '-m', 'docs: change');
   const head = (await git('rev-parse', 'HEAD')).stdout.trim();
-  const result = await run(repo, ['sh', script], { ...env, EVENT: event, BASE: base, HEAD: head });
+  const result = await run(repo, ['sh', script], { ...env, EVENT: event, AREAS: areas, BASE: base, HEAD: head });
   expect(result.code).toBe(0);
   expect(result.stderr).toBe('');
   return parse(result.stdout);
@@ -73,7 +73,7 @@ async function runningJobs(outputs: Outputs, event = 'push') {
     } else {
       // `changes` classifies every event; client and agent always run, except the nightly, which is the device suite alone.
       expect(job.if, id).toBe(id === 'changes' ? undefined : neverNightly);
-      if (event === 'schedule' && id !== 'changes') continue;
+      if ((event === 'schedule' || event === 'workflow_dispatch') && id !== 'changes') continue;
     }
     let count = job.uses === './.github/workflows/companion-artifacts.yml' ? binaries : 1;
     for (const [key, values] of Object.entries<any>(job.strategy?.matrix ?? {})) {
@@ -87,9 +87,9 @@ async function runningJobs(outputs: Outputs, event = 'push') {
   return jobs;
 }
 
-const neverNightly = "github.event_name != 'schedule'";
+const neverNightly = "github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
-const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-macos': 1, 'terminal-windows': 1, 'native-linux-surface': 1, 'native-linux': 1, 'native-terminal-bridge': 1, 'native-desktop': 2,
+const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-macos': 1, 'terminal-windows': 1, 'terminal-ios': 1, 'native-linux-surface': 1, 'native-linux': 1, 'native-terminal-bridge': 1, 'native-desktop': 2,
   'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-zellij': 1,
   'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-ios-simulator': 1,
   'native-android-biometric': 1, 'native-android-appium': 1 };
@@ -133,6 +133,18 @@ test.each([
   const outputs = await classify([...paths]);
   expect(outputs).toEqual(pullRequestEverything);
   expect(await runningJobs(outputs)).toEqual(onPullRequest(fullRun));
+});
+
+test('only a pull request that changes the release build configuration builds the release APK with the native engine', async () => {
+  for (const path of ['.github/workflows/release-artifacts.yml', '.github/actions/ghostty-zig/action.yml', '.changeset/release-artifacts.ts']) {
+    const outputs = await classify([path]);
+    expect(outputs, path).toEqual({ ...pullRequestEverything, android_release_native: 'true' });
+    expect((await runningJobs(outputs))['native-android-release-core'], path).toBe(1);
+  }
+  for (const request of [await classify(['.github/workflows/checks.yml']), await classify(['docs/connections.md'], { event: 'push' })]) {
+    expect(request.android_release_native).toBe('false');
+    expect((await runningJobs(request))['native-android-release-core']).toBeUndefined();
+  }
 });
 
 test('pushes and manual runs always select every job and the full matrix, even for documentation', async () => {
@@ -230,6 +242,14 @@ test('the nightly runs the Appium suite and the Herdr it needs, and nothing else
   const outputs = await classify([], { event: 'schedule' });
   expect(outputs).toEqual({ ...nothing, herdr: 'true', android_appium: 'true', native: 'true', docs_only: 'false' });
   expect(await runningJobs(outputs, 'schedule')).toEqual({ changes: 1, 'herdr-native': 1, 'native-android-appium': 1 });
+});
+
+test('a manual dispatch runs only the named areas, by default the macOS and iOS terminal core jobs', async () => {
+  const outputs = await classify([], { event: 'workflow_dispatch', areas: 'terminal_apple' });
+  expect(outputs).toEqual({ ...nothing, terminal_macos: 'true', terminal_ios: 'true', native: 'true', docs_only: 'false' });
+  expect(await runningJobs(outputs, 'workflow_dispatch')).toEqual({ changes: 1, 'terminal-macos': 1, 'terminal-ios': 1 });
+  // Without areas a dispatch is a manual full run.
+  expect(await classify([], { event: 'workflow_dispatch', areas: '' })).toEqual(everything);
 });
 
 test('quarantined Appium specs get their own job on main and the nightly, never on a pull request or without a tagged spec', async () => {

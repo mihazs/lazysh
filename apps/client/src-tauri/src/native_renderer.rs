@@ -531,4 +531,4 @@ impl Drop for Host {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
