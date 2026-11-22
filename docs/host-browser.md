@@ -278,7 +278,10 @@ The browser is started with `--remote-debugging-pipe`, a private profile and `--
 on the host), and its standard output and error are discarded because they can name pages. It ends, with its
 helpers and its profile, when standard input closes, on SIGINT, SIGTERM or SIGHUP, when the browser exits and
 when the page closes; on Linux the kernel also stops it if the relay is killed outright, and the next start
-removes the profile that a killed relay left. With `--keep-profile` the relay uses the one kept profile instead
+removes the profile that a killed relay left. The browser is stopped with SIGTERM to its main process alone, so it
+writes what a page stored (`localStorage` included) before its helpers go; only when it has not exited within three
+seconds is its whole process group killed. Its process id stays reserved until then (`waitid` with `WNOWAIT`), and
+if the relay cannot observe it, it sends no signal at all. With `--keep-profile` the relay uses the one kept profile instead
 (`host-browser/kept`, mode 0700) and leaves it, with what the browser wrote, for `host-browser --clear-data`. `--no-sandbox` is for containers and CI runners that cannot create a
 sandbox. There is no Windows relay: a Windows host is refused with `HostBrowserUnsupported`.
 
