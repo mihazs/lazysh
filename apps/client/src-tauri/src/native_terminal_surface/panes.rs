@@ -2,7 +2,7 @@
 //! first surface and kept across the surfaces that follow (the window destroys and recreates its surface on stop
 //! and start; the session and its screen live on). Platform-neutral, so the bookkeeping is tested on every host
 //! with offscreen targets; the Android entry points in [`super::android`] only turn a `Surface` into a [`Target`].
-#![cfg_attr(not(target_os = "android"), allow(dead_code))]
+#![cfg_attr(not(any(target_os = "android", target_os = "linux")), allow(dead_code))]
 use crate::native_renderer::{Host, Inbox, Look};
 use lazysh_terminal_renderer_wgpu::Target;
 use lazysh_terminal_runtime::{RgbColor, Session, Theme};

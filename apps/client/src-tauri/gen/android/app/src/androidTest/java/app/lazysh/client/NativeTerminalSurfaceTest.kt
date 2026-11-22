@@ -198,7 +198,7 @@ class NativeTerminalSurfaceTest {
         awaitBackground()
     }
 
-    @Test fun aReleaseBuildRefusesAndShowsNothing() {
+    @Test fun aDisabledHostRefusesAndShowsNothing() {
         TerminalSurfaces.enabled = false
         val anchor = PageDriver.anchor("left:10%;top:25%;width:50%;height:30%")
         assertEquals("error native_surface_disabled", PageDriver.invoke("native_terminal_surface_place", placeArguments(anchor)))
