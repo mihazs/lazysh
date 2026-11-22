@@ -278,6 +278,7 @@ fn main() {
         "agent_transcript",
         "agent_usage",
         "account_usage",
+        "usage_collector_status",
         "agent_transcripts",
         "agent_history",
     ]);

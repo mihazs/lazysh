@@ -161,3 +161,17 @@ fn malformed_companion_wire_rejects_times_windows_money_and_duplicate_accounts()
         "invalid_report"
     );
 }
+
+#[test]
+fn a_host_that_forbids_the_quota_read_arrives_as_unknown_without_a_report() {
+    let forbidden = json!({"schemaVersion":1,"state":"disabled","source":null,"report":null});
+    let response = from_wire(&serde_json::to_vec(&forbidden).unwrap());
+    assert_eq!(response.state, "disabled");
+    assert!(response.report.is_none());
+    // A forbidden read that carries a number is not what a host sends; it is not shown as one.
+    let invented = json!({"schemaVersion":1,"state":"disabled","source":"builtin","report":{"primary":null,"entries":[]}});
+    assert_eq!(
+        from_wire(&serde_json::to_vec(&invented).unwrap()).state,
+        "invalid_report"
+    );
+}

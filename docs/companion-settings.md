@@ -50,6 +50,33 @@ lazysh-agent settings host-browser update --expected-revision 0 --host-browser-e
 
 While it is off, or its file is unreadable, every host-browser command refuses before it starts a process. Turning it off does not stop a browser that already runs. `lazysh-agent host-browser --clear-data` removes the profile that **Keep profile** left, and works with the switch off. See the [reference](reference/companion-settings.md) for the file, the errors and the profile lifetime.
 
+## Forbid account quota reads on a host
+
+`lazysh-agent account-usage` reads each configured provider's quota with the host's own sign-ins and makes outbound requests to those providers. By default any connected lazysh app may ask for it. To forbid it on a host, run on that host (the app does not offer this switch yet):
+
+```sh
+lazysh-agent usage-collection show
+lazysh-agent usage-collection update --expected-revision 0 --account-quota-enabled false
+```
+
+Replace `0` with the revision `show` returned. While the switch is off, the AI account usage page and the status-bar item show that this host does not allow account usage reads, with **no percentage**: the quota is unknown, not zero. Nothing reads a credential file, starts a helper or contacts a provider. Turn it back on with `--account-quota-enabled true`; the next refresh uses it, with no restart. A stale revision returns `SettingsConflict`; reread and retry. A malformed `usage-collection.json` makes the quota read fail, not allow it: correct the file; the companion never rewrites it.
+
+The switch binds the host companion. A companion older than this switch ignores it, and the desktop app's own read of its local machine does not use the companion. It is stored in `usage-collection.json`, separate from the three switches above. See the [reference](reference/companion-settings.md#usage-collection-policy).
+
+## Record account quota samples in the background
+
+By default nothing is collected while the app is closed, so a refresh shows no history. To record one bounded sample of each account's quota on a schedule, run on the host:
+
+```sh
+lazysh-agent usage-collector enable --interval-minutes 30
+lazysh-agent usage-collector status --limit 5
+lazysh-agent usage-collector disable
+```
+
+**Read this first:** enabling makes the host contact each configured provider every interval, with the sign-ins the quota read already uses, while no lazysh app is open. That is why it is off by default and the shortest interval is 5 minutes. A sample holds only percentages, resets and staleness per account: no plan name, balance, credential, prompt or path. At most 1000 samples, 7 days and 1 MiB are kept, oldest first, in `usage-samples.json` in the companion state directory; delete that file to erase them. If account quota reads are [forbidden](#forbid-account-quota-reads-on-a-host), the collector reads nothing and records the skipped run.
+
+`enable` installs a user-level timer without sudo: a systemd user timer on Linux, a launchd agent on macOS, a Scheduled Task on Windows. `disable` removes only what `enable` wrote. Exit 41 means this account cannot hold a timer (no user service manager or login session) and nothing was changed; exit 42 means the system or a file of another origin refused it and the collector stays off. On Linux the user manager stops when the last session ends unless you run `loginctl enable-linger USER` yourself; `status` shows `linger`. While the host is suspended or off nothing is recorded; the first tick afterwards records one sample, so a gap stays a gap. An interval is rounded up to a multiple of five minutes. The usage page of the app shows the collector's state, its last run and the age of every sample under **Background collection** (it needs a companion that has `usage-collector`); it has no controls for it, so `enable` and `disable` are run on the host. See the [reference](reference/companion-settings.md#usage-collector) for the schema, bounds, per-system details and what was and was not tested.
+
 ## Quiet notifications for nested agents and an unlocked desktop
 
 If you opt in to the [relay](notification-relay.md#opt-in-the-host-companion), two more host switches decide which events may notify your phone. Both are **off** by default, so nothing changes until you turn one on, and they are not part of the three switches above. There is no control for them in the app yet; use the host terminal:

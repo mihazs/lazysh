@@ -41,6 +41,19 @@ The query runs on the session machine. Android and desktop remote terminals requ
 
 Credentials remain on the host. The app receives a bounded report with provider labels, quota percentages, balance values, reset timestamps and freshness. It does not receive OAuth credentials, API keys, transcript context, live-session titles, arbitrary report blocks or raw provider error bodies.
 
+## A host can forbid the quota read
+
+A host owner can turn off account quota reads with `lazysh-agent usage-collection update --expected-revision R --account-quota-enabled false` ([how to](companion-settings.md#forbid-account-quota-reads-on-a-host)). The status-bar item and this page then say that the host does not allow account usage reads and show **no percentage**: the quota is unknown, not zero, and nothing reads a credential or contacts a provider. The default is on, so hosts that never set it keep today's behavior.
+
+A host can also opt in to **recording** bounded samples of this quota on a timer while no app is open ([how to](companion-settings.md#record-account-quota-samples-in-the-background)). It is off by default and honors the switch above. The usage page then shows it under **Background collection**:
+
+- whether the collector is on and how often, and whether its timer is installed, drifted or impossible on that account (and, on Linux, that without lingering the timer only runs while someone is logged in);
+- the last run and its outcome (a sample, skipped because the host forbids the read, or no report);
+- how many samples are recorded and the age of the newest, the oldest and **every listed sample**, aged against the host's own clock and then by the time since the answer, so a phone with the wrong time cannot make an old sample look new;
+- for each sample, each account's most consumed quota row, marked **stale** when the provider flagged it stale or failed, did not date it, or fetched it more than ten minutes before it was recorded. An account with no quota row says so; a missing sample or row is never shown as zero.
+
+The view is read only and refreshes when the page opens or when you choose **Refresh collection**; it does not poll. An older companion shows a message to update it. Recorded samples come from the host's `usage-collector status`; the app asks for the 24 newest.
+
 ## Configuration
 
 Sign in with the provider's existing CLI or configure its host-side API key. Without a usage configuration file, the companion enables providers with locally available credentials in memory. For automatic [Codex discovery](https://learn.chatgpt.com/docs/auth), a nonempty host `CODEX_HOME` selects its `auth.json`; otherwise the normal home-directory default applies. Whitespace-only values use that default. Nonempty overrides must be absolute, bounded paths without control or dot/parent components; invalid overrides report usage as unavailable instead of silently choosing another account. Explicit usage profiles retain their configured paths, accounts and disabled providers; set `openai.codex_auth_path` there for a nonstandard Codex home. No login or quota success is inferred just from finding a file.
