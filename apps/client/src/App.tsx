@@ -97,6 +97,8 @@ import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import TerminalEngineNotice from "./TerminalEngineNotice";
 import {describeTerminalEngine} from "./terminalEngineReason";
+import TerminalFeedbackLink from "./TerminalFeedbackLink";
+import {reportOfSession} from "./terminalFeedback";
 import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTourModel";
 import { useClientAppearance } from "./appearance";
 import { getPreferences, usePreferences } from "./preferences";
@@ -2212,6 +2214,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       ...(secondaryTools.length?[{id:'more',title:t('workspaceMoreTools'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>}]:[]),
       {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
         <p className="terminal-engine-line" role="note">{t('terminalEngineOfSession',{engine:describeTerminalEngine(active.selection)})}</p>
+        <TerminalFeedbackLink report={reportOfSession(active.selection,getPreferences().terminalEngine)}/>
         {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
         {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
         {!sideMenuMode && active.connected && !active.local && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}

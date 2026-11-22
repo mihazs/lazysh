@@ -18,7 +18,8 @@ async function openApp(page:Page,core:Core,stored:Record<string,unknown>={}) {
       localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,...stored}));
     }
     let sessions=0;
-    window.nativeFixtureInvoke=async command=>{
+    (window as unknown as {opened:string[]}).opened=[];
+    window.nativeFixtureInvoke=async (command,args)=>{
       if(command==='list_hosts')return [{id:'fixture',name:'Fixture',hostname:'fixture.invalid',username:'owner',port:22}];
       if(command==='local_capability'||command==='apple_status_capability')return {available:false,reason:'Synthetic engine fixture.'};
       if(command==='transport_capabilities')return {mosh:false,et:false};
@@ -27,6 +28,7 @@ async function openApp(page:Page,core:Core,stored:Record<string,unknown>={}) {
       if(command==='native_terminal_probe')return core.available?{available:true}:{available:false,reason:core.reason};
       if(command==='terminal_core_available')return {...core,reason:'reason' in core?core.reason:'The native terminal core and its surface host are present'};
       if(command==='native_terminal_surface_place')return {placed:true,ready:true,generation:1,width:1,height:1};
+      if(command==='open_web_url'){(window as unknown as {opened:string[]}).opened.push(String(args.url));return undefined;}
       if(command==='agent_snapshot')return {schemaVersion:1,sessions:[]};
       if(command.startsWith('plugin:event|')||command.startsWith('terminal_core_')||command.startsWith('native_terminal_surface_')||['resize','ack_output','disconnect','write_stdin','cancel_credential_auth'].includes(command))return undefined;
       throw new Error(`Unexpected synthetic engine command: ${command}`);
@@ -136,8 +138,8 @@ test('the keyboard alone chooses the engine and passes over a disabled Native',a
 });
 
 const translated={
-  'pt-BR':{group:'Mecanismo das novas sessões',auto:'Automático',off:'Nativo está desativado: o mecanismo nativo não pode ser executado aqui (this is not the lazysh app).'},
-  es:{group:'Motor de las nuevas sesiones',auto:'Automático',off:'Nativo está desactivado: el motor nativo no puede ejecutarse aquí (this is not the lazysh app).'},
+  'pt-BR':{group:'Mecanismo das novas sessões',auto:'Automático',off:'Nativo está desativado: o mecanismo nativo não pode ser executado aqui (this is not the lazysh app).',report:'Relatar um problema do terminal'},
+  es:{group:'Motor de las nuevas sesiones',auto:'Automático',off:'Nativo está desactivado: el motor nativo no puede ejecutarse aquí (this is not the lazysh app).',report:'Informar un problema del terminal'},
 };
 for(const [locale,text] of Object.entries(translated))test(`the engine choice and the reason Native is off are shown in ${locale}`,async({page})=>{
   await openLocalizedApp(page,locale);
@@ -147,4 +149,19 @@ for(const [locale,text] of Object.entries(translated))test(`the engine choice an
   await expect(page.getByRole('radio',{name:text.auto,exact:true})).toBeChecked();
   await expect(page.getByRole('radio',{name:'Nativo',exact:true})).toBeDisabled();
   await expect(page.getByText(text.off,{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:text.report,exact:true})).toBeVisible();
+});
+
+test('Report a terminal problem opens the prefilled issue form in the browser and the app makes no request of its own',async({page})=>{
+  const outside:string[]=[];
+  page.on('request',request=>{if(new URL(request.url()).host!=='127.0.0.1:1420')outside.push(request.url());});
+  await openApp(page,notBuilt,{terminalEngine:'native'});
+  await openEngineSettings(page);
+  await page.getByRole('button',{name:'Report a terminal problem',exact:true}).click();
+  const opened=await page.evaluate(()=>(window as unknown as {opened:string[]}).opened);
+  expect(opened).toHaveLength(1);
+  const url=new URL(opened[0]);
+  expect(url.origin+url.pathname).toBe('https://github.com/mihazs/lazysh/issues/new');
+  expect(url.searchParams.get('body')).toContain(`- Setting: native\n- Reason: native: ${notBuilt.reason}`);
+  expect(outside).toEqual([]);
 });

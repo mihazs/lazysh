@@ -2,6 +2,7 @@ import {useEffect, useState} from 'react';
 import {X} from 'lucide-react';
 import {t} from './i18n/core';
 import {getPreferences} from './preferences';
+import TerminalFeedbackLink from './TerminalFeedbackLink';
 import type {TerminalBackendId} from './terminalAdapter';
 
 const SEEN_KEY = 'lazysh.terminal.defaultEngineSeen';
@@ -37,6 +38,7 @@ export default function TerminalEngineNotice({onOpenSettings, resolve = resolveD
   return <div className="browser-banner terminal-engine-notice" role="status">
     <span>{t('terminalEngineChanged')}</span>
     <button type="button" onClick={() => { dismiss(); onOpenSettings(); }}>{t('terminalEngineChangedOpenSettings')}</button>
+    <TerminalFeedbackLink report={{engine: changed, preference: 'auto', reasons: ['default engine changed']}} />
     <button type="button" className="icon-button" aria-label={t('appDismiss')} onClick={dismiss}><X size={16} aria-hidden="true"/></button>
   </div>;
 }

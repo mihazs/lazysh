@@ -49,6 +49,7 @@ for(const {name,storage,coreReason,line} of cases)test(`the Workspace tools menu
   await openToolsPageWith(page,'New connection');
   const menu=page.getByRole('dialog',{name:'Workspace tools',exact:true});
   await expect(menu.getByRole('note').filter({hasText:sentence})).toHaveText(sentence);
+  await expect(menu.getByRole('button',{name:'Report a terminal problem',exact:true})).toBeVisible();
   await menu.getByRole('button',{name:'Close Workspace tools',exact:true}).click();
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Terminal');
