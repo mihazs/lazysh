@@ -778,6 +778,12 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     try {
       const directory=join(root,'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results',recorded?'recorded-conversation-ui':tmux?'tmux-ui':zellij?'zellij-ui':herdr?(herdrMosh?'herdr-mosh-ui':'herdr-ui'):dpad?'ssh-dpad-ui':ime?'ssh-ime-ui':companion?'companion-ui':attachments?'attachment-ui':moshBackground?'mosh-background-ui':deniedNotification?'denied-notification-ui':'ssh-ui');
       await reportInstrumentationFailures(directory);
+      // A tmux server that exited uncleanly (exit 139) leaves its own -v log in the fixture directory; keep a bounded copy for the artifact.
+      if(tmux)try {
+        const logs=(await readdir(fixture.directory)).filter(name=>/^tmux-(server|client)-[0-9]+\.log$/.test(name)).slice(0,8);
+        if(logs.length)await mkdir(join(directory,'tmux-logs'),{recursive:true});
+        for(const name of logs)await writeFile(join(directory,'tmux-logs',name),(await readFile(join(fixture.directory,name))).subarray(-4*1024*1024));
+      } catch {console.error('Owned tmux logs unavailable');}
       const crash=await crashes?.stop();
       const imeWire=ime?await observeImeReceiverWire(join(imeDirectory,'received-bytes'),fixture.nonce):undefined;
       // Sample before an inspection adb command could implicitly restart its server.

@@ -1567,6 +1567,9 @@ jobs:
           sudo chmod 0600 /dev/kvm
       - &android-runtime-emulator
         name: Run native Android instrumentation
+        # Below the shortest job limit that runs it for long (native-android-runtime: 75 minutes), so a stalled run ends this step and the
+        # result upload still runs; a case that blocks fails after 15 minutes through the runner's timeout_msec.
+        timeout-minutes: 60
         uses: mihazs/lazysh-android-emulator-runner@46beb5d59b664ea61462125a023549a5a7b0418b
         with:
           # NativeActivityFixture owns screen/keyguard readiness; avoid early MENU input.
@@ -1603,6 +1606,8 @@ jobs:
             capture lastanr adb shell dumpsys activity lastanr;
             capture lastanr-traces adb shell dumpsys activity lastanr-traces;
             capture adb-server-log tail -c 1048576 "${TMPDIR:-/tmp}/adb.$(id -u).log";
+            capture adb-root adb root;
+            capture app-threads adb shell "for p in \$(pidof app.lazysh.client); do kill -3 \$p; debuggerd -b \$p; done; sleep 3; ls -l /data/anr; tail -c 524288 /data/anr/* 2>/dev/null";
             fi;
             kill %1 2>/dev/null || true;
             wait "$collector_pid"; local collector_result=$?;
