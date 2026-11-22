@@ -3,7 +3,6 @@ package app.lazysh.client
 import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.SystemClock
 import android.os.ParcelFileDescriptor
@@ -152,6 +151,7 @@ class GotifyAndroidTest {
         val allowLabel = By.pkg("com.android.permissioncontroller").text(java.util.regex.Pattern.compile("Allow", java.util.regex.Pattern.CASE_INSENSITIVE))
         awaitCondition { permissionGranted() || device.hasObject(allow) || device.hasObject(allowLabel) }
         if (!permissionGranted()) (device.findObject(allow) ?: device.findObject(allowLabel))?.click()
+        phase = "notification-permission-grant"
         awaitCondition { permissionGranted() }
         phase = "alarm-permission"
         awaitCondition {
@@ -166,7 +166,8 @@ class GotifyAndroidTest {
                     val toggle = node(By.pkg("com.android.settings").res("android:id/switch_widget"))
                     check(!toggle.isChecked)
                     toggle.click()
-                    check(node(By.pkg("com.android.settings").res("android:id/switch_widget")).isChecked)
+                    // Settings repaints the switch a moment after the tap.
+                    awaitCondition { device.findObject(By.pkg("com.android.settings").res("android:id/switch_widget"))?.isChecked == true }
                     device.pressBack()
                 }
                 false
@@ -179,7 +180,13 @@ class GotifyAndroidTest {
     private fun launchGotify() = context.startActivity(Intent().setComponent(ComponentName(gotify, "$gotify.init.InitializationActivity"))
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 
-    private fun permissionGranted(): Boolean = context.packageManager.checkPermission(Manifest.permission.POST_NOTIFICATIONS, gotify) == PackageManager.PERMISSION_GRANTED
+    // Read through the shell: the app's own PackageManager hides a package that its manifest declares no <queries> for (it lists only
+    // UnifiedPush distributor intents), so checkPermission(..., gotify) answers "denied" however the dialog was answered.
+    private fun permissionGranted(): Boolean = runtimePermissionGranted(shell("dumpsys package $gotify"), Manifest.permission.POST_NOTIFICATIONS)
+
+    /** True only when the `dumpsys package` runtime-permission section holds exactly one row for [permission] and it is granted. */
+    private fun runtimePermissionGranted(dump: String, permission: String): Boolean =
+        dump.lines().map { it.trim() }.filter { it.startsWith("$permission: granted=") }.singleOrNull()?.startsWith("$permission: granted=true") == true
 
     private fun home() {
         check(device.pressHome())
@@ -393,6 +400,16 @@ class GotifyAndroidTest {
             sample.replace("  uid=$uid", "  uid=0"),
             sample + "\n  key=$ownKey",
         )) check(!record(bad, ownKey, uid, 17, "working", started))
+        val permission = Manifest.permission.POST_NOTIFICATIONS
+        val granted = "    runtime permissions:\n      $permission: granted=true, flags=[ USER_SET]\n      android.permission.CAMERA: granted=false, flags=[ ]"
+        check(runtimePermissionGranted(granted, permission))
+        for (bad in listOf(
+            granted.replace("$permission: granted=true", "$permission: granted=false"),
+            granted.replace(permission, "android.permission.POST_NOTIFICATIONS_FAKE"),
+            "      android.permission.CAMERA: granted=true, flags=[ ]",
+            "",
+            granted + "\n      $permission: granted=true, flags=[ ]",
+        )) check(!runtimePermissionGranted(bad, permission))
     }
 
     private fun parserChecks() {
