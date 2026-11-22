@@ -207,7 +207,7 @@ export class TmuxFixture {
       if(!/^tmux [0-9]+[.][0-9]+[a-z]?$/.test(version))throw new Error('Owned tmux version unavailable');
       if(!tmuxPassthroughSupported(version))throw new Error('Owned tmux 3.3 or later required for escape passthrough');
       console.log(`Owned Android tmux fixture ${version}`);
-      owned.server=ssh.tmuxServer(['-D','-f','/dev/null','-L','default']);
+      owned.server=ssh.tmuxServer(['-v','-D','-f','/dev/null','-L','default']);
       const socket=join(ssh.environment!.TMUX_TMPDIR!,`tmux-${process.getuid!()}`,'default');
       const until=performance.now()+3000;
       // list-sessions never starts a server, so readiness cannot admit an unowned daemon.

@@ -390,7 +390,7 @@ exit "$SDK_EXIT"
   expect(() => process.kill(pid, 0)).toThrow();
   const diagnostics = join(directory, 'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/system-diagnostics');
   const files = await readdir(diagnostics);
-  expect(files.length).toBe(expectedExit ? 9 : 4);
+  expect(files.length).toBe(expectedExit ? 11 : 4);
   const status = await readFile(join(diagnostics, 'status.txt'), 'utf8');
   for (const name of files) expect((await stat(join(diagnostics, name))).size).toBeLessThanOrEqual(1024 * 1024);
   expect(status).toContain(`test exit=${expectedExit}`);
@@ -405,7 +405,7 @@ exit "$SDK_EXIT"
     } else expect(serverLog).not.toContain('connection terminated');
   }
   if (diagnosticFailure) {
-    for (const name of ['start-load', ...(expectedExit ? ['lastanr', 'lastanr-traces', 'cpu-load', 'kernel-load'] : [])]) {
+    for (const name of ['start-load', ...(expectedExit ? ['lastanr', 'lastanr-traces', 'cpu-load', 'kernel-load', 'adb-root', 'app-threads'] : [])]) {
       expect(status).toContain(`${name} exit=79`);
     }
   }
