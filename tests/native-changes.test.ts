@@ -1,8 +1,11 @@
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gitFixtureRoots, project, spawnText as run } from './support/gitFixture';
 import { moonJson } from './support/moon';
+
+// The first moon query on a cold runner can take longer than bun's 5 s default.
+setDefaultTimeout(60_000);
 
 const script = join(project, '.github', 'scripts', 'native-changes.sh');
 const workflow = async (name: string) => Bun.YAML.parse(await Bun.file(join(project, '.github', 'workflows', name)).text()) as any;
