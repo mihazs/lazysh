@@ -1,7 +1,7 @@
 import {expect,it} from 'vitest';
 import {NativeGui} from './fixture';
 import {SshFixture} from '../../../tests/support/sshFixture';
-import {disconnectOwnedSsh,openOwnedSsh,ownedSshGui,workspaceAction,workspaceToolNames} from './sshUi';
+import {disconnectOwnedSsh,openOwnedSsh,ownedSshGui,withUiState,workspaceAction,workspaceToolNames} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -29,7 +29,7 @@ it('drives a real Zellij session from its shortcut panel and offers no Jump To w
 
   await (await controls.$('label=New tab name').$('input')).setValue('second');
   await (await controls.$('button=Create Zellij tab')).click();
-  await browser.waitUntil(async()=>{const found=await tabs();return found.length===2&&found[1].name==='second'&&await active()===1;},{timeout:20_000,timeoutMsg:'Create Zellij tab did not add and focus the second tab'});
+  await withUiState(gui,()=>browser.waitUntil(async()=>{const found=await tabs();return found.length===2&&found[1].name==='second'&&await active()===1;},{timeout:20_000,timeoutMsg:'Create Zellij tab did not add and focus the second tab'}),async()=>({tabs:await tabs()}));
   await (await controls.$('button=Previous Zellij tab')).click();
   await browser.waitUntil(async()=>await active()===0,{timeout:20_000,timeoutMsg:'Previous Zellij tab did not focus the first tab'});
   await (await controls.$('button=Next Zellij tab')).click();
