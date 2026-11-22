@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { adbFor, androidProbe as makeProbe, WEBVIEW_HOST } from '../../bench/androidProbe';
 import { installNativeBridge } from './nativeBridge';
 
 // What the benchmark specs record in the environment block of their result files.
@@ -46,15 +47,16 @@ export async function installBenchBridge(page: Page) {
 
 /** `bun run bench:terminal` against a device: LAZYSH_BENCH_ANDROID is the adb serial (for example the Waydroid guest). The page is then the benchmark page in that device's Android System WebView. */
 export const androidSerial = process.env.LAZYSH_BENCH_ANDROID ?? null;
-const WEBVIEW_APP = 'app.lazysh.webviewbench';
 const adb = (...args: string[]) => execFileSync('adb', ['-s', androidSerial!, ...args], { encoding: 'utf8' }).trim();
 const retry = async <T>(attempt: () => Promise<T>, times: number): Promise<T> => {
   for (let left = times; ; left--) {
     try { return await attempt(); } catch (error) { if (left <= 1) throw error; await new Promise(resolve => setTimeout(resolve, 500)); }
   }
 };
+/** The guest's own counters for the benchmark WebView host (CPU, thread wakeups, presented frames, PSS), or null on a desktop run. */
+export const androidProbe = () => androidSerial === null ? null : makeProbe(adbFor(androidSerial), WEBVIEW_HOST);
 /** Whether the benchmark WebView host has the window focus. Another user of a shared guest bringing an app to the front pauses the page (no frames), which disturbs the run: rows are rejected, not recorded. */
-export const androidFocused = () => androidSerial === null || adb('shell', 'dumpsys window | grep mCurrentFocus').includes(`${WEBVIEW_APP}/`);
+export const androidFocused = () => androidSerial === null || adb('shell', 'dumpsys window | grep mCurrentFocus').includes(`${WEBVIEW_HOST}/`);
 /** The device the Android runs measured on, read when they finish: display, build and which window had the focus (a window of another app means the run was disturbed). */
 export const androidDevice = () => androidSerial === null ? null : {
   serial: androidSerial, release: adb('shell', 'getprop', 'ro.build.version.release'), model: adb('shell', 'getprop', 'ro.product.model'),
@@ -72,8 +74,8 @@ export const test = base.extend({
   page: async ({ page, playwright, baseURL }, use) => {
     if (androidSerial === null) return use(page);
     adb('reverse', `tcp:${new URL(baseURL!).port}`, `tcp:${new URL(baseURL!).port}`);
-    adb('shell', 'am', 'start', '-S', '-W', '-n', `${WEBVIEW_APP}/.WebActivity`, '--es', 'url', 'about:blank');
-    const port = adb('forward', 'tcp:0', `localabstract:webview_devtools_remote_${adb('shell', 'pidof', WEBVIEW_APP).split(/\s+/)[0]}`);
+    adb('shell', 'am', 'start', '-S', '-W', '-n', `${WEBVIEW_HOST}/.WebActivity`, '--es', 'url', 'about:blank');
+    const port = adb('forward', 'tcp:0', `localabstract:webview_devtools_remote_${adb('shell', 'pidof', WEBVIEW_HOST).split(/\s+/)[0]}`);
     // The debugging socket answers a moment after the process starts.
     const browser = await retry(() => playwright.chromium.connectOverCDP(`http://127.0.0.1:${port}`), 20);
     try { await use(browser.contexts()[0].pages()[0]); } finally { await browser.close(); adb('forward', '--remove', `tcp:${port}`); }
