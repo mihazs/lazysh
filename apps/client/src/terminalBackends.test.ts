@@ -4,7 +4,8 @@ import {stubMatchMedia} from './test/stubMatchMedia';
 import type {TerminalAdapter, TerminalCapabilities} from './terminalAdapter';
 import {defaults, savePreferences} from './preferences';
 import {createBackendRegistry, type BackendProbe} from './terminalBackendRegistry';
-import {createTerminalAdapter, registerNativeBackend} from './terminalBackends';
+import {createTerminalAdapter, recordedNativeFailure, recordNativeFailure, registerNativeBackend} from './terminalBackends';
+import {appVersion} from './version';
 import {describeTerminalEngine} from './terminalEngineReason';
 import {xtermCapabilities} from './xtermTerminalAdapter';
 
@@ -129,5 +130,31 @@ describe('the native backend as the app registers it', () => {
     const {selection} = await createTerminalAdapter({preference: 'native'}, registered({ok: true}));
     expect(selection).toEqual({id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'lacks accessibility'}]});
     expect(openCore).not.toHaveBeenCalled();
+  });
+
+  it('starts on xterm.js when the core cannot be opened, and the session says why', async () => {
+    openCore.mockRejectedValue(new Error('terminal_core_open refused'));
+    const {selection, adapter} = await createTerminalAdapter({preference: 'native'}, registered({ok: true}));
+    expect([adapter.backend, selection]).toEqual(['xterm', {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'failed: terminal_core_open refused'}]}]);
+    expect(describeTerminalEngine(selection)).toBe('xterm.js: the native engine failed (terminal_core_open refused)');
+  });
+});
+
+describe('the failure the device remembers', () => {
+  const key = 'lazysh.terminal.failure.native';
+
+  it('is kept for the version of the app that recorded it and forgotten after an update', () => {
+    expect(recordedNativeFailure()).toBeUndefined();
+    expect(recordNativeFailure(new Error('surface lost'))).toBe('failed: surface lost');
+    expect(recordedNativeFailure()).toBe('failed: surface lost');
+    localStorage.setItem(key, JSON.stringify({version: `${appVersion}-older`, reason: 'failed: surface lost'}));
+    expect(recordedNativeFailure()).toBeUndefined();
+  });
+
+  it('is not a failure when the stored value is not one', () => {
+    for (const value of ['nonsense', '{"version":1}', 'null', JSON.stringify({version: appVersion, reason: 7})]) {
+      localStorage.setItem(key, value);
+      expect(recordedNativeFailure()).toBeUndefined();
+    }
   });
 });

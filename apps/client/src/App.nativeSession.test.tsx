@@ -1,24 +1,35 @@
 // @vitest-environment jsdom
 // The harness registers the module mocks, so it has to be the first import.
 import {mocks, openConnection, selectConnectionTransport} from './test/appHarness';
-import {afterEach, expect, it} from 'vitest';
+import {afterEach, expect, it, vi} from 'vitest';
 import {act, screen, waitFor} from '@testing-library/react';
 import {defaults, getPreferences, savePreferences} from './preferences';
 import type {LiveSession} from './terminal';
 
 afterEach(() => act(() => savePreferences(defaults)));
 
-it('starts a session on the native engine with the core as its data path: no output through JS, no credit returned from it, and the core freed with the session', async () => {
-  mocks.api.connect.mockResolvedValueOnce({sessionId: 'core-session'});
-  mocks.invoke.mockImplementation(async (command: string) => command === 'terminal_core_available' || command === 'native_terminal_probe' ? {available: true} : undefined);
+/** The app's answers when the native engine can be used: its probe passes, and `core` says what opening a core does. */
+const withCore = (core: (command: string, args: {events: unknown}) => unknown = () => undefined) =>
+  mocks.invoke.mockImplementation(async (command: string, args: {events: unknown}) => command === 'terminal_core_available' || command === 'native_terminal_probe' ? {available: true} : core(command, args));
+
+/** Opens a session after the user chose Native; the mocked transport is told which session started on the core's Channel. */
+async function connectNative(sessionId: string) {
+  mocks.api.connect.mockResolvedValueOnce({sessionId});
   act(() => savePreferences({...getPreferences(), terminalEngine: 'native'}));
   const user = await openConnection();
   await user.click(screen.getByRole('button', {name: 'Connect'}));
   await waitFor(() => expect(mocks.terminalPaneProps).toHaveBeenCalled());
   const session = mocks.terminalPaneProps.mock.calls.at(-1)![0].session as LiveSession;
+  const onEvent = mocks.api.connect.mock.calls.at(-1)![2] as ((event: unknown) => void) & {link?: {events: unknown; bind(session: Promise<string>): void}};
+  return {session, onEvent};
+}
+
+it('starts a session on the native engine with the core as its data path: no output through JS, no credit returned from it, and the core freed with the session', async () => {
+  withCore();
+  const {session, onEvent: transport} = await connectNative('core-session');
+  const onEvent = transport as typeof transport & {link: NonNullable<typeof transport.link>};
   expect(session.adapter).toMatchObject({backend: 'native', dataPath: 'runtime'});
   expect(session.selection).toMatchObject({id: 'native'});
-  const onEvent = mocks.api.connect.mock.calls.at(-1)![2] as ((event: unknown) => void) & {link: {events: unknown; bind(session: Promise<string>): void}};
   // The mocked bridge does not start the transport, so the test plays its part: the session that started on the core's channel.
   onEvent.link.bind(Promise.resolve('core-session'));
   expect(onEvent.link).toBe(session.adapter.transport);
@@ -55,4 +66,39 @@ it('starts a Mosh session on the native engine: the core opens for Mosh frames, 
   expect(session.moshResize!.failure).toBe('invalid-frame');
   expect(session.connected).toBe(false);
   await waitFor(() => expect(mocks.api.disconnect).toHaveBeenCalledWith('core-mosh'));
+  // A Mosh session cannot leave the native engine yet: the xterm.js terminal would need its canonical-resize controller.
+  expect(session.leaveNative).toBeUndefined();
+});
+
+it('starts the session on xterm.js when the core cannot be opened, says why, and remembers the failure on the device', async () => {
+  withCore(command => command === 'terminal_core_open' ? Promise.reject('no surface host') : undefined);
+  const {session} = await connectNative('fell-back');
+  expect(session.adapter.backend).toBe('xterm');
+  expect(session.selection).toEqual({id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'failed: no surface host'}]});
+  expect(session.connected).toBe(true);
+  expect(session.leaveNative).toBeUndefined();
+  expect(localStorage.setItem).toHaveBeenCalledWith('lazysh.terminal.failure.native', expect.stringContaining('failed: no surface host'));
+});
+
+it('moves a live native session to xterm.js: the snapshot first, then the new Channel\'s output, acknowledged through the normal path', async () => {
+  let handed: {onmessage?: (event: unknown) => void} | undefined;
+  withCore((command, args) => command === 'terminal_core_release' ? (handed = args.events as typeof handed, 'SNAPSHOT') : undefined);
+  // The page's xterm.js terminal here is a stand-in that applies a write at once.
+  Object.assign(mocks.terminal, {resize: vi.fn()});
+  mocks.terminal.write.mockImplementation((_bytes: Uint8Array, applied?: () => void) => applied?.());
+  const {session, onEvent: transport} = await connectNative('handed-back');
+  transport.link!.bind(Promise.resolve('handed-back'));
+  const native = session.adapter;
+  expect(await session.leaveNative!()).toBe(true);
+  expect(mocks.invoke).toHaveBeenCalledWith('terminal_core_release', {sessionId: 'handed-back', events: handed}, expect.anything());
+  expect(session.adapter).not.toBe(native);
+  expect(session.adapter.backend).toBe('xterm');
+  expect(session.selection).toEqual({id: 'xterm', reason: 'switched', fallbacks: []});
+  expect(mocks.invoke).toHaveBeenCalledWith('terminal_core_close', {sessionId: 'handed-back'});
+  expect(mocks.terminal.write).toHaveBeenCalledWith(new TextEncoder().encode('SNAPSHOT'), expect.any(Function));
+
+  act(() => handed!.onmessage!({type: 'data', data: [104, 105]}));
+  await waitFor(() => expect(mocks.api.ackOutput).toHaveBeenCalledWith('handed-back', 2));
+  expect(mocks.terminal.write).toHaveBeenLastCalledWith(new Uint8Array([104, 105]), expect.any(Function));
+  expect(mocks.terminal.write).toHaveBeenCalledTimes(2);
 });

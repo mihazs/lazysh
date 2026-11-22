@@ -156,3 +156,10 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
   adapter.transport = {events, bind};
   return {adapter, events, bind};
 }
+
+/**
+ * Hands a native session's transport back to the WebView (#1342): from the next chunk on its output and closing notice arrive on
+ * `events`, and the answer is the ANSI snapshot of the screen the program had until then, which a fresh terminal of the same size
+ * replays first. The core is freed. Under the lease of this call, like every command of the core.
+ */
+export const releaseNativeCore = (sessionId: string, events: Channel<SshEvent>) => protectedInvoke<string>('terminal_core_release', {sessionId, events});

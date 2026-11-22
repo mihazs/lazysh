@@ -14,6 +14,8 @@ const selections: Record<string, BackendSelection> = {
   lacking: {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'lacks ime, mouseReporting'}]},
   probe: {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'no Vulkan'}]},
   killSwitch: {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'disabled in this build'}]},
+  failed: {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'failed: surface lost'}]},
+  switched: {id: 'xterm', reason: 'switched', fallbacks: []},
 };
 
 describe('the recorded reason a session got its terminal engine', () => {
@@ -27,6 +29,8 @@ describe('the recorded reason a session got its terminal engine', () => {
       lacking: 'xterm.js: the native engine lacks ime, mouseReporting',
       probe: 'xterm.js: the native engine cannot run here (no Vulkan)',
       killSwitch: 'xterm.js: the native engine is disabled in this build',
+      failed: 'xterm.js: the native engine failed (surface lost)',
+      switched: 'xterm.js: you switched this session from the native engine',
     });
   });
 
@@ -37,5 +41,6 @@ describe('the recorded reason a session got its terminal engine', () => {
     translated.forEach((text, index) => expect(text, `${language} ${index}`).not.toBe(english[index]));
     expect(translated.filter(text => text.includes('no Vulkan'))).toHaveLength(1);
     expect(translated.filter(text => text.includes('ime, mouseReporting'))).toHaveLength(1);
+    expect(translated.filter(text => text.includes('surface lost'))).toHaveLength(1);
   });
 });

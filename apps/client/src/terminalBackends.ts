@@ -2,10 +2,28 @@ import {getPreferences} from './preferences';
 import {nativeCapabilities} from './nativeTerminalAdapter';
 import {createNativeTerminalAdapter, probeNativeCore} from './tauriNativeCoreBridge';
 import type {TerminalBackendId} from './terminalAdapter';
-import {createBackendRegistry, type BackendPreference, type BackendRegistration, type SelectOptions} from './terminalBackendRegistry';
+import {createBackendRegistry, type BackendPreference, type BackendRegistration, type FailureMemory, type SelectOptions} from './terminalBackendRegistry';
+import {appVersion} from './version';
 import {createXtermTerminalAdapter, xtermCapabilities} from './xtermTerminalAdapter';
 
-const registry = createBackendRegistry();
+const FAILURE_KEY = 'lazysh.terminal.failure';
+
+/**
+ * A failure of a backend is kept on this device until the app is updated (a fix may have shipped) or a start of that backend works again.
+ * shortcut: a storage that cannot be written forgets the failure at once, so Auto retries native in every session; keep an in-memory copy beside it if that is seen.
+ */
+const deviceFailures: FailureMemory = {
+  get(id) {
+    try {
+      const kept = JSON.parse(localStorage.getItem(`${FAILURE_KEY}.${id}`) ?? 'null') as {version?: unknown; reason?: unknown} | null;
+      return kept?.version === appVersion && typeof kept.reason === 'string' ? kept.reason : undefined;
+    } catch { return undefined; }
+  },
+  set(id, reason) { try { localStorage.setItem(`${FAILURE_KEY}.${id}`, JSON.stringify({version: appVersion, reason})); } catch { /* Not kept: the next session tries again. */ } },
+  clear(id) { try { localStorage.removeItem(`${FAILURE_KEY}.${id}`); } catch { /* Nothing was kept either. */ } },
+};
+
+const registry = createBackendRegistry(deviceFailures);
 registry.register({
   id: 'xterm',
   capabilities: xtermCapabilities,
@@ -26,6 +44,12 @@ export function registerNativeBackend(backends: Pick<typeof registry, 'register'
   });
 }
 registerNativeBackend(registry);
+
+/** The failure that keeps Auto on xterm.js on this device (undefined: none), as the registry recorded it; Settings shows it. */
+export const recordedNativeFailure = () => registry.failure('native');
+
+/** The native engine broke in a live session: Auto keeps away from it from now on. */
+export const recordNativeFailure = (error: unknown) => registry.recordFailure('native', error);
 
 /** What `createTerminalAdapter` can select, so a test can hold each registration to the adapter contract. */
 export const registeredBackends = () => registry.registrations();

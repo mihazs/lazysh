@@ -1,7 +1,7 @@
 import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
-import { subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke } from './access';
+import { isAccessReady, subscribeAccess, useMountedAccess, useProtectedApi, useProtectedInvoke } from './access';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type {PathLink} from "./terminalLinks";
@@ -860,7 +860,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const tracker = trackSurfaceAnchor({
       session: session.id, element,
       background: () => rgbOf(terminalPreferences(getPreferences()).theme.background ?? "") ?? 0,
-      onError: error => {reportError(String(error)); setSurfaceFailed(true);},
+      // A surface the shell cannot place leaves nothing to look at: the session moves to xterm.js, and Auto keeps away from native on this device. A locked app refuses the shell's commands too, and that is not a failure.
+      onError: error => {reportError(String(error)); setSurfaceFailed(true); if (isAccessReady()) void session.leaveNative?.(error).catch(failed => reportError(String(failed)));},
     });
     return () => void tracker.stop();
   }, [surface, session.id]);
