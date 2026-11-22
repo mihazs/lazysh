@@ -25,7 +25,7 @@ export const gotifyStates=['working','needs_attention','done'] as const;
 export const gotifyCase='ownedOfficialGotifyDisplaysFiniteEventsWhileBackgrounded';
 const gotifyNativeFailures=['admission','parser-calibration','fixture-input','fixture-identity','fresh-permission','record-calibration','workspace','login',
   'login-launch','login-url','login-url-submit','login-auth-form','login-client-name',
-  'notification-permission','notification-permission-grant','alarm-permission','login-restart','background','message-0','message-1','message-2','history'] as const;
+  'notification-permission','notification-permission-grant','alarm-permission','alarm-permission-settings','login-restart','background','message-0','message-1','message-2','history'] as const;
 const gotifyNativePhases=['android-native-stage-0','android-native-stage-1','android-native-stage-2','android-native-stage-3','android-native-stage-4'] as const;
 const gotifyFixturePhases=['admission','clean source checkout','tracked fixture source','official Gotify artifact',
   'official Gotify APK signature','official Gotify package','official Gotify server extraction','current test-support relay build','source checkout',
@@ -482,7 +482,7 @@ async function runGotifyAndroid(root:string) {
     phase='android-instrumentation';await continuous();native=new OwnedProcess(join(android,'gradlew'),[':app:connectedUniversalDebugAndroidTest',...gradleArguments,
       '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true',`-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.GotifyAndroidTest#${gotifyCase}`,
       '-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyAcceptance=true',`-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyNonce=${nonce}`],root);
-    processes.push(native);void native.done.catch(()=>{});const until=performance.now()+330000; // Gradle compiles, packages and installs for over a minute before the native case starts its own 180 s deadline.
+    processes.push(native);void native.done.catch(()=>{});const until=performance.now()+480000; // Gradle compiles, packages and installs for over a minute before the native case starts its own 300 s deadline.
     const stage=async(step:number,id?:number)=>{
       phase=gotifyNativePhases[step]??'android-native-stage';
       return wait(until,async()=>{

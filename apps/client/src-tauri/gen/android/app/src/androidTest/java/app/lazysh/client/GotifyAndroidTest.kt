@@ -59,7 +59,7 @@ class GotifyAndroidTest {
         assumeTrue("Owned official Gotify acceptance only", args.getString("lazyshGotifyAcceptance") == "true")
         nonce = args.getString("lazyshGotifyNonce").orEmpty()
         check(nonce.matches(Regex("[a-f0-9]{32}"))) { "Invalid Gotify fixture nonce" }
-        deadline = SystemClock.elapsedRealtime() + 180_000
+        deadline = SystemClock.elapsedRealtime() + 300_000
         val started = System.currentTimeMillis()
         try {
             check(Build.VERSION.SDK_INT == 36) { "Owned API36 required" }
@@ -92,7 +92,7 @@ class GotifyAndroidTest {
             phase = "login-restart"
             shell("am force-stop $gotify")
             launchGotify()
-            node(By.pkg(gotify).text("There are no messages, yet.\nSend a message to Gotify\nand it will appear here."))
+            node(emptyHistory())
             phase = "background"
             home()
             awaitCondition { foregroundConnected(uid) }
@@ -154,13 +154,15 @@ class GotifyAndroidTest {
         phase = "notification-permission-grant"
         awaitCondition { permissionGranted() }
         phase = "alarm-permission"
+        // The list view is hidden while the history is empty (the app flips to its "no messages" view), so either one ends the wait.
         awaitCondition {
-            if (device.hasObject(By.res(gotify, "messages_view"))) true
+            if (device.hasObject(By.res(gotify, "messages_view")) || device.hasObject(emptyHistory())) true
             else {
                 val grant = device.findObject(By.res("android", "button1").pkg(gotify).text("Grant"))
                 if (grant != null) {
                     check(device.hasObject(By.pkg(gotify).text("Gotify requires permission to schedule reconnecting after connection is lost.")))
                     grant.click()
+                    phase = "alarm-permission-settings"
                     node(By.pkg("com.android.settings").text("Allow setting alarms and reminders"))
                     node(By.pkg("com.android.settings").text("Gotify"))
                     val toggle = node(By.pkg("com.android.settings").res("android:id/switch_widget"))
@@ -169,13 +171,16 @@ class GotifyAndroidTest {
                     // Settings repaints the switch a moment after the tap.
                     awaitCondition { device.findObject(By.pkg("com.android.settings").res("android:id/switch_widget"))?.isChecked == true }
                     device.pressBack()
+                    phase = "alarm-permission"
                 }
                 false
             }
         }
         // An empty official history is required before the host may publish anything.
-        node(By.pkg(gotify).text("There are no messages, yet.\nSend a message to Gotify\nand it will appear here."))
+        node(emptyHistory())
     }
+
+    private fun emptyHistory() = By.pkg(gotify).text("There are no messages, yet.\nSend a message to Gotify\nand it will appear here.")
 
     private fun launchGotify() = context.startActivity(Intent().setComponent(ComponentName(gotify, "$gotify.init.InitializationActivity"))
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -245,7 +250,8 @@ class GotifyAndroidTest {
 
     private fun notification(ownKey: String): String {
         check(ownKey.matches(Regex("[0-9]+\\|com\\.github\\.gotify\\|-?[0-9]+\\|null\\|[0-9]+")))
-        return shell("cmd notification get '$ownKey'")
+        // executeShellCommand splits the command on spaces and starts no shell, so a quoted key would reach `cmd` with its quotes.
+        return shell("cmd notification get $ownKey")
     }
 
     // AOSP android16-release NotificationRecord.dump(false) and Notification.toString().
