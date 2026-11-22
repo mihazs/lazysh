@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.95.7
+
+### Patch Changes
+
+- feat(terminal): run a session on the native data path when the registry picks native ([#2274](https://github.com/mihazs/lazysh/pull/2274))
+
+  <details><summary>Details</summary>
+
+  When the terminal engine registry selects native, the session's transport (SSH, Eternal Terminal, multiplexer attach or local terminal) now starts on the native core's own channel, so its output is parsed in Rust and never passes through JavaScript, no output credit is returned from the WebView, and closing the session closes the core. A Mosh session is not supported on native yet. Native stays off by default (it is never picked automatically), so nothing changes unless Settings, Terminal engine is set to Native on a build that has the core.
+
+  </details>
+- build(android): compile and package the native terminal engine in the Google release APK ([#2317](https://github.com/mihazs/lazysh/pull/2317))
+
+  <details><summary>Details</summary>
+
+  The Google arm64 release APK is now built with the `native-terminal` feature, so the native terminal engine (libghostty-vt and the wgpu renderer) ships inside it. Nothing changes for users yet: release builds still refuse the native surface and Auto keeps using xterm.js, so the default terminal is the same.
+
+  </details>
+
 ## 1.95.6
 
 ### Patch Changes
