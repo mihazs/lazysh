@@ -1,5 +1,9 @@
 # @lazysh/apple-speech
 
+## 1.97.5
+
+No changes in this release.
+
 ## 1.97.4
 
 No changes in this release.
