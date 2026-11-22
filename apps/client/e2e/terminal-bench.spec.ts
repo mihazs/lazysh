@@ -21,8 +21,8 @@ const launchArgs = setUpBenchSpec(full);
 // A full run measures the one LAZYSH_BENCH_WRITE names; the smoke run checks both, so the adapter path is held to the same correctness bar.
 const writePaths = full ? [process.env.LAZYSH_BENCH_WRITE === 'adapter' ? 'adapter' : 'direct'] : ['direct', 'adapter'];
 const scale = full
-  ? { runs: 5, plain: 4 << 20, ansi: 2 << 20, frames: 1500, shell: 300, idleMs: androidSerial ? 30_000 : 10_000, idleRuns: 3, keys: 200, repeat: 150, scrollLines: 20_000, scrollback: 20_000, defaultScrollback: 5000, fillLines: 5000, sessions: [5, 10] }
-  : { runs: 1, plain: 64 << 10, ansi: 32 << 10, frames: 30, shell: 12, idleMs: 300, idleRuns: 1, keys: 6, repeat: 6, scrollLines: 400, scrollback: 300, defaultScrollback: 100, fillLines: 120, sessions: [2] };
+  ? { runs: 5, plain: 4 << 20, ansi: 2 << 20, frames: 1500, shell: 300, idleMs: androidSerial ? 30_000 : 10_000, idleRuns: 3, keys: 200, sessionKeys: androidSerial ? 40 : 200, repeat: 150, scrollLines: 20_000, scrollback: 20_000, defaultScrollback: 5000, fillLines: 5000, sessions: [5, 10] }
+  : { runs: 1, plain: 64 << 10, ansi: 32 << 10, frames: 30, shell: 12, idleMs: 300, idleRuns: 1, keys: 6, sessionKeys: 6, repeat: 6, scrollLines: 400, scrollback: 300, defaultScrollback: 100, fillLines: 120, sessions: [2] };
 
 
 type Result = { workload: string; title: string; variant: string | null; runs: unknown[]; median: unknown; correct: boolean; notes?: string };
@@ -126,7 +126,8 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
   for (const scrollback of [scale.defaultScrollback, scale.scrollback])
     await workload('W10', 'Large scrollback', scale.runs, () => page.evaluate(([lines, limit]) => window.terminalBench.scrollCost(lines, limit), [scale.scrollLines, scrollback] as const), `scrollback ${scrollback} lines`);
 
-  // W9: memory per session and typing in the visible one while the others stream.
+  // W9: memory per session and typing in the visible one while the others stream. On the Android WebView the streaming sessions leave the page's
+  // main thread so busy that each key takes about two seconds to reach it (the latency being measured), so a run types 40 keys there, not 200.
   await streamed('plain', scale.plain)();
   for (const count of scale.sessions) {
     await page.evaluate(() => window.terminalBench.disposeSessions());
@@ -139,7 +140,7 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
     const perSessionRssMiB = before.rssKiB === null || after.rssKiB === null ? null : (after.rssKiB - before.rssKiB) / 1024 / count;
     await workload('W9', `${count} simultaneous sessions`, scale.runs, async () => {
       await page.evaluate(n => window.terminalBench.startBackground(n), count - 1);
-      const typing = await press(scale.keys, 'echo');
+      const typing = await press(scale.sessionKeys, 'echo');
       await page.evaluate(() => window.terminalBench.stopBackground());
       return { ...typing, sessions: filled.sessions, linesPerSession: filled.linesPerSession, perSessionHeapMiB, perSessionRssMiB, correct: typing.correct && filled.correct };
     }, `${count} sessions, ${scale.fillLines} lines each, others streaming`, 'Background sessions are opened xterm terminals in display:none panes, as App.tsx keeps inactive sessions; per-session figures are the JS-heap and resident-set growth after forced GC divided by sessions; xterm keeps its cell buffers in typed arrays, so RSS is the figure that includes them.', async () => ({ pss: { baselineKiB: pssBaselineKiB, kiB: await pssKiB() } }));

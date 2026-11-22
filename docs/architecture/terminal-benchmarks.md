@@ -521,7 +521,7 @@ Recorded sessions of real programs, replayed a step at a time through the two en
 
 ```sh
 cd apps/client
-bun run bench:terminal -- --project desktop e2e/terminal-programs.spec.ts   # xterm.js in Chromium, about 2 minutes; LAZYSH_BENCH_OUT=<file> names the result
+bun run bench:terminal -- e2e/terminal-programs.spec.ts --project=desktop   # xterm.js in Chromium, about 2 minutes; LAZYSH_BENCH_OUT=<file> names the result
 bun bench/programWorkloads.ts /tmp/programs.json                            # the same workloads as JSON, for the core
 cd ../../packages/terminal-runtime                                          # built as in its README
 cargo run --release --example program_workloads -- /tmp/programs.json 100   # the core, 100 fresh sessions per workload
@@ -605,7 +605,7 @@ State was preserved in every run: the hidden terminal parsed everything and show
 
 ### Android procedure (manual gate, not run)
 
-The harness cannot run on Android in this form: it drives desktop Chromium over CDP. Until an Android runner exists ([#1303](https://github.com/mihazs/lazysh/issues/1303), [#1340](https://github.com/mihazs/lazysh/issues/1340)), the Android measurement is a manual gate with this procedure. **None of it has been executed;** the tools named are standard Android tooling and the steps have not been validated on a device for this app.
+The harness drives the benchmark page over CDP; on the Waydroid lane it does so in the guest's Android System WebView, and [the same-run comparison below](#same-run-comparison-on-the-waydroid-lane-g14-g15-g16-idle) reads the guest's own counters beside it. For a **physical device**, which the lane does not replace for energy, thermal behaviour and a phone GPU ([#1303](https://github.com/mihazs/lazysh/issues/1303), [#1340](https://github.com/mihazs/lazysh/issues/1340)), the measurement is still a manual gate with this procedure. **None of it has been executed;** the tools named are standard Android tooling and the steps have not been validated on a device for this app.
 
 1. Fix the conditions and record them in the environment block: physical device (model, SoC, RAM, Android build, WebView version from `adb shell dumpsys webviewupdate`), release build of the app (`app.lazysh.client`), fixed brightness, airplane mode with Wi-Fi only (or a fixed radio), battery above 80 %, thermal state cool, screen kept awake, the same SSH host and the same replay fixture for each run.
 2. Reset counters: `adb shell dumpsys batterystats --reset`, `adb shell dumpsys gfxinfo app.lazysh.client reset`.
@@ -613,6 +613,46 @@ The harness cannot run on Android in this form: it drives desktop Chromium over 
 4. Collect: `adb shell dumpsys gfxinfo app.lazysh.client framestats` (frame pacing and janky frames), `adb shell dumpsys meminfo app.lazysh.client` (peak and steady memory, per-session by opening N sessions), `adb shell dumpsys batterystats app.lazysh.client` plus a bug report for energy attribution, and `adb shell dumpsys cpuinfo` for CPU share. A debuggable build and Chrome DevTools remote debugging (`chrome://inspect`) can add `Performance.getMetrics`-style counters for diagnosis but must not be used for the final figures.
 5. Input-to-presentation needs an external reference (a high-speed camera or a photodiode); without one, an in-app marker plus the frame timeline gives an estimate that must be labelled as such.
 6. Repeat at least five times per workload, keep the raw traces beside the JSON, and fill the schema above with `null` for anything the device cannot provide.
+
+### Same-run comparison on the Waydroid lane (G14, G15, G16 idle)
+
+The Android runs above measure one engine at a time and read the page's own counters. Gates G14, G15 and the idle half of G16 ask a different question: is the native engine worse than xterm.js, **on the same workloads, in the same lane run, on the same guest** ([#2407](https://github.com/mihazs/lazysh/issues/2407), part of [#2093](https://github.com/mihazs/lazysh/issues/2093)). This section is the harness for it and the rules it decides by. The rules were fixed, and committed with this section, before any native number existed: if native loses, Android keeps xterm.js ([migration plan](terminal-migration-plan.md#acceptance-gates-and-evidence)) and nothing here is retuned.
+
+**Run it** ([lane runbook](waydroid-lane.md#the-engine-comparison-on-the-lane)): `androidEngineBench.ts` runs the baseline spec (W0 to W4, W9, W12) for each xterm.js renderer asked for in the guest's Android System WebView (`bench/android-webview` host app) and writes one record; the native engine's driver writes the same record, with the adapter `native-wgpu`, into the same run; `androidCompare.ts <record>...` decides the targets and exits 0 (all met), 1 (a target not met: native loses), 2 (unusable input: a record that is not one, different runs or different guests) or 3 (incomplete: no native arm, or a target nothing was measured for).
+
+**The record** (`schema` 1, `kind` `android-engine-comparison`): the run id and start and end times, the commit, an `environment` block (device and guest, Android version, display refresh rate, GPU path with the raw EGL and GLES strings, WebView version, host app), `limits` and `acceptedRisk` (energy, real GPU drivers, thermal, arm64, vendor WebView and ROM: always "accepted risk, not measured"), one entry per `arms` (adapter name, engine, host app, GPU the engine drew on, page geometry, how the engine was measured) and the `measurements`: one per adapter, workload, variant and metric with the number of runs, the number of samples, p50, p95, min and max over the runs and the per-run values. For a metric sampled many times in every run (latency) p50 and p95 are the medians of each run's own p50 and p95; for a metric with one value per run, p50 is the median of the runs and p95 their 95th percentile (the largest, with five runs). A figure that was not measured is absent, never zero.
+
+**Instruments.** The same for every engine, read from the guest and not from the engine: CPU time (`/proc/<pid>/stat`, 10 ms ticks) and thread wakeups (voluntary context switches of every thread, `/proc/<pid>/task/*/status`) of the app process and the WebView renderer processes it started (they are children of `webview_zygote` named after the WebView package; they are told from another app's by having started after the app process); frames presented and janky frames of the app's layers (`dumpsys SurfaceFlinger --timestats`, per layer, so the WebView window and a native `SurfaceView` are both counted; the legacy `--latency` returns zeros for these layers on this guest); and PSS (`dumpsys meminfo <pid>`, summed over those processes). Each measured window is read between two adb calls of 10 to 40 ms, so a window shorter than a second carries that much of the time around it: frame counters are reported only for sustained output (the W12 flood and W9), where the window is seconds long. Latency is the engine's own render event, an estimate in the sense of the [stage table](#stage-separation); the remote echoes at once.
+
+**Metrics** (every arm reports these; `gate` is what a metric decides, none for informational):
+
+| Metric | Unit | Better | Gate | Workloads | Definition |
+| --- | --- | --- | --- | --- | --- |
+| `throughputMiBs` | MiB/s | higher | G14 | W2, W3, W4 | bytes delivered until the end screen is shown |
+| `cpuMsPerMiB` | ms CPU per MiB | lower | G14, key | W2, W3, W4 | CPU of the app and its renderer processes per MiB delivered |
+| `inputLatencyMs` | ms | lower | G14, key | W12 (idle keys, auto-repeat, during output, IME), W9 with 5 and 10 sessions | key or commit to the frame that shows its echo |
+| `outputLatencyMs` | ms | lower | G14, key | W1 | burst written to the frame that shows it |
+| `jankyFramePercent` | % | lower | G14 | W12 during output, W9 | share of the app's timeline frames that missed their deadline |
+| `frameIntervalMs` | ms | lower | none | same | interval between presented frames; an engine that coalesces redraws presents less often without being slower, so it is read beside the jank rate and decides nothing |
+| `idleCpuMsPerSecond`, `idleWakeupsPerSecond`, `idleFramesPerSecond` | per second | lower | G16 | W0, cursor blink on and off | CPU, thread wakeups and presented frames at idle (30 s windows, 3 runs) |
+| `pssMiB` | MiB | lower | G15 | W9 with 5 and 10 sessions | total PSS; compared only when both engines ran in the same host app |
+| `pssGrowthMiB` | MiB | lower | G15 | W9 with 5 and 10 sessions | PSS with N sessions minus PSS with one session |
+| `pssChurnDriftMiB` | MiB | lower | G15 | W9 churn | PSS after the last of five open-five-sessions-then-close cycles minus after the first |
+
+**The rules** (`apps/client/bench/androidCompare.ts`, `RULES`). A difference between native and an xterm.js arm is noise when it is smaller than 10 % or than the run-to-run spread of either number, whichever is larger; beyond that it is a win or a regression. Each target is judged against every xterm.js arm in the run, and is met only if it is met against all of them.
+
+| Target (PRD) | Met when |
+| --- | --- |
+| No correctness regression | every workload of every arm ends on its expected screen |
+| No input-latency regression under heavy output | no p50 or p95 of `inputLatencyMs` is worse while W2 floods the terminal and with 5 and 10 sessions streaming |
+| No material regression elsewhere | no G14 figure (throughput, CPU per MiB, latency, jank) is worse |
+| At least 25 % on one key latency or CPU metric | some key figure is better by 25 % or more and beyond the noise |
+| Near-zero idle activity | idle CPU, wakeups and frames are at or below a floor of 10 ms/s, 20 /s and 3 /s (a blinking cursor is about 2 frames a second), or not worse than xterm.js |
+| Memory not worse across 5 and 10 sessions and churn | no G15 figure is worse |
+
+Not decided here, because the lane cannot show it: battery energy (the 20 % target), thermal behaviour, a phone GPU, refresh pacing on a real display, vendor WebView and ROM. They stay "accepted risk, not measured" in every record.
+
+<<MEASURED>>
 
 ## Results
 
