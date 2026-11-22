@@ -6872,8 +6872,11 @@ mod tests {
             commands.iter().all(|command| !command.contains("attach")),
             "{commands:?}"
         );
-        let (outcome, commands) =
-            attach_zellij(Some(false), "other [Created 1m ago] \nnotes [Created 2s ago] \n").await;
+        let (outcome, commands) = attach_zellij(
+            Some(false),
+            "other [Created 1m ago] \nnotes [Created 2s ago] \n",
+        )
+        .await;
         assert_eq!(outcome, "attached");
         let attach = commands
             .iter()
