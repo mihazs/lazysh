@@ -394,6 +394,26 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
             let focused = servers.json(name, &["tab", "focus", tab]).await;
             assert!(focused.get("error").is_none());
         }
+        // The guard prepares the display's destination, so wait until the focused tab shows as that display
+        // (the server's focus change reaches the guard's view asynchronously) instead of preparing at once.
+        if let Some((_, pane, _)) = &seeded {
+            let mut last = String::new();
+            let shown = timeout(Duration::from_secs(15), async {
+                loop {
+                    match guard(&app, &lease, &child, json!({"kind":"observe"})).await {
+                        Ok(reply) if reply["destination"]["pane"] == *pane => break,
+                        Ok(reply) => last = reply["destination"]["pane"].to_string(),
+                        Err(error) => last = format!("{error}"),
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await;
+            assert!(
+                shown.is_ok(),
+                "the guard never observed the focused pane {pane}; last: {last}"
+            );
+        }
         let source = context("mosh-owned");
         let inspected = guard(
             &app,
