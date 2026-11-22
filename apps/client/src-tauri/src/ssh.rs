@@ -4101,10 +4101,11 @@ mod tests {
     #[path = "file_download_fixture.rs"]
     mod file_download_fixture;
     #[cfg(unix)]
-    #[path = "host_browser_fixture.rs"]
-    mod host_browser_fixture;
     #[path = "herdr_events_fixture.rs"]
     mod herdr_events_fixture;
+    #[cfg(unix)]
+    #[path = "host_browser_fixture.rs"]
+    mod host_browser_fixture;
     #[path = "host_clipboard_fixture.rs"]
     mod host_clipboard_fixture;
     #[cfg(target_os = "linux")]
@@ -7928,6 +7929,8 @@ mod tests {
             app.manage(crate::host_browser::HostBrowsers::default());
             // Boxed: its future would otherwise inflate this check's, and overflow a debug test thread's stack.
             Box::pin(host_browser_fixture::verify(&app, &id, dir.path())).await;
+            return;
+        }
         if matches!(check, OpenSshCheck::HerdrEvents) {
             app.manage(crate::transcript_watch::TranscriptWatches::default());
             herdr_events_fixture::verify(&app, &id, dir.path()).await;
