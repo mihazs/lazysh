@@ -30,6 +30,16 @@ export abstract class ReportingAgent {
   /** The code of every key the agent's pane received, one per line. */
   keys() {return lines(this.path('agent.log.keys'));}
   submitted() {return this.log().then(rows=>rows.filter(row=>row.startsWith('SUBMIT ')).map(row=>row.slice(7)));}
+  /**
+   * Asserts what the pane submitted. A mismatch names the key codes the pane received, so a dropped character shows
+   * whether it never reached the pane (a code is missing) or reached it and was misread.
+   */
+  async expectSubmitted(expected:string[]) {
+    const actual=await this.submitted();
+    if(JSON.stringify(actual)===JSON.stringify(expected))return;
+    const codes=(await this.keys().catch(()=>[] as string[])).filter(key=>/^\d{1,3}$/.test(key));
+    throw new Error(`The pane submitted ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}; expected key codes ${expected.flatMap(text=>Array.from(text,character=>String(character.codePointAt(0)))).join(' ')}, pane received ${codes.slice(-64).join(' ')}`);
+  }
   /** Waits for the agent to log `row` and returns when it was seen, to the poll's resolution. */
   async waitFor(row:string) {
     try {await this.browser.waitUntil(async()=>(await this.log()).includes(row),{timeout:20_000,interval:20,timeoutMsg:`The agent did not log ${row}`});}
