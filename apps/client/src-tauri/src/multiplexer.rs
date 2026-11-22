@@ -34,10 +34,17 @@ pub(crate) fn tmux_arg(value: &str) -> String {
 /// reads converge and a replacement server, which never saw it, differs.
 const SERVER_TOKEN: &str = "@lazysh_server";
 fn server_token(value: &str) -> Result<&str> {
-    if value.len() == 32 && value.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+    if value.len() == 32
+        && value
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
         Ok(value)
     } else {
-        Err(SshError::new("invalid_target", "Invalid tmux server identity"))
+        Err(SshError::new(
+            "invalid_target",
+            "Invalid tmux server identity",
+        ))
     }
 }
 fn fresh_server_token() -> String {
@@ -1029,7 +1036,14 @@ async fn local_discovery(
     {
         host.run(
             access,
-            &server.cmd(&["set-option", "-s", "-o", "-q", SERVER_TOKEN, &fresh_server_token()]),
+            &server.cmd(&[
+                "set-option",
+                "-s",
+                "-o",
+                "-q",
+                SERVER_TOKEN,
+                &fresh_server_token(),
+            ]),
         )
         .await?;
         let panes = server.cmd(&["list-panes", "-a", "-F", PANE_FORMAT]);
@@ -1200,7 +1214,10 @@ mod tests {
     #[test]
     fn parses_exact_ids_and_refuses_ambiguous_output() {
         let tree = parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t1\tzellij 0.45.1\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\t0123456789abcdef0123456789abcdef\t80\t24\tbuild\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\t0123456789abcdef0123456789abcdef\t40\t24\ta\tb\x1b[31m\n").unwrap();
-        assert_eq!(tree.server_token.as_deref(), Some("0123456789abcdef0123456789abcdef"));
+        assert_eq!(
+            tree.server_token.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
         assert_eq!(tree.sessions[0].windows[0].panes.len(), 2);
         let panes = &tree.sessions[0].windows[0].panes;
         assert_eq!(panes[1].id, "%5");
@@ -1219,9 +1236,8 @@ mod tests {
         let row = |token: &str, pane: &str| {
             format!("$0\twork\t@2\t0\tagent\t1\t{pane}\t0\t1\tzsh\t/work\t{token}\t80\t24\tt\n")
         };
-        let read = |rows: String| {
-            parse_tree(&format!("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n{rows}"))
-        };
+        let read =
+            |rows: String| parse_tree(&format!("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n{rows}"));
         let good = "0123456789abcdef0123456789abcdef";
         assert!(read(row("", "%4")).unwrap().server_token.is_none());
         assert!(read(row(good, "%4") + &row("fedcba9876543210fedcba9876543210", "%5")).is_err());
@@ -1779,7 +1795,10 @@ mod tests {
             |command: String| lazysh_common::test_support::successful_output(&mut scoped(command));
         let read_tree = || {
             // As a discovery read does: name the server, then list its panes.
-            run(format!("tmux set-option -s -o -q {SERVER_TOKEN} {}", fresh_server_token()));
+            run(format!(
+                "tmux set-option -s -o -q {SERVER_TOKEN} {}",
+                fresh_server_token()
+            ));
             let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
             parse_tree(&format!("tmux\t1\t\nherdr\t0\nzellij\t0\n{rows}")).unwrap()
         };
@@ -1922,7 +1941,11 @@ mod tests {
         assert!(history.lines >= 5000);
         // Pane title, geometry and close, each read back from the parsed tree.
         let tree = read_tree();
-        let live = || read_tree().server_token.expect("the server carries its token");
+        let live = || {
+            read_tree()
+                .server_token
+                .expect("the server carries its token")
+        };
         let first = &tree.sessions[0].windows[0];
         assert_eq!(first.panes.len(), 2);
         let (left, right) = (first.panes[0].id.clone(), first.panes[1].id.clone());
@@ -2045,13 +2068,19 @@ mod tests {
         }
         let survivors = read_tree();
         assert_eq!(survivors.sessions[0].name, "replacement");
-        assert!(!survivors.sessions[0].windows[0].panes[0].title.contains("stale"));
+        assert!(!survivors.sessions[0].windows[0].panes[0]
+            .title
+            .contains("stale"));
         // The same actions with the replacement's own token run.
         for command in stale_actions(&live()).into_iter().take(1) {
             let again = scoped(command).output().unwrap();
             assert!(again.status.success());
         }
-        assert!(!scoped("tmux has-session".into()).output().unwrap().status.success());
+        assert!(!scoped("tmux has-session".into())
+            .output()
+            .unwrap()
+            .status
+            .success());
     }
 
     #[test]
