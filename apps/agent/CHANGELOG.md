@@ -1,5 +1,38 @@
 # @lazysh/agent
 
+## 1.97.0
+
+### Minor Changes
+
+- feat(usage): let a host forbid account quota reads ([#1823](https://github.com/mihazs/lazysh/pull/1823))
+
+  <details><summary>Details</summary>
+
+  Let a host forbid account quota reads (#1588, slice of #18). `lazysh-agent usage-collection show` and `usage-collection update --expected-revision R --account-quota-enabled true|false` read and change a new `usage-collection.json` policy beside `settings.json`. With the switch off, `lazysh-agent account-usage` answers a new `disabled` state with no report before it opens a credential, starts a helper or contacts a provider, and the app shows that the host does not allow account usage reads, in English, Portuguese and Spanish, with no percentage. The default is on, so nothing changes for existing hosts; an unreadable policy fails the read closed.
+
+  </details>
+- feat(usage): record account quota samples on an opt-in user-level timer ([#1823](https://github.com/mihazs/lazysh/pull/1823))
+
+  <details><summary>Details</summary>
+
+  Add the opt-in usage collector (#1588, slice of #18). `lazysh-agent usage-collector enable [--interval-minutes N]` installs a user-level timer (a systemd user timer, a launchd agent or a Scheduled Task, no sudo) that wakes `usage-collector run` every five minutes, and `disable` removes it. While it is on, a run records one bounded sample of the account quota report per interval (percentages, resets and staleness only: no plan, balance, credential, prompt or path) in `usage-samples.json`, at most 1000 samples, 7 days and 1 MiB. `status [--limit N]` shows the policy, the timer, the last run and the samples with the host's clock. It is off by default, nothing runs or is written while it is off, and it honors the account quota switch.
+
+  </details>
+- feat(agents): answer OpenCode permissions and questions through its local service ([#1841](https://github.com/mihazs/lazysh/pull/1841))
+
+  <details><summary>Details</summary>
+
+  Answer OpenCode permission requests and question forms, and stop a turn, from the Agent view through OpenCode's local background service, with the exact request checked again before every answer.
+
+  </details>
+- feat(usage): add host switches for simulator streaming and port scanning in their own host-features.json ([#1813](https://github.com/mihazs/lazysh/pull/1813))
+
+  <details><summary>Details</summary>
+
+  Add host feature switches in their own `host-features.json`: `lazysh-agent settings features show|update` controls whether `devices ... stream` is allowed (it fails with `SimulatorStreamingDisabled` before any SDK process) and whether the app's port scanning is allowed; the Preview panel reads the port-scan switch before every discovery and says when the host turned it off, and Host companion settings offers both switches with a conflict-safe save. `settings.json` is unchanged, so an older companion keeps working. Changed default: the Preview panel now remembers the HTTP check and the automatic refresh for each saved host instead of resetting them on every visit.
+
+  </details>
+
 ## 1.96.0
 
 ### Minor Changes
