@@ -136,6 +136,14 @@ async fn real_gotify_server_stores_all_finite_relay_states_over_verified_tls() {
     let service = Service::open_with(config, client.clone(), false).unwrap();
     let source_id = source(&service, SOURCE, "owned-terminal").await;
     enable(&service).await;
+    // The desktop receiver connects first: what the server already holds is only a baseline.
+    let mut desktop = lazysh_notification_client::gotify::Reader::new(
+        client.clone(),
+        &origin,
+        reader["token"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert!(desktop.poll().await.unwrap().is_empty());
     let receipts = finite_state_receipts(&service).await;
     let (done, worker) = start(service.clone()).await;
     for receipt in receipts {
@@ -165,6 +173,22 @@ async fn real_gotify_server_stores_all_finite_relay_states_over_verified_tls() {
         assert_eq!(matches[0]["priority"], priority);
         assert_eq!(matches[0]["appid"], application["id"]);
     }
+    // Of the three finite states the relay published, only needs-attention reaches the desktop, once.
+    assert_eq!(desktop.poll().await.unwrap().len(), 1);
+    assert!(desktop.poll().await.unwrap().is_empty());
+    // Deleting the client in Gotify revokes the token on the server; the receiver is then rejected.
+    client
+        .delete(format!("{origin}/client/{}", reader["id"]))
+        .basic_auth("admin", Some(&password))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(
+        desktop.poll().await.unwrap_err(),
+        lazysh_notification_client::gotify::PollError::Unauthorized
+    );
     server.kill().await.unwrap();
     assert!(server.try_wait().unwrap().is_some());
     drop(service);

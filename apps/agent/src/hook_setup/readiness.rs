@@ -1,10 +1,14 @@
 //! Additive hook readiness for `hooks status`. Only a fact the companion store already holds is
 //! reported; everything this host cannot observe stays `notChecked`, never guessed or inferred.
 use super::AgentProfile;
+#[cfg(not(windows))]
 use chrono::{DateTime, SecondsFormat};
+#[cfg(not(windows))]
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::{json, Value};
-use std::{fs, io, os::unix::fs::MetadataExt, path::Path, time::Duration};
+use std::io;
+#[cfg(not(windows))]
+use std::{fs, os::unix::fs::MetadataExt, path::Path, time::Duration};
 
 const NOT_CHECKED: &str = "notChecked";
 
@@ -31,7 +35,18 @@ fn local_event(agent: &str) -> Value {
     }
 }
 
+/// A Windows host has no owner or link-count answer for the store (an ACL question it has no admission for), so the
+/// status stays `notChecked` there rather than read a file it cannot prove is its own.
+#[cfg(windows)]
+fn latest(_agent: &str) -> io::Result<Option<String>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Unsupported on Windows",
+    ))
+}
+
 /// Reads the existing store only: an absent store is `None`, nothing is created, repaired or pruned.
+#[cfg(not(windows))]
 fn latest(agent: &str) -> io::Result<Option<String>> {
     let invalid = |message| io::Error::new(io::ErrorKind::InvalidData, message);
     let directory = crate::state_directory().map_err(|_| invalid("No state directory"))?;
@@ -51,6 +66,7 @@ fn latest(agent: &str) -> io::Result<Option<String>> {
     newest(&path, agent).map_err(|_| invalid("Unreadable state"))
 }
 
+#[cfg(not(windows))]
 fn newest(path: &Path, agent: &str) -> rusqlite::Result<Option<String>> {
     let connection = Connection::open_with_flags(
         path,

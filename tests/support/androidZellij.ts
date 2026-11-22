@@ -15,11 +15,10 @@ export function zellijActiveTab(text:string):ActiveTab {
   if(active.length>1)throw new Error('Owned Zellij topology changed');
   return active.length?active[0].position:null;
 }
-/** A busy session can answer one readback with nothing readable; only an answer that stays wrong across several samples is a changed topology. */
+/** A busy session can answer one readback with nothing readable, or with a failed command; only an answer or failure that stays across several samples counts. */
 export async function zellijActiveTabSettled(read:()=>Promise<string>,attempts=10):Promise<ActiveTab> {
   for(let attempt=1;;attempt++) {
-    const text=await read();
-    try{return zellijActiveTab(text);}
+    try{return zellijActiveTab(await read());}
     catch(error){if(attempt>=attempts)throw error;await Bun.sleep(25);}
   }
 }

@@ -79,6 +79,16 @@ enum Command {
         #[command(subcommand)]
         command: SettingsCommand,
     },
+    /// Show or change whether this host may read account quotas, without creating state when absent.
+    UsageCollection {
+        #[command(subcommand)]
+        command: UsageCollectionCommand,
+    },
+    /// Record account quota samples on a timer while no app is open (off until you enable it).
+    UsageCollector {
+        #[command(subcommand)]
+        command: lazysh_agent::usage_collector::Command,
+    },
     /// Open a URL on the attached device, or with the next real opener (what the managed
     /// `xdg-open` and `lazysh-open` wrappers run).
     BrowserOpen {
@@ -175,6 +185,11 @@ enum Command {
         /// Pass --no-sandbox, for containers and CI runners that cannot create a sandbox.
         #[arg(long)]
         no_sandbox: bool,
+    },
+    /// Answer OpenCode permission requests and question forms, and stop a turn, through its loopback background service.
+    OpencodeService {
+        #[command(subcommand)]
+        command: lazysh_agent::opencode_service::Command,
     },
     /// Print live, bounded permission requests.
     ApprovalList {
@@ -375,6 +390,11 @@ enum SettingsCommand {
         #[command(subcommand)]
         command: NotificationsCommand,
     },
+    /// Switches an older companion sharing the state directory must not see in `settings.json`.
+    Features {
+        #[command(subcommand)]
+        command: FeaturesCommand,
+    },
     Update {
         #[arg(long)]
         expected_revision: u64,
@@ -409,6 +429,16 @@ enum HostBrowserSettingsCommand {
     },
 }
 #[derive(Subcommand)]
+enum UsageCollectionCommand {
+    Show,
+    Update {
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        account_quota_enabled: bool,
+    },
+}
+#[derive(Subcommand)]
 enum NotificationsCommand {
     Show,
     Update {
@@ -419,6 +449,21 @@ enum NotificationsCommand {
         #[arg(long, action=clap::ArgAction::Set, required=true)]
         suppress_while_desktop_unlocked: bool,
     },
+}
+#[derive(Subcommand)]
+enum FeaturesCommand {
+    Show,
+    Update {
+        #[arg(long)]
+        expected_revision: u64,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        simulator_streaming_enabled: bool,
+        #[arg(long, action=clap::ArgAction::Set, required=true)]
+        port_scan_enabled: bool,
+    },
+}
+fn json(value: impl serde::Serialize) -> lazysh_agent::Result<serde_json::Value> {
+    serde_json::to_value(value).map_err(|_| Error::InvalidEvent)
 }
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     // A lazysh app newer than this companion sends its version. Hooks run inside agent turns and
@@ -439,6 +484,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     };
     if let Some(operation) = operation {
         lazysh_agent::settings::read(&lazysh_agent::state_directory()?)?.check(operation)?;
+    }
+    if matches!(&cli.command, Command::Devices { command } if command.is_stream()) {
+        lazysh_agent::host_features::read(&lazysh_agent::state_directory()?)?
+            .check_simulator_streaming()?;
     }
     let output = match cli.command {
         Command::BrowserOpen { .. } => None,
@@ -493,50 +542,85 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         )?),
         Command::Settings { command } => {
             let directory = lazysh_agent::state_directory()?;
-            let settings = match command {
+            Some(match command {
                 SettingsCommand::HostBrowser { command } => {
                     use lazysh_agent::host_browser::settings;
-                    serde_json::to_value(match command {
-                        HostBrowserSettingsCommand::Show => settings::read(&directory)?,
+                    match command {
+                        HostBrowserSettingsCommand::Show => json(settings::read(&directory)?)?,
                         HostBrowserSettingsCommand::Update {
                             expected_revision,
                             host_browser_enabled,
-                        } => settings::update(&directory, expected_revision, host_browser_enabled)?,
-                    })
+                        } => json(settings::update(
+                            &directory,
+                            expected_revision,
+                            host_browser_enabled,
+                        )?)?,
+                    }
                 }
                 SettingsCommand::Notifications { command } => {
                     use lazysh_agent::notification_policy as policy;
-                    serde_json::to_value(match command {
-                        NotificationsCommand::Show => policy::read(&directory)?,
+                    match command {
+                        NotificationsCommand::Show => json(policy::read(&directory)?)?,
                         NotificationsCommand::Update {
                             expected_revision,
                             nested_agent_suppression_enabled,
                             suppress_while_desktop_unlocked,
-                        } => policy::update(
+                        } => json(policy::update(
                             &directory,
                             expected_revision,
                             nested_agent_suppression_enabled,
                             suppress_while_desktop_unlocked,
-                        )?,
-                    })
+                        )?)?,
+                    }
                 }
-                SettingsCommand::Show => {
-                    serde_json::to_value(lazysh_agent::settings::read(&directory)?)
-                }
+                SettingsCommand::Show => json(lazysh_agent::settings::read(&directory)?)?,
                 SettingsCommand::Update {
                     expected_revision,
                     transcript_discovery_enabled,
                     recorded_usage_enabled,
                     device_tools_enabled,
-                } => serde_json::to_value(lazysh_agent::settings::update(
+                } => json(lazysh_agent::settings::update(
                     &directory,
                     expected_revision,
                     transcript_discovery_enabled,
                     recorded_usage_enabled,
                     device_tools_enabled,
-                )?),
+                )?)?,
+                SettingsCommand::Features {
+                    command: FeaturesCommand::Show,
+                } => json(lazysh_agent::host_features::read(&directory)?)?,
+                SettingsCommand::Features {
+                    command:
+                        FeaturesCommand::Update {
+                            expected_revision,
+                            simulator_streaming_enabled,
+                            port_scan_enabled,
+                        },
+                } => json(lazysh_agent::host_features::update(
+                    &directory,
+                    expected_revision,
+                    simulator_streaming_enabled,
+                    port_scan_enabled,
+                )?)?,
+            })
+        }
+        Command::UsageCollector { .. } => unreachable!("handled before execute"),
+        Command::UsageCollection { command } => {
+            let directory = lazysh_agent::state_directory()?;
+            let policy = match command {
+                UsageCollectionCommand::Show => lazysh_agent::usage_collection::read(&directory)?,
+                UsageCollectionCommand::Update {
+                    expected_revision,
+                    account_quota_enabled,
+                } => lazysh_agent::usage_collection::update(
+                    &directory,
+                    Some(expected_revision),
+                    |policy| {
+                        policy.account_quota_enabled = account_quota_enabled;
+                    },
+                )?,
             };
-            Some(settings.map_err(|_| Error::InvalidEvent)?)
+            Some(serde_json::to_value(policy).map_err(|_| Error::InvalidEvent)?)
         }
         Command::Usage {
             agent,
@@ -616,6 +700,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             None
         }
         Command::Listeners(options) => lazysh_agent::listeners::run(&options)?,
+        Command::OpencodeService { command } => Some(lazysh_agent::opencode_service::run(command)?),
         Command::Review(arguments) => {
             lazysh_agent::review::run(arguments, &mut io::stdout().lock())?;
             None
@@ -935,8 +1020,16 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             None
         }
         Command::Snapshot { limit } => {
-            let mut snapshot = Store::open(&lazysh_agent::state_directory()?)?
-                .snapshot(limit, chrono::Utc::now())?;
+            let directory = lazysh_agent::state_directory()?;
+            let mut store = Store::open(&directory)?;
+            // Claude Code sends no hook when a permission dialog is rejected (#1795).
+            let admission = store.admission(
+                &directory,
+                Agent::Claude,
+                &lazysh_agent::notification_policy::System,
+            )?;
+            store.settle_rejected_dialogs(chrono::Utc::now(), admission)?;
+            let mut snapshot = store.snapshot(limit, chrono::Utc::now())?;
             snapshot.update = update;
             Some(serde_json::to_value(snapshot).map_err(|_| Error::InvalidEvent)?)
         }
@@ -977,6 +1070,9 @@ fn main() -> std::process::ExitCode {
     let cli = Cli::from_arg_matches_mut(&mut command.get_matches()).unwrap_or_else(|e| e.exit());
     if let Command::Update(args) = cli.command {
         return lazysh_agent::update::run(args);
+    }
+    if let Command::UsageCollector { command } = cli.command {
+        return lazysh_agent::usage_collector::run(command);
     }
     if let Command::BrowserOpen { args } = &cli.command {
         return lazysh_agent::browser::open("browser-open", args);

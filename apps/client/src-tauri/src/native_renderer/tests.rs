@@ -38,7 +38,8 @@ fn look() -> Look {
     }
 }
 
-fn session() -> (Session, Inbox) {
+/// A session of `COLS` x `ROWS` cells and the inbox its `changed` hook rings.
+pub(crate) fn session() -> (Session, Inbox) {
     let (wake, inbox) = wake();
     let hooks = Hooks {
         writer: Arc::new(NoPeer),

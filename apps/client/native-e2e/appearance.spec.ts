@@ -2,7 +2,7 @@ import {expect,it} from 'vitest';
 import {copyFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {NativeGui} from './fixture';
-import {ownedSshGui,typeText,workspaceAction} from './sshUi';
+import {ownedSshGui,typeText,withUiState,workspaceAction} from './sshUi';
 import {controlContrast} from '../e2e/fixtures/controlContrast';
 
 const fixture=ownedSshGui();
@@ -28,7 +28,7 @@ async function enterAppearance(gui:NativeGui) {
 
   gui.stage='appearance keyboard entry';
   const opener=await workspaceAction(gui,'Preferences');
-  const dialog=await browser.$('[role="dialog"][aria-label="Preferences"]');await dialog.waitForDisplayed();
+  const dialog=await browser.$('[role="dialog"][aria-label="Preferences"]');await withUiState(gui,()=>dialog.waitForDisplayed());
   const appearance=await dialog.$('button[data-settings-target="appearance"]');
   const categories=await dialog.$$('.settings-index button');
   // Traverse the actual tab order; do not focus the target with injected JavaScript.

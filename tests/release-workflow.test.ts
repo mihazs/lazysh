@@ -122,7 +122,7 @@ test('release jobs bind the exact event source and restore dependency downloads 
       }
     }
   }
-  expect([...restored].sort()).toEqual(['${{ runner.temp }}/lazysh-parakeet-onnxruntime-cache', '~/.bun/install/cache',
+  expect([...restored].sort()).toEqual(['${{ runner.temp }}/lazysh-herdr-native/zig-global/p', '${{ runner.temp }}/lazysh-parakeet-onnxruntime-cache', '~/.bun/install/cache',
     '~/.cargo/git/db/', '~/.cargo/registry/cache/', '~/.cargo/registry/index/', '~/.gradle/caches/modules-2', '~/.gradle/wrapper/dists']);
 });
 

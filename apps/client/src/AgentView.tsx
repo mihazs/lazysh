@@ -7,8 +7,11 @@ import {HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDi
 import AgentStartFolder from './AgentStartFolder';
 import {knownDirectories} from './herdrCreate';
 import {herdrFocusAction} from './multiplexerTabs';
+import AgentSwitcher from './AgentSwitcher';
+import {agentSwitchShortcut,useCapturedShortcut} from './keyboard';
 import {focusedPane,type LinkedAgent} from './herdrPaneLink';
 import AgentApprovalDock from './AgentApprovalDock';
+import AgentOpenCodeDock from './AgentOpenCodeDock';
 import AgentPickerDock, {hasDialogProfile, type ScreenSource} from './AgentPickerDock';
 import AgentHistory from './AgentHistory';
 import {publishAnswerGuard, publishTaskGuard, useComposerControl} from './agentDialogAnswer';
@@ -18,7 +21,7 @@ import {conversationAgents, conversationSource, recordsAgents} from './agentConv
 import {parseTerminalSnapshot, type TerminalInputLabels, type ZellijTarget} from './ChatTerminalInput';
 import {zellijPane} from './agentPaneIdentity';
 import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
-import {herdrStatusKeys, useHerdrNavigation} from './useHerdrNavigation';
+import {herdrStatusKeys, useHerdrNavigation, type LiveAgent} from './useHerdrNavigation';
 import {formatRelativeTime, pathBasename, useNow} from './relativeTime';
 import {WaitingLabel, waitingFirst, waitingKeys, waitingKind} from './AgentWaiting';
 import {AgentHeaderPills, AgentSessionDetails} from './AgentHeaderPills';
@@ -285,10 +288,21 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     request.current++;setSelecting(false);setUnavailable(false);
     const target={kind:'pane' as const,workspace:live.workspace_id,tab:live.tab_id,pane:live.pane_id,terminal:live.terminal_id};
     setPicked(herdrSelection(live,server,{focusKey:lastFocus.current,enter:{server,target}}));
-    // Switching agents here also focuses its pane, so the terminal follows and the pane's own composer shows; a refused focus leaves the read-only pick.
+    focusPane(server,target);
+  };
+  // Switching agents here also focuses its pane, so the terminal follows and the pane's own composer shows; a refused focus leaves the view as it was.
+  const focusPane=(server:string,target:HerdrNavigationTarget)=>{
     const snapshot=navigation.data?.snapshot;
     if(herdrSession && snapshot)void (async()=>{await invoke('herdr_action',{sessionId,name:server,action:herdrFocusAction(snapshot,target)});await navigation.refresh();})().catch(()=>undefined);
   };
+  const [switching,setSwitching]=useState(false);
+  const switchTo=(live:LiveAgent)=>{
+    request.current++;setPicked(undefined);setChoosing(false);setHistory(undefined);setMenu(false);
+    focusPane(navigation.data!.server,{kind:'pane',workspace:live.workspace_id,tab:live.tab_id,pane:live.pane_id,terminal:live.terminal_id});
+  };
+  const switchRows=herdrSession && fresh && navigation.data?.loaded ? navigation.data.rows : [];
+  const canSwitch=shown && switchRows.length>1;
+  useCapturedShortcut(agentSwitchShortcut,()=>{if(!canSwitch)return false;setMenu(false);setSwitching(open=>!open);});
   const empty=!!focus && !!navigation.data?.server && navigation.data.rows.length===0;
   const focusCreated=(workspace:string)=>void invoke('herdr_action',{sessionId,name:navigation.data!.server,action:{type:'focusWorkspace',target:workspace}}).catch(()=>undefined);
   const startFolder=<AgentStartFolder sessionId={sessionId} invoke={invoke} recent={knownDirectories(navigation.data?.snapshot,sessions.map(session=>session.project))} disabled={!shown} onStaged={onShowTerminal}/>;
@@ -302,7 +316,8 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
   const listing=!!herdrSession && !selected && (!reader || choosing);
   return <section className="agent-view" data-testid="agent-view" data-history={reading.full?undefined:'conversation'} hidden={!shown} aria-label={t('agentViewTitle')}>
     <header className="agent-view-header">
-      {state && <StatusRing tone={state.tone} />}
+      {state && !canSwitch && <StatusRing tone={state.tone} />}
+      {canSwitch && <AgentSwitcher rows={switchRows} current={navigation.data?.snapshot?.panes.find(pane=>pane.focused)?.pane_id} open={switching} onOpenChange={setSwitching} onSwitch={switchTo}/>}
       <div className="agent-view-heading">
         <strong title={selected?.place ? `${title} · ${selected.place}` : title}>{title}</strong>
         <div className="agent-view-facts">
@@ -368,6 +383,7 @@ export default function AgentView({sessionId, shown, tmux, zellijSession, herdrS
     </section>}
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {((!selected && tmux) || herdrClaude) && <AgentApprovalDock sessionId={sessionId} shown={shown && fresh} row={row} herdr={herdrClaude} access={access} invoke={invoke} />}
+    {!selected && tmux && <AgentOpenCodeDock sessionId={sessionId} shown={shown && fresh} row={row} access={access} invoke={invoke} />}
     {herdrAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && selected?.status !== 'working'} terminal={herdrView} agent={agentNames[herdrAgent.agent]} answerable={hasDialogProfile(agentNames[herdrAgent.agent])} guard={herdrStillHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {zellijAgent && row && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && row.state !== 'working'} terminal={zellijView} agent={row.agent} answerable={hasDialogProfile(row.agent)} guard={zellijHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {reader && !selected && !zellijAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} agent={row?.agent} answerable={tmux && hasDialogProfile(row?.agent) && !!row?.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}

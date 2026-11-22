@@ -43,6 +43,10 @@ it('shows unavailable provider guidance without requiring an external tool or fa
  vi.mocked(invoke).mockResolvedValue({schemaVersion:1,state:'unavailable',source:'builtin',report:null});render(<Surface/>);
  await screen.findByText(/Check provider sign-ins/);expect(screen.queryByRole('meter')).toBeNull();expect(screen.queryByText('0% used')).toBeNull();
 });
+it('shows a host that forbids the quota read as unknown, not as a number',async()=>{
+ vi.mocked(invoke).mockResolvedValue({schemaVersion:1,state:'disabled',source:null,report:null});render(<Surface/>);
+ await screen.findByText(/does not allow account usage reads/);expect(screen.queryByRole('meter')).toBeNull();expect(screen.queryByText(/%/)).toBeNull();
+});
 it('renders upstream text as text, never markup',async()=>{
  const entry={...report.report!.entries[0],plan:'<img src=x onerror=alert(1)>',rows:[{type:'text' as const,label:'Credits',value:'<script>secret</script>',usedCents:null,limitCents:null,percent:null}]};
  vi.mocked(invoke).mockResolvedValue({...report,report:{primary:'codex',entries:[entry]}});const {container}=render(<Surface/>);

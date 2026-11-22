@@ -1,5 +1,9 @@
 # Host devices and simulator video
 
+## Host switches
+
+Every `lazysh-agent devices` operation follows **Device tools** in the host's [companion settings](companion-settings.md). The two live video streams (`devices android ID stream` and `devices ios ID stream`) also need **Simulator and emulator streaming**, a separate switch kept in `host-features.json`, so a host can allow screenshots, input and inventory while forbidding live streaming. A refused stream fails with `SimulatorStreamingDisabled` before any `adb`, `idb` or `ffmpeg` process starts; `probe`, screenshots and the other operations are unaffected. A stream that is already running continues until it is stopped; only new streams are refused. Details: [settings reference](reference/companion-settings.md#host-feature-switches).
+
 ## Android SDK acceptance
 
 See [android sdk acceptance](reference/devices-acceptance.md#android-sdk-acceptance) for details.

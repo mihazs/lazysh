@@ -25,6 +25,8 @@ async function openLocal(page:Page,tools:Partial<typeof none>) {
       if(command==='upload_reserve')return {uploadId:receipt};
       if(command==='upload_file')return {path:`/tmp/lazysh-0123456789ab-${args.path}`};
       if(command==='upload_cancel')return {outcome:'unknown_or_settled'};
+      // A local session without a companion has no host switches, so the port scan stays on.
+      if(command==='get_host_features')return null;
       if(command==='list_previews')return [];
       if(command==='discover_preview_ports')return [{port:5173,address:'127.0.0.1',process:'node',pid:4312,http:true}];
       if(command==='start_preview')return {id:'local-preview',remotePort:args.remotePort,remoteAddress:'127.0.0.1',localPort:41234,url:'http://127.0.0.1:41234/',pickerToken:null};

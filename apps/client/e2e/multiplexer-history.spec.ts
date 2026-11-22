@@ -5,7 +5,7 @@ declare global {interface Window {muxHistory:ReturnType<typeof mountMultiplexerH
 test.use({permissions:['clipboard-read','clipboard-write']});
 for(const truncated of [false,true])test(`History of the attached pane renders, searches and copies${truncated?' and says it was cut':''}`,async({page})=>{
   await page.goto('/');
-  await page.evaluate(async truncated=>{const{mountMultiplexerHarness}=await import('/e2e/fixtures/MultiplexerHarness.tsx');window.muxHistory=mountMultiplexerHarness({truncated});},truncated);
+  await page.evaluate(async truncated=>{const{mountMultiplexerHarness}=await import('/e2e/fixtures/MultiplexerHarness.tsx');window.muxHistory=mountMultiplexerHarness({history:{truncated}});},truncated);
   await page.getByRole('button',{name:'Read history',exact:true}).click();
   const history=page.getByRole('region',{name:'Pane history',exact:true});
   const lines=history.locator('pre');

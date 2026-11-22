@@ -198,7 +198,7 @@ it.each(['claude','codex'])('denies a %s request with a trimmed message and send
   expect(invoke).toHaveBeenLastCalledWith('resolve_agent_approval',{sessionId:'ssh1',id:request.id,expectedHash:request.expectedHash,agentSessionId:'agent-session',paneId:'%7',decision:'deny',message:'Use staging'},expect.anything());
 });
 
-const mine = {agentSessionId: 'agent-session', paneId: '%7'};
+const mine = {agent: 'claude' as const, agentSessionId: 'agent-session', paneId: '%7'};
 it('says a request was answered elsewhere and sends nothing when the host no longer lists it',async()=>{
   let listed=[request];
   vi.mocked(invoke).mockImplementation(async command=>command==='agent_approvals'?{schemaVersion:1,requests:listed}:{schemaVersion:1,accepted:true});
