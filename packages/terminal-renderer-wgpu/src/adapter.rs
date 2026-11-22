@@ -188,6 +188,11 @@ pub(crate) fn select_seen(
         backends,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     };
+    // A debug build asks Vulkan to name its objects (`InstanceFlags::DEBUG`, VK_EXT_debug_utils), and the Android emulator's
+    // gfxstream driver (vulkan.ranchu) crashes the process in `vkSetDebugUtilsObjectNameEXT` (the first probe on the CI emulator,
+    // SIGSEGV on the probe's thread). A release build never names objects, so this makes a debug build draw as a release one does.
+    #[cfg(target_os = "android")]
+    descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
     if let Some(window) = window {
         // OpenGL ES picks its display when the instance is made.
         descriptor = descriptor.with_display_handle(Box::new(window));
