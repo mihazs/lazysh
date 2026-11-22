@@ -2289,14 +2289,15 @@ esac
                 Binary::Rmux => command,
             };
             let mut process = Command::new("sh");
-            process
-                .arg("-c")
-                .arg(command)
-                .env_remove("TMUX")
-                .env_remove("RMUX")
-                .env("HOME", temp.path())
-                .env("SHELL", "/bin/sh")
-                .env("RMUX_TMPDIR", temp.path());
+            process.arg("-c").arg(command).env_remove("TMUX");
+            // rmux gets a private home, a plain shell and its own socket directory; the tmux case keeps the environment it always ran in.
+            if matches!(binary, Binary::Rmux) {
+                process
+                    .env_remove("RMUX")
+                    .env("HOME", temp.path())
+                    .env("SHELL", "/bin/sh")
+                    .env("RMUX_TMPDIR", temp.path());
+            }
             process
         };
         let run =
