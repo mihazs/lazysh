@@ -497,7 +497,12 @@ mod tests {
                 Vec::new()
             })
         }
-        fn launch(&mut self, _tool: Tool, _args: &[String], _: std::time::Duration) -> Result<bool> {
+        fn launch(
+            &mut self,
+            _tool: Tool,
+            _args: &[String],
+            _: std::time::Duration,
+        ) -> Result<bool> {
             unreachable!("idb controls never launch a detached SDK process")
         }
     }
