@@ -1,0 +1,88 @@
+{
+ "cases": [
+  {
+   "about": "Forty rows on five (history above a full screen), a styled word, the cursor left mid-screen and hidden, bracketed paste, application cursor keys and drag tracking in the SGR encoding",
+   "cols": 20,
+   "expect": {
+    "cursor": {
+     "x": 3,
+     "y": 2
+    },
+    "lines": [
+     "row 36",
+     "row 37",
+     "row 38",
+     "row 39",
+     "red plain"
+    ],
+    "modes": {
+     "alternateScreen": false,
+     "applicationCursorKeys": true,
+     "bracketedPaste": true,
+     "mouseTracking": "drag"
+    }
+   },
+   "id": "history-styles-and-modes",
+   "rows": 5,
+   "scrollback": 200,
+   "snapshot": "row 36\r\nrow 37\r\nrow 38\r\nrow 39\r\n\u001b[0m\u001b[1m\u001b[38;5;1mred\u001b[0m plain\u001b[0m\u001b[3;4H\u001b[?1h\u001b[?25l\u001b[?1002h\u001b[?1006h\u001b[?2004h",
+   "write": "row 0\r\nrow 1\r\nrow 2\r\nrow 3\r\nrow 4\r\nrow 5\r\nrow 6\r\nrow 7\r\nrow 8\r\nrow 9\r\nrow 10\r\nrow 11\r\nrow 12\r\nrow 13\r\nrow 14\r\nrow 15\r\nrow 16\r\nrow 17\r\nrow 18\r\nrow 19\r\nrow 20\r\nrow 21\r\nrow 22\r\nrow 23\r\nrow 24\r\nrow 25\r\nrow 26\r\nrow 27\r\nrow 28\r\nrow 29\r\nrow 30\r\nrow 31\r\nrow 32\r\nrow 33\r\nrow 34\r\nrow 35\r\nrow 36\r\nrow 37\r\nrow 38\r\nrow 39\r\n\u001b[1;31mred\u001b[0m plain\u001b[3;4H\u001b[?25l\u001b[?2004h\u001b[?1h\u001b[?1002h\u001b[?1006h"
+  },
+  {
+   "about": "A full-screen program on the alternate screen over a shell prompt, with plain click tracking: the screen the program is not on is not carried over",
+   "cols": 20,
+   "expect": {
+    "cursor": {
+     "x": 6,
+     "y": 3
+    },
+    "lines": [
+     "",
+     "  editor",
+     "",
+     "",
+     "-- INSERT --"
+    ],
+    "modes": {
+     "alternateScreen": true,
+     "applicationCursorKeys": false,
+     "bracketedPaste": false,
+     "mouseTracking": "vt200"
+    }
+   },
+   "id": "alternate-screen",
+   "rows": 5,
+   "scrollback": 200,
+   "snapshot": "\u001b[?1049h\r\n  editor\r\n\r\n\r\n-- INSERT --\u001b[0m\u001b[4;7H\u001b[?1000h",
+   "write": "shell\r\n\u001b[?1049h\u001b[2;3Heditor\u001b[5;1H-- INSERT --\u001b[4;7H\u001b[?1000h"
+  },
+  {
+   "about": "A wide pair, a line that wrapped at the right edge and a coloured word on the cursor row",
+   "cols": 20,
+   "expect": {
+    "cursor": {
+     "x": 2,
+     "y": 3
+    },
+    "lines": [
+     "世界 two",
+     "0123456789abcdefghij",
+     "KLMNOPQRST",
+     "ok",
+     ""
+    ],
+    "modes": {
+     "alternateScreen": false,
+     "applicationCursorKeys": false,
+     "bracketedPaste": false,
+     "mouseTracking": "none"
+    }
+   },
+   "id": "wide-and-wrapped",
+   "rows": 5,
+   "scrollback": 200,
+   "snapshot": "世界 two\r\n0123456789abcdefghij\r\nKLMNOPQRST\r\n\u001b[0m\u001b[1m\u001b[38;5;2mok\u001b[0m\u001b[0m\u001b[4;3H",
+   "write": "世界 two\r\n0123456789abcdefghijKLMNOPQRST\r\n\u001b[1;32mok\u001b[0m"
+  }
+ ]
+}

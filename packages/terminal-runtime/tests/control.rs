@@ -539,3 +539,61 @@ fn an_ansi_snapshot_rebuilds_the_visible_screen_cursor_and_modes_without_the_scr
     feed(&mut fresh, b"\x1b[?1049l");
     assert_eq!(fresh.viewport_text().unwrap().trim(), "");
 }
+
+/// What a runtime shows: the cursor, the modes the control plane reports and the rows of the viewport.
+fn shown(rt: &mut lazysh_terminal_runtime::TerminalRuntime, rows: usize) -> Value {
+    let answer = serde_json::to_value(rt.control_snapshot(rows).unwrap()).unwrap();
+    let (top, first) = (
+        answer["state"]["viewport"]["top"].as_u64().unwrap() as usize,
+        answer["window"]["first"].as_u64().unwrap() as usize,
+    );
+    let lines = &answer["window"]["rows"].as_array().unwrap()[top - first..][..rows];
+    json!({"cursor": answer["state"]["cursor"], "modes": answer["state"]["modes"], "lines": lines})
+}
+
+/// The snapshot's bytes are what xterm.js replays when a session leaves the native engine, so they are a contract:
+/// `fixtures/ansi-snapshot.json` pins what the core writes for each program (`ANSI_SNAPSHOT_UPDATE=1` rewrites
+/// `snapshot`), and the core must show `expect` after the program and after the snapshot alone, as headless xterm.js
+/// does in `apps/client/src/xterm/ansiSnapshotFixture.test.ts`.
+#[test]
+fn the_ansi_snapshot_bytes_are_pinned_and_replay_to_the_screen_xterm_js_shows() {
+    let path = format!("{}/fixtures/ansi-snapshot.json", env!("CARGO_MANIFEST_DIR"));
+    let mut fixture: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let update = std::env::var_os("ANSI_SNAPSHOT_UPDATE").is_some();
+    for case in fixture["cases"].as_array_mut().unwrap() {
+        let id = case["id"].as_str().unwrap().to_owned();
+        let (cols, rows) = (
+            case["cols"].as_u64().unwrap(),
+            case["rows"].as_u64().unwrap(),
+        );
+        let mut program = replay(case);
+        let snapshot = program.ansi_snapshot().unwrap();
+        if update {
+            case["snapshot"] = json!(snapshot);
+        }
+        assert_eq!(
+            case["snapshot"],
+            json!(snapshot),
+            "{id}: the snapshot bytes"
+        );
+        let mut fresh = runtime(cols as u16, rows as u16);
+        feed(&mut fresh, snapshot.as_bytes());
+        for (name, rt) in [
+            ("after the program", &mut program),
+            ("after the snapshot", &mut fresh),
+        ] {
+            assert_eq!(shown(rt, rows as usize), case["expect"], "{id}, {name}");
+        }
+    }
+    if update {
+        let mut out = Vec::new();
+        let format = serde_json::ser::PrettyFormatter::with_indent(b" ");
+        serde::Serialize::serialize(
+            &fixture,
+            &mut serde_json::Serializer::with_formatter(&mut out, format),
+        )
+        .unwrap();
+        std::fs::write(&path, [out, b"\n".to_vec()].concat()).unwrap();
+    }
+}
