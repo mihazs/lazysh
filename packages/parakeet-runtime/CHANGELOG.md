@@ -1,5 +1,9 @@
 # @lazysh/parakeet-runtime
 
+## 1.97.3
+
+No changes in this release.
+
 ## 1.97.2
 
 No changes in this release.
