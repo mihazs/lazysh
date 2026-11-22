@@ -5,11 +5,10 @@
 //! by the renderer host with a wgpu swapchain on the subsurface (#1331); any other shows the pane background
 //! from a `wl_shm` buffer. Everything but [`display`] runs on the GTK main thread.
 use super::{Anchor, SurfaceState};
-use crate::native_renderer::{Host as Renderer, Look};
+use crate::native_renderer::Host as Renderer;
 use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
 use lazysh_terminal_renderer_wgpu::{Policy, Target, Window};
-use lazysh_terminal_runtime::{RgbColor, Theme};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Write;
@@ -74,21 +73,6 @@ fn policy() -> Policy {
         policy.with_software()
     } else {
         policy
-    }
-}
-
-// shortcut: the font is the system's monospace at 14 CSS pixels and the colours are the default theme on the
-// pane's background; take both from the user's preferences once the page sends them with the anchor.
-fn look(dpr: f64, background: u32) -> Look {
-    let mut theme = Theme::default();
-    let [_, r, g, b] = background.to_be_bytes();
-    theme.background = RgbColor { r, g, b };
-    Look {
-        theme,
-        font_family: "monospace".into(),
-        font_px: 14.0,
-        scale: dpr as f32,
-        system_fonts: true,
     }
 }
 
@@ -299,7 +283,8 @@ impl Host {
             // The swapchain is the size of the surface in device pixels.
             let _ = renderer.resize(w as u32, h as u32);
             if pane.looked != (pane.anchor.dpr, pane.background) {
-                let _ = renderer.set_look(look(pane.anchor.dpr, pane.background));
+                let _ =
+                    renderer.set_look(super::panes::look(pane.anchor.dpr as f32, pane.background));
                 pane.looked = (pane.anchor.dpr, pane.background);
             }
             pane.surface.commit();
@@ -361,7 +346,7 @@ impl Host {
         let window = unsafe { Window::wayland(display, wl_surface) };
         let (w, h) = (pane.size.0 as u32, pane.size.1 as u32);
         let target = Target::on_window(window, w, h).with_policy(policy());
-        let look = look(pane.anchor.dpr, pane.background);
+        let look = super::panes::look(pane.anchor.dpr as f32, pane.background);
         match Renderer::attach(surface, inbox, target, 1, look) {
             Ok(renderer) => {
                 pane.renderer = Some(renderer);
