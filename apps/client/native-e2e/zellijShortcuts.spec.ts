@@ -5,7 +5,7 @@ import {disconnectOwnedSsh,openOwnedSsh,ownedSshGui,workspaceAction,workspaceToo
 
 const fixture=ownedSshGui();
 
-it('drives a real Zellij session from its shortcut panel and offers no Jump To while attached to it',async()=>{
+it('drives a real Zellij session from its shortcut panel and offers Jump To while it is the only attached client',async()=>{
   fixture.captureSafe=false;
   const zellij=process.env.LAZYSH_TEST_ZELLIJ;
   if(!zellij?.startsWith('/'))throw new Error('The pinned Zellij binary (LAZYSH_TEST_ZELLIJ) is required');
@@ -37,10 +37,10 @@ it('drives a real Zellij session from its shortcut panel and offers no Jump To w
   await (await controls.$('button=Tab 1')).click();
   await browser.waitUntil(async()=>await active()===0,{timeout:20_000,timeoutMsg:'Zellij quick tab 1 did not focus the first tab'});
 
-  gui.stage='owned Zellij tab has no Jump To';
-  // The gate that lists Jump To for a tmux tab withholds it from a Zellij tab, which has no Jump tree.
+  gui.stage='owned Zellij tab offers Jump To';
+  // The pinned Zellij has the tree capability and this terminal is the session's only client, so Jump To is listed.
   const tools=await workspaceToolNames(gui);
   expect(tools).toContain('Sessions');
-  expect(tools).not.toContain('Jump To');
+  expect(tools).toContain('Jump To');
   await disconnectOwnedSsh(gui,terminal,`Owned SSH GUI host / ${name}`);
 },240_000);

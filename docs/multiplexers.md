@@ -89,8 +89,8 @@ lazysh captures PID/TTY metadata on its own SSH attach channel immediately befor
 verified SSH control channel confirms that exact attached normal client. Every
 jump uses its captured generation and exact session/window IDs with a synchronous
 server-side client guard. It never reopens a control connection to follow a
-restarted server with reused IDs. Plain shells, externally attached/unbound
-terminals and Zellij do not gain this tmux tree. An absent or malformed handshake
+restarted server with reused IDs. Plain shells and externally attached/unbound
+terminals do not gain this tmux tree. A Zellij terminal has its own Jump To, described under [Zellij](#zellij). An absent or malformed handshake
 leaves the terminal usable and navigation unavailable rather than guessing.
 
 The extra `no-output,ignore-size` control client affects attached/client counts
@@ -351,7 +351,7 @@ Attached tmux and Herdr terminals also offer prefix shortcuts and numbered windo
 
 ## Zellij
 
-List running sessions or enter a name to create/attach one. The list names live sessions and exited ones (Zellij keeps a resurrectable layout, and attaching resurrects it); a host with Zellij and no session shows "No running zellij sessions." instead of an error, although Zellij itself exits with status 1 there. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. Zellij does not expose the tmux/Herdr Jump To tree here.
+List running sessions or enter a name to create/attach one. The list names live sessions and exited ones (Zellij keeps a resurrectable layout, and attaching resurrects it); a host with Zellij and no session shows "No running zellij sessions." instead of an error, although Zellij itself exits with status 1 there. Its shortcut panel creates named tabs in a project directory, selects numbered tabs, moves between tabs, splits the focused pane and toggles fullscreen. Commands target the selected named session; focused-pane actions follow that session's current focus. A Zellij terminal also offers **Jump To**, below.
 
 The Zellij panel includes a tab 1–20 quick-access row alongside the existing manual
 tab-number form. These are explicit shortcuts, not a discovered tab list or a
@@ -426,6 +426,14 @@ shell's startup file puts on `PATH` can pass the check and still not start. Crea
 session, splitting an existing pane instead of opening a window, a Zellij tab, and rmux (which
 needs [#1140](https://github.com/mihazs/lazysh/issues/1140), tracked in [#1679](https://github.com/mihazs/lazysh/issues/1679)) are not part of this primitive yet,
 and no screen calls it yet.
+
+### Zellij Jump To
+
+On Zellij 0.45.1 (the version gate's `tree` capability; 0.44.x and others show no Jump To) a terminal attached to a Zellij session offers **Jump To** with that session's tabs, numbered from 1 like the tab strip. The list reads `zellij --session S action list-tabs --json` and `list-clients` (`zellij_jump_tabs`); a tab without a stable id is not listed. Host names are shown as text.
+
+Zellij cannot address a client from the command line: `go-to-tab-by-id` carries no client id and acts on whichever client the server picks, and with two clients on different tabs `list-tabs` marks both tabs active (#2046, reproduced on Zellij 0.45.1 and 0.46.0). So Jump To claims a current tab and jumps only while this terminal is the one attached client. Then exactly one row is **Current** (`aria-current="location"`), choosing it closes the panel without a command, and choosing another tab runs `zellij --session S action go-to-tab-by-id <id>` through the typed `zellij_action` `jump`, which counts the clients again first and fails with `zellij_client_ambiguous` unless there is exactly one. With another client attached the tabs are listed without a Current row, their buttons are disabled and the panel says why. A client that attaches between that count and the jump can still be moved: Zellij offers nothing atomic. A pane is not a destination: Zellij's `focus-pane-id` leaves the attached client where it was.
+
+Checked by Vitest (`zellijJump.test.ts`, `TmuxJumpPanel.test.tsx`), the Rust unit tests of `zellij.rs`, and Playwright `e2e/zellij-jump.spec.ts` on phone and desktop (one current row and a jump by tab id, a shared session without a current row or jump, no Jump To on a version without the capability).
 
 ## Tab strip
 
