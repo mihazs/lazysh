@@ -403,7 +403,7 @@ async fn real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap
                     match guard(&app, &lease, &child, json!({"kind":"observe"})).await {
                         Ok(reply) if reply["destination"]["pane"] == *pane => break,
                         Ok(reply) => last = reply["destination"]["pane"].to_string(),
-                        Err(error) => last = format!("{error}"),
+                        Err(error) => last = error.to_string(),
                     }
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
