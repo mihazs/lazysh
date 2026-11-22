@@ -8,8 +8,9 @@ import {Terminal} from '@xterm/headless';
 import {decodeClipboardRequest} from '../preferences';
 import type {CoreMouseInput, NativeCoreBridge, NativeCoreEvent, NativeCoreSnapshot} from '../nativeCoreBridge';
 import {cwdFromOsc7} from '../terminalText';
-import type {TerminalModes} from '../terminalAdapter';
+import type {CanonicalResize, TerminalModes} from '../terminalAdapter';
 import type {CoreKeyInput} from '../terminalPlatformKeys';
+import {installMoshResize} from './moshResize';
 
 export type HeadlessCoreOptions = {
   columns?: number; rows?: number; scrollbackLines?: number;
@@ -56,7 +57,12 @@ export function createHeadlessCore({columns = 20, rows = 5, scrollbackLines = 20
       window: {first, rows: Array.from({length: Math.min(window, length - first)}, (_, i) => buffer.getLine(first + i)?.translateToString(true).trimEnd() ?? '')},
     };
   };
-  const parse = (bytes: Uint8Array) => new Promise<void>(resolve => terminal.write(bytes, resolve));
+  let canonical: CanonicalResize | undefined, told = false;
+  const parse = (bytes: Uint8Array) => new Promise<void>(resolve => terminal.write(bytes, () => {
+    // As the Rust core does: a display that failed is told once, with the answer to the read that follows.
+    if (canonical?.failure && !told) { told = true; send({type: 'failure', reason: canonical.failure}); }
+    resolve();
+  }));
   const core: HeadlessCore = {
     calls, inputs, keys, mice,
     get closed() { return closed; },
@@ -80,6 +86,12 @@ export function createHeadlessCore({columns = 20, rows = 5, scrollbackLines = 20
   if (feed) {
     core.feed = async bytes => { calls.push('feed'); await parse(bytes); return snapshot(); };
     core.resize = async size => { calls.push('resize'); terminal.resize(size.columns, size.rows); return snapshot(); };
+    // Mosh: the frames' sizes decide the grid, through the xterm backend's own top-anchored resize. A headless terminal has no selection, which that resize reads: it has none to keep.
+    core.canonicalFrames = async () => {
+      calls.push('canonicalFrames');
+      Object.assign(terminal, {getSelectionPosition: () => undefined, clearSelection() {}, select() {}});
+      canonical = installMoshResize(terminal as never);
+    };
   }
   return core;
 }

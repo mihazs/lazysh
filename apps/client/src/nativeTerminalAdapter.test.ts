@@ -62,7 +62,7 @@ describe('native backend specifics', () => {
   it('reports what it is: native, no renderer, and a data path that follows the core', async () => {
     const fed = await open();
     expect(fed.adapter).toMatchObject({backend: 'native', dataPath: 'renderer'});
-    expect(fed.adapter.capabilities).toMatchObject({nativeRendering: false, ime: false, canonicalMoshResize: false, screenInspection: true});
+    expect(fed.adapter.capabilities).toMatchObject({nativeRendering: false, ime: false, canonicalMoshResize: true, screenInspection: true});
     const owned = await open({feed: false});
     expect(owned.adapter.dataPath).toBe('runtime');
     expect(owned.adapter.write).toBeUndefined();
@@ -170,6 +170,69 @@ describe('native backend specifics', () => {
     adapter.subscribe(event => seen.push(event), ['title', 'bell', 'cwd', 'clipboard']);
     await core.output(text('\x1b]0;build\x07\x07\x1b]7;file://host/srv/a%20b\x07\x1b]7;nonsense\x07\x1b]52;c;aGk=\x07'));
     expect(seen).toEqual([{type: 'title', title: 'build'}, {type: 'bell'}, {type: 'cwd', path: '/srv/a b'}, {type: 'clipboard', text: 'hi'}]);
+    await adapter.dispose();
+  });
+});
+
+describe('native Mosh resize', () => {
+  const frame = (id: number, cols: number, rows: number, body = '') => text(`\x1b]7777;lazysh-mosh;1;begin;${id};${cols};${rows}\x1b\\${body}\x1b]7777;lazysh-mosh;1;end;${id}\x1b\\`);
+
+  it('refuses a core that cannot follow the frames, and asks one that can before the first byte', async () => {
+    const owned = await open({feed: false});
+    expect(() => owned.adapter.enableCanonicalResize()).toThrow('cannot apply canonical Mosh resizing');
+    const {adapter, core} = await open();
+    const canonical = adapter.enableCanonicalResize();
+    expect(adapter.enableCanonicalResize()).toBe(canonical);
+    await adapter.write!(frame(1, 30, 6, 'hello'));
+    expect(core.calls.filter(call => call === 'canonicalFrames' || call === 'feed')).toEqual(['canonicalFrames', 'feed']);
+    expect(adapter.size()).toEqual({columns: 30, rows: 6});
+    expect(adapter.readRows!(0, 1)).toEqual(['hello']);
+    await Promise.all([owned.adapter.dispose(), adapter.dispose()]);
+  });
+
+  it('hands each size it is asked for to the transport once, refuses one the transport cannot have and follows only the frames', async () => {
+    const {adapter} = await open();
+    const canonical = adapter.enableCanonicalResize();
+    const asked: unknown[] = [];
+    canonical.onResizeIntent(size => asked.push(size));
+    for (const [columns, rows] of [[60, 20], [60, 20], [80, 24]]) adapter.requestSize({columns, rows});
+    expect(asked).toEqual([{cols: 60, rows: 20}, {cols: 80, rows: 24}]);
+    for (const [columns, rows] of [[1, 5], [513, 5], [200, 200], [2.5, 4]]) expect(() => adapter.requestSize({columns, rows}), `${columns}x${rows}`).toThrow('canonical Mosh resizing');
+    expect(adapter.size()).toEqual({columns: 20, rows: 5});
+    await adapter.write!(frame(1, 50, 10));
+    expect(adapter.size()).toEqual({columns: 50, rows: 10});
+    await adapter.dispose();
+  });
+
+  it('fails the display for good on a frame the core refuses: one event, no more intents, later frames ignored', async () => {
+    const {adapter} = await open();
+    const canonical = adapter.enableCanonicalResize();
+    const failures: unknown[] = [], asked: unknown[] = [];
+    adapter.subscribe(event => failures.push(event), ['failure']);
+    canonical.onResizeIntent(size => asked.push(size));
+    await adapter.write!(frame(1, 30, 6));
+    await adapter.write!(text('\x1b]7777;lazysh-mosh;1;end;9\x1b\\'));
+    expect(failures).toEqual([{type: 'failure', reason: 'invalid-frame'}]);
+    expect(canonical.failure).toBe('invalid-frame');
+    adapter.requestSize({columns: 60, rows: 20});
+    await adapter.write!(frame(2, 50, 10));
+    expect(asked).toEqual([]);
+    expect(adapter.size()).toEqual({columns: 30, rows: 6});
+    expect(failures).toHaveLength(1);
+    await adapter.dispose();
+  });
+
+  it('closes once the core has handled what was sent before, and asks for nothing afterwards', async () => {
+    const {adapter} = await open();
+    const canonical = adapter.enableCanonicalResize();
+    const asked: unknown[] = [];
+    canonical.onResizeIntent(size => asked.push(size));
+    adapter.write!(frame(1, 30, 6, 'late'));
+    await canonical.close();
+    expect(adapter.readRows!(0, 1)).toEqual(['late']);
+    adapter.requestSize({columns: 60, rows: 20});
+    expect(asked).toEqual([]);
+    expect(adapter.size()).toEqual({columns: 30, rows: 6});
     await adapter.dispose();
   });
 });

@@ -4,6 +4,7 @@
 //! `fixtures/control-plane.json` pins them to what xterm.js answers for the same bytes.
 use super::{Error, TerminalRuntime, Viewport, MAX_READ_ROWS};
 use crate::clipboard::clipboard_consent_text;
+use crate::mosh::DisplayFailure;
 use crate::selection::{CellPos, CellRange, Direction, SearchHit};
 use crate::size::Size;
 use ghostty_vt::ActiveScreen;
@@ -134,6 +135,11 @@ pub enum ControlEvent {
     Clipboard {
         text: String,
     },
+    /// The Mosh display stopped following the transport ([`DisplayFailure`]); said once, and the session cannot
+    /// recover.
+    Failure {
+        reason: DisplayFailure,
+    },
 }
 
 /// What a reader asks about the text of the buffer (#1320), in the adapter's shapes: absolute rows, both ends of a
@@ -253,9 +259,12 @@ impl TerminalRuntime {
 
     /// What the program reported since the last call, decoded and bounded, in a fixed order across kinds (title,
     /// bells, directory, clipboard) and the order they happened within one: the VT queues them apart. The queues
-    /// hold at most 8 of each kind, so what a reader never takes is bounded, and a flood of bells is capped. Takes
-    /// only these; the size and display events stay for [`take_events`](Self::take_events).
+    /// hold at most 8 of each kind, so what a reader never takes is bounded, and a flood of bells is capped. A Mosh
+    /// display failure is told once, last. Takes only these; the size events stay for
+    /// [`take_events`](Self::take_events), which still holds the failure.
     pub fn take_control_events(&mut self) -> Vec<ControlEvent> {
+        let failure = self.display_failure().filter(|_| !self.failure_told);
+        self.failure_told |= failure.is_some();
         let events = &mut self.events;
         let title = events
             .title
@@ -278,6 +287,7 @@ impl TerminalRuntime {
             .chain(bells)
             .chain(directories)
             .chain(writes)
+            .chain(failure.map(|reason| ControlEvent::Failure { reason }))
             .collect()
     }
 

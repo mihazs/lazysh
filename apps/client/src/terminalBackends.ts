@@ -22,7 +22,7 @@ export function registerNativeBackend(backends: Pick<typeof registry, 'register'
     autoEligible: false,
     probe,
     // The session start reads `adapter.transport` to start its transport on this core.
-    create: async () => (await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: getPreferences().scrollback})).adapter,
+    create: async ({mosh} = {}) => (await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: getPreferences().scrollback, canonicalFrames: mosh})).adapter,
   });
 }
 registerNativeBackend(registry);

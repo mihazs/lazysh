@@ -34,8 +34,10 @@ const SUB: u8 = 0x1a;
 const OPEN: &[u8] = b"\x1b]7777;";
 const TAG: &[u8] = b"lazysh-mosh;";
 
-/// Why the display stopped following the transport; the session cannot recover from either.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Why the display stopped following the transport; the session cannot recover from either. Serialized as the
+/// adapter's `TerminalFailure` (`invalid-frame`, `partial-frame`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum DisplayFailure {
     /// A malformed, out-of-range, stale or nested envelope.
     InvalidFrame,
