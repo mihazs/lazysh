@@ -469,7 +469,12 @@ async fn a_view_change_waits_for_the_turn_in_flight_instead_of_being_refused() {
     assert!(binding.reserve().is_err());
     let waiting = {
         let binding = binding.clone();
-        tokio::spawn(async move { binding.reserve_waiting(Duration::from_secs(30)).await.map(|_| ()) })
+        tokio::spawn(async move {
+            binding
+                .reserve_waiting(Duration::from_secs(30))
+                .await
+                .map(|_| ())
+        })
     };
     tokio::task::yield_now().await;
     assert!(!waiting.is_finished());
