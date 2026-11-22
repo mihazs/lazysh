@@ -1234,9 +1234,6 @@ fn an_idle_time_outside_one_second_to_a_day_is_refused_before_anything_starts() 
     fixture.nothing_was_started();
 }
 
-const GREEN_PAGE: &str =
-    "<!doctype html><title>Green</title><body style=\"margin:0;background:#00c800\">";
-
 /// A page that keeps its state in its title, which the relay reports as text: clicks on the button, whether it
 /// scrolled, and the text in the input, in brackets (a title loses trailing spaces). The button, the input and a tall spacer fill the width, one below the other.
 const INPUT_PAGE: &str = "<!doctype html><title>clicks=0;scroll=0;text=[]</title>
