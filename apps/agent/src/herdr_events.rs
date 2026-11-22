@@ -267,7 +267,11 @@ mod engine {
                 if left.is_zero() {
                     return Ok(Read1::Quiet);
                 }
-                self.stream.set_read_timeout(Some(left))?;
+                // macOS refuses a timeout on a socket whose peer has closed (EINVAL); the read then reports the end.
+                match self.stream.set_read_timeout(Some(left)) {
+                    Err(error) if error.kind() == ErrorKind::InvalidInput => {}
+                    other => other?,
+                }
                 let mut chunk = [0; 8192];
                 match self.stream.read(&mut chunk) {
                     Ok(0) => return Ok(Read1::Eof),
