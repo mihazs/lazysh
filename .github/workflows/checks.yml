@@ -1596,9 +1596,27 @@ jobs:
             local code=$?;
             printf "%s exit=%s\n" "$name" "$code" >> "$diagnostic_dir/status.txt";
             };
+            watchdog() {
+            local sleeper;
+            sleep "${LAZYSH_ANDROID_WATCHDOG_SECONDS:-3480}" & sleeper=$!;
+            trap "kill $sleeper 2>/dev/null; exit 0" TERM;
+            wait $sleeper || exit 0;
+            printf "watchdog fired at %s\n" "$(date -u +%FT%TZ)" >> "$diagnostic_dir/status.txt";
+            capture watchdog-current-test adb shell "logcat -d -s TestRunner:I | tail -n 6";
+            capture watchdog-logcat adb shell "logcat -d -t 500";
+            capture watchdog-adb-root adb root;
+            capture watchdog-threads adb shell "for p in \$(pidof app.lazysh.client); do kill -3 \$p; debuggerd -b \$p; top -H -b -n 1 -p \$p | head -n 60; done; sleep 3; ls -l /data/anr; tail -c 524288 /data/anr/* 2>/dev/null";
+            capture watchdog-activity adb shell dumpsys activity top;
+            capture watchdog-window adb shell "dumpsys window windows | head -n 300";
+            capture watchdog-processes adb shell "ps -A | grep -E \"lazysh|instrument|systemui\"";
+            capture watchdog-ui adb exec-out uiautomator dump /dev/tty;
+            (ulimit -c 0; exec timeout --kill-after=2s 10s adb exec-out screencap -p) > "$diagnostic_dir/watchdog-screen.png" 2>/dev/null;
+            };
             cleanup() {
             local result=$?;
             trap - EXIT INT TERM;
+            kill "$watchdog_pid" 2>/dev/null || true;
+            wait "$watchdog_pid" 2>/dev/null || true;
             if (( result != 0 )); then
             capture kernel-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
             capture cpu-load adb shell dumpsys cpuinfo;
@@ -1621,6 +1639,7 @@ jobs:
             "ActivityManager:E" "InputDispatcher:W" "WindowManager:W" "am_anr:I" "*:S")
             > "$diagnostic_dir/system-anr.txt" 2> "$diagnostic_dir/collector-errors.txt" &
             collector_pid=$!;
+            watchdog & watchdog_pid=$!;
             capture start-load adb shell "date -u; cat /proc/uptime /proc/loadavg /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory";
             sh .github/scripts/android-dismiss-error-dialogs.sh;
             case "$LAZYSH_ANDROID_RUNTIME_OWNER" in
