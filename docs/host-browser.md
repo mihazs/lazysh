@@ -86,8 +86,14 @@ Security and data (each is tested, not only stated):
 | Start cost | 130 ms (Chromium) and 410 ms (Firefox) to a usable endpoint, so on demand is cheap. |
 
 **Keep profile** is an explicit option for flows that need a sign-in to survive (it keeps cookies on the host's
-disk until **Clear browser data**). It is off by default and labelled with what it stores. In the launcher it is
-`--keep-profile` (one kept profile, refused while a browser uses it) and `host-browser --clear-data`.
+disk until **Clear browser data**). It is off by default and labelled with what it stores. In the launcher and in the
+relay (`host-browser serve --keep-profile`) it is `--keep-profile` (one kept profile, refused as `BrowserProfileInUse`
+while a browser uses it, which the relay reports as its `closed` reason) and `host-browser --clear-data` removes it. A
+relay that is not asked to keep the profile stays ephemeral and leaves the kept one as it is. An older companion
+answers `--keep-profile` with a usage error and starts nothing, so a session never silently runs without the profile
+the user asked to keep.
+When upgrading, stop older companion sessions before starting a kept session or clearing browser data. Older
+companions do not use the profile coordination lock, so concurrent recovery of stale profiles across versions is not protected.
 
 ### Attaching to the normal profile
 
@@ -219,7 +225,7 @@ Everything else is dropped with a counter, and the browser's protocol is not oth
 
 ### Relay wire format
 
-`lazysh-agent host-browser serve [--binary PATH] [--no-sandbox]` is the relay. It is hidden from `--help`, fails
+`lazysh-agent host-browser serve [--binary PATH] [--no-sandbox] [--keep-profile]` is the relay. It is hidden from `--help`, fails
 before it starts anything while the host browser switch is off, and speaks one format in both directions on its
 standard input and output (the SSH exec channel): `length:u32be tag:u8 body`, where `length` counts the tag and
 the body.
@@ -272,7 +278,11 @@ The browser is started with `--remote-debugging-pipe`, a private profile and `--
 on the host), and its standard output and error are discarded because they can name pages. It ends, with its
 helpers and its profile, when standard input closes, on SIGINT, SIGTERM or SIGHUP, when the browser exits and
 when the page closes; on Linux the kernel also stops it if the relay is killed outright, and the next start
-removes the profile that a killed relay left. `--no-sandbox` is for containers and CI runners that cannot create a
+removes the profile that a killed relay left. The browser is stopped with SIGTERM to its main process alone, so it
+writes what a page stored (`localStorage` included) before its helpers go; only when it has not exited within three
+seconds is its whole process group killed. Its process id stays reserved until then (`waitid` with `WNOWAIT`), and
+if the relay cannot observe it, it sends no signal at all. With `--keep-profile` the relay uses the one kept profile instead
+(`host-browser/kept`, mode 0700) and leaves it, with what the browser wrote, for `host-browser --clear-data`. `--no-sandbox` is for containers and CI runners that cannot create a
 sandbox. There is no Windows relay: a Windows host is refused with `HostBrowserUnsupported`.
 
 ### What the relay may send to the browser
