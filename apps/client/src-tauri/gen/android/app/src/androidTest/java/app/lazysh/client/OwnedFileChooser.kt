@@ -56,11 +56,32 @@ internal object OwnedFileChooser {
                 requireNotNull(resolver.openOutputStream(uri, "w")) { "MediaStore gave no stream for the picker fixture" }.use { input.copyTo(it) }
             }
             resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+            awaitSettled(resolver, uri)
         } catch (failure: Throwable) {
             resolver.delete(uri, null, null)
             throw failure
         }
         return uri
+    }
+
+    /**
+     * The page reads the chosen file through the size and modification time the picker reported when it was chosen, and the page fails
+     * with NotReadableError when they changed since (44964180752: the picker listed the fixture, the page's read then failed). MediaProvider
+     * rewrites a published file's row after IS_PENDING clears, so the row must stay unchanged for a while before the picker opens.
+     */
+    private fun awaitSettled(resolver: android.content.ContentResolver, uri: Uri) {
+        val columns = arrayOf(MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.IS_PENDING)
+        fun row() = resolver.query(uri, columns, null, null, null)?.use { if (it.moveToFirst()) "${it.getLong(0)}/${it.getLong(1)}/${it.getInt(2)}" else null }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
+        var seen: String? = null
+        var since = System.nanoTime()
+        while (true) {
+            val now = row()
+            if (now != seen) { seen = now; since = System.nanoTime() }
+            else if (now != null && now.endsWith("/0") && System.nanoTime() - since >= TimeUnit.MILLISECONDS.toNanos(1_500)) return
+            assertTrue("The staged picker fixture never settled in MediaStore: $seen", System.nanoTime() < deadline)
+            Thread.sleep(100)
+        }
     }
 
     fun unstage(instrumentation: Instrumentation, uri: Uri) {

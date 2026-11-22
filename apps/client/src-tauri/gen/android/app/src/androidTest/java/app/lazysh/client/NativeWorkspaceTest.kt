@@ -1858,7 +1858,7 @@ class NativeWorkspaceTest {
             val before = evaluate(scenario, saved)
             // Records only outcomes (byte count, error class, decode result kind) of the page's own read and decode calls, for the failure report.
             evaluate(scenario, """(()=>{const rec=window.__lazyshQrDiag=[];const read=File.prototype.arrayBuffer;
-                File.prototype.arrayBuffer=function(){return read.call(this).then(b=>{rec.push('read:'+b.byteLength);return b;},e=>{rec.push('read-error:'+e.name);throw e;});};
+                File.prototype.arrayBuffer=function(){return read.call(this).then(b=>{rec.push('read:'+b.byteLength);return b;},e=>{rec.push('read-error:'+e.name+':'+String(e.message).slice(0,60));throw e;});};
                 const internals=window.__TAURI_INTERNALS__,invoke=internals&&internals.invoke;
                 if(invoke)internals.invoke=function(cmd,...rest){const p=invoke.call(this,cmd,...rest);
                   if(cmd==='theme_qr_decode')p.then(r=>rec.push('decode:'+(r===null?'none':typeof r)),e=>rec.push('decode-error:'+String(e&&e.message||e).slice(0,60)));return p;};

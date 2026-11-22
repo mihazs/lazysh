@@ -2,6 +2,6 @@
 "@lazysh/client": patch
 ---
 
-test(android): report the page's own read and decode outcomes when the QR image case fails
+test(android): wait until the staged QR fixture's MediaStore row stops changing before the picker opens
 
-The QR picker case fails intermittently with "The QR image could not be decoded" although the picker lists only the fixture. The failure now carries the outcomes of the page's file read and decode call. Test only. No user-visible behaviour changes.
+The QR picker case failed intermittently with "The QR image could not be decoded": the page's own read of the chosen file rejected with NotReadableError, which Chromium raises when a file's size or modification time changed after it was chosen, and MediaProvider rewrites a published file's row after it leaves pending. The case now waits for the row to stay unchanged first, and a failure still reports the page's read and decode outcomes. Test only. No user-visible behaviour changes.
