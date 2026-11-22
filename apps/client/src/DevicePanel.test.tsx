@@ -260,7 +260,10 @@ it("maps a touch on the Android video to the verified display and stops the vide
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", "DeviceDimensionsChanged");
     expect(screen.getByRole("button", { name: "Start video preview" })).toHaveProperty("disabled", true);
     expect(screen.getByLabelText("Enable device input")).toHaveProperty("disabled", true);
-    expect(invoke).toHaveBeenCalledWith("device_stream_stop", { sessionId: "ssh-video", streamId: "video" }, expect.anything());
+    // The stream effect cleanup runs after the alert paints, so wait for the stop instead of reading it at once.
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("device_stream_stop", { sessionId: "ssh-video", streamId: "video" }, expect.anything()),
+    );
   } finally {
     vi.unstubAllGlobals();
   }
