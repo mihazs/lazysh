@@ -648,6 +648,19 @@ mod tests {
                 Err(Error::Device("DeviceTimeout")) => return None,
                 Err(error) => panic!("real simctl discovery failed: {error:?}"),
             };
+            // Discovery that stays slow after its retry answers with an empty list and this warning (#1911).
+            if inventory["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| {
+                    warning
+                        .as_str()
+                        .is_some_and(|w| w.starts_with("iOS Simulator discovery is slow"))
+                })
+            {
+                return None;
+            }
             let device = inventory["devices"]
                 .as_array()
                 .unwrap()
