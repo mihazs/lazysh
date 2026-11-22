@@ -1939,6 +1939,8 @@ mod tests {
         assert!(!history.truncated);
         assert!(history.text.lines().any(|line| line == "1"));
         assert!(history.lines >= 5000);
+        // The history session is done: the layout actions below run in the one session the test built.
+        run("tmux kill-session -t '=history:'".into());
         // Pane title, geometry and close, each read back from the parsed tree.
         let tree = read_tree();
         let live = || {
