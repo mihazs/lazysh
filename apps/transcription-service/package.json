@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/transcription-service",
-  "version": "1.97.11",
+  "version": "1.98.0",
   "private": true,
   "license": "GPL-3.0-or-later",
   "dependencies": {
