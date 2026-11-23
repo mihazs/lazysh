@@ -1,7 +1,7 @@
 # Security policy
 
-lazysh is a development preview, not a security-audited production guarantee.
-Use the latest published version's notes and outstanding acceptance limits in
+lazysh has not been through an independent security audit, and no security
+guarantee is made. Use the latest published version's notes and outstanding acceptance limits in
 [installation guidance](docs/install-and-update.md); no long-term security support
 window is currently promised for older versions.
 
