@@ -100,9 +100,11 @@ omitted rather than increasing the count. Case timeouts do not cover a runner
 that stalls before starting a case; the step bounds cover that phase. App
 installation is bounded to three minutes, and cleanup to two minutes.
 
-The outer raw-fixture step has an 18-minute bound covering its existing build,
-boot and execution budgets. Its 45-second executable deadlines and five-second
-diagnostic budget are unchanged. The existing Bun command is captured with
+The outer raw-fixture step has a 20-minute bound covering its build, boot and
+execution budgets (600 s build, 180 s boot, 180 s first launch, three 45 s
+launches, 5 s diagnostics). Its 45-second executable deadlines and five-second
+diagnostic budget are unchanged; only the first standalone launch of the
+simulator has its own 180-second bound, logged with its elapsed time (below). The existing Bun command is captured with
 `tee` and explicit `pipefail`, preserving its failure outcome. A separate
 `lazysh-ios-mosh-diagnostics` artifact is uploaded immediately afterward, before
 hosted acceptance, so a later stall cannot hide that completed raw evidence.
@@ -116,8 +118,16 @@ after a failure a separate observation-only step retains the last five minutes o
 the unified log of the daemons that check, scan or spawn a new executable
 (`syspolicyd`, `amfid`, `trustd`, `CoreSimulatorService`, `mds`, `XprotectService`,
 `simctl`) as `lazysh-ios-mosh-system.log`, with a process table and `vm_stat` taken
-afterwards. All of it is in the `lazysh-ios-mosh-diagnostics` artifact. No deadline
-or verdict changes.
+afterwards. All of it is in the `lazysh-ios-mosh-diagnostics` artifact.
+
+The unified log of run 45092067382 shows where the first standalone launch waits:
+`simctl` reached `simdiskimaged` 15 s and `SimLaunchHost` 36 s after it started, and only
+then did the kernel check the test executable (AMFI), by which time the 45-second
+deadline was nearly spent. That latency is CoreSimulator's, so the test runs the
+`--list` launch once with a 180-second bound and prints `first standalone launch
+finished in N ms`, then runs the unchanged 45-second discovery, unit and protocol
+launches. A launch over either bound still fails with the same diagnostics; nothing is
+retried, so a run's `N` records the cold-start distribution.
 
 Native linking and simulator execution are distinct acceptance results. Physical
 device bootstrap, app session handoff, suspension/resume, network roaming, and
