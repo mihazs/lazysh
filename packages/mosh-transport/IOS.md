@@ -110,6 +110,15 @@ The existing result upload and simulator cleanup still run on failure. These
 are new runner bounds and evidence retention, not a fix or diagnosis of the
 intermittent startup cause. Runtime validation requires macOS CI.
 
+To name that cause on the next stall (#45), the same step samples the twelve
+busiest host processes every three seconds into `lazysh-ios-mosh-host.log`, and
+after a failure a separate observation-only step retains the last five minutes of
+the unified log of the daemons that check, scan or spawn a new executable
+(`syspolicyd`, `amfid`, `trustd`, `CoreSimulatorService`, `mds`, `XprotectService`,
+`simctl`) as `lazysh-ios-mosh-system.log`, with a process table and `vm_stat` taken
+afterwards. All of it is in the `lazysh-ios-mosh-diagnostics` artifact. No deadline
+or verdict changes.
+
 Native linking and simulator execution are distinct acceptance results. Physical
 device bootstrap, app session handoff, suspension/resume, network roaming, and
 battery measurements remain separate checks. This repository's Linux environment
