@@ -5,7 +5,7 @@
 # changes, and any unrecognised path select every job and the full matrix. When a path's
 # consumers are uncertain it must select more jobs, never fewer.
 # Exception: a pull request never selects the jobs that are not required to merge (companion
-# candidates, macOS and Windows desktop, iOS simulator, Mosh, Herdr navigation, auxiliary
+# candidates, macOS and Windows desktop, the Windows client against a Linux host, iOS simulator, Mosh, Herdr navigation, auxiliary
 # Android, ntfy, terminal core on macOS and iOS). They run on pushes to main, where main-verdict.yml reports their verdict.
 # The terminal performance gate (terminal_perf) is report-only too, but a pull request that selects the terminal runtime area runs it.
 set -u

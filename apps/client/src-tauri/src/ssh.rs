@@ -4220,6 +4220,8 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[path = "core_output_fixture.rs"]
     mod core_output_fixture;
+    #[path = "external_host_fixture.rs"]
+    mod external_host_fixture;
     #[cfg(unix)]
     #[path = "file_download_fixture.rs"]
     mod file_download_fixture;
