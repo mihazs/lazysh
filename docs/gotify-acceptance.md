@@ -27,7 +27,8 @@ dialog and allows the alarm permission the app also asks for through the app-op 
 (`cmd appops set --uid ... SCHEDULE_EXACT_ALARM allow`), because that platform screen is not what this lane qualifies.
 It then sends the app to the background and, for each of `working`, `needs_attention` and `done`,
 requires the relay receipt, the server message, the Android notification record, a visible SystemUI card and finally the
-app's own message history. The official app starts its foreground service from its own permission callback, after the
+app's own message history (after the pull-down refresh a user makes: the official 2.10.1 list does not update itself when it was empty and the
+app was in the background, because it fetches missed messages only once it holds a last-received message). The official app starts its foreground service from its own permission callback, after the
 grant, so its "Connected" notification exists without restarting the app; the case checks it before it publishes anything.
 Installed APKs, UIDs, emulator continuity, the reverse mapping and package cleanup are
 checked before and after; a failure keeps only a closed phase label in `failure.json`.

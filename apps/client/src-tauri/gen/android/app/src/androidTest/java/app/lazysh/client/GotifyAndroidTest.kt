@@ -13,6 +13,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
+import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiObject2
@@ -121,9 +122,18 @@ class GotifyAndroidTest {
             }
             phase = "history-open"
             showCard(states.last()).click()
-            awaitCondition { showing(gotify) && device.hasObject(By.res(gotify, "messages_view")) }
+            awaitCondition { showing(gotify) && (device.hasObject(By.res(gotify, "messages_view")) || device.hasObject(emptyHistory())) }
             phase = "history"
-            for (state in states) node(By.pkg(gotify).text(body(state)))
+            // Gotify 2.10.1 refreshes its list on its own only when it already holds a last-received message (updateMissedMessages
+            // returns early on an empty history) and while the screen is resumed, so after events that arrived with an empty history
+            // and the app in the background its list is still empty. A user pulls the list down to refresh it; so does the case.
+            awaitCondition {
+                if (states.all { device.hasObject(By.pkg(gotify).text(body(it))) }) true
+                else {
+                    try { device.findObject(By.res(gotify, "swipe_refresh"))?.swipe(Direction.DOWN, 0.9f) } catch (_: StaleObjectException) { }
+                    false
+                }
+            }
             stage(4, JSONObject().put("history", true))
         } catch (failure: Throwable) {
             // Never propagate upstream exceptions, credentials, shell output or UI trees to JUnit.
