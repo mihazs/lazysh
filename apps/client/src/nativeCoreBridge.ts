@@ -6,9 +6,9 @@
 import type {Disposable, TerminalCell, TerminalEvent, TerminalInputOrigin, TerminalModes, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalTheme, TerminalViewport} from './terminalAdapter';
 import type {CoreKeyInput} from './terminalPlatformKeys';
 
-/** The wire shape of a wheel notch for `terminal_core_input`: a cell of the live screen, row 0 its first row. */
+/** The wire shape of a wheel notch or a button report for `terminal_core_input`: a cell of the live screen, row 0 its first row. */
 export type CoreMouseInput = {
-  type: 'mouse'; action: 'press'; button: 'wheelUp' | 'wheelDown';
+  type: 'mouse'; action: 'press' | 'release' | 'motion'; button: 'left' | 'middle' | 'right' | 'wheelUp' | 'wheelDown';
   mods: {shift: boolean; ctrl: boolean; alt: boolean; meta: boolean}; x: number; y: number;
 };
 
