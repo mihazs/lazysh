@@ -702,14 +702,14 @@ mod tests {
     #[test]
     fn history_runs_dump_screen_for_a_hostile_session_name_without_running_the_name() {
         let dir = tempfile::tempdir().unwrap();
+        // A relative canary in the shell's own directory: the name must not grow with the platform's temporary path
+        // (macOS's is long enough to pass the 200 character limit of a name).
         let canary = dir.path().join("nope");
-        let hostile = format!(
-            "a'$(touch {0});`touch {0}`;touch {0} #\"x y\\",
-            canary.display()
-        );
+        let hostile = "a'$(touch nope);`touch nope`;touch nope #\"x y\\".to_owned();
         let command = history_command(&hostile).unwrap();
         // A stub `zellij` prints its argv one word per line, so a name that split into words or ran a substitution shows.
         let out = std::process::Command::new("sh")
+            .current_dir(dir.path())
             .arg("-c")
             .arg(format!("zellij() {{ printf '%s\\n' \"$@\"; }}; {command}"))
             .output()
