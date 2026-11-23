@@ -33,8 +33,12 @@ fn owned_managed(path: &Path) -> bool {
     {
         use std::os::unix::fs::MetadataExt;
         std::fs::symlink_metadata(path).is_ok_and(|meta| {
+            // A link is refused by its type: its own mode says nothing (Linux gives every link 0777, which the
+            // write check below happened to reject; macOS gives it 0755, which it accepted).
             // SAFETY: geteuid has no preconditions.
-            meta.uid() == unsafe { libc::geteuid() } && meta.mode() & 0o022 == 0
+            !meta.file_type().is_symlink()
+                && meta.uid() == unsafe { libc::geteuid() }
+                && meta.mode() & 0o022 == 0
         }) && runnable(path)
     }
     #[cfg(not(unix))]
