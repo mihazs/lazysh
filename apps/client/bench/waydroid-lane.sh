@@ -189,6 +189,9 @@ environment=$(jq -n \
     guestIme: { default: ($ime | blank), enabled: ($imes | split("\n") | map(select(. != ""))) },
     vendorImesInstalled: $vendorImes }')
 started_at=$(now)
+# One id names the run: the evidence records it and every --bench command gets it as LAZYSH_LANE_RUN_ID, so records written by separate
+# commands of one run (the benchmark arms of one engine comparison) can be told to belong together.
+run_id=$(printf '%s-%s' "${label:-lane}" "$(printf '%s' "$started_at" | tr -dc '0-9TZ')" | tr -c 'A-Za-z0-9._\n-' '-')
 
 # --- the steps ----------------------------------------------------------------------------------------------------------------------------------
 fail() { message=$(printf '%s' "$1" | tr '\n' ' '); failures="$failures$message
@@ -240,7 +243,7 @@ run_instrument() { # run_instrument <runner> <class>: counts the raw status code
 run_bench() { # run_bench <name> <command>: the command writes its result files into $LAZYSH_LANE_OUT; they are kept beside the evidence
   say "benchmark $1: $2"
   mkdir "$work/bench-$1" || { fail "bench $1: the name is used twice"; return 1; }
-  LAZYSH_BENCH_ANDROID=$serial LAZYSH_LANE_OUT="$work/bench-$1" LAZYSH_LANE_PACKAGE=$package sh -c "$2" >&2 </dev/null; code=$?
+  LAZYSH_BENCH_ANDROID=$serial LAZYSH_LANE_OUT="$work/bench-$1" LAZYSH_LANE_PACKAGE=$package LAZYSH_LANE_RUN_ID=$run_id sh -c "$2" >&2 </dev/null; code=$?
   files='[]'; stem=$(basename "$out" .json)
   for file in "$work/bench-$1"/*; do
     [ -f "$file" ] || continue
@@ -294,13 +297,13 @@ done 3< "$plan"
 # --- the evidence ---------------------------------------------------------------------------------------------------------------------------------
 status=passed; [ -z "$failures" ] || status=failed
 evidence="$out.tmp.$$"
-jq -n --arg label "$label" --arg status "$status" --arg failures "$failures" --arg startedAt "$started_at" --arg finishedAt "$(now)" \
+jq -n --arg label "$label" --arg runId "$run_id" --arg status "$status" --arg failures "$failures" --arg startedAt "$started_at" --arg finishedAt "$(now)" \
   --arg cpu "$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -n 1)" --arg cpus "$(nproc 2>/dev/null)" \
   --arg os "$(uname -sr)" --arg load "$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)" --arg waydroid "$(waydroid --version 2>/dev/null | head -n 1)" \
   --arg adbVersion "$("$adb" version 2>/dev/null | head -n 1)" --arg commit "$source_commit" --argjson dirty "$source_dirty" \
   --slurpfile results "$work/results.jsonl" --argjson environment "$environment" '
   def blank: if . == "" then null else . end;
-  { schema: 1, run: "waydroid lane", label: ($label | blank), status: $status, failures: ($failures | split("\n") | map(select(. != ""))),
+  { schema: 1, run: "waydroid lane", runId: $runId, label: ($label | blank), status: $status, failures: ($failures | split("\n") | map(select(. != ""))),
     startedAt: $startedAt, finishedAt: $finishedAt,
     host: { cpu: ($cpu | blank), logicalCpus: ($cpus | tonumber? // null), os: $os, loadAverageAtEnd: ($load | split(" ") | map(tonumber? // empty)) },
     toolchain: { waydroid: ($waydroid | blank), adb: ($adbVersion | blank) },

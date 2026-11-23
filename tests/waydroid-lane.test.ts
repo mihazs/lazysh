@@ -186,6 +186,13 @@ describe('a run that passes', () => {
     expect(evidence.limits).toMatch(/not a device result/);
   });
 
+  test('names the run once: the evidence and every benchmark command see the same id', async () => {
+    const result = await lane(['--label', 'engine xterm', '--bench', 'one', 'printf %s "$LAZYSH_LANE_RUN_ID" > "$LAZYSH_LANE_OUT/id.txt"', '--bench', 'two', 'printf %s "$LAZYSH_LANE_RUN_ID" > "$LAZYSH_LANE_OUT/id.txt"']);
+    const id = result.evidence.runId;
+    expect(id).toMatch(/^engine-xterm-\d{8}T\d{6}Z$/);
+    for (const name of ['one', 'two']) expect(await readFile(join(result.dir, 'evidence', `lane-${name}-id.txt`), 'utf8')).toBe(id);
+  });
+
   test('attaches to a running session without a compositor, and leaves the session and an existing connection as it found them', async () => {
     const result = await lane(['--apk', await apk()], { session: 'RUNNING', compositor: false, listed: true });
     expect(result.code).toBe(0);
