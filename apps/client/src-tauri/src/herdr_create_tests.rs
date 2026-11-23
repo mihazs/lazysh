@@ -224,6 +224,7 @@ fn wrapper_preserves_literal_argv_and_status_through_real_sh() {
     assert!(parse_status("no marker").is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn every_step_runs_as_the_connections_herdr_under_each_login_shell() {
     use crate::herdr_backend::{

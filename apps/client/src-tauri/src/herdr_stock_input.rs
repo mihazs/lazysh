@@ -365,6 +365,7 @@ mod tests {
     }
     /// The commands this module generates, run against a real private Herdr server (its own HOME and socket, never the user's server) whose
     /// pane runs a program named `codex` that writes every byte it reads to a file. Skipped where `herdr` is not on PATH.
+    #[cfg(unix)]
     #[test]
     fn a_dialog_answer_reaches_a_real_herdr_pane_as_the_bytes_a_person_types() {
         use std::{process::Command, time::Duration};
