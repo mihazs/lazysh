@@ -1,8 +1,8 @@
 //! What the relay owes the client, and the pacing that keeps a slow link from building a queue.
 //!
-//! Controls (state, refusals, the final `closed`) go out in order and are few. Page information and frames are
-//! one slot each: a newer one replaces an older one that was not sent yet, so a slow device sees fewer frames
-//! instead of old ones. At most [`WINDOW`] frames are unacknowledged at once; the client acknowledges a frame
+//! Controls (state, refusals, dialogs, notices, the final `closed`) go out in order and are few. Page
+//! information, the tab list and frames are one slot each: a newer one replaces an older one that was not sent
+//! yet, so a slow device sees fewer frames instead of old ones. At most [`WINDOW`] frames are unacknowledged at once; the client acknowledges a frame
 //! after it decoded it, so its decode time is part of the pacing.
 use super::wire::{self, Frame};
 use serde_json::{json, Value};
@@ -18,19 +18,20 @@ pub const WINDOW: u32 = 2;
 struct Slots {
     controls: VecDeque<Vec<u8>>,
     page: Option<Vec<u8>>,
+    tabs: Option<Vec<u8>>,
     frame: Option<Vec<u8>>,
     in_flight: u32,
     paused: bool,
     done: bool,
 }
 impl Slots {
-    /// The next message to write, in the order controls, page information, frame.
+    /// The next message to write, in the order controls, page information, tab list, frame.
     fn next(&mut self) -> Option<Vec<u8>> {
         if let Some(control) = self.controls.pop_front() {
             return Some(control);
         }
-        if let Some(page) = self.page.take() {
-            return Some(page);
+        if let Some(message) = self.page.take().or_else(|| self.tabs.take()) {
+            return Some(message);
         }
         if self.in_flight < WINDOW && !self.paused {
             if let Some(frame) = self.frame.take() {
@@ -65,6 +66,11 @@ impl Outbox {
         let page = wire::encode_json(&json!({"type": "page", "title": title, "url": url}));
         self.change(|slots| slots.page = Some(page));
     }
+    /// The tab list and what the controls show about the page (`tabs`), already encoded by the caller.
+    pub fn tabs(&self, tabs: &Value) {
+        let tabs = wire::encode_json(tabs);
+        self.change(|slots| slots.tabs = Some(tabs));
+    }
     pub fn frame(&self, frame: &Frame) {
         let frame = wire::encode_frame(frame);
         self.change(|slots| {
@@ -73,9 +79,14 @@ impl Outbox {
             }
         });
     }
-    /// The device decoded one frame.
-    pub fn ack(&self) {
-        self.change(|slots| slots.in_flight = slots.in_flight.saturating_sub(1));
+    /// The device decoded one frame; `false` when none was waiting for it, which is not a delivery.
+    pub fn ack(&self) -> bool {
+        let mut acknowledged = false;
+        self.change(|slots| {
+            acknowledged = slots.in_flight > 0;
+            slots.in_flight = slots.in_flight.saturating_sub(1);
+        });
+        acknowledged
     }
     /// Paused: no frame is held or sent. Resuming forgets frames the hidden device never acknowledged.
     pub fn pause(&self, paused: bool) {
@@ -94,6 +105,7 @@ impl Outbox {
         self.change(|slots| {
             slots.controls.push_back(wire::encode_json(&closed));
             slots.page = None;
+            slots.tabs = None;
             slots.frame = None;
             slots.done = true;
         });
@@ -177,6 +189,28 @@ mod tests {
         assert_eq!(sent(&outbox), Some(4));
         outbox.frame(&frame(5));
         assert_eq!(sent(&outbox), Some(5));
+    }
+
+    #[test]
+    fn the_newest_tab_list_replaces_an_older_one_and_goes_out_before_a_frame() {
+        let outbox = Outbox::default();
+        outbox.frame(&frame(1));
+        outbox.tabs(&json!({"type": "tabs", "activeId": "T1"}));
+        outbox.tabs(&json!({"type": "tabs", "activeId": "T2"}));
+        let mut written = Vec::new();
+        for _ in 0..2 {
+            written.extend(outbox.slots().next().unwrap());
+        }
+        assert!(outbox.slots().next().is_none());
+        let mut input = written.as_slice();
+        let (tag, body) = wire::read(&mut input, wire::MAX_JPEG).unwrap().unwrap();
+        assert_eq!(tag, wire::JSON);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["activeId"],
+            "T2"
+        );
+        let (tag, _) = wire::read(&mut input, wire::MAX_JPEG).unwrap().unwrap();
+        assert_eq!(tag, wire::FRAME);
     }
 
     #[test]

@@ -3,7 +3,7 @@ import {join} from 'node:path';
 import {executable} from '../../native-e2e/tools';
 import {expect,it} from 'vitest';
 import {disposableVaultArguments,secretServicePid,credentialItemPaths} from '../../native-e2e/fixture';
-import {assertDirectDriverEnvironment,guiEnvironment,listenerInode,namespaceArguments} from '../../native-e2e/policy';
+import {assertDirectDriverEnvironment,guiEnvironment,ibusDaemonArguments,ibusEnvironment,inputMethodEnvironment,listenerInode,namespaceArguments} from '../../native-e2e/policy';
 
 it('refuses a WebDriver client proxy instead of sending owned loopback traffic through it',()=>{
   expect(()=>assertDirectDriverEnvironment({})).not.toThrow();
@@ -72,4 +72,23 @@ it('requires an explicit protected prepared Secret Service image without executi
     await chmod(image,0o500);
     await expect(executable(image,'disposable Secret Service','other-daemon')).rejects.toThrow('Untrusted');
   }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+it('points only the input-method case at its own IBus daemon, in a UTF-8 locale, without touching the shared GUI environment',()=>{
+  const directory='/tmp/lazysh-native-gui-owned',address=`unix:path=${directory}/runtime/ibus`;
+  const base=guiEnvironment(directory,`unix:path=${directory}/runtime/bus`,1200);
+  const env=inputMethodEnvironment(base,address);
+  expect(env).toMatchObject({GTK_IM_MODULE:'ibus',XMODIFIERS:'@im=ibus',IBUS_ADDRESS:address,IBUS_ENABLE_SYNC_MODE:'1',LANG:'C.UTF-8',LC_ALL:'C.UTF-8',DISPLAY:':1200',HOME:`${directory}/home`});
+  expect(base).not.toHaveProperty('GTK_IM_MODULE');expect(base.LANG).toBe('C');
+  for(const bad of ['tcp:host=127.0.0.1,port=1','unix:abstract=/tmp/ibus','unix:path=relative/ibus',`unix:path=${directory}/runtime/ibus;x`])expect(()=>inputMethodEnvironment(base,bad)).toThrow('address');
+});
+it('runs IBus in the foreground with no panel, emoji extension or on-disk config, and lets its engines read the system data directory',()=>{
+  const address='unix:path=/tmp/lazysh-native-gui-owned/runtime/ibus';
+  const args=ibusDaemonArguments(address,'/usr/libexec/ibus-memconf');
+  expect(args).toEqual(expect.arrayContaining(['--panel','disable','--emoji-extension','disable','--config','/usr/libexec/ibus-memconf','--address',address]));
+  for(const forbidden of ['--daemonize','-d','--xim','--replace'])expect(args).not.toContain(forbidden);
+  expect(()=>ibusDaemonArguments(address,'ibus-memconf')).toThrow();expect(()=>ibusDaemonArguments('tcp:host=127.0.0.1','/usr/libexec/ibus-memconf')).toThrow();
+  const base=guiEnvironment('/tmp/lazysh-native-gui-owned','unix:path=/tmp/lazysh-native-gui-owned/runtime/bus',1200);
+  expect(ibusEnvironment(base)).toMatchObject({XDG_DATA_DIRS:'/usr/share',HOME:'/tmp/lazysh-native-gui-owned/home',XDG_DATA_HOME:'/tmp/lazysh-native-gui-owned/data'});
+  expect(base.XDG_DATA_DIRS).toBe('/tmp/lazysh-native-gui-owned/data');
 });

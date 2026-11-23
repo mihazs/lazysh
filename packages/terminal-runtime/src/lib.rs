@@ -38,7 +38,7 @@ pub use hub::{
 pub use ingress::{Ingress, IngressHandle, Offer};
 pub use input::{KeyInput, MouseInput};
 pub use keymap::{dom_mods, DomKey};
-pub use links::{PathLink, UrlLink};
+pub use links::{LinkHit, PathLink, UrlLink};
 pub use mosh::{DisplayFailure, MAX_COLS, MAX_FRAME_CELLS, MAX_ROWS};
 pub use reference::{Image, ReferenceRenderer};
 pub use render::{

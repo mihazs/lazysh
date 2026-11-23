@@ -8,7 +8,7 @@
 mod pty;
 
 use lazysh_terminal_runtime::{ffi, RgbColor, Theme};
-use pty::{find, Program, Scratch};
+use pty::{find, running, Program, Scratch};
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -479,7 +479,7 @@ impl Tmux {
 /// when the test ends, normally or by panic.
 #[test]
 fn a_detached_daemon_does_not_outlive_the_program_guard() {
-    let alive = |pid: &str| Path::new(&format!("/proc/{pid}")).exists();
+    let alive = |pid: &str| running(pid.parse().unwrap());
     let run = |panic: bool| {
         let scratch = Scratch::new(if panic { "daemon-panic" } else { "daemon-ok" });
         let pidfile = scratch.path("daemon.pid");
@@ -516,4 +516,31 @@ fn a_detached_daemon_does_not_outlive_the_program_guard() {
     };
     run(false);
     run(true);
+}
+
+/// A killed program is a zombie until its parent reaps it: `/proc/<pid>` is still there, but nothing runs.
+/// `running` is what tells that apart, so a test that waits for a daemon to be gone is not left racing init.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_zombie_is_not_a_running_process() {
+    let mut exited = Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let pid = exited.id() as i32;
+    let proc_entry = format!("/proc/{pid}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while running(pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the child never exited"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        Path::new(&proc_entry).exists(),
+        "an unreaped child keeps its /proc entry"
+    );
+    exited.wait().unwrap();
+    assert!(!Path::new(&proc_entry).exists() && !running(pid));
 }

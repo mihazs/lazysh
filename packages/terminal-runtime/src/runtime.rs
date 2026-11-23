@@ -219,6 +219,8 @@ pub struct TerminalRuntime {
     authority: SizeAuthority,
     intent: Option<Size>,
     display: Option<Display>,
+    /// The Mosh display failure was handed to a control reader ([`TerminalRuntime::take_control_events`]).
+    failure_told: bool,
     processed: u64,
 }
 
@@ -257,6 +259,7 @@ impl TerminalRuntime {
             },
             intent: None,
             display: config.canonical_frames.then(Display::new),
+            failure_told: false,
             processed: 0,
         })
     }

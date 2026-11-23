@@ -99,6 +99,8 @@ import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import TerminalEngineNotice from "./TerminalEngineNotice";
 import {describeTerminalEngine} from "./terminalEngineReason";
+import TerminalFeedbackLink from "./TerminalFeedbackLink";
+import {reportOfSession} from "./terminalFeedback";
 import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTourModel";
 import { useClientAppearance } from "./appearance";
 import { getPreferences, usePreferences } from "./preferences";
@@ -150,9 +152,10 @@ async function prepareSession(
   name: string,
   destination: string,
   lease: AccessLease,
+  mosh = false,
 ) {
   const { createTerminalAdapter } = await import("./terminalBackends");
-  const { adapter, selection } = await createTerminalAdapter({ preference: getPreferences().terminalEngine });
+  const { adapter, selection } = await createTerminalAdapter({ preference: getPreferences().terminalEngine, mosh });
   lease.assert();
   const session: LiveSession = {
     id: "",
@@ -225,7 +228,11 @@ async function prepareSession(
     }
   };
   // On the native data path the transport starts on the core's Channel, so no output reaches onEvent and none is acknowledged here.
-  if (adapter.transport) Object.assign(onEvent, {link: adapter.transport}), adapter.transport.onEvent = onEvent;
+  if (adapter.transport) {
+    Object.assign(onEvent, {link: adapter.transport}), adapter.transport.onEvent = onEvent;
+    // The core applies Mosh's frames itself, so the data handler's failure check never runs: its refusal of one arrives as the adapter's event.
+    adapter.subscribe(failDisplay, ['failure']);
+  }
   return { session, onEvent, establish };
 }
 
@@ -261,7 +268,7 @@ async function selectTransport(
       const skip = host.jumpHostId ? t("appBastionRoutesUseSSH") : host.forwardAgent ? t("appSelectedIdentityForwardingRequiresSSH") : !capabilities[kind] ? capabilities.reason || t("appUnavailableInThisAppBuild") : '';
       if (skip) { reasons.push(`${name}: ${skip}`); continue; }
     }
-    const child = await prepareSession(host.id, entry?`${host.name} / ${entry.name}`:host.name, kind==='ssh'?shell.session.destination:`${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease);
+    const child = await prepareSession(host.id, entry?`${host.name} / ${entry.name}`:host.name, kind==='ssh'?shell.session.destination:`${host.username}@${host.hostname} · ${kind === 'mosh' ? 'Mosh' : 'ET'}`, lease, kind === 'mosh');
     try {
       ensureAlive();
       if (kind === 'mosh') {
@@ -2218,6 +2225,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       ...(secondaryTools.length?[{id:'more',title:t('workspaceMoreTools'),content:<nav className="mobile-session-views workspace-tools-tiles" aria-label={t('workspaceMoreTools')}>{secondaryTools.map(mobileToolButton)}</nav>}]:[]),
       {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
         <p className="terminal-engine-line" role="note">{t('terminalEngineOfSession',{engine:describeTerminalEngine(active.selection)})}</p>
+        <TerminalFeedbackLink report={reportOfSession(active.selection,getPreferences().terminalEngine)}/>
         {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
         {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
         {!sideMenuMode && active.connected && !active.local && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}

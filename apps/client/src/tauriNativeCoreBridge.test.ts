@@ -101,6 +101,34 @@ describe('the native core over the Tauri commands', () => {
     await mosh.adapter.dispose();
   });
 
+  it('follows Mosh\'s frames only when it was opened for them, takes sizes as intents for the transport and tells its owner when the core refuses a frame', async () => {
+    const plain = await open();
+    expect(() => plain.adapter.enableCanonicalResize()).toThrow('cannot apply canonical Mosh resizing');
+    await plain.adapter.dispose();
+    const mosh = await open(undefined, {canonicalFrames: true});
+    const canonical = mosh.adapter.enableCanonicalResize();
+    const heard: unknown[] = [];
+    canonical.onResizeIntent(size => heard.push(size));
+    mosh.adapter.subscribe(event => heard.push(event), ['failure', 'geometry']);
+    invoke.mockClear();
+    mosh.adapter.requestSize({columns: 100, rows: 30});
+    mosh.adapter.requestSize({columns: 100, rows: 30});
+    await flush();
+    expect(heard).toEqual([{cols: 100, rows: 30}]);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(mosh.adapter.size()).toEqual({columns: 80, rows: 24});
+    // The core's refusal is the adapter's event, not a notice of the transport, and the display stays failed.
+    mosh.events.onmessage!({type: 'failure', reason: 'partial-frame'} as never);
+    mosh.events.onmessage!({type: 'failure', reason: 'invalid-frame'} as never);
+    expect(heard.slice(1)).toEqual([{type: 'failure', reason: 'partial-frame'}]);
+    expect(canonical.failure).toBe('partial-frame');
+    expect(transport).not.toHaveBeenCalled();
+    mosh.adapter.requestSize({columns: 120, rows: 40});
+    expect(heard).toHaveLength(2);
+    await expect(canonical.close()).resolves.toBeUndefined();
+    await mosh.adapter.dispose();
+  });
+
   it('tells the core about a theme change once, in order after the session starts, and not after the terminal is gone', async () => {
     const opening = await open(undefined, {theme: forest});
     opening.adapter.applyPreferences(preferences(paper));
@@ -228,6 +256,20 @@ describe('the native core over the Tauri commands', () => {
       ['terminal_core_selection_text', {sessionId: 'local:7', range}],
       ['terminal_core_search', {sessionId: 'local:7', query: 'file', direction: 'backward', from: 12}],
       ['terminal_core_select', {sessionId: 'local:7', range: null}],
+    ]);
+    await adapter.dispose();
+  });
+
+  it('asks the core which link a tap opens with one command per cell, and takes no link for no answer', async () => {
+    const {adapter} = await open();
+    invoke.mockClear();
+    const link = {kind: 'url', uri: 'https://example.com/docs'};
+    invoke.mockImplementation(async (command: string, args: {cell: {x: number}}) => command === 'terminal_core_link_at' && args.cell.x === 4 ? link : null);
+    expect(await adapter.linkAt({x: 4, y: 7})).toEqual(link);
+    expect(await adapter.linkAt({x: 0, y: 0})).toBeUndefined();
+    expect(invoke.mock.calls.map(([command, args]) => [command, args])).toEqual([
+      ['terminal_core_link_at', {sessionId: 'local:7', cell: {x: 4, y: 7}}],
+      ['terminal_core_link_at', {sessionId: 'local:7', cell: {x: 0, y: 0}}],
     ]);
     await adapter.dispose();
   });

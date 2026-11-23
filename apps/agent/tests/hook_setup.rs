@@ -1224,8 +1224,7 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
     }
 }
 
-/// The store's file names and the bytes of its database and write-ahead log; the shared-memory
-/// index is left out because merely reading a write-ahead-log database touches it.
+/// The store's file names and the bytes of every file it can have: database, write-ahead log and shared-memory index.
 #[cfg(target_os = "linux")]
 fn store_fingerprint(state: &std::path::Path) -> (Vec<String>, Vec<Vec<u8>>) {
     let mut names: Vec<String> = std::fs::read_dir(state)
@@ -1233,7 +1232,7 @@ fn store_fingerprint(state: &std::path::Path) -> (Vec<String>, Vec<Vec<u8>>) {
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
     names.sort();
-    let bytes = ["events.sqlite3", "events.sqlite3-wal"]
+    let bytes = ["events.sqlite3", "events.sqlite3-wal", "events.sqlite3-shm"]
         .map(|name| std::fs::read(state.join(name)).unwrap_or_default());
     (names, bytes.into())
 }
@@ -1325,6 +1324,61 @@ fn hook_status_tells_configured_but_silent_from_a_received_local_event_and_never
             json!({"state":"none"})
         );
     }
+}
+
+/// Regression (#1766, #1944): SQLite's read-only mode created a missing write-ahead index and deleted the log of an empty
+/// database, so a status read changed the store it only meant to read.
+#[cfg(target_os = "linux")]
+#[test]
+fn hook_status_never_creates_changes_or_deletes_a_file_of_the_store() {
+    use std::fs;
+    let unchecked = json!({"state":"notChecked"});
+    let fixture = ProfileFixture::new(record::Agent::Claude);
+    let state = fixture.state();
+    // An empty database beside a log: SQLite deletes such a log when it opens the database.
+    fs::create_dir(&state).unwrap();
+    fs::write(state.join("events.sqlite3"), b"").unwrap();
+    fs::write(state.join("events.sqlite3-wal"), b"sentinel").unwrap();
+    let before = store_fingerprint(&state);
+    assert_eq!(
+        fixture.cli("status", None)["readiness"]["localEvent"],
+        unchecked
+    );
+    assert_eq!(
+        store_fingerprint(&state),
+        before,
+        "status changed the store"
+    );
+    // A real store whose write-ahead index is gone: it is neither rebuilt nor repaired, and the state is not guessed.
+    fs::remove_file(state.join("events.sqlite3")).unwrap();
+    fs::remove_file(state.join("events.sqlite3-wal")).unwrap();
+    let mut ingest = std::process::Command::new(&fixture.companion);
+    ingest
+        .args(["ingest", "--agent", record::Agent::Claude.name()])
+        .env_clear()
+        .env("PATH", "")
+        .env("LAZYSH_STATE_DIR", &state);
+    let prompt = json!({"hook_event_name":"UserPromptSubmit","session_id":"ready","cwd":"/work"});
+    assert!(
+        process::run(&mut ingest, &serde_json::to_vec(&prompt).unwrap())
+            .status
+            .success()
+    );
+    let index = state.join("events.sqlite3-shm");
+    if index.exists() {
+        fs::remove_file(&index).unwrap();
+    }
+    let before = store_fingerprint(&state);
+    assert_eq!(
+        fixture.cli("status", None)["readiness"]["localEvent"],
+        unchecked
+    );
+    assert!(!index.exists(), "status created the write-ahead index");
+    assert_eq!(
+        store_fingerprint(&state),
+        before,
+        "status changed the store"
+    );
 }
 
 #[cfg(target_os = "linux")]

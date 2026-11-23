@@ -122,6 +122,9 @@ pub(crate) trait Core: Send + Sync {
     )> {
         None
     }
+    /// The session's transport ended: a Mosh display left inside a frame has failed, and the reader is told before the
+    /// closing notice that follows. Nothing for a core that follows no frames.
+    fn finished(&self) {}
     /// Free the core now. Idempotent.
     fn close(&self);
 }
@@ -381,6 +384,9 @@ impl OutputSink for Routed<'_> {
 
     fn closed(&self, message: String, lost: bool) -> Result<(), String> {
         let handed = self.attached.and_then(|attached| attached.handed().clone());
+        if let (None, Some(attached)) = (&handed, self.attached) {
+            attached.core.finished();
+        }
         handed
             .as_ref()
             .unwrap_or(self.channel)
@@ -735,6 +741,18 @@ pub async fn terminal_core_word_at(
     query(lease, session_id, word).await
 }
 
+/// The link a tap on `cell` opens: an OSC 8 hyperlink, a URL or a host path (`{kind: "url", uri}` or `{kind: "path", ...}`), `null`
+/// where there is none.
+#[tauri::command]
+pub async fn terminal_core_link_at(
+    lease: AccessLease,
+    session_id: String,
+    cell: Json,
+) -> AccessResult<Json> {
+    let link = serde_json::json!({"kind": "linkAt", "cell": cell});
+    query(lease, session_id, link).await
+}
+
 /// The whole soft-wrapped line that holds `row`.
 #[tauri::command]
 pub async fn terminal_core_line_at(
@@ -961,9 +979,9 @@ mod native {
     use super::*;
     use lazysh_terminal_runtime::{
         control_window, dom_mods, ffi, scrollback_bytes_for_lines, CellRange, Config, ControlEvent,
-        ControlQuery, ControlSnapshot, DomKey, Doorbell, Error as RuntimeError, Hooks, Hub,
-        HubConfig, KeyInput, MouseInput, Offer, Origin, PtyWriter, Refused, RgbColor, ScrollAction,
-        Session, Size, TerminalRuntime, Theme,
+        ControlQuery, ControlSnapshot, DisplayFailure, DomKey, Doorbell, Error as RuntimeError,
+        Hooks, Hub, HubConfig, KeyInput, MouseInput, Offer, Origin, PtyWriter, Refused, RgbColor,
+        ScrollAction, Session, Size, TerminalRuntime, Theme,
     };
 
     static HUB: LazyLock<Hub> = LazyLock::new(|| Hub::new(HubConfig::default()));
@@ -1100,6 +1118,12 @@ mod native {
                 ControlEvent::Bell => Self::Bell,
                 ControlEvent::Cwd { path } => Self::Cwd { path },
                 ControlEvent::Clipboard { text } => Self::Clipboard { text },
+                ControlEvent::Failure { reason } => Self::Failure {
+                    reason: match reason {
+                        DisplayFailure::InvalidFrame => "invalid-frame",
+                        DisplayFailure::PartialFrame => "partial-frame",
+                    },
+                },
             }
         }
     }
@@ -1297,8 +1321,41 @@ mod native {
             Some((self.0.clone(), inbox))
         }
 
+        fn finished(&self) {
+            // Everything fed is parsed first: a frame the transport finished is not a partial one. Nothing is
+            // queued in the usual case, and then the reader hears of a failure before the closing notice.
+            if finish_display(&self.0, &self.2) {
+                return;
+            }
+            let (session, bell) = (self.0.clone(), self.2.clone());
+            std::thread::spawn(move || {
+                let until = std::time::Instant::now() + FINISH_PATIENCE;
+                while !finish_display(&session, &bell) && std::time::Instant::now() < until {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            });
+        }
+
         fn close(&self) {
             self.0.close();
+        }
+    }
+
+    /// How long a transport that has ended waits for the core to parse what it was fed before the Mosh display is closed.
+    const FINISH_PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Closes the Mosh display once nothing is queued, and tells the reader what failed. False while chunks wait; true
+    /// when done or when the session is already gone.
+    fn finish_display(session: &Session, bell: &Doorbell) -> bool {
+        match session
+            .with(|runtime| (runtime.ingress().queued() == 0).then(|| runtime.finish_canonical()))
+        {
+            Ok(Some(_)) => {
+                bell.read();
+                true
+            }
+            Ok(None) => false,
+            Err(_) => true,
         }
     }
 
@@ -1821,13 +1878,23 @@ mod native {
             lease: AccessLease,
             core: Arc<dyn Core>,
             written: Arc<Mutex<Vec<u8>>>,
+            /// Where the session's output goes, as the transport finds it.
+            slot: CoreSlot,
+            channel: Channel<SshEvent>,
         }
 
         async fn opened(id: &'static str, config: Option<CoreConfig>) -> Opened {
+            opened_on(Channel::new(|_| Ok(())), id, config).await
+        }
+
+        async fn opened_on(
+            channel: Channel<SshEvent>,
+            id: &'static str,
+            config: Option<CoreConfig>,
+        ) -> Opened {
             let lease = crate::app_lock::AccessState::disabled()
                 .lease(None)
                 .unwrap();
-            let channel = Channel::new(|_| Ok(()));
             terminal_core_open(lease.clone(), channel.clone(), 80, 24, None, config)
                 .await
                 .unwrap()
@@ -1837,9 +1904,10 @@ mod native {
             let core = prepared.core.clone();
             let written = Arc::new(Mutex::new(Vec::new()));
             let transport = written.clone();
+            let slot = CoreSlot::default();
             prepared.attach(
                 id,
-                &CoreSlot::default(),
+                &slot,
                 Arc::new(|_| {}),
                 Arc::new(move |bytes, _| {
                     transport.lock().unwrap().extend(bytes);
@@ -1851,6 +1919,8 @@ mod native {
                 lease,
                 core,
                 written,
+                slot,
+                channel,
             }
         }
 
@@ -2026,6 +2096,85 @@ mod native {
             assert_eq!(mosh.size(None).await, (60, 20));
             close("mosh-canonical");
             close("mosh-plain");
+        }
+
+        /// A Channel and the kinds of event it was sent that matter to a Mosh display (`failure:<reason>` and `closed`), in order.
+        struct Told(
+            Channel<SshEvent>,
+            Mutex<tokio::sync::mpsc::UnboundedReceiver<Json>>,
+            Mutex<Vec<String>>,
+        );
+
+        impl Told {
+            fn new() -> Self {
+                let (channel, received) = crate::ssh::test_support::json_events();
+                Self(channel, Mutex::new(received), Mutex::default())
+            }
+
+            fn kinds(&self) -> Vec<String> {
+                let (mut received, mut seen) = (self.1.lock().unwrap(), self.2.lock().unwrap());
+                while let Ok(event) = received.try_recv() {
+                    let kind = event["type"].as_str().unwrap();
+                    match event["reason"].as_str() {
+                        Some(reason) if kind == "failure" => seen.push(format!("failure:{reason}")),
+                        _ if kind == "closed" => seen.push(kind.into()),
+                        _ => {}
+                    }
+                }
+                seen.clone()
+            }
+        }
+
+        #[tokio::test]
+        #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+        async fn a_mosh_display_the_core_cannot_follow_is_told_to_the_renderer_before_the_closing_notice(
+        ) {
+            let _kept = tests_keeping_cores().read();
+            let mosh = || CoreConfig {
+                canonical_frames: true,
+                ..CoreConfig::default()
+            };
+            let end = |opened: &Opened| {
+                opened
+                    .slot
+                    .route(&opened.channel)
+                    .closed("gone".into(), false)
+                    .unwrap()
+            };
+            // A frame the core refuses fails the display, once, as the client's `failure` event.
+            let refused = Told::new();
+            let refusing = opened_on(refused.0.clone(), "mosh-refused", Some(mosh())).await;
+            refusing.answers_to(b"\x1b]7777;lazysh-mosh;1;end;9\x1b\\");
+            wait_until(|| refused.kinds() == ["failure:invalid-frame"]);
+            refusing.answers_to(b"\x1b]7777;lazysh-mosh;1;end;9\x1b\\");
+            assert_eq!(refused.kinds(), ["failure:invalid-frame"]);
+            // A transport that ends inside a frame fails it too, ahead of the notice that it ended.
+            let cut = Told::new();
+            let cutting = opened_on(cut.0.clone(), "mosh-cut", Some(mosh())).await;
+            cutting.answers_to(b"\x1b]7777;lazysh-mosh;1;begin;1;30;6\x1b\\half");
+            end(&cutting);
+            wait_until(|| cut.kinds().len() == 2);
+            assert_eq!(cut.kinds(), ["failure:partial-frame", "closed"]);
+            // A frame the transport finished is not a partial one, and a session that is not Mosh never fails a display.
+            let (whole, plain) = (Told::new(), Told::new());
+            let finished = opened_on(whole.0.clone(), "mosh-whole", Some(mosh())).await;
+            finished.answers_to(
+                b"\x1b]7777;lazysh-mosh;1;begin;1;30;6\x1b\\ok\x1b]7777;lazysh-mosh;1;end;1\x1b\\",
+            );
+            let ordinary = opened_on(plain.0.clone(), "mosh-plain-failure", None).await;
+            ordinary.answers_to(b"\x1b]7777;lazysh-mosh;1;end;9\x1b\\");
+            end(&finished);
+            end(&ordinary);
+            wait_until(|| whole.kinds() == ["closed"] && plain.kinds() == ["closed"]);
+            assert_eq!(finished.size(None).await, (30, 6));
+            for id in [
+                "mosh-refused",
+                "mosh-cut",
+                "mosh-whole",
+                "mosh-plain-failure",
+            ] {
+                close(id);
+            }
         }
 
         #[test]
@@ -2439,6 +2588,7 @@ mod tests {
             "terminal_core_selection_text",
             "terminal_core_search",
             "terminal_core_word_at",
+            "terminal_core_link_at",
             "terminal_core_line_at",
             "terminal_core_buffer_range",
             "terminal_core_copy_screen",
@@ -2611,6 +2761,7 @@ mod tests {
                 )
                 .await,
                 terminal_core_word_at(lease(), id.clone(), json!({"x": 5, "y": 6})).await,
+                terminal_core_link_at(lease(), id.clone(), json!({"x": 7, "y": 8})).await,
                 terminal_core_line_at(lease(), id.clone(), 9).await,
                 terminal_core_buffer_range(lease(), id.clone()).await,
                 terminal_core_copy_screen(lease(), id).await,
@@ -2631,6 +2782,7 @@ mod tests {
                 json!({"kind": "selectionText", "range": range}),
                 json!({"kind": "search", "query": "needle", "direction": "backward", "from": 7}),
                 json!({"kind": "wordAt", "cell": {"x": 5, "y": 6}}),
+                json!({"kind": "linkAt", "cell": {"x": 7, "y": 8}}),
                 json!({"kind": "lineAt", "row": 9}),
                 json!({"kind": "bufferRange"}),
                 json!({"kind": "copyScreen"}),
@@ -2654,7 +2806,7 @@ mod tests {
         assert!(terminal_core_select(renderer, id(), None).await.is_err());
         assert_eq!(
             core.asked.lock().unwrap().len(),
-            8,
+            9,
             "a refusal asks nothing"
         );
         close("text-gated");

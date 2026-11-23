@@ -7,7 +7,8 @@
 //! and a `result` or an `error`. What the program reported (title, bell, directory, clipboard) and the doorbell are
 //! notifications (`method: "event"`, `params` a `ControlEvent`), written before the answer of the request that read the
 //! state. Methods, each with an optional `window` where it answers with the state:
-//! `open {columns, rows, scrollbackLines}`, `feed {data}` (base64; parsed before it answers), `snapshot`, `scroll {action}`,
+//! `open {columns, rows, scrollbackLines, canonicalFrames?}`, `canonical` (a core that was not opened for Mosh becomes one,
+//! before its first byte), `feed {data}` (base64; parsed before it answers), `snapshot`, `scroll {action}`,
 //! `resize {columns, rows}`, `input {text}`, `setActive {active}`, `query {query}` (a `ControlQuery` about the buffer's
 //! text, answered with text, a range or a hit), `select {range}` (the cells to highlight, or none) and `close`, which
 //! ends the process.
@@ -51,12 +52,15 @@ impl PtyWriter for Nowhere {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Open {
     columns: u16,
     rows: u16,
     scrollback_lines: usize,
+    /// The transport is Mosh: its frames decide the grid's size.
+    #[serde(default)]
+    canonical_frames: bool,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +115,7 @@ struct Parsed {
 }
 
 struct Core {
+    request: Open,
     session: Session,
     doorbell: Arc<Doorbell>,
     parsed: Arc<Parsed>,
@@ -163,11 +168,13 @@ fn open(hub: &Hub, request: Open) -> Result<Core, Failure> {
         columns,
         rows,
         scrollback_lines,
+        canonical_frames,
     } = request;
     let config = Config {
         size: Size::new(columns, rows),
         scrollback_bytes: scrollback_bytes_for_lines(scrollback_lines, columns),
         ingress_bytes: WINDOW,
+        canonical_frames,
         ..Config::default()
     };
     let parsed = Arc::new(Parsed::default());
@@ -191,6 +198,7 @@ fn open(hub: &Hub, request: Open) -> Result<Core, Failure> {
     doorbell.bind(session.clone());
     session.set_active(true);
     Ok(Core {
+        request,
         session,
         doorbell,
         parsed,
@@ -204,6 +212,27 @@ fn call(hub: &Hub, core: &mut Option<Core>, method: &str, input: Value) -> Resul
             return Err(failed("a core is already open"));
         }
         *core = Some(open(hub, params(input)?)?);
+        return Ok(Value::Null);
+    }
+    if method == "canonical" {
+        let current = core.as_ref().ok_or_else(|| failed("no core is open"))?;
+        if current.fed > 0 {
+            return Err(failed("canonical frames must precede the first byte"));
+        }
+        // The mode is fixed when a session is built, as in the app (`terminal_core_open`'s config): start it again,
+        // empty and at the size it has now.
+        let size = current
+            .session
+            .with(|runtime| runtime.size())
+            .map_err(failed)?;
+        let request = Open {
+            columns: size.cols,
+            rows: size.rows,
+            canonical_frames: true,
+            ..current.request.clone()
+        };
+        current.session.close();
+        *core = Some(open(hub, request)?);
         return Ok(Value::Null);
     }
     let core = core.as_mut().ok_or_else(|| failed("no core is open"))?;

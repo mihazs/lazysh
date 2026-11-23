@@ -16,10 +16,12 @@ use std::{
 pub mod bidi;
 pub mod firefox;
 pub mod input;
+pub mod ladder;
 pub mod outbox;
 pub mod profile;
 pub mod relay;
 pub mod settings;
+pub mod tabs;
 pub mod wire;
 
 pub const ENABLE_VARIABLE: &str = "LAZYSH_DEV_HOST_BROWSER";
@@ -174,7 +176,8 @@ pub fn run(launch: &Launch) -> Result<()> {
             terminate(&mut child);
             return Ok(());
         }
-        if child.try_wait()?.is_some() {
+        if browser_exited(&mut child)? {
+            terminate(&mut child);
             return Err(Error::Browser("BrowserExited"));
         }
         if started.elapsed() > START_TIMEOUT {
@@ -198,7 +201,7 @@ pub fn run(launch: &Launch) -> Result<()> {
     while !matches!(
         stopped.recv_timeout(Duration::from_millis(100)),
         Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected)
-    ) && child.try_wait()?.is_none()
+    ) && !browser_exited(&mut child)?
     {}
     terminate(&mut child);
     Ok(())
@@ -230,15 +233,61 @@ fn die_with_launcher(command: &mut Command) {
 #[cfg(not(target_os = "linux"))]
 fn die_with_launcher(_: &mut Command) {}
 
+// Keep the child's PID reserved until the group is retired: `try_wait` would reap it and permit reuse.
+#[cfg(unix)]
+fn retry_interrupted<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    loop {
+        match operation() {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => return result,
+        }
+    }
+}
+#[cfg(unix)]
+fn browser_exited(child: &mut Child) -> io::Result<bool> {
+    retry_interrupted(|| {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is writable and this only observes our child without reaping it.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: waitid initialized the zeroed siginfo; a zero PID means no state change.
+        Ok(unsafe { info.si_pid() } != 0)
+    })
+}
+#[cfg(not(unix))]
+fn browser_exited(child: &mut Child) -> io::Result<bool> {
+    Ok(child.try_wait()?.is_some())
+}
+
 #[cfg(unix)]
 fn terminate(child: &mut Child) {
     let group = child.id() as i32;
-    // SAFETY: killpg takes plain integers and only signals the group this process created.
-    unsafe { libc::killpg(group, libc::SIGTERM) };
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
-        std::thread::sleep(Duration::from_millis(25));
+    // Fail closed if ownership cannot be observed: never signal a potentially reused PID or group.
+    let Ok(exited) = browser_exited(child) else {
+        return;
+    };
+    if !exited {
+        // SAFETY: the owned child has not been reaped, so its PID cannot be reused.
+        unsafe { libc::kill(group, libc::SIGTERM) };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            match browser_exited(child) {
+                Ok(false) => std::thread::sleep(Duration::from_millis(25)),
+                Ok(true) => break,
+                Err(_) => return,
+            }
+        }
     }
+    // SAFETY: the unreaped child reserves the process-group ID until after this signal.
     unsafe { libc::killpg(group, libc::SIGKILL) };
     let _ = child.wait();
 }
@@ -254,6 +303,49 @@ pub mod allow;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_child_observation_retries_and_other_errors_are_preserved() {
+        let mut calls = 0;
+        let observed = retry_interrupted(|| {
+            calls += 1;
+            if calls == 1 {
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            } else {
+                Ok(true)
+            }
+        });
+        assert!(observed.unwrap());
+        assert_eq!(calls, 2);
+        assert_eq!(
+            retry_interrupted::<()>(|| Err(io::Error::from(io::ErrorKind::PermissionDenied)))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exited_browser_is_observed_without_reaping_until_group_cleanup() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]);
+        own_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !browser_exited(&mut child).unwrap() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(browser_exited(&mut child).unwrap());
+        terminate(&mut child);
+        assert!(
+            browser_exited(&mut child).is_err(),
+            "reaped child cannot authorize a signal"
+        );
+        terminate(&mut child); // An already-reaped child must not signal its old PID or group.
+    }
 
     #[test]
     fn origins_must_be_exact() {

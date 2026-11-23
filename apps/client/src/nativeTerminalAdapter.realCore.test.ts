@@ -21,6 +21,11 @@ type SelectionCase = {
   words: {at: Cell; range: [Cell, Cell]}[];
   searches: {query: string; direction: 1 | -1; from: number | null; hit: {row: number; column: number; length: number} | null}[];
 };
+type LinksCase = {
+  id: string; cols: number; rows: number; scrollback: number; write: string;
+  urls?: {text: string; start: Cell; end: Cell}[];
+  paths?: {text: string; path: string; start: Cell; end: Cell; line: number | null; column: number | null}[];
+};
 type ClipboardCase = {id: string; data: string; text: string | null; core?: {text: string | null}};
 const cell = ([x, y]: Cell) => ({x, y});
 
@@ -78,6 +83,20 @@ describe.skipIf(!binary)('NativeTerminalAdapter over the real core', () => {
         for (const w of c.words) {
           adapter.select(adapter.selectWordAt(cell(w.at)));
           await vi.waitFor(() => expect(adapter.selectionRange(), `${c.id}: word at ${w.at}`).toEqual({start: cell(w.range[0]), end: cell(w.range[1])}));
+        }
+      } finally { await adapter.dispose(); }
+    }
+  });
+
+  it('says what a tap on the first and the last cell of every URL and host path of links.json opens, wrapped across rows or not', async () => {
+    for (const c of fixture<LinksCase>('links')) {
+      const adapter = await openNativeTerminalAdapter(await openStdioCore(binary!, {columns: c.cols, rows: c.rows, scrollbackLines: c.scrollback}));
+      try {
+        await adapter.write!(bytes(c.write));
+        for (const link of c.urls ?? []) for (const [x, y] of [link.start, link.end]) expect(await adapter.linkAt({x, y}), `${c.id}: ${link.text} at ${x},${y}`).toEqual({kind: 'url', uri: link.text});
+        for (const link of c.paths ?? []) for (const [x, y] of [link.start, link.end]) {
+          expect(await adapter.linkAt({x, y}), `${c.id}: ${link.text} at ${x},${y}`)
+            .toMatchObject({kind: 'path', text: link.text, path: link.path, ...(link.line === null ? {} : {line: link.line}), ...(link.column === null ? {} : {column: link.column})});
         }
       } finally { await adapter.dispose(); }
     }

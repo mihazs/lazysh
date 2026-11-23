@@ -13,7 +13,7 @@ import {registerSessionOutput} from './pendingSessions';
 import type {BackendProbe} from './terminalBackendRegistry';
 
 const noop = () => {};
-const coreEvents: ReadonlySet<string> = new Set<NativeCoreEvent['type']>(['changed', 'title', 'bell', 'cwd', 'clipboard']);
+const coreEvents: ReadonlySet<string> = new Set<NativeCoreEvent['type']>(['changed', 'title', 'bell', 'cwd', 'clipboard', 'failure']);
 const isCoreEvent = (event: {type: string}): event is NativeCoreEvent => coreEvents.has(event.type);
 /** Tauri rejects with the command's error value, usually a string; a caller of `createNativeTerminalAdapter` gets an `Error`, a lease refusal (`StaleAccessError`) as it is. */
 const asError = (error: unknown) => error instanceof Error ? error : new Error(String(error));
@@ -136,6 +136,8 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
       theme = next;
       call('terminal_core_theme', {theme}).catch(noop);
     },
+    // The mode is fixed when the core opens: a core that was not opened for Mosh cannot follow its frames.
+    ...canonicalFrames && {canonicalFrames: async () => {}},
     subscribe(listener) {
       listeners.add(listener);
       return {dispose: () => { listeners.delete(listener); }};

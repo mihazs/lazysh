@@ -86,8 +86,14 @@ Security and data (each is tested, not only stated):
 | Start cost | 130 ms (Chromium) and 410 ms (Firefox) to a usable endpoint, so on demand is cheap. |
 
 **Keep profile** is an explicit option for flows that need a sign-in to survive (it keeps cookies on the host's
-disk until **Clear browser data**). It is off by default and labelled with what it stores. In the launcher it is
-`--keep-profile` (one kept profile, refused while a browser uses it) and `host-browser --clear-data`.
+disk until **Clear browser data**). It is off by default and labelled with what it stores. In the launcher and in the
+relay (`host-browser serve --keep-profile`) it is `--keep-profile` (one kept profile, refused as `BrowserProfileInUse`
+while a browser uses it, which the relay reports as its `closed` reason) and `host-browser --clear-data` removes it. A
+relay that is not asked to keep the profile stays ephemeral and leaves the kept one as it is. An older companion
+answers `--keep-profile` with a usage error and starts nothing, so a session never silently runs without the profile
+the user asked to keep.
+When upgrading, stop older companion sessions before starting a kept session or clearing browser data. Older
+companions do not use the profile coordination lock, so concurrent recovery of stale profiles across versions is not protected.
 
 ### Attaching to the normal profile
 
@@ -209,17 +215,18 @@ header (sequence, width, height, scroll offset, timestamp), so the client never 
 | client to relay | `open {browser, headed, viewport}` | Starts the managed browser; the reply carries the capability record. |
 | client to relay | `navigate {url}`, `back`, `forward`, `reload`, `stop` | `url` limited to `http`, `https`, `about:blank`. |
 | client to relay | `tabs`, `activateTab {id}`, `newTab`, `closeTab {id}` | Pages only. |
+| client to relay | `answerDialog {accept, text?}` | The answer to the page's open dialog; `text` is a prompt's answer. |
 | client to relay | `ack {sequence, decodeMs}` | After the device decoded a frame. |
-| client to relay | `quality {rung}`, `pause`, `resume` | Pause when hidden. |
+| client to relay | `quality {rung}`, `pause`, `resume` | `rung` is `auto`, `high`, `balanced`, `low` or `minimal`: a named rung holds it (Data saver sends `minimal`), `auto` lets the relay choose. Pause when hidden. |
 | client to relay | `control {on}` | Turns Control on or off for the session. Off when a session starts. |
 | client to relay | `pointer {kind, x, y, button, clickCount}`, `wheel {x, y, deltaX, deltaY}`, `pinch {scale}`, `key {key, modifiers}`, `text {text}` | Accepted only while Control is on; see "Relay wire format". |
-| relay to client | `frame`, `state`, `tabs`, `dialog {kind, text}`, `closed {reason}` | Page strings are untrusted text. |
+| relay to client | `frame`, `state`, `quality {rung, pinned}`, `tabs`, `dialog {kind, message, defaultPrompt}`, `dialogClosed`, `notice {kind, count}`, `closed {reason}` | Page strings are untrusted text. |
 
 Everything else is dropped with a counter, and the browser's protocol is not otherwise reachable.
 
 ### Relay wire format
 
-`lazysh-agent host-browser serve [--binary PATH] [--no-sandbox]` is the relay. It is hidden from `--help`, fails
+`lazysh-agent host-browser serve [--binary PATH] [--no-sandbox] [--keep-profile]` is the relay. It is hidden from `--help`, fails
 before it starts anything while the host browser switch is off, and speaks one format in both directions on its
 standard input and output (the SSH exec channel): `length:u32be tag:u8 body`, where `length` counts the tag and
 the body.
@@ -231,15 +238,18 @@ the body.
 
 Client messages are a closed set, `deny_unknown_fields`: `open {browser?: "chrome" | "firefox", headed?, viewport: {width,
 height, scale?}, url?}` (first, once; viewport 100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels
-scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `pause`, `resume`, `control {on}` and the
-input messages below. Anything else, including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
+scaled; `url` limited like any address), `ack {sequence, decodeMs?}`, `quality {rung}`, `pause`, `resume`, `control {on}`, the
+input messages below and the navigation messages of "Navigation, tabs and dialogs". Anything else, including a second `open`, is refused and counted, never forwarded; a length of zero, above 64 KiB, or a tag other
 than 1 ends the session with `ProtocolViolation`. Relay messages are `state {state: "running" | "paused",
-browser, viewport, capabilities}` (the version comes from `Browser.getVersion` and must be Chrome or Chromium
+browser, viewport, capabilities}`, `quality {rung, pinned}` (the rung the stream is at, sent when the stream starts and
+whenever the rung or the pin changes) (the version comes from `Browser.getVersion` and must be Chrome or Chromium
 111 or newer, or, for Firefox, from `session.new` and must be Firefox 159 or newer, otherwise the session ends with `BrowserVersionUnsupported` and `detail` names the version),
 `page {title, url}` (untrusted text, bounded to 512 and 2048 characters), `refused {reason, count}` (one count
 per reason, sent at count 1, 2, 4, 8 and so on; the reasons are `OperationRefused`, `ControlOff`,
-`InputOutOfRange`, `PermissionRefused` and `InputRateLimited`), and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed`,
-`BrowserExited`, `PageCrashed`, `ProtocolViolation`, or the class of a failure before the stream started
+`InputOutOfRange`, `PermissionRefused`, `AddressRefused` and `InputRateLimited`), the messages of "Navigation, tabs
+and dialogs" below, and `closed {reason, detail?}` as the last message: `ClientClosed`, `PageClosed` (the browser has no
+page left),
+`BrowserExited`, `PageCrashed`, `ProtocolViolation`, `IdleReleased` (the view was hidden for the idle time, below), or the class of a failure before the stream started
 (`HostBrowserDisabled`, `BrowserNotFound`, `AddressRefused`, `ViewportInvalid`, and so on).
 
 `control {on}` turns Control on or off, and `capabilities.control` in `state` says the relay accepts it. Control is
@@ -265,14 +275,20 @@ does not reach (a drag is one `wheel` per frame). The relay does not log or keep
 Pacing is the relay's job. It acknowledges the browser's screencast frame at once and keeps only the newest
 frame for the device; at most two frames are unacknowledged, and the client sends `ack` after it decoded a frame,
 so a slow device sees fewer frames, not a queue. `pause` stops the screencast at the browser and holds nothing;
-`resume` starts it again. The browser's title and address are read when they change and once a second while the
+`resume` starts it again. A view hidden for the idle time, `--idle-release SECONDS` (1 to 86400, default 600), ends
+the session with `IdleReleased`, which stops the browser and removes its profile; a shown view is never released.
+How much the relay asks of the browser is the [quality ladder](#performance). The browser's title and address are read when they change and once a second while the
 view is shown, because Chrome announces an address change but not a title that the page sets later.
 
 The browser is started with `--remote-debugging-pipe`, a private profile and `--headless=new` (so no port exists
 on the host), and its standard output and error are discarded because they can name pages. It ends, with its
 helpers and its profile, when standard input closes, on SIGINT, SIGTERM or SIGHUP, when the browser exits and
 when the page closes; on Linux the kernel also stops it if the relay is killed outright, and the next start
-removes the profile that a killed relay left. `--no-sandbox` is for containers and CI runners that cannot create a
+removes the profile that a killed relay left. The browser is stopped with SIGTERM to its main process alone, so it
+writes what a page stored (`localStorage` included) before its helpers go; only when it has not exited within three
+seconds is its whole process group killed. Its process id stays reserved until then (`waitid` with `WNOWAIT`), and
+if the relay cannot observe it, it sends no signal at all. With `--keep-profile` the relay uses the one kept profile instead
+(`host-browser/kept`, mode 0700) and leaves it, with what the browser wrote, for `host-browser --clear-data`. `--no-sandbox` is for containers and CI runners that cannot create a
 sandbox. There is no Windows relay: a Windows host is refused with `HostBrowserUnsupported`.
 
 ### What the relay may send to the browser
@@ -354,6 +370,57 @@ the Chrome slices [#1255](https://github.com/mihazs/lazysh/issues/1255),
   leaked session, so the relay ends the session instead), a Firefox older than 159, Firefox from a snap or a
   Flatpak (its profile and port may sit behind the sandbox), Windows and macOS hosts, and a headed Firefox were not
   tried.
+
+### Navigation, tabs and dialogs
+
+Status: the relay carries these messages; the app does not send or show them yet
+([#1998](https://github.com/mihazs/lazysh/issues/1998), second slice of
+[#1706](https://github.com/mihazs/lazysh/issues/1706)). They are **not input**, so Control does not gate them: a
+session that is view-only can still navigate, switch tabs and answer a page's dialog. They are bounded by the
+switch, by the closed message set and by the allow-list like everything else, and `state` says
+`capabilities.navigation: true` and `capabilities.tabs: true`.
+
+| Client message | Relay's calls (each one passes the allow-list first) |
+| --- | --- |
+| `navigate {url}` | `Page.navigate`; an address that is not `http`, `https` or `about:blank` (printable ASCII, at most 2048 bytes) is refused with `AddressRefused` and dropped. |
+| `back`, `forward` | `Page.navigateToHistoryEntry` for the entry one step back or forward in the history the relay last read (`Page.getNavigationHistory`); nothing at either end of the history. |
+| `reload`, `stop` | `Page.reload`, `Page.stopLoading`. |
+| `tabs` | None: the relay sends the tab list again. |
+| `activateTab {id}` | Attach to that page, `Target.activateTarget`, then leave the shown page (see below). A page that is not in the list is refused with `OperationRefused`. |
+| `newTab` | `Target.createTarget` with `about:blank`, then show it; refused with `OperationRefused` at 16 pages. |
+| `closeTab {id}` | `Target.closeTarget`. A browser keeps a page: closing the last one makes a blank one first. |
+| `answerDialog {accept, text?}` | `Page.handleJavaScriptDialog`; refused with `OperationRefused` while no dialog is open and with `InputOutOfRange` when `text` is over 4 KiB. |
+
+The relay sends:
+
+- `tabs {tabs: [{id, title, url}], activeId, canGoBack, canGoForward, loading}`: the browser's pages (type `page`
+  only, in the order it first reported them, at most 16; titles at most 200 characters, addresses at most 2048) and
+  what the controls show about the shown one. It is sent again only when it changes. A list that would not fit one
+  JSON message (64 KiB) loses its last pages, never the shown one. Titles are read from `Target.getTargets` again
+  every second and whenever a page settles, because Chromium announces a title through a target change for the
+  first page only (measured). `loading` is the main frame's loading state (the main frame has the id of its
+  target, measured).
+- `dialog {kind, message, defaultPrompt}` when the shown page opens an alert, a confirm, a prompt or a
+  before-unload question (text bounded to 1000 characters), and `dialogClosed` when it closes. Showing another page
+  while a dialog is open dismisses it first (`accept: false`), so that its page is not left blocked.
+- `notice {kind: "download" | "fileChooser", count}` when the browser denied a download or a file chooser, at count
+  1, 2, 4, 8 and so on. The download behavior is set to `deny` with `eventsEnabled` before any page is attached, and the
+  file chooser is intercepted on every page the relay attaches to. **Permission prompts have no notice**: the
+  protocol typings of Playwright 1.64.1 (Chromium 157 era) have `Browser.setPermission`, `grantPermissions` and
+  `resetPermissions`, which the allow-list refuses on purpose, and no event for a request, and headless Chromium
+  denies the request without a prompt (`Notification.requestPermission()` resolved `denied`, measured in #1256).
+
+Only one page streams at a time (a background page produces no frames, measured). Showing another page attaches to it
+first and leaves the shown one only once that worked; a page the browser listed that is gone by then is dropped from
+the list and the shown page stays. A page that opens another (a link with `target="_blank"`, `window.open`)
+takes the view, like in a browser. A page that is closed (by a tab close, by itself) hands the view to the last page of
+the list; the session ends with `PageClosed` only when the browser has none left. A page beyond sixteen is closed
+again as soon as the browser creates it, so a page that opens windows in a loop cannot grow the list.
+
+Known limit: while the relay switches pages it waits for each answer of the browser, up to 90 seconds, and the
+client's messages wait in line meanwhile; a page that hangs while it is being attached would stall the session until
+that timeout ends it with `BrowserStartTimeout`. Everything else on the shown page (navigation, history, dialog
+answers, input) is sent without waiting.
 
 ### Adapters and capabilities
 
@@ -531,19 +598,40 @@ Measured on this project's development host; see the
 
 Design from those facts:
 
-- **Quality ladder.** High, balanced, low and minimal, each a JPEG quality, a frame size and a frame divisor
-  (for example q60 full size every frame, q40 every 3rd frame, q35 at 75 percent size every 6th frame). The
-  relay measures goodput and the acknowledgement time, steps down within a second and steps up after ten stable
-  seconds. A **Data saver** option pins the lowest rung.
+- **Quality ladder** (`apps/agent/src/host_browser/ladder.rs`). Four rungs, each a JPEG quality, a frame size
+  and a frame divisor:
+
+  | Rung | JPEG quality | Size | Every nth frame (60 fps page) |
+  | --- | --- | --- | --- |
+  | High | 60 | 100 percent | 1 (60) |
+  | Balanced | 50 | 100 percent | 2 (30) |
+  | Low | 40 | 100 percent | 3 (20) |
+  | Minimal | 35 | 75 percent | 6 (10) |
+
+  A stream starts at High. The relay counts the frames the browser produces and the frames the device acknowledges
+  after decoding them. At most two frames are unacknowledged, so the acknowledgement rate is two frames over the
+  acknowledgement time: it holds the link's goodput and round trip and the phone's decode time, and the relay
+  does not estimate them separately. A rung **fits** while, over a window of 0.8 seconds, the device acknowledges
+  at least 80 percent of the lesser of the produced rate and 15 frames a second; a window with fewer than four
+  produced frames (an unchanged page) is not judged. A window that does not fit steps down one rung, so the first
+  step comes within a second and the lowest rung from High within about three. A rung that fit for ten seconds
+  steps up one rung, and if that one does not fit it is left again within a window. The relay tells the client the
+  rung and whether it is pinned with `quality {rung, pinned}`. A **Data saver** option sends `quality {rung:
+  "minimal"}`, which pins the lowest rung: the ladder neither judges nor boosts, until `quality {rung: "auto"}`
+  starts again from High.
+  A screencast sends a frame when the page changes (measured with Chromium 156), so after a step on a page that
+  does not change the picture keeps the previous rung's size until the page next changes.
 - **Acknowledge after decode.** The device's decode time is part of back-pressure, so a slow phone gets fewer
   frames instead of a growing queue.
 - **Pacing on the host.** The relay acknowledges the browser at once and holds only the newest frame for the
   device, so the link's round trip never throttles the browser. On Firefox it pipelines polls and drops repeats.
-- **Interaction boost.** Full rate for two seconds after input, then back to the ladder.
+- **Interaction boost.** Every frame (divisor 1) for two seconds after input the relay forwarded, at the rung's
+  own quality and size, then back to the rung. The boosted rate is not judged, because the link cannot be
+  expected to carry it, and a pinned rung is never boosted.
 - **Sharpen when idle.** A single high-quality still when the page stops changing, because a screencast is
   produced at CSS size.
 - **Pause when hidden.** No frames when the view is not visible, the app is in the background or the screen is
-  off; the browser is released after the idle time.
+  off (the viewer sends `pause`); the browser is released after the idle time (`--idle-release`).
 - **Host budget.** A streaming browser stays under one core at the highest rung, with at most one browser per
   session and two per app.
 

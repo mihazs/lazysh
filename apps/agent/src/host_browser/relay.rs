@@ -7,14 +7,19 @@
 //! client message that is not in the closed [`wire::Client`] set is refused and counted.
 //!
 //! Input reaches the browser only while the client has turned Control on (off at every start), as the few fixed
-//! messages of [`input`], each bounded and rate limited.
+//! messages of [`input`], each bounded and rate limited. Navigation, tabs and the answer to a page's dialog are
+//! not input, so Control does not gate them; each becomes the few allow-listed calls of [`Relay`] and a refused
+//! address or operation is counted and dropped like any other message outside the closed set.
 //!
 //! The browser, its helpers and its profile end with the channel: standard input closing, SIGINT, SIGTERM or
 //! SIGHUP, or the browser exiting. Nothing about a page is logged or written to disk.
 use super::{
     allow, browser_command, find_binary, firefox, input,
+    ladder::{self, Ladder, Screencast},
     outbox::Outbox,
-    profile, settings, terminate,
+    profile, settings,
+    tabs::{self, Reach, Tab, MAX_TABS, MAX_URL},
+    terminate,
     wire::{self, Client, Viewport},
 };
 use crate::{Error, Result};
@@ -29,6 +34,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+pub(super) use tabs::bounded;
 
 /// Chrome 111 added the origin check and the pipe behavior this relay relies on.
 const MIN_VERSION: u32 = 111;
@@ -38,9 +44,9 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(90);
 /// A screencast frame is base64 of a JPEG of at most [`wire::MAX_JPEG`], inside a JSON object.
 const MAX_BROWSER_MESSAGE: u64 = 8 << 20;
 pub(super) const MAX_TITLE: usize = 512;
-pub(super) const MAX_URL: usize = 2048;
-const QUALITY: u8 = 60;
 const TITLE_POLL: Duration = Duration::from_secs(1);
+/// How often the quality ladder and the idle time are looked at when nothing else wakes the relay.
+const TICK: Duration = Duration::from_millis(100);
 
 pub struct Serve<'a> {
     /// The companion state directory: where the setting and the profiles live.
@@ -48,6 +54,10 @@ pub struct Serve<'a> {
     pub binary: Option<&'a Path>,
     /// Pass --no-sandbox, for containers and CI runners that cannot create a sandbox.
     pub no_sandbox: bool,
+    /// Use the single kept profile instead of a private one, and leave it for `host-browser --clear-data`.
+    pub keep_profile: bool,
+    /// How long a hidden view may keep the browser before the session ends with `IdleReleased`.
+    pub idle_release: Duration,
 }
 
 pub(super) enum Event {
@@ -141,8 +151,8 @@ fn session(
     }
     let binary = find_binary(options.binary)?;
 
-    // Declared before the browser, so it is removed after the browser has ended.
-    let profile = profile::create(options.state, false)?;
+    // Declared before the browser, so it is released after the browser has ended: removed, unless it is the kept one.
+    let profile = profile::create(options.state, options.keep_profile)?;
     let mut command = browser_command(&binary, profile.path(), headed, options.no_sandbox);
     command
         .arg("--remote-debugging-pipe")
@@ -173,53 +183,26 @@ fn session(
         *detail = Some(bounded(&product, 64));
         return Err(Error::Browser("BrowserVersionUnsupported"));
     }
+    // Denied before any page can start one, and reported (`eventsEnabled`); the allow-list refuses every other
+    // behavior.
+    link.call(
+        "Browser.setDownloadBehavior",
+        json!({"behavior": "deny", "eventsEnabled": true}),
+        None,
+    )?;
     link.call("Target.setDiscoverTargets", json!({"discover": true}), None)?;
     let targets = link.call("Target.getTargets", json!({}), None)?;
-    let page = targets["targetInfos"]
+    let mut tabs: Vec<Tab> = targets["targetInfos"]
         .as_array()
         .into_iter()
         .flatten()
-        .find(|info| info["type"] == "page")
-        .and_then(|info| info["targetId"].as_str());
-    let target = match page {
-        Some(id) => id.to_string(),
-        None => link.call("Target.createTarget", json!({"url": "about:blank"}), None)?["targetId"]
-            .as_str()
-            .ok_or(Error::Browser("BrowserNoPage"))?
-            .to_string(),
-    };
-    let attached = link.call(
-        "Target.attachToTarget",
-        json!({"targetId": target, "flatten": true}),
-        None,
-    )?;
-    let page_session = attached["sessionId"]
-        .as_str()
-        .ok_or(Error::Browser("BrowserNoPage"))?
-        .to_string();
-    let on_page = Some(page_session.as_str());
-    link.call("Page.enable", json!({}), on_page)?;
-    // Denied before any page can start one; the allow-list refuses every other behavior.
-    link.call(
-        "Browser.setDownloadBehavior",
-        json!({"behavior": "deny"}),
-        None,
-    )?;
-    link.call(
-        "Page.setInterceptFileChooserDialog",
-        json!({"enabled": true}),
-        on_page,
-    )?;
-    link.call(
-        "Emulation.setDeviceMetricsOverride",
-        json!({
-            "width": viewport.width,
-            "height": viewport.height,
-            "deviceScaleFactor": viewport.scale,
-            "mobile": false,
-        }),
-        on_page,
-    )?;
+        .filter_map(Tab::page)
+        .collect();
+    if tabs.is_empty() {
+        tabs.push(link.create_tab()?);
+    }
+    let target = tabs[0].id.clone();
+    let page_session = link.attach(&target, viewport)?;
 
     let mut relay = Relay {
         link,
@@ -228,19 +211,33 @@ fn session(
         target,
         viewport,
         paused: false,
+        paused_since: None,
+        idle_release: options.idle_release,
+        ladder: Ladder::new(Instant::now()),
+        quality: None,
         control: false,
         limit: input::Limit::new(Instant::now()),
         sequence: 0,
         refused: BTreeMap::new(),
+        notices: BTreeMap::new(),
         page: (String::new(), String::new()),
         polled: Instant::now(),
+        tabs,
+        reach: Reach::default(),
+        reach_asked: None,
+        loading: false,
+        dialog: false,
+        sent: Value::Null,
     };
     relay.start_screencast()?;
     outbox.control(running_state(
         &product,
         viewport,
-        json!({"view": true, "control": true, "navigation": false, "tabs": false}),
+        json!({"view": true, "control": true, "navigation": true, "tabs": true}),
     ));
+    relay.report_quality();
+    relay.send_tabs(false);
+    relay.settle()?;
     relay.run()
 }
 
@@ -387,10 +384,6 @@ pub(super) fn major(product: &str) -> Option<u32> {
     product.split_once('/')?.1.split('.').next()?.parse().ok()
 }
 
-pub(super) fn bounded(text: &str, max: usize) -> String {
-    text.chars().take(max).collect()
-}
-
 struct Cdp {
     to_browser: Box<dyn Write + Send>,
     next: u64,
@@ -429,6 +422,45 @@ struct Link {
     backlog: VecDeque<Event>,
 }
 impl Link {
+    /// Attach to a page and make it ready to show: its events on, its file chooser intercepted (which is how it
+    /// is denied: the browser reports it and no file is supplied) and sized like the phone. The session's id.
+    fn attach(&mut self, target: &str, viewport: Viewport) -> Result<String> {
+        let attached = self.call(
+            "Target.attachToTarget",
+            json!({"targetId": target, "flatten": true}),
+            None,
+        )?;
+        let session = attached["sessionId"]
+            .as_str()
+            .ok_or(Error::Browser("BrowserNoPage"))?
+            .to_string();
+        let on_page = Some(session.as_str());
+        self.call("Page.enable", json!({}), on_page)?;
+        self.call(
+            "Page.setInterceptFileChooserDialog",
+            json!({"enabled": true}),
+            on_page,
+        )?;
+        self.call(
+            "Emulation.setDeviceMetricsOverride",
+            json!({
+                "width": viewport.width,
+                "height": viewport.height,
+                "deviceScaleFactor": viewport.scale,
+                "mobile": false,
+            }),
+            on_page,
+        )?;
+        Ok(session)
+    }
+
+    /// A new blank page.
+    fn create_tab(&mut self) -> Result<Tab> {
+        let created = self.call("Target.createTarget", json!({"url": "about:blank"}), None)?;
+        let page = json!({"targetId": created["targetId"], "type": "page", "url": "about:blank"});
+        Tab::page(&page).ok_or(Error::Browser("BrowserNoPage"))
+    }
+
     fn call(&mut self, method: &str, params: Value, session: Option<&str>) -> Result<Value> {
         let id = self.cdp.send(method, params, session)?;
         let mut reply = await_reply(&self.inbox, &mut self.backlog, id)?;
@@ -469,6 +501,12 @@ struct Relay {
     target: String,
     viewport: Viewport,
     paused: bool,
+    /// When the view was hidden, while it is.
+    paused_since: Option<Instant>,
+    idle_release: Duration,
+    ladder: Ladder,
+    /// The rung and whether it is pinned, as last told to the client.
+    quality: Option<(ladder::Rung, bool)>,
     /// Whether input reaches the browser. Off when a session starts, and it must be off again whenever the relay
     /// starts the browser anew: a client turns it on, never the relay.
     control: bool,
@@ -476,26 +514,65 @@ struct Relay {
     sequence: u32,
     /// Client messages that were refused, by reason and count: never their content.
     refused: BTreeMap<&'static str, u64>,
+    /// What the browser refused to do for a page (a download, a file chooser), by kind and count.
+    notices: BTreeMap<&'static str, u64>,
     page: (String, String),
     /// When the page's title was last asked for.
     polled: Instant,
+    /// The browser's pages, in the order it first reported them; `target` is one of them.
+    tabs: Vec<Tab>,
+    /// Where back and forward lead from the shown page, as of its last settling.
+    reach: Reach,
+    /// The id of the history request whose answer is still awaited.
+    reach_asked: Option<u64>,
+    /// Whether the shown page's main frame is loading.
+    loading: bool,
+    /// Whether the shown page is waiting for an answer to a dialog.
+    dialog: bool,
+    /// The `tabs` message the client has, so that a change that is not one is not sent.
+    sent: Value,
 }
 impl Relay {
+    /// Start the screencast at what the ladder wants now.
     fn start_screencast(&mut self) -> Result<()> {
-        let width = (self.viewport.width as f32 * self.viewport.scale).round() as u32;
-        let height = (self.viewport.height as f32 * self.viewport.scale).round() as u32;
+        let screencast = self.ladder.apply(Instant::now());
+        self.send_screencast(screencast)
+    }
+
+    fn send_screencast(&mut self, screencast: Screencast) -> Result<()> {
+        let size = |css: u32| {
+            (css as f32 * self.viewport.scale * screencast.percent as f32 / 100.0).round() as u32
+        };
         self.link.cdp.send(
             "Page.startScreencast",
             json!({
                 "format": "jpeg",
-                "quality": QUALITY,
-                "maxWidth": width,
-                "maxHeight": height,
-                "everyNthFrame": 1,
+                "quality": screencast.quality,
+                "maxWidth": size(self.viewport.width),
+                "maxHeight": size(self.viewport.height),
+                "everyNthFrame": screencast.every_nth,
             }),
             Some(&self.session),
         )?;
         Ok(())
+    }
+
+    /// Move a running screencast to other parameters; the browser takes them at a start.
+    fn restart_screencast(&mut self, screencast: Screencast) -> Result<()> {
+        self.link
+            .cdp
+            .send("Page.stopScreencast", json!({}), Some(&self.session))?;
+        self.send_screencast(screencast)
+    }
+
+    /// Tell the client the rung it sees and whether it is pinned, when that changed.
+    fn report_quality(&mut self) {
+        let quality = self.ladder.rung();
+        if self.quality != Some(quality) {
+            self.quality = Some(quality);
+            self.outbox
+                .control(json!({"type": "quality", "rung": quality.0, "pinned": quality.1}));
+        }
     }
 
     /// Handle events until the session ends; the value is the reason it ended.
@@ -507,16 +584,20 @@ impl Relay {
             if now >= self.polled + TITLE_POLL {
                 self.polled = now;
                 if !self.paused {
-                    self.link.cdp.send("Target.getTargets", json!({}), None)?;
+                    self.settle()?;
                 }
             }
+            if let Some(since) = self.paused_since {
+                if now >= since + self.idle_release {
+                    return Ok("IdleReleased");
+                }
+            } else if let Some(screencast) = self.ladder.tick(now) {
+                self.restart_screencast(screencast)?;
+            }
+            self.report_quality();
             let event = match self.link.backlog.pop_front() {
                 Some(event) => event,
-                None => match self
-                    .link
-                    .inbox
-                    .recv_timeout((self.polled + TITLE_POLL).saturating_duration_since(now))
-                {
+                None => match self.link.inbox.recv_timeout(TICK) {
                     Ok(event) => event,
                     Err(mpsc::RecvTimeoutError::Timeout) => continue,
                     Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(CLIENT_CLOSED),
@@ -530,9 +611,15 @@ impl Relay {
 
     fn client(&mut self, body: &[u8]) -> Result<()> {
         match serde_json::from_slice::<Client>(body) {
-            Ok(Client::Ack { .. }) => self.outbox.ack(),
+            Ok(Client::Ack { .. }) => {
+                if self.outbox.ack() {
+                    self.ladder.delivered();
+                }
+            }
+            Ok(Client::Quality { rung }) => self.ladder.choose(rung, Instant::now()),
             Ok(Client::Pause {}) if !self.paused => {
                 self.paused = true;
+                self.paused_since = Some(Instant::now());
                 self.outbox.pause(true);
                 self.link
                     .cdp
@@ -542,6 +629,7 @@ impl Relay {
             }
             Ok(Client::Resume {}) if self.paused => {
                 self.paused = false;
+                self.paused_since = None;
                 self.outbox.pause(false);
                 self.start_screencast()?;
                 self.outbox
@@ -549,6 +637,22 @@ impl Relay {
             }
             Ok(Client::Pause {} | Client::Resume {}) => {}
             Ok(Client::Control { on }) => self.control = on,
+            Ok(Client::Navigate { url }) => {
+                self.page_call("Page.navigate", json!({"url": url}))?;
+            }
+            Ok(Client::Back {}) => self.travel(self.reach.back)?,
+            Ok(Client::Forward {}) => self.travel(self.reach.forward)?,
+            Ok(Client::Reload {}) => {
+                self.page_call("Page.reload", json!({}))?;
+            }
+            Ok(Client::Stop {}) => {
+                self.page_call("Page.stopLoading", json!({}))?;
+            }
+            Ok(Client::Tabs {}) => self.send_tabs(true),
+            Ok(Client::ActivateTab { id }) => self.activate(&id)?,
+            Ok(Client::NewTab {}) => self.new_tab()?,
+            Ok(Client::CloseTab { id }) => self.close_tab(&id)?,
+            Ok(Client::AnswerDialog { accept, text }) => self.answer(accept, text)?,
             // A second open, or any message outside the closed set: counted, never forwarded.
             Ok(Client::Open { .. }) | Err(_) => self.refuse(allow::Refusal::Unlisted.reason()),
             // What is left is input; `input::commands` refuses a message that is not.
@@ -569,6 +673,7 @@ impl Relay {
             Err(reason) => self.refuse(reason),
             Ok(_) if !self.limit.take(Instant::now()) => self.refuse(input::RATE_LIMITED),
             Ok(calls) => {
+                self.ladder.input(Instant::now());
                 for (method, params) in calls {
                     self.link.cdp.send(method, params, Some(&self.session))?;
                 }
@@ -579,47 +684,301 @@ impl Relay {
 
     /// Tell the client about the first refusal of a reason and every doubling after it, so a flood stays small.
     fn refuse(&mut self, reason: &'static str) {
-        let count = self.refused.entry(reason).or_default();
-        *count += 1;
-        if let Some(notice) = refusal_notice(reason, *count) {
-            self.outbox.control(notice);
+        if let Some(count) = tally(&mut self.refused, reason) {
+            self.outbox
+                .control(json!({"type": "refused", "reason": reason, "count": count}));
         }
     }
 
-    /// `Some(reason)` ends the session: the page is gone.
+    /// The browser refused to do `kind` for the page: a download or a file chooser, denied before it began.
+    fn notice(&mut self, kind: &'static str) {
+        if let Some(count) = tally(&mut self.notices, kind) {
+            self.outbox
+                .control(json!({"type": "notice", "kind": kind, "count": count}));
+        }
+    }
+
+    /// `Some(reason)` ends the session: the browser has no page left.
     fn browser(&mut self, message: &Value) -> Result<Option<&'static str>> {
         let params = &message["params"];
         match message["method"].as_str() {
-            Some("Page.screencastFrame") if message["sessionId"] == self.session.as_str() => {
-                self.frame(params)?;
+            // An event of the shown page.
+            Some(method) if message["sessionId"] == self.session.as_str() => {
+                self.page_event(method, params)?;
             }
-            Some("Target.targetInfoChanged" | "Target.targetCreated")
-                if params["targetInfo"]["targetId"] == self.target.as_str() =>
-            {
-                self.page(&params["targetInfo"]);
-            }
-            Some("Target.targetDestroyed") if params["targetId"] == self.target.as_str() => {
-                return Ok(Some("PageClosed"));
+            // Downloads are reported by the browser, not by a page.
+            Some("Browser.downloadWillBegin") => self.notice("download"),
+            Some("Target.targetCreated") => self.seen(&params["targetInfo"], true)?,
+            Some("Target.targetInfoChanged") => self.seen(&params["targetInfo"], false)?,
+            Some("Target.targetDestroyed") => {
+                let id = params["targetId"].as_str().unwrap_or_default();
+                let listed = self.tabs.len();
+                self.tabs.retain(|tab| tab.id != id);
+                if id == self.target {
+                    return self.shown_page_gone();
+                }
+                if self.tabs.len() != listed {
+                    self.send_tabs(false);
+                }
             }
             Some("Target.detachedFromTarget") if params["sessionId"] == self.session.as_str() => {
-                return Ok(Some("PageClosed"));
+                return self.shown_page_gone();
             }
             Some("Target.targetCrashed") if params["targetId"] == self.target.as_str() => {
                 return Err(Error::Browser("PageCrashed"));
             }
-            // The reply to the title poll.
-            _ => {
-                let targets = message["result"]["targetInfos"].as_array();
-                if let Some(info) = targets.and_then(|infos| {
-                    infos
-                        .iter()
-                        .find(|info| info["targetId"] == self.target.as_str())
-                }) {
-                    self.page(info);
-                }
-            }
+            // The reply to a history request or to the title poll.
+            _ => self.reply(message),
         }
         Ok(None)
+    }
+
+    fn page_event(&mut self, method: &str, params: &Value) -> Result<()> {
+        match method {
+            "Page.screencastFrame" => self.frame(params)?,
+            // The main frame of a page has the id of its target (measured on Chromium 157).
+            "Page.frameStartedLoading" | "Page.frameStoppedLoading"
+                if params["frameId"] == self.target.as_str() =>
+            {
+                self.loading = method == "Page.frameStartedLoading";
+                self.send_tabs(false);
+                if !self.loading {
+                    self.settle()?;
+                }
+            }
+            "Page.navigatedWithinDocument" => self.settle()?,
+            "Page.javascriptDialogOpening" => match tabs::dialog(params) {
+                Some(dialog) => {
+                    self.dialog = true;
+                    self.outbox.control(dialog);
+                }
+                // A dialog the controls cannot show must not leave its page blocked.
+                None => {
+                    self.page_call("Page.handleJavaScriptDialog", json!({"accept": false}))?;
+                }
+            },
+            "Page.javascriptDialogClosed" => self.dialog_closed(),
+            "Page.fileChooserOpened" => self.notice("fileChooser"),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The answer to a history request, or to the poll: what the browser says its pages are now.
+    fn reply(&mut self, message: &Value) {
+        if self.reach_asked.is_some_and(|id| message["id"] == id) {
+            self.reach_asked = None;
+            self.reach = Reach::of(&message["result"]);
+            self.send_tabs(false);
+        } else if let Some(infos) = message["result"]["targetInfos"].as_array() {
+            // Only pages already listed are updated: one that went away meanwhile stays gone.
+            for tab in infos.iter().filter_map(Tab::page) {
+                if let Some(listed) = self.tabs.iter_mut().find(|listed| listed.id == tab.id) {
+                    *listed = tab;
+                }
+            }
+            if let Some(info) = infos
+                .iter()
+                .find(|info| info["targetId"] == self.target.as_str())
+            {
+                self.page(info);
+            }
+            self.send_tabs(false);
+        }
+    }
+
+    /// A call on the shown page. The allow-list is asked first, so that what it refuses (an address that is not
+    /// `http`, `https` or `about:blank`) is counted and dropped, not a failure of the relay.
+    fn page_call(&mut self, method: &str, params: Value) -> Result<Option<u64>> {
+        if let Err(refusal) = allow::command(method, &params) {
+            self.refuse(refusal.reason());
+            return Ok(None);
+        }
+        self.link
+            .cdp
+            .send(method, params, Some(&self.session))
+            .map(Some)
+    }
+
+    /// Ask for the shown page's history and the pages' titles. Chromium announces a page's title through a target
+    /// change for its first page only, not after a later navigation (measured), so they are read again whenever
+    /// a page settles.
+    fn settle(&mut self) -> Result<()> {
+        self.link.cdp.send("Target.getTargets", json!({}), None)?;
+        self.reach_asked = self.page_call("Page.getNavigationHistory", json!({}))?;
+        Ok(())
+    }
+
+    /// Send the tab list and what the controls show about the shown page, when it is not what the client has.
+    fn send_tabs(&mut self, force: bool) {
+        let tabs = tabs::view(
+            &self.tabs,
+            &self.target,
+            self.reach.back.is_some(),
+            self.reach.forward.is_some(),
+            self.loading,
+        );
+        if force || tabs != self.sent {
+            self.outbox.tabs(&tabs);
+            self.sent = tabs;
+        }
+    }
+
+    /// A page the browser told us about. A popup that the shown page opened becomes the shown page, like in a
+    /// browser, and a page beyond [`MAX_TABS`] is closed again.
+    fn seen(&mut self, info: &Value, created: bool) -> Result<()> {
+        let Some(tab) = Tab::page(info) else {
+            return Ok(());
+        };
+        let id = tab.id.clone();
+        let listed = self.tabs.iter().position(|listed| listed.id == id);
+        let popup = created && listed.is_none() && info["openerId"] == self.target.as_str();
+        match listed {
+            Some(at) => self.tabs[at] = tab,
+            None if self.tabs.len() >= MAX_TABS => {
+                // Told once, when it is created; the change notices that follow are not a second page.
+                if created {
+                    self.link
+                        .cdp
+                        .send("Target.closeTarget", json!({"targetId": id}), None)?;
+                }
+                return Ok(());
+            }
+            None => self.tabs.push(tab),
+        }
+        if id == self.target {
+            self.page(info);
+        }
+        self.send_tabs(false);
+        if popup {
+            self.show(&id)?;
+        }
+        Ok(())
+    }
+
+    /// Show another page: the shown one is left, and the new one is sized like the phone and starts its frames.
+    /// `false` when that page had gone by now.
+    // shortcut: each call waits for its answer (up to CALL_TIMEOUT) and client messages queue meanwhile, so a page
+    // that hangs while attached stalls the session until the timeout ends it; upgrade to one pending call per step
+    // if a hung page is ever seen in practice.
+    fn show(&mut self, id: &str) -> Result<bool> {
+        let session = match self.link.attach(id, self.viewport) {
+            Ok(session) => session,
+            Err(Error::Browser("BrowserProtocolError")) => {
+                self.tabs.retain(|tab| tab.id != id);
+                self.send_tabs(false);
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
+        // Without this a background page produces no frames.
+        self.link
+            .cdp
+            .send("Target.activateTarget", json!({"targetId": id}), None)?;
+        // A dialog left open would keep its page blocked for as long as nobody looks at it.
+        if self.dialog {
+            self.page_call("Page.handleJavaScriptDialog", json!({"accept": false}))?;
+            self.dialog_closed();
+        }
+        let left = std::mem::replace(&mut self.session, session);
+        self.link
+            .cdp
+            .send("Page.stopScreencast", json!({}), Some(&left))?;
+        self.link
+            .cdp
+            .send("Target.detachFromTarget", json!({"sessionId": left}), None)?;
+        self.target = id.to_string();
+        (self.reach, self.reach_asked, self.loading) = (Reach::default(), None, false);
+        if !self.paused {
+            self.start_screencast()?;
+        }
+        if let Some(tab) = self.tabs.iter().find(|tab| tab.id == id) {
+            self.page = (String::new(), String::new());
+            let page = (tab.title.clone(), tab.url.clone());
+            announce_page(&self.outbox, &mut self.page, &page.0, &page.1);
+        }
+        self.settle()?;
+        self.send_tabs(false);
+        Ok(true)
+    }
+
+    /// The shown page is gone: another takes the view, or the session ends when the browser has none left.
+    fn shown_page_gone(&mut self) -> Result<Option<&'static str>> {
+        self.dialog_closed();
+        let gone = self.target.clone();
+        self.tabs.retain(|tab| tab.id != gone);
+        while let Some(next) = self.tabs.last().map(|tab| tab.id.clone()) {
+            if self.show(&next)? {
+                return Ok(None);
+            }
+        }
+        Ok(Some("PageClosed"))
+    }
+
+    fn dialog_closed(&mut self) {
+        if std::mem::take(&mut self.dialog) {
+            self.outbox.control(json!({"type": "dialogClosed"}));
+        }
+    }
+
+    fn travel(&mut self, entry: Option<i64>) -> Result<()> {
+        if let Some(entry) = entry {
+            self.page_call("Page.navigateToHistoryEntry", json!({"entryId": entry}))?;
+        }
+        Ok(())
+    }
+
+    fn activate(&mut self, id: &str) -> Result<()> {
+        if id == self.target {
+            return Ok(());
+        }
+        if !self.tabs.iter().any(|tab| tab.id == id) {
+            self.refuse(allow::Refusal::Unlisted.reason());
+            return Ok(());
+        }
+        self.show(id).map(|_| ())
+    }
+
+    fn new_tab(&mut self) -> Result<()> {
+        if self.tabs.len() >= MAX_TABS {
+            self.refuse(allow::Refusal::Unlisted.reason());
+            return Ok(());
+        }
+        let tab = self.link.create_tab()?;
+        let id = tab.id.clone();
+        self.tabs.push(tab);
+        self.show(&id).map(|_| ())
+    }
+
+    fn close_tab(&mut self, id: &str) -> Result<()> {
+        if !self.tabs.iter().any(|tab| tab.id == id) {
+            self.refuse(allow::Refusal::Unlisted.reason());
+            return Ok(());
+        }
+        // A browser keeps a page: the last one is replaced by a blank one first, never left without any.
+        if self.tabs.len() == 1 {
+            let blank = self.link.create_tab()?;
+            self.tabs.push(blank);
+        }
+        self.link
+            .cdp
+            .send("Target.closeTarget", json!({"targetId": id}), None)?;
+        Ok(())
+    }
+
+    fn answer(&mut self, accept: bool, text: Option<String>) -> Result<()> {
+        let text = text.unwrap_or_default();
+        if !self.dialog {
+            self.refuse(allow::Refusal::Unlisted.reason());
+        } else if text.len() > input::MAX_TEXT {
+            self.refuse(input::OUT_OF_RANGE);
+        } else {
+            self.page_call(
+                "Page.handleJavaScriptDialog",
+                json!({"accept": accept, "promptText": text}),
+            )?;
+        }
+        Ok(())
     }
 
     fn frame(&mut self, params: &Value) -> Result<()> {
@@ -632,8 +991,12 @@ impl Relay {
         let Some(data) = params["data"].as_str() else {
             return Ok(());
         };
+        if self.paused {
+            return Ok(());
+        }
+        self.ladder.produced();
         // Base64 is a third larger than the bytes it carries.
-        if self.paused || data.len() > wire::MAX_JPEG / 3 * 4 + 4 {
+        if data.len() > wire::MAX_JPEG / 3 * 4 + 4 {
             return Ok(());
         }
         let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) else {
@@ -706,6 +1069,14 @@ impl Handler for Relay {
     }
 }
 
+/// Count one more of `kind`. It is `Some` for the first and for every doubling after it, which is what the
+/// client is told, so a flood stays small.
+fn tally(counts: &mut BTreeMap<&'static str, u64>, kind: &'static str) -> Option<u64> {
+    let count = counts.entry(kind).or_default();
+    *count += 1;
+    count.is_power_of_two().then_some(*count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,12 +1117,6 @@ mod tests {
             cdp.send("Page.reload", json!({}), Some("s")),
             Err(Error::Browser("BrowserExited"))
         ));
-    }
-
-    #[test]
-    fn page_text_is_cut_on_a_character_boundary() {
-        assert_eq!(bounded("héllo", 2), "hé");
-        assert_eq!(bounded("ab", 10), "ab");
     }
 
     #[test]

@@ -152,7 +152,7 @@
   },
   {
     "id": "osc52-clipboard-targets",
-    "about": "OSC 52 to the selection ('s') and to several targets ('cs'): lazysh offers both, libghostty-vt drops them",
+    "about": "OSC 52 to the selection ('s'), to several targets ('cs', 'ccc'), to an unknown letter ('x') and with nothing to write: lazysh offers all but 'x' and the empty one's text, libghostty-vt drops the first three, offers 'x' and queues no empty write",
     "cols": 20,
     "rows": 3,
     "scrollback": 100,
@@ -162,6 +162,15 @@
       },
       {
         "write": "\u001b]52;cs;aGVsbG8=\u001b\\"
+      },
+      {
+        "write": "\u001b]52;ccc;aGVsbG8=\u001b\\"
+      },
+      {
+        "write": "\u001b]52;x;aGVsbG8=\u001b\\"
+      },
+      {
+        "write": "\u001b]52;c;\u001b\\"
       }
     ],
     "probes": [],
@@ -178,7 +187,10 @@
       "events": {
         "osc52": [
           "s;aGVsbG8=",
-          "cs;aGVsbG8="
+          "cs;aGVsbG8=",
+          "ccc;aGVsbG8=",
+          "x;aGVsbG8=",
+          "c;"
         ]
       }
     },
@@ -189,7 +201,9 @@
       "expect": {
         "events": {
           "bell": 0,
-          "osc52": []
+          "osc52": [
+            "hello"
+          ]
         }
       }
     }

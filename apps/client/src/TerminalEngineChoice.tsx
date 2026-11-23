@@ -1,6 +1,7 @@
 import {useEffect, useState} from 'react';
 import {t} from './i18n/core';
 import type {Preferences} from './preferences';
+import TerminalFeedbackLink from './TerminalFeedbackLink';
 import {describeRefusal} from './terminalEngineReason';
 
 const choices = [['auto', 'preferencesTerminalEngineAuto'], ['native', 'terminalEngineNative'], ['xterm', 'terminalEngineXterm']] as const;
@@ -24,6 +25,7 @@ export default function TerminalEngineChoice({engine, screenReader, update}: {en
     <fieldset className="cursor-picker" aria-describedby="terminal-engine-help"><legend>{t('preferencesTerminalEngine')}</legend><div>{choices.map(([value, label]) =>
       <label key={value}><input type="radio" name="terminal-engine" value={value} checked={(engine ?? 'auto') === value} disabled={value === 'native' && off} aria-describedby={value === 'native' && answer?.reason !== undefined ? 'terminal-engine-native-off' : undefined} onChange={() => update({terminalEngine: value === 'auto' ? undefined : value})} /><span>{t(label)}</span></label>)}</div></fieldset>
     <p id="terminal-engine-help">{t('preferencesTerminalEngineHelp')}</p>
+    <p id="terminal-engine-feedback"><TerminalFeedbackLink report={{preference: engine ?? 'auto', reasons: answer?.reason === undefined ? [] : [`native: ${answer.reason}`]}} /> {t('terminalFeedbackHelp')}</p>
     {answer?.reason !== undefined && <p id="terminal-engine-native-off">{t('preferencesTerminalEngineNativeOff', {reason: describeRefusal(answer.reason)})}</p>}
   </>;
 }

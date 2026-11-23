@@ -44,16 +44,18 @@ entry in `divergences.json` with a reason.
 
 ## Divergences
 
-`divergences.json` has 29 entries (28 accepted, 1 open). Every entry but `osc52-target-letters` was reviewed on 2026-11-18 (#1314, slice
-1314b); the ones that decide something a user or a program could notice carry a `status` that says what was decided
+`divergences.json` has 29 entries, none open. Every entry but `osc52-target-letters` was reviewed on 2026-11-18 (#1314, slice
+1314b), and that one on 2026-11-22 (#1314); the ones that decide something a user or a program could notice carry a `status` that says what was decided
 and an `evidence` field that names the test or fixture that pins it. The user-visible approvals are the Unicode 11
 and later widths and the grapheme and colour-scheme modes that go with them, the standard Alt+arrow encodings, reflow
 on resize, the OSC 52 selection filter, the Kitty keyboard protocol for Codex and Herdr, libghostty-vt's device
 attributes and the terminator of colour replies; the release notes of the Android default (#2094) must call out the
-widths, the Alt+arrow form, reflow and the dropped primary-selection writes. `shift-pageup-handled-by-host` was closed on
+widths, the Alt+arrow form, reflow, the dropped primary-selection writes and the three OSC 52 target differences. `shift-pageup-handled-by-host` was closed on
 2026-11-19 by #1334 (slice 1334a): the native input editor scrolls the history on Shift+PageUp and Shift+PageDown and never
-sends them to the core. One entry stays open and has an owner: `osc52-target-letters` (a write to `ccc` dropped, an unknown
-target letter offered, an empty write not queued; `osc52.json` records each request) is decided before the native adapter ships (#1321). Explicit zero counts, parameterless tab clears and
+sends them to the core. The last one, `osc52-target-letters` (a write to `ccc` dropped, an unknown
+target letter offered, an empty write not queued; `osc52.json` records each request), was accepted on 2026-11-22: the VT cannot see the
+letters, no program lazysh targets sends them, and what is offered is only an offer to approve or refuse. The release notes of the Android default (#2094) name
+them with the dropped primary-selection writes. Explicit zero counts, parameterless tab clears and
 DECXCPR are accepted because no program lazysh targets sends them (`tests/programs` scans every capture and every
 live run); they should be reported to Ghostty with the fixtures as the reproduction, which this repository does not do.
 

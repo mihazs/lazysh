@@ -1,11 +1,13 @@
 import {isAndroidApp} from './isAndroidApp';
-import type {NativeCoreBridge, NativeCoreEvent, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
+import type {NativeCoreBridge, NativeCoreEvent, NativeCoreLink, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
+import {NativeCanonicalResize} from './nativeCanonicalResize';
+import {attachLinkTaps, type LinkHandlers} from './nativeLinkTap';
 import {NativeInputCapture} from './nativeInputCapture';
 import {SurfaceInput} from './nativeSurfaceInput';
 import {attachPointerSelection} from './nativePointerSelection';
 import {cellsOf, sliceColumns} from './nativeRowText';
 import type {
-  Disposable, RuntimeTransport, TerminalAdapter, TerminalBounds, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
+  CanonicalResize, Disposable, RuntimeTransport, TerminalAdapter, TerminalBounds, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
   TerminalMountTarget, TerminalPreferences, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalSelection, TerminalSize, TerminalTheme,
   TerminalViewport,
 } from './terminalAdapter';
@@ -13,10 +15,10 @@ import {TerminalEvents} from './terminalEvents';
 import type {CoreKeyInput} from './terminalPlatformKeys';
 import {searchRows} from './terminalText';
 
-/** Honest for a core without a renderer (`ime` is xterm.js' input observation and `mouseReporting` is its DOM wheel dispatch, which this backend does not have: its keyboards are the capture and the Android input view, and its wheel reports go to the core): it parses, scrolls and answers questions about the screen, and draws nothing. */
+/** Honest for a core without a renderer (`ime` is xterm.js' input observation and `mouseReporting` is its DOM wheel dispatch, which this backend does not have: its keyboards are the capture and the Android input view, and its wheel reports go to the core): it parses, scrolls and answers questions about the screen, and draws nothing. `canonicalMoshResize` holds for a core that follows Mosh's frames (`NativeCoreBridge.canonicalFrames`); `enableCanonicalResize` refuses one that cannot. */
 export const nativeCapabilities: TerminalCapabilities = {
   nativeRendering: false, selection: true, scrollback: true, mouseReporting: false, ime: false, accessibility: false,
-  screenInspection: true, canonicalMoshResize: false, customBoldColor: false,
+  screenInspection: true, canonicalMoshResize: true, customBoldColor: false,
 };
 
 /** Longest pause between two pulls of the core's state, so IPC calls follow the screen's refresh rate and not the output volume. */
@@ -54,10 +56,14 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private anchor: HTMLElement | undefined;
   private capture: {readonly element?: HTMLTextAreaElement; focus(): void; blur(): void; dispose(): void} | undefined;
   private pointer: Disposable | undefined;
+  private links: LinkHandlers | undefined;
+  private taps: Disposable | undefined;
   private interceptor: ((event: KeyboardEvent) => boolean) | undefined;
   private preferences: TerminalPreferences | undefined;
   private active = true;
   private disposed: Promise<void> | undefined;
+  /** Set once a Mosh session asked for it: the transport's frames decide the grid and `requestSize` is an intent. */
+  private canonical: NativeCanonicalResize | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly pending = new Set<(error: Error) => void>();
   private readonly events = new TerminalEvents();
@@ -88,12 +94,13 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.anchor = anchor;
     this.capture?.dispose(); this.pointer?.dispose();
     this.pointer = attachPointerSelection(this, anchor);
+    this.tapLinks();
     // Android types through a native input connection (#1328), not a DOM editor.
     const preferences = () => this.preferences;
     this.capture = isAndroidApp() ? (target.kind === 'native' && target.surface ? new SurfaceInput(this, target.surface, anchor, preferences) : undefined) : new NativeInputCapture(this, anchor, {intercepts: event => this.interceptor?.(event) === false, preferences});
   }
 
-  async detach() { this.capture?.dispose(); this.pointer?.dispose(); this.pointer = this.capture = this.anchor = undefined; }
+  async detach() { this.capture?.dispose(); this.pointer?.dispose(); this.taps?.dispose(); this.pointer = this.capture = this.taps = this.anchor = undefined; }
 
   screenReaderMirrored(): Disposable {
     this.mirrored = true;
@@ -109,7 +116,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
 
   dispose() {
     if (this.disposed) return this.disposed;
-    this.source.dispose(); this.capture?.dispose(); this.pointer?.dispose(); this.events.clear(); this.anchor = this.capture = this.pointer = undefined;
+    this.source.dispose(); this.capture?.dispose(); this.pointer?.dispose(); this.canonical?.dispose(); this.taps?.dispose(); this.events.clear(); this.anchor = this.capture = this.pointer = this.taps = this.links = undefined;
     const error = new Error('This terminal was disposed before the bytes were applied.');
     this.pending.forEach(reject => reject(error)); this.pending.clear();
     // Queued commands finish first: closing the core under one would turn its answer into an error.
@@ -167,13 +174,15 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     const before = this.mirror.state;
     this.mirror = snapshot;
     const {state} = snapshot;
-    if (state.columns !== before.columns || state.rows !== before.rows) this.emit({type: 'geometry', size: {columns: state.columns, rows: state.rows}, authority: 'local'});
+    if (state.columns !== before.columns || state.rows !== before.rows) this.emit({type: 'geometry', size: {columns: state.columns, rows: state.rows}, authority: this.canonical ? 'transport' : 'local'});
     if (JSON.stringify(state.viewport) !== JSON.stringify(before.viewport)) this.emit({type: 'viewport', viewport: state.viewport});
     if (JSON.stringify(state.modes) !== JSON.stringify(before.modes)) this.emit({type: 'modes', modes: state.modes});
   }
 
   private onCore(event: NativeCoreEvent) {
-    if (event.type === 'changed') this.ring(); else this.emit(event);
+    if (event.type === 'changed') this.ring();
+    else if (event.type === 'failure') this.canonical?.fail(event.reason);
+    else this.emit(event);
   }
 
   /** The core says the screen changed: pull its state at most once per refresh interval, and not at all while inactive. */
@@ -188,10 +197,17 @@ export class NativeTerminalAdapter implements TerminalAdapter {
       .then(() => { this.pulling = false; if (this.again) { this.again = false; this.ring(); } });
   }
 
-  sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) { this.send(() => this.bridge.input(data, origin)); }
+  sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) {
+    // Typing clears the selection, as xterm.js' selection service does on user input; a terminal's reply is not typing.
+    if (origin !== 'terminal-reply') this.clearSelection();
+    this.send(() => this.bridge.input(data, origin));
+  }
 
   /** A key as the DOM reports it, for the core to encode for the modes the program set; `sendInput` carries text. */
-  sendKey(input: CoreKeyInput) { this.send(() => this.bridge.key(input)); }
+  sendKey(input: CoreKeyInput) {
+    if (!input.release) this.clearSelection();
+    this.send(() => this.bridge.key(input));
+  }
 
   private send(run: () => Promise<void>) {
     // A refused write (input gated, app locked) is dropped by the transport on purpose: a stale key must not arrive later.
@@ -205,8 +221,22 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.sendInput(this.mirror.state.modes.bracketedPaste ? `\x1b[200~${body.replaceAll('\x1b[201~', '')}\x1b[201~` : body, 'paste');
   }
 
+  /** Mosh: the core was opened to follow the frames' sizes; from now on a size asked for is an intent for the transport, and a frame the core refuses fails the display. Call it before the transport's first output. */
+  enableCanonicalResize(): CanonicalResize {
+    const {canonicalFrames} = this.bridge;
+    if (this.disposed || !canonicalFrames) throw new Error('This terminal cannot apply canonical Mosh resizing.');
+    if (this.canonical) return this.canonical;
+    // The barrier is a no-op command: it answers after every command issued before it.
+    const canonical = this.canonical = new NativeCanonicalResize(() => this.command(async () => {}), reason => this.emit({type: 'failure', reason}));
+    canonical.onResizeIntent(({cols, rows}) => this.emit({type: 'resizeIntent', size: {columns: cols, rows}}));
+    // Ahead of any output that follows, whatever the core's latency; a core that cannot follow the frames cannot show the session.
+    this.command(() => canonicalFrames.call(this.bridge)).catch(() => canonical.fail('invalid-frame'));
+    return canonical;
+  }
+
   requestSize({columns, rows}: TerminalSize) {
     if (this.disposed) return;
+    if (this.canonical) return this.canonical.requestSize(columns, rows);
     // An intent: the mirror follows at once (the contract reads it synchronously) and the core's answer replaces it.
     const {state} = this.mirror;
     this.mirror = {...this.mirror, state: {...state, columns, rows, viewport: {...state.viewport, rows}}};
@@ -372,7 +402,23 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.interceptor = handler;
     return {dispose: () => { if (this.interceptor === handler) this.interceptor = undefined; }};
   }
-  registerLinks(): Disposable { return {dispose: noop}; }
+  /** A tap on a URL, an OSC 8 hyperlink or a host path the core finds under it goes to `handlers`; the pane registers before it attaches, so the taps follow the anchor. */
+  registerLinks(handlers: LinkHandlers): Disposable {
+    this.links = handlers;
+    this.tapLinks();
+    return {dispose: () => { if (this.links !== handlers) return; this.links = undefined; this.tapLinks(); }};
+  }
+
+  private tapLinks() {
+    this.taps?.dispose();
+    this.taps = this.anchor && this.links && !this.disposed ? attachLinkTaps(this, this.anchor, this.links) : undefined;
+  }
+
+  /** The link a tap on `cell` opens, as the core reads it; none where there is nothing, or for a core that cannot say. */
+  async linkAt(cell: TerminalCell): Promise<NativeCoreLink | undefined> {
+    if (this.disposed || !this.bridge.query) return undefined;
+    return await this.ask({kind: 'linkAt', cell}) ?? undefined;
+  }
   focus() { this.capture?.focus(); }
   blur() { this.capture?.blur(); }
 

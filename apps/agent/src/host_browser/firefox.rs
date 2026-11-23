@@ -631,7 +631,9 @@ impl Handler for Stream<'_, '_> {
     fn client(&mut self, body: &[u8]) -> Result<()> {
         let message = serde_json::from_slice::<Client>(body).ok();
         match message {
-            Some(Client::Ack { .. }) => self.outbox.ack(),
+            Some(Client::Ack { .. }) => {
+                self.outbox.ack();
+            }
             Some(Client::Pause {}) => self.pause(true),
             Some(Client::Resume {}) => self.pause(false),
             // A second open, any message outside the closed set, and Control and input (this adapter reports
@@ -689,7 +691,7 @@ mod tests {
             .collect();
         assert_eq!(
             preferences["browser.download.dir"],
-            json!(format!("{}/downloads", profile.display()))
+            json!(profile.join("downloads").to_str().unwrap())
         );
         assert_eq!(preferences["browser.download.useDownloadDir"], json!(false));
         assert_eq!(preferences["permissions.default.geo"], json!(2));

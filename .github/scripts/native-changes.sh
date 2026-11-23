@@ -58,7 +58,7 @@ classify() {
     packages/terminal-runtime/prototypes/linux-surface/scripts/*) add linux_surface terminal_bridge ;;
     packages/*/*) package "$1" ;;
     # The release APK's build configuration: only a pull request touching it builds a release APK with the native engine.
-    .github/workflows/release-artifacts.yml | .github/actions/ghostty-zig/* | .changeset/release-artifacts.ts | .github/scripts/apk-budget.ts | tests/apk-budget.test.ts) add all android_release ;;
+    .github/workflows/release-artifacts.yml | .github/actions/ghostty-zig/* | .changeset/release-artifacts.ts | .github/scripts/apk-budget.ts | .github/scripts/apk-engine.ts | tests/apk-budget.test.ts) add all android_release ;;
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
     apps/client/src-tauri/gen/android/*) add android ;;
     apps/client/src-tauri/apple/*) add ios ;;
@@ -86,7 +86,7 @@ classify() {
     apps/transcription-service/* | .githooks/* | fdroid/* | tests/fdroid-recipe.test.ts | \
       tests/pre-commit.test.ts | tests/commit-msg.test.ts | tests/regression-check.test.ts | tests/native-changes.test.ts | \
       tests/pinned-download.test.ts | tests/herdr-release.test.ts | tests/speech-fixtures.test.ts | tests/moon-graph.test.ts | tests/support/gitFixture.ts | .jscpd.json | lint-staged.config.mjs | \
-      tests/waydroid-lane.test.ts | tests/native-lib-size.test.ts | \
+      tests/waydroid-lane.test.ts | tests/native-lib-size.test.ts | tests/native-terminal-kill-switch.test.ts | \
       .github/workflows/main-verdict.yml | .github/workflows/conventional-commits.yml | tests/main-verdict.test.ts) add none ;;
     */*) add all ;;
     *.md) add docs ;;

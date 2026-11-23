@@ -69,11 +69,12 @@ const stepNamed = async (file: string, name: string) => (await document(file)).j
 
 test('the release Android build retries one flavor on a dependency failure and still validates each APK', async () => {
   const step = await stepNamed('.github/workflows/release-artifacts.yml', 'Build each release flavor with the configured signer, validating each APK before the next build');
-  const result = await runFakeBuild([`1:${flaky}`, '0:', '0:', '0:', '0:'], 'bun', () => ['bash', '-e', '-c', step.run],
-    { GITHUB_WORKSPACE: project, LAZYSH_RETRY_UNIT: '0', NDK_HOME: '/ndk', RUNNER_TEMP: '/owned' });
-  const label = (call: string) => call.includes('tauri android build') ? `build ${call.includes('--features fdroid') ? 'foss' : 'google'}` : `validate ${call.split(' ')[1]}`;
+  const result = await runFakeBuild([`1:${flaky}`, ...Array(6).fill('0:')], 'bun', () => ['bash', '-e', '-c', step.run],
+    { GITHUB_WORKSPACE: project, LAZYSH_RETRY_UNIT: '0', NDK_HOME: '/ndk', RUNNER_TEMP: '/owned', LAZYSH_NATIVE_TERMINAL: 'on' });
+  const label = (call: string) => call.includes('tauri android build') ? `build ${call.includes('--features fdroid') ? 'foss' : 'google'}`
+    : call.includes('apk-engine.ts') ? `engine ${call.split(' ').slice(-2).join(' ')}` : `validate ${call.split(' ')[1]}`;
   expect(result.exit).toBe(0);
-  expect(result.calls.map(label)).toEqual(['build foss', 'build foss', 'validate android-foss-arm64', 'build google', 'validate android-google-arm64']);
+  expect(result.calls.map(label)).toEqual(['build foss', 'build foss', 'validate android-foss-arm64', 'engine foss on', 'build google', 'validate android-google-arm64', 'engine google on']);
 });
 
 test('the release source build retries only the fdroid build on a dependency failure, not the scans before it', async () => {

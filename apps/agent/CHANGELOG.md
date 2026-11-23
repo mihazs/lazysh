@@ -1,5 +1,65 @@
 # @lazysh/agent
 
+## 1.97.8
+
+No changes in this release.
+
+## 1.97.7
+
+### Patch Changes
+
+- feat(browser): keep the host browser relay's profile until Clear browser data ([#1995](https://github.com/mihazs/lazysh/pull/1995))
+
+  <details><summary>Details</summary>
+
+  Add `--keep-profile` to the hidden host browser relay (`lazysh-agent host-browser serve --keep-profile`): the session uses the one kept profile, leaves it for `host-browser --clear-data`, and is refused while another browser holds it. Without the option the relay stays ephemeral. Nothing is offered in the app yet; no defaults change.
+
+  Updated companions coordinate stale profile recovery and clearing. Stop older companion sessions before using a kept profile or clearing browser data, as older versions do not participate in this coordination.
+
+  The browser is now stopped with SIGTERM to its main process first, so what a page stored in the kept profile (`localStorage`) survives a prompt stop (#2045); only a browser that has not exited in three seconds has its whole process group killed.
+
+  </details>
+- feat(browser): fit the host browser relay's stream to the link with a quality ladder ([#1997](https://github.com/mihazs/lazysh/pull/1997))
+
+  <details><summary>Details</summary>
+
+  Fit the host browser relay's stream to the link and the device (`lazysh-agent host-browser serve`, hidden, off until the host browser switch is on): a quality ladder of four rungs (JPEG quality, frame size and every-nth-frame) that steps down within a second when the device acknowledges too few of the frames the page produces and up after ten seconds that fit, `quality {rung}` from the client to hold a rung (Data saver) or to adapt again with `auto`, `quality {rung, pinned}` to the client, every frame for two seconds after forwarded input, and `--idle-release SECONDS` (default 600) which ends a session whose view stayed hidden with `IdleReleased`. Nothing in the app sends or shows these yet.
+
+  </details>
+- fix(ios): answer a slow Simulator boot, shutdown or reboot as requested instead of DeviceTimeout ([#2002](https://github.com/mihazs/lazysh/pull/2002))
+
+  <details><summary>Details</summary>
+
+  Answer an iOS Simulator boot, shutdown or reboot that `simctl` is still carrying out after ten seconds as requested instead of `DeviceTimeout`, report a reboot whose shutdown is still running as `shutting_down`, report slow iOS discovery as a warning after one retry, and show a note for each answer in the Devices panel. Changed response shape: an iOS reboot can answer `status: "shutting_down"`.
+
+  </details>
+- feat(browser): carry navigation, tabs, dialogs and notices over the host browser relay ([#2001](https://github.com/mihazs/lazysh/pull/2001))
+
+  <details><summary>Details</summary>
+
+  Teach the host browser relay (`lazysh-agent host-browser serve`) navigation, tabs and a page's dialogs: `navigate`, `back`, `forward`, `reload`, `stop`, `tabs`, `activateTab`, `newTab`, `closeTab` and `answerDialog` become the browser's allow-listed calls, and the relay reports the tab list, the page's dialogs and a denied download or file chooser. An address that is not `http`, `https` or `about:blank`, a tab the browser does not have and an answer with no dialog open are refused and counted. The command is still hidden and nothing in the app sends these messages yet.
+
+  </details>
+- fix(herdr): on macOS the Herdr event stream ends cleanly when the Herdr server closes its socket ([#2402](https://github.com/mihazs/lazysh/pull/2402))
+
+  <details><summary>Details</summary>
+
+  On macOS the companion's Herdr event stream stopped with `Invalid argument` when the Herdr server closed the socket, instead of ending the stream so the Agent view resubscribes or falls back to polling. The read no longer fails when the platform refuses a timeout on a closed socket.
+
+  </details>
+
+## 1.97.6
+
+No changes in this release.
+
+## 1.97.5
+
+No changes in this release.
+
+## 1.97.4
+
+No changes in this release.
+
 ## 1.97.3
 
 ### Patch Changes
