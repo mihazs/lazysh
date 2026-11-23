@@ -551,6 +551,8 @@ async function runGotifyAndroid(root:string) {
         }
       }catch{/* Missing or malformed reports retain the closed host failure phase. */}
     }
+    // TEMPORARY diagnosis (removed once the lane is green): a printable-ASCII tail of the Gradle output, which holds no fixture secret.
+    if(phase==='android-native-exit'&&native)console.error('DIAG gradle tail',(native.stdout+native.stderr).replace(/[^\x20-\x7e\n]/g,'?').slice(-3000));
     if(native&&phase.startsWith('android-native-stage')&&hostOperation==='stage-wait')hostOperation=gotifyStageWaitOperation(native.stdout,native.stderr);
     const failedPhase=phase,failedOperation=hostOperation,originalAdbdProbe=failedAdbdProbe;
     let nativePhase='unavailable';
