@@ -4,6 +4,7 @@
 //! `fixtures/control-plane.json` pins them to what xterm.js answers for the same bytes.
 use super::{Error, TerminalRuntime, Viewport, MAX_READ_ROWS};
 use crate::clipboard::clipboard_consent_text;
+use crate::links::LinkHit;
 use crate::mosh::DisplayFailure;
 use crate::selection::{CellPos, CellRange, Direction, SearchHit};
 use crate::size::Size;
@@ -165,6 +166,10 @@ pub enum ControlQuery {
     /// Select all: `null` for an empty buffer.
     BufferRange,
     CopyScreen,
+    /// The link a tap on `cell` opens (an OSC 8 hyperlink, a URL or a host path), `null` where there is none.
+    LinkAt {
+        cell: CellPos,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +178,7 @@ pub enum ControlAnswer {
     Text(String),
     Range(Option<CellRange>),
     Hit(Option<SearchHit>),
+    Link(Option<LinkHit>),
 }
 
 impl TerminalRuntime {
@@ -191,6 +197,7 @@ impl TerminalRuntime {
             ControlQuery::LineAt { row } => ControlAnswer::Range(Some(self.line_at(row)?)),
             ControlQuery::BufferRange => ControlAnswer::Range(self.buffer_range()?),
             ControlQuery::CopyScreen => ControlAnswer::Text(self.copy_screen()?),
+            ControlQuery::LinkAt { cell } => ControlAnswer::Link(self.link_at(cell)?),
         })
     }
 

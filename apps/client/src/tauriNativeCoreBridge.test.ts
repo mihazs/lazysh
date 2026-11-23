@@ -260,6 +260,20 @@ describe('the native core over the Tauri commands', () => {
     await adapter.dispose();
   });
 
+  it('asks the core which link a tap opens with one command per cell, and takes no link for no answer', async () => {
+    const {adapter} = await open();
+    invoke.mockClear();
+    const link = {kind: 'url', uri: 'https://example.com/docs'};
+    invoke.mockImplementation(async (command: string, args: {cell: {x: number}}) => command === 'terminal_core_link_at' && args.cell.x === 4 ? link : null);
+    expect(await adapter.linkAt({x: 4, y: 7})).toEqual(link);
+    expect(await adapter.linkAt({x: 0, y: 0})).toBeUndefined();
+    expect(invoke.mock.calls.map(([command, args]) => [command, args])).toEqual([
+      ['terminal_core_link_at', {sessionId: 'local:7', cell: {x: 4, y: 7}}],
+      ['terminal_core_link_at', {sessionId: 'local:7', cell: {x: 0, y: 0}}],
+    ]);
+    await adapter.dispose();
+  });
+
   it('drops the input of a locked app and wakes the core again after the unlock', async () => {
     const {adapter} = await open();
     setLocked(true);

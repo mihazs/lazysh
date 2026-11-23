@@ -1,6 +1,7 @@
 import {isAndroidApp} from './isAndroidApp';
-import type {NativeCoreBridge, NativeCoreEvent, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
+import type {NativeCoreBridge, NativeCoreEvent, NativeCoreLink, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 import {NativeCanonicalResize} from './nativeCanonicalResize';
+import {attachLinkTaps, type LinkHandlers} from './nativeLinkTap';
 import {NativeInputCapture} from './nativeInputCapture';
 import {SurfaceInput} from './nativeSurfaceInput';
 import {attachPointerSelection} from './nativePointerSelection';
@@ -55,6 +56,8 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private anchor: HTMLElement | undefined;
   private capture: {readonly element?: HTMLTextAreaElement; focus(): void; blur(): void; dispose(): void} | undefined;
   private pointer: Disposable | undefined;
+  private links: LinkHandlers | undefined;
+  private taps: Disposable | undefined;
   private interceptor: ((event: KeyboardEvent) => boolean) | undefined;
   private preferences: TerminalPreferences | undefined;
   private active = true;
@@ -91,12 +94,13 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.anchor = anchor;
     this.capture?.dispose(); this.pointer?.dispose();
     this.pointer = attachPointerSelection(this, anchor);
+    this.tapLinks();
     // Android types through a native input connection (#1328), not a DOM editor.
     const preferences = () => this.preferences;
     this.capture = isAndroidApp() ? (target.kind === 'native' && target.surface ? new SurfaceInput(this, target.surface, anchor, preferences) : undefined) : new NativeInputCapture(this, anchor, {intercepts: event => this.interceptor?.(event) === false, preferences});
   }
 
-  async detach() { this.capture?.dispose(); this.pointer?.dispose(); this.pointer = this.capture = this.anchor = undefined; }
+  async detach() { this.capture?.dispose(); this.pointer?.dispose(); this.taps?.dispose(); this.pointer = this.capture = this.taps = this.anchor = undefined; }
 
   screenReaderMirrored(): Disposable {
     this.mirrored = true;
@@ -112,7 +116,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
 
   dispose() {
     if (this.disposed) return this.disposed;
-    this.source.dispose(); this.capture?.dispose(); this.pointer?.dispose(); this.canonical?.dispose(); this.events.clear(); this.anchor = this.capture = this.pointer = undefined;
+    this.source.dispose(); this.capture?.dispose(); this.pointer?.dispose(); this.canonical?.dispose(); this.taps?.dispose(); this.events.clear(); this.anchor = this.capture = this.pointer = this.taps = this.links = undefined;
     const error = new Error('This terminal was disposed before the bytes were applied.');
     this.pending.forEach(reject => reject(error)); this.pending.clear();
     // Queued commands finish first: closing the core under one would turn its answer into an error.
@@ -398,7 +402,23 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.interceptor = handler;
     return {dispose: () => { if (this.interceptor === handler) this.interceptor = undefined; }};
   }
-  registerLinks(): Disposable { return {dispose: noop}; }
+  /** A tap on a URL, an OSC 8 hyperlink or a host path the core finds under it goes to `handlers`; the pane registers before it attaches, so the taps follow the anchor. */
+  registerLinks(handlers: LinkHandlers): Disposable {
+    this.links = handlers;
+    this.tapLinks();
+    return {dispose: () => { if (this.links !== handlers) return; this.links = undefined; this.tapLinks(); }};
+  }
+
+  private tapLinks() {
+    this.taps?.dispose();
+    this.taps = this.anchor && this.links && !this.disposed ? attachLinkTaps(this, this.anchor, this.links) : undefined;
+  }
+
+  /** The link a tap on `cell` opens, as the core reads it; none where there is nothing, or for a core that cannot say. */
+  async linkAt(cell: TerminalCell): Promise<NativeCoreLink | undefined> {
+    if (this.disposed || !this.bridge.query) return undefined;
+    return await this.ask({kind: 'linkAt', cell}) ?? undefined;
+  }
   focus() { this.capture?.focus(); }
   blur() { this.capture?.blur(); }
 
