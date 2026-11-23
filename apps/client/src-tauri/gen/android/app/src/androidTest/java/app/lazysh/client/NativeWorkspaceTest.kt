@@ -1218,6 +1218,23 @@ class NativeWorkspaceTest {
     }
     private fun closePreferences() =
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
+    /** Leaves whatever Preferences page is open and closes Preferences, waiting for the control the layout shows (the list's Close or a category's back button). */
+    private fun leavePreferences(scenario: ActivityScenario<MainActivity>) {
+        val dialog = "[role=dialog][aria-label='Preferences']"
+        val close = "button[aria-label='Close Preferences']"
+        val back = ".settings-detail-header button"
+        val gone = "!Boolean(document.querySelector(${JSONObject.quote(dialog)}))"
+        repeat(3) {
+            if (evaluate(scenario, gone) == "true") return
+            awaitDocument(scenario, "a Preferences control to leave by", "$gone || Boolean(document.querySelector(${JSONObject.quote(close)})) || ${workspaceElementVisible(back)}",
+                observe = { remaining -> evaluate(scenario, "JSON.stringify(Array.from(document.querySelectorAll('[role=dialog]')).map(d=>d.getAttribute('aria-label')+':'+d.innerText.slice(0,120)))", remaining) })
+            if (evaluate(scenario, gone) == "true") return
+            val target = if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(close)}))") == "true") close else back
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, target)).perform(webScrollIntoView()).perform(webClick())
+            Thread.sleep(300)
+        }
+        awaitDocument(scenario, "Preferences closed", gone)
+    }
     private fun webButton(label: String) =
         onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$label']")).perform(webScrollIntoView()).perform(webClick())
     private fun visibleStatus(text: String) =
@@ -4853,7 +4870,11 @@ class NativeWorkspaceTest {
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
         // A live remote connection opens the drawer on Agents; the host list is the Connections tab.
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[data-workspace-mode='connections']")).perform(webClick())
-        awaitDocument(scenario, "hosts drawer open", workspaceElementVisible(add, true))
+        awaitDocument(scenario, "hosts drawer open", workspaceElementVisible(add, true),
+            observe = { remaining -> evaluate(scenario, """JSON.stringify({dialogs:Array.from(document.querySelectorAll('[role=dialog]')).map(d=>d.getAttribute('aria-label')),
+                inert:document.querySelector('main.workspace')?.inert,add:Boolean(document.querySelector(${JSONObject.quote(add)})),
+                mode:Array.from(document.querySelectorAll('[data-workspace-mode]')).filter(x=>x.getAttribute('aria-pressed')==='true'||x.getAttribute('aria-current')).map(x=>x.getAttribute('data-workspace-mode')),
+                text:document.body.innerText.slice(0,160)})""", remaining) })
     }
 
     private fun deleteOwnedHost(scenario: ActivityScenario<MainActivity>, name: String) {
@@ -6489,6 +6510,7 @@ class NativeWorkspaceTest {
                 return facts
             }
             Os.setenv("LAZYSH_TEST_SHARE_ROOT_PEM", share.getString("certificate"), true)
+            var passed = false
             try {
                 // Configure: the origin and the management token go through the real fields.
                 awaitUnlockedWorkspace(scenario, "Share dialog")
@@ -6569,15 +6591,12 @@ class NativeWorkspaceTest {
                 assertEquals("The deleted link answers not found: $gone", listOf("404"), parityList(gone, "gone"))
                 assertEquals("The copied link no longer serves anything", 404, parity.control("open", "url" to url).getInt("status"))
                 println("lazysh parity: the share service configured, uploaded to, listed, thumbnailed, linked and deleted through the Share dialog over TLS")
+                passed = true
             } finally {
                 Os.unsetenv("LAZYSH_TEST_SHARE_ROOT_PEM")
-                // Later cases open the hosts drawer, which Preferences would cover. On a phone the category is a detail page
-                // whose header button returns to the list; Close Preferences is on the list.
-                runCatching {
-                    if (evaluate(scenario, workspaceElementVisible(".settings-detail-header button")) == "true")
-                        onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".settings-detail-header button")).perform(webClick())
-                    closePreferences()
-                }
+                // Later cases open the hosts drawer, which Preferences would cover: leave it, and fail here, not in the next case, when it stays.
+                val left = runCatching { leavePreferences(scenario) }.exceptionOrNull()
+                if (left != null) { if (passed) throw left else println("lazysh parity: Preferences could not be left after a failed share case: ${left.message}") }
             }
         }
     }
