@@ -52,6 +52,7 @@ jobs:
       android: ${{ steps.paths.outputs.android }}
       android_runtime: ${{ steps.paths.outputs.android_runtime }}
       android_terminal_core: ${{ steps.paths.outputs.android_terminal_core }}
+      android_terminal_session: ${{ steps.paths.outputs.android_terminal_session }}
       android_release_native: ${{ steps.paths.outputs.android_release_native }}
       android_mosh: ${{ steps.paths.outputs.android_mosh }}
       android_herdr: ${{ steps.paths.outputs.android_herdr }}
@@ -1706,6 +1707,7 @@ jobs:
             tmux) bun run test:android-tmux; exit $? ;;
             zellij) bun run test:android-zellij; exit $? ;;
             terminal-core) bun run test:android-terminal-core:ci; exit $? ;;
+            terminal-session) bun run test:android-native-session:ci; exit $? ;;
             ssh-parity) bun run test:android-ssh-parity; exit $? ;;
             mosh) bun run test:android-mosh; exit $? ;;
             guarded) bun run test:android-ssh; exit $? ;;
@@ -1851,6 +1853,46 @@ jobs:
             apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
             apps/client/src-tauri/gen/android/app/build/outputs/apk/androidTest/universal/debug/app-universal-debug-androidTest.apk
           if-no-files-found: error
+          retention-days: 7
+
+  # The first native session through the real UI (#2093, #1327): the app built with the terminal core for x86_64 and the cases of
+  # NativeTerminalSessionTest, which choose Native in Settings, connect to an owned OpenSSH through the page, check the pixels the
+  # renderer drew on the surface and type into it. A job of its own and not a required check: its verdict is the native engine's, and
+  # it must not share native-android-runtime's flaky oracles. The CI emulator has no GPU the shipping policy accepts, so the case asks
+  # for the debug software-GPU switch (software-gpu-switch.sh keeps that switch out of the release engine).
+  native-android-terminal-session:
+    needs: changes
+    if: needs.changes.outputs.android_terminal_session == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: terminal-session
+    steps:
+      - *source-checkout
+      - *source-bun
+      - *pinned-download-cache
+      - *ghostty-zig-checkout
+      - *rust-release-manifest
+      - *rust-1-96-1
+      - *android-toolchains
+      - name: Make the Zig build use the pinned NDK
+        run: echo "ANDROID_NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
+      - *android-owned-rust
+      - *android-owned-host-dependencies
+      - *android-cache-identity
+      - *android-owned-cache
+      - run: bun install --frozen-lockfile
+      - name: Build the x86_64 debug app with the terminal core
+        run: sh .github/scripts/retry-zig-fetch.sh bun run build:android:emulator:terminal-core
+      - *android-owned-kvm
+      - *android-runtime-emulator
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lazysh-android-terminal-session-results
+          path: *android-runtime-result-paths
+          if-no-files-found: warn
           retention-days: 7
 
   # The Google release APK with the native terminal engine (#2306): the release workflow's own build command (the release profile,

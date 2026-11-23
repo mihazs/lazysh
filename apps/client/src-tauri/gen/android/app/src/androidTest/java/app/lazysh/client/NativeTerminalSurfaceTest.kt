@@ -1,18 +1,12 @@
 package app.lazysh.client
 
-import android.graphics.Bitmap
 import android.graphics.Rect
-import android.os.Handler
-import android.os.Looper
-import android.view.PixelCopy
 import android.view.Surface
 import android.view.SurfaceView
 import android.view.ViewGroup
 import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import org.json.JSONObject
@@ -93,15 +87,7 @@ class NativeTerminalSurfaceTest {
     }
 
     /** The pixel at the middle of what the surface itself holds, read from its buffer and not from the composited screen. */
-    private fun centreOfSurface(view: SurfaceView): Int {
-        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        val done = CountDownLatch(1)
-        var result = -1
-        ui { PixelCopy.request(view, bitmap, { result = it; done.countDown() }, Handler(Looper.getMainLooper())) }
-        assertTrue("PixelCopy answered", done.await(30, TimeUnit.SECONDS))
-        assertEquals("PixelCopy succeeded", PixelCopy.SUCCESS, result)
-        return bitmap.getPixel(view.width / 2, view.height / 2)
-    }
+    private fun centreOfSurface(view: SurfaceView) = PageDriver.pixelsOf(view).getPixel(view.width / 2, view.height / 2)
 
     private fun awaitBackground() {
         var seen = "no surface"

@@ -60,7 +60,8 @@ classify() {
     # The release APK's build configuration: only a pull request touching it builds a release APK with the native engine.
     .github/workflows/release-artifacts.yml | .github/actions/ghostty-zig/* | .changeset/release-artifacts.ts | .github/scripts/apk-budget.ts | .github/scripts/apk-engine.ts | tests/apk-budget.test.ts | .github/scripts/software-gpu-switch.sh | tests/software-gpu-switch.test.ts) add all android_release ;;
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
-    apps/client/src-tauri/gen/android/*) add android ;;
+    # The native session job (native-android-terminal-session) builds the app with the terminal core and drives its real UI: the Android project and the native terminal's own sources select it.
+    apps/client/src-tauri/gen/android/*) add android android_native_session ;;
     apps/client/src-tauri/apple/*) add ios ;;
     apps/client/package.json | apps/client/moon.yml | apps/client/src-tauri/Cargo.toml | \
       apps/client/src-tauri/build.rs | apps/client/src-tauri/tauri.conf.json | \
@@ -68,6 +69,8 @@ classify() {
       apps/client/src-tauri/src/apple_*) add client ios ;;
     # The terminal runtime replays this file in herdr-native; the client e2e suite reads it too.
     apps/client/e2e/fixtures/mosh-resize-frames.json | apps/client/e2e/fixtures/platform-keys/*) add client terminal_runtime terminal_windows ;;
+    apps/client/src-tauri/src/native_* | apps/client/src-tauri/src/terminal_core.rs | apps/client/src/native* | apps/client/src/terminal* | apps/client/src/TerminalPane* | apps/client/src/tauriNativeCoreBridge*) add client android_native_session ;;
+    tests/android-native-session.test.ts | tests/android-terminal-core.test.ts | tests/support/androidTerminalCore.ts) add android android_native_session ;;
     apps/client/* | apps/share-service/*) add client ;;
     apps/agent/*) add agent ;;
     apps/notification-service/*) add agent push relay ;;
@@ -164,6 +167,7 @@ for output in \
   "android=$(flag any client android)" \
   "android_runtime=$android_runtime" \
   "android_terminal_core=$(flag any client android android_core)" \
+  "android_terminal_session=$(flag any android_native_session android_core)" \
   "android_release_native=$(case "$areas" in *" android_release "*) echo true ;; *) echo false ;; esac)" \
   "android_mosh=$(flag has mosh)" \
   "android_herdr=$android_herdr" \

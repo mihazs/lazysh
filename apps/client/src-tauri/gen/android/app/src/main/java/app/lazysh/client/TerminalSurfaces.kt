@@ -150,6 +150,9 @@ internal object TerminalSurfaces {
         return state(id)
     }
 
+    /** The sessions the page has placed or that have a client: the ones an instrumentation case can look at. */
+    fun ids(): Set<String> = entries.keys.toSet()
+
     /** The session is over: its surface goes and its generation count with it. */
     fun remove(id: String) {
         val entry = entries.remove(id) ?: return

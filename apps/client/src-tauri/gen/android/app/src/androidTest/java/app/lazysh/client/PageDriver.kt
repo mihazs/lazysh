@@ -1,6 +1,11 @@
 package app.lazysh.client
 
+import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
+import android.view.SurfaceView
 import android.webkit.WebView
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -29,6 +34,17 @@ internal object PageDriver {
         var out: Any? = null
         scenario.onActivity { out = block(it) }
         @Suppress("UNCHECKED_CAST") return out as T
+    }
+
+    /** What the surface itself holds, read from its buffer with `PixelCopy` and not from the composited screen. */
+    fun pixelsOf(view: SurfaceView): Bitmap {
+        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        val done = CountDownLatch(1)
+        var result = -1
+        onActivity { PixelCopy.request(view, bitmap, { result = it; done.countDown() }, Handler(Looper.getMainLooper())) }
+        assertTrue("PixelCopy answered", done.await(30, TimeUnit.SECONDS))
+        assertTrue("PixelCopy succeeded: $result", result == PixelCopy.SUCCESS)
+        return bitmap
     }
 
     /** Two screen rectangles agree to within a pixel of rounding. */
