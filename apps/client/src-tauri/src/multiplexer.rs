@@ -2701,6 +2701,19 @@ esac
         // the old server's tree is refused without touching the replacement (#2044).
         let stale = live();
         run(format!("{} kill-server", server.prefix()));
+        if matches!(binary, Binary::Tmux) {
+            // kill-server returns before the old server has exited, and a command sent meanwhile reaches it ("server exited
+            // unexpectedly"): wait until nothing answers, so the next one starts the replacement.
+            for _ in 0..100 {
+                let probe = scoped(format!("{} has-session", server.prefix()))
+                    .output()
+                    .unwrap();
+                if String::from_utf8_lossy(&probe.stderr).contains("no server running") {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
         run(action_command(&TmuxAction::CreateSession {
             name: "replacement".into(),
             directory: temp.path().to_str().unwrap().into(),
