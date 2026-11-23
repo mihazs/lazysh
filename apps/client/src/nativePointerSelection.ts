@@ -10,6 +10,8 @@ import {nextTouchSelection, rangeBetween, TOUCH_SELECTION_DELAY, type TouchSelec
 
 /** Pixels a held finger may drift before it is a scroll, not a long press. */
 const TOUCH_SLOP = 10;
+/** Longest a finger may rest and still be a click. */
+const TAP_MS = 500;
 const earlier = (a: TerminalCell, b: TerminalCell) => a.y < b.y || (a.y === b.y && a.x < b.x);
 const same = (a: TerminalCell, b: TerminalCell) => a.x === b.x && a.y === b.y;
 
@@ -20,8 +22,35 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
   // A program that tracks the mouse owns it.
   const free = () => adapter.modes().mouseTracking === 'none';
 
+  // A program that tracks the mouse owns it: a mouse's button, drag and release, and a finger's tap, go to it as reports.
+  const buttons = ['left', 'middle', 'right'] as const;
+  let reported: {id: number; button: typeof buttons[number]; touch: boolean; x: number; y: number; moved: boolean; at: number} | undefined;
+  const report = {
+    down(event: PointerEvent) {
+      const touch = event.pointerType === 'touch', button = buttons[event.button] ?? 'left';
+      reported = {id: event.pointerId, button, touch, x: event.clientX, y: event.clientY, moved: false, at: Date.now()};
+      if (!touch) adapter.reportMouse('press', button, event.clientX, event.clientY);
+    },
+    move(event: PointerEvent) {
+      const now = reported;
+      if (!now || now.id !== event.pointerId) return;
+      if (Math.hypot(event.clientX - now.x, event.clientY - now.y) > TOUCH_SLOP) now.moved = true;
+      const level = adapter.modes().mouseTracking;
+      if (!now.touch && (level === 'drag' || level === 'any')) adapter.reportMouse('motion', now.button, event.clientX, event.clientY);
+    },
+    up(event: PointerEvent) {
+      const now = reported;
+      reported = undefined;
+      if (!now || now.id !== event.pointerId) return;
+      // A finger that stayed put and lifted quickly is a click; one that moved was a scroll, which the pane turns into wheel reports.
+      if (now.touch && (now.moved || Date.now() - now.at > TAP_MS)) return;
+      if (now.touch) adapter.reportMouse('press', now.button, now.x, now.y);
+      adapter.reportMouse('release', now.button, event.clientX, event.clientY);
+    },
+  };
+
   const down = (event: PointerEvent) => {
-    if (!free()) return;
+    if (!free()) { report.down(event); return; }
     if (event.pointerType === 'mouse' || !event.pointerType) {
       if (event.button !== 0) return;
       const cell = adapter.cellAt(event.clientX, event.clientY);
@@ -43,6 +72,7 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
   };
 
   const move = (event: PointerEvent) => {
+    if (reported) { report.move(event); return; }
     if (hold) {
       if (Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > TOUCH_SLOP) cancelHold();
       return;
@@ -52,7 +82,8 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
     if (cell && !(same(cell, drag) && !adapter.hasSelection())) adapter.select(rangeBetween(drag, cell));
   };
 
-  const up = () => {
+  const up = (event: PointerEvent) => {
+    if (reported) { report.up(event); return; }
     drag = undefined;
     if (!hold) return;
     const {ready, x, y} = hold, cell = ready && free() ? adapter.cellAt(x, y) : undefined;

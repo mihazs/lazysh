@@ -8,11 +8,12 @@ afterEach(() => { vi.useRealTimers(); document.body.replaceChildren(); });
 
 /** A 20x5 core over a 200x50 anchor: one cell is 10x10 pixels. The core has no queries, so the window of rows answers. */
 async function mounted(output = 'hello world\r\nsecond line here') {
+  const core = createHeadlessCore({columns: 20, rows: 5, feed: true});
   const element = document.createElement('div');
   element.id = 'pointer-anchor';
   element.getBoundingClientRect = () => ({left: 0, top: 0, width: 200, height: 50, right: 200, bottom: 50, x: 0, y: 0, toJSON() {}});
   document.body.append(element);
-  const adapter = await openNativeTerminalAdapter(createHeadlessCore({columns: 20, rows: 5}));
+  const adapter = await openNativeTerminalAdapter(core);
   await adapter.write!(new TextEncoder().encode(output));
   await adapter.attach({kind: 'native', anchorId: element.id});
   const fire = (type: string, x: number, y: number, init: {detail?: number; shiftKey?: boolean; pointerType?: string} = {}) => {
@@ -21,7 +22,7 @@ async function mounted(output = 'hello world\r\nsecond line here') {
     element.dispatchEvent(event);
     return event;
   };
-  return {adapter, fire};
+  return {adapter, fire, core};
 }
 const at = (column: number, row: number) => [column * 10 + 5, row * 10 + 5] as const;
 
@@ -86,5 +87,40 @@ describe('pointer selection on the native adapter anchor', () => {
     await adapter.detach();
     fire('pointerdown', ...at(8, 0), {detail: 2});
     expect(adapter.hasSelection()).toBe(false);
+  });
+});
+
+describe('mouse reports to a program that tracks the mouse', () => {
+  const sent = (core: Awaited<ReturnType<typeof mounted>>['core']) => core.mice.map(m => [m.action, m.button, m.x, m.y]);
+  const settle = () => new Promise(resolve => setTimeout(resolve, 5));
+
+  it('sends a mouse its press, drag motion and release in the cell under it, and selects nothing', async () => {
+    const {adapter, fire, core} = await mounted('\x1b[?1002h');
+    fire('pointerdown', ...at(2, 1)); fire('pointermove', ...at(5, 1)); fire('pointerup', ...at(5, 1));
+    await settle();
+    expect(sent(core)).toEqual([['press', 'left', 2, 1], ['motion', 'left', 5, 1], ['release', 'left', 5, 1]]);
+    expect(adapter.hasSelection()).toBe(false);
+  });
+
+  it('reports no motion at the plain click level', async () => {
+    const {fire, core} = await mounted('\x1b[?1000h');
+    fire('pointerdown', ...at(1, 0)); fire('pointermove', ...at(4, 0)); fire('pointerup', ...at(4, 0));
+    await settle();
+    expect(sent(core).map(r => r[0])).toEqual(['press', 'release']);
+  });
+
+  it('sends a quick still tap of a finger as a click, and a finger that scrolled as nothing', async () => {
+    const {fire, core} = await mounted('\x1b[?1000h');
+    fire('pointerdown', ...at(3, 2), {pointerType: 'touch'}); fire('pointerup', ...at(3, 2), {pointerType: 'touch'});
+    fire('pointerdown', ...at(3, 0), {pointerType: 'touch'}); fire('pointermove', ...at(3, 3), {pointerType: 'touch'}); fire('pointerup', ...at(3, 3), {pointerType: 'touch'});
+    await settle();
+    expect(sent(core)).toEqual([['press', 'left', 3, 2], ['release', 'left', 3, 2]]);
+  });
+
+  it('sends nothing while the program does not track the mouse', async () => {
+    const {fire, core} = await mounted();
+    fire('pointerdown', ...at(1, 0)); fire('pointerup', ...at(1, 0));
+    await settle();
+    expect(core.mice).toEqual([]);
   });
 });
