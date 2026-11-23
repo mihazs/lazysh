@@ -166,7 +166,7 @@ export function gotifyNativeScreen(xml:string):string|undefined {
     const text=gotifyNativeFailureText(xml)??'';
     const windows=/^Owned Gotify windows: ([a-z. ]{0,200})\r?$/m.exec(text)?.[1]??'';
     const tail=(name:string)=>new RegExp(`^Owned Gotify ${name}: ?([A-Za-z0-9 .:_\\/|-]{0,2000})\\r?$`,'m').exec(text)?.[1];
-    const logs=['crash','boot','events','record'].map(name=>[name,tail(name)] as const);
+    const logs=['crash','boot','events','record','cause'].map(name=>[name,tail(name)] as const);
     const names=windows.split(' ').filter(Boolean);
     return logs.every(([,value])=>value!==undefined)&&names.every(name=>gotifyNativeWindowNames.some(known=>known===name))?
       `windows=[${names.join(' ')}] ${logs.map(([name,value])=>`${name}=[${value}]`).join(' ')}`:undefined;

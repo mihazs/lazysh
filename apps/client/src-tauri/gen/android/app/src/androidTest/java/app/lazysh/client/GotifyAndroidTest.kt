@@ -133,9 +133,9 @@ class GotifyAndroidTest {
             awaitCondition { showing(gotify) && device.hasObject(By.res(gotify, "messages_view")) }
             for (state in states) node(By.pkg(gotify).text(body(state)))
             stage(4, JSONObject().put("history", true))
-        } catch (_: Throwable) {
+        } catch (failure: Throwable) {
             // Never propagate upstream exceptions, credentials, shell output or UI trees to JUnit.
-            throw AssertionError("Owned Gotify acceptance failed: $phase\nOwned Gotify timeline: ${timeline.toString().trim()}${screenEvidence()}")
+            throw AssertionError("Owned Gotify acceptance failed: $phase\nOwned Gotify timeline: ${timeline.toString().trim()}${screenEvidence()}${causeEvidence(failure)}")
         }
     }
 
@@ -303,6 +303,13 @@ class GotifyAndroidTest {
             "\nOwned Gotify events: ${log("logcat -d -b events -e com.github.gotify -t 40", 40)}" +
             "\nOwned Gotify record: ${record()}"
     } catch (_: Throwable) { "" }
+
+    // TEMPORARY diagnosis: the exception class and its first stack frame inside this class, as printable ASCII.
+    private fun causeEvidence(failure: Throwable): String {
+        val frame = failure.stackTrace.firstOrNull { it.className.startsWith("app.lazysh.client") }
+        return "\nOwned Gotify cause: ${(failure.javaClass.simpleName + " " + failure.message.orEmpty().take(100) + " " + frame?.methodName + ":" + frame?.lineNumber)
+            .replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|")}"
+    }
 
     // The app's foreground-service record as the failing "Connected" check saw it (TEMPORARY diagnosis).
     private fun record(): String = shell("cmd notification get ${key(gotifyUid, -1)}", bounded = false).lineSequence()
