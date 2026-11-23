@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "run": "waydroid lane",
+  "label": "composition",
+  "status": "passed",
+  "failures": [],
+  "startedAt": "2026-11-22T18:22:39Z",
+  "finishedAt": "2026-11-22T18:22:51Z",
+  "host": {
+    "cpu": "AMD Ryzen 9 5900X 12-Core Processor",
+    "logicalCpus": 22,
+    "os": "Linux 7.3.4-1-cachyos",
+    "loadAverageAtEnd": [
+      23.62,
+      21.35,
+      19.45
+    ]
+  },
+  "toolchain": {
+    "waydroid": "1.6.3",
+    "adb": "Android Debug Bridge version 1.0.41"
+  },
+  "source": {
+    "commit": "27d8ceb57b56a47f8dbd5392c36d08ddd2c48230",
+    "dirty": false
+  },
+  "environment": {
+    "device": {
+      "serial": "192.168.240.112:5555",
+      "model": "WayDroid x86_64 Device",
+      "abi": "x86_64",
+      "wmSize": "Physical size: 1920x1080",
+      "wmDensity": "Physical density: 180"
+    },
+    "waydroidImage": {
+      "waydroid": "1.6.3",
+      "fingerprint": "waydroid/lineage_waydroid_x86_64/waydroid_x86_64:13/TQ3A.230901.001/eng.aleast.20260927.215901:userdebug/test-keys",
+      "display": "lineage_waydroid_x86_64-userdebug 13 TQ3A.230901.001 eng.aleast.20260927.215901 test-keys",
+      "flavor": "lineage_waydroid_x86_64-userdebug",
+      "lineageVersion": "20.0-20260927-VANILLA-waydroid_x86_64",
+      "sessionStartedByLane": false
+    },
+    "androidVersion": {
+      "release": "13",
+      "sdk": "33"
+    },
+    "gpuPath": {
+      "path": "host-gl",
+      "egl": "mesa",
+      "gralloc": "minigbm_gbm_mesa",
+      "glesRenderer": "AMD, AMD Radeon Graphics (radeonsi, navi14, ACO, DRM 3.64, 7.3.4-1-cachyos), OpenGL ES 3.2 Mesa 26.0.8"
+    },
+    "appRevision": {
+      "commit": "27d8ceb57b56a47f8dbd5392c36d08ddd2c48230",
+      "dirty": false,
+      "package": "app.lazysh.client",
+      "versionName": "1.97.4",
+      "versionCode": "1097004"
+    },
+    "guestIme": {
+      "default": "com.android.inputmethod.latin/.LatinIME",
+      "enabled": [
+        "com.android.inputmethod.latin/.LatinIME",
+        "io.appium.settings/.UnicodeIME"
+      ]
+    },
+    "vendorImesInstalled": []
+  },
+  "limits": "Waydroid is the Android acceptance environment for the native-engine release (ADR 0001, Amendment 6). Its guest is x86_64 on the host GPU or a software rasterizer, so these timings are not a device result and every acceptedRisk below is not measured.",
+  "acceptedRisk": [
+    {
+      "id": "energy",
+      "gate": "G16",
+      "status": "accepted risk, not measured",
+      "reason": "Waydroid has no phone battery to read, so battery energy cannot be compared between engines."
+    },
+    {
+      "id": "vendor-ime",
+      "gate": "G6",
+      "status": "accepted risk, not measured",
+      "reason": "Gboard and SwiftKey are not part of the guest unless installed and run; see vendorImesInstalled in the environment block and the guest IME."
+    },
+    {
+      "id": "real-gpu-drivers",
+      "gate": "G13",
+      "status": "accepted risk, not measured",
+      "reason": "The guest draws through the host GPU path or a software rasterizer, not a phone GPU driver."
+    },
+    {
+      "id": "touch",
+      "gate": "G13",
+      "status": "accepted risk, not measured",
+      "reason": "Touches are injected events; a real digitizer, palm rejection and pressure are not exercised."
+    },
+    {
+      "id": "thermal",
+      "gate": "G14",
+      "status": "accepted risk, not measured",
+      "reason": "A workstation host does not throttle like a phone; sustained-load behaviour is unknown."
+    },
+    {
+      "id": "aarch64",
+      "gate": "G12",
+      "status": "accepted risk, not measured",
+      "reason": "The guest is x86_64; the arm64 build that ships has not run here."
+    },
+    {
+      "id": "vendor-webview-rom",
+      "gate": "G14",
+      "status": "accepted risk, not measured",
+      "reason": "One WebView and one LineageOS-based image; vendor WebView and ROM variation are not covered."
+    }
+  ],
+  "results": [
+    {
+      "kind": "install",
+      "apk": "<artifact lazysh-android-debug-x86_64 of CI run 45049588618>/universal/debug/app-universal-debug.apk",
+      "sha256": "6a0f6aa2fc7e8f8a26e7e7742613f21c13efe9e0d340bbfd167f509ab5d60315",
+      "ok": true,
+      "output": "Performing Streamed Install\nSuccess"
+    },
+    {
+      "kind": "install",
+      "apk": "<artifact lazysh-android-debug-x86_64 of CI run 45049588618>/androidTest/universal/debug/app-universal-debug-androidTest.apk",
+      "sha256": "9c77346ffc886179cbf1eff6eb5c198add7cb34f87dfd04ac0eaced540ecf5be",
+      "ok": true,
+      "output": "Performing Streamed Install\nSuccess"
+    },
+    {
+      "kind": "instrumentation",
+      "runner": "app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner",
+      "class": "app.lazysh.client.NativeTerminalCompositionTest#thePageShowsTheSurfaceThroughItsNativePaneWithItsOverlayAboveAndTheWebViewIsOpaqueAgainWhenItEnds",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "ok": true,
+      "reason": null
+    },
+    {
+      "kind": "instrumentation",
+      "runner": "app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner",
+      "class": "app.lazysh.client.NativeTerminalCompositionTest#aPlacedSurfaceChangesNothingOnAPageThatIsNotANativePane",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "ok": true,
+      "reason": null
+    },
+    {
+      "kind": "instrumentation",
+      "runner": "app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner",
+      "class": "app.lazysh.client.NativeTerminalCompositionTest#aRecreatedActivityStartsOpaqueAndShowsTheSurfaceAgainOnceItsPagePlacesIt",
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0,
+      "ok": true,
+      "reason": null
+    }
+  ]
+}
