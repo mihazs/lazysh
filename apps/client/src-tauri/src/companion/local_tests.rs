@@ -639,6 +639,8 @@ async fn real_local_hook_setup_on_windows_is_template_only() {
     bundle();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path();
+    // The request names an existing provider profile; the case is about what Windows does with it.
+    fs::create_dir(home.join(".claude")).unwrap();
     let (app, id) = session(home).await;
     let request = |action: &str| {
         serde_json::from_value(json!({"agent": "claude", "action": action,
