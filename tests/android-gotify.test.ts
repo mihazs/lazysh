@@ -70,10 +70,10 @@ test('failed owned native reports expose only a closed failure phase and cannot 
     expect(gotifyNativeTimeline(report(`java.lang.AssertionError: Owned Gotify acceptance failed: login\nOwned Gotify timeline: ${bad}\n`))).toBeUndefined();
   expect(gotifyNativeTimeline(timelined.replace('GotifyAndroidTest"','ForeignTest"'))).toBeUndefined();
   expect(gotifyNativeTimeline(xml)).toBeUndefined();
-  const screened=(windows:string,crash:string)=>report(`java.lang.AssertionError: Owned Gotify acceptance failed: login\nOwned Gotify timeline: login=1\nOwned Gotify windows: ${windows}\nOwned Gotify crash: ${crash}\n`);
-  expect(gotifyNativeScreen(screened('com.github.gotify android','E AndroidRuntime|FATAL EXCEPTION'))).toBe('windows=[com.github.gotify android] crash=[E AndroidRuntime|FATAL EXCEPTION]');
-  expect(gotifyNativeScreen(screened('','')) ).toBe('windows=[] crash=[]');
-  for(const [windows,crash] of [['com.example.other',''],['com.github.gotify','secret=1;rm'],['com.github.gotify','x'.repeat(601)]])
+  const screened=(windows:string,crash:string)=>report(`java.lang.AssertionError: Owned Gotify acceptance failed: login\nOwned Gotify timeline: login=1\nOwned Gotify windows: ${windows}\nOwned Gotify crash: ${crash}\nOwned Gotify boot: b\nOwned Gotify events: e\n`);
+  expect(gotifyNativeScreen(screened('com.github.gotify launcher','E AndroidRuntime|FATAL EXCEPTION'))).toBe('windows=[com.github.gotify launcher] crash=[E AndroidRuntime|FATAL EXCEPTION] boot=[b] events=[e]');
+  expect(gotifyNativeScreen(screened('',''))).toBe('windows=[] crash=[] boot=[b] events=[e]');
+  for(const [windows,crash] of [['com.example.other',''],['com.github.gotify','secret=1;rm'],['com.github.gotify','x'.repeat(2001)]])
     expect(gotifyNativeScreen(screened(windows,crash))).toBeUndefined();
   expect(()=>gotifyNativeReport(xml)).toThrow();
   for(const bad of [report('private-token'),report(failure.replace('login','unknown')),

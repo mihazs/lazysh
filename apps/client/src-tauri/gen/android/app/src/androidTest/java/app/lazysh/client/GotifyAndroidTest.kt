@@ -289,12 +289,16 @@ class GotifyAndroidTest {
             unique("  mHidden==false") && unique("  mIntercept=false")
     }
 
-    // Which of a fixed set of packages own a window now, and (TEMPORARY diagnosis) the last fatal crashes, as printable ASCII.
+    // Which of a fixed set of packages own a window now, and (TEMPORARY diagnosis) the crash buffer and the app's process
+    // lifecycle events, as printable ASCII.
     private fun screenEvidence(): String = try {
         val shown = listOf(gotify, "app.lazysh.client", "com.android.systemui", "com.android.permissioncontroller", "com.android.settings", "android")
-            .filter { device.hasObject(By.pkg(it)) }
-        val crash = shell("logcat -d -b crash -t 30", bounded = false).replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|").takeLast(600)
-        "\nOwned Gotify windows: ${shown.joinToString(" ")}\nOwned Gotify crash: $crash"
+            .filter { device.hasObject(By.pkg(it)) } + listOfNotNull("launcher".takeIf { runCatching { device.hasObject(By.pkg(launcher)) }.getOrDefault(false) })
+        fun log(command: String, keep: Int) = shell(command, bounded = false).lineSequence().filter { it.isNotBlank() }.toList()
+            .takeLast(keep).joinToString("|") { it.trim().take(160) }.replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|").takeLast(2000)
+        "\nOwned Gotify windows: ${shown.joinToString(" ")}\nOwned Gotify crash: ${log("logcat -d -b crash -t 30", 30).takeLast(900)}" +
+            "\nOwned Gotify boot: ${log("logcat -d -b all -e BOOT_COMPLETED -t 10", 10).takeLast(900)}" +
+            "\nOwned Gotify events: ${log("logcat -d -b events -e com.github.gotify -t 40", 40)}"
     } catch (_: Throwable) { "" }
 
     private fun shell(command: String, bounded: Boolean = true): String {
