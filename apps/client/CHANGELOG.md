@@ -1,5 +1,32 @@
 # @lazysh/client
 
+## 1.98.3
+
+### Patch Changes
+
+- feat(terminal): Size a native terminal's columns and rows to its pane, so the remote program draws for the screen it has ([#2458](https://github.com/mihazs/lazysh/pull/2458))
+
+  <details><summary>Details</summary>
+
+  Closes #2397, part of #1327. A native terminal pane, which is opt-in (Settings, Terminal engine), opened at 80 x 24 and stayed there, whatever the pane's size, a rotation, the soft keyboard, a pinch or a font change. It now holds the whole cells its pane fits at the renderer's cell size, asks the transport for that grid (the core and the remote PTY follow) and fits again when the pane, the font size or the display density changes. The new `native_terminal_surface_cell` command answers the renderer's cell so the page and the renderer share one rule. A pane that is not a whole number of cells has a margin at its right and bottom. Mosh's canonical resize on native is still its own slice, and the default engine is unchanged.
+
+  </details>
+- docs(readme): describe lazysh as a released app with current platforms and features, not a development preview ([#2470](https://github.com/mihazs/lazysh/pull/2470))
+- fix(terminal): say why a native terminal cannot draw and move to xterm.js instead of showing a blank pane ([#2460](https://github.com/mihazs/lazysh/pull/2460))
+
+  <details><summary>Details</summary>
+
+  Part of #2457. On Android the native engine could place its pane and then show nothing, with no sign of why (a renderer that could not draw on the surface left only the pane's background). The shell now reports, with the surface's state, whether the renderer drew on it and the reason when it did not; the page reports that reason and the session moves to xterm.js, as it does for a surface the shell cannot place. Every stage of the renderer's way to a first frame is also written to logcat under the tag `lazysh-native`. The native engine is still opt-in (Settings, Terminal engine).
+
+  </details>
+- fix(voice): import a Whisper model on Android, where hard links in app storage are refused ([#2469](https://github.com/mihazs/lazysh/pull/2469))
+
+  <details><summary>Details</summary>
+
+  Fixes #2468. Importing a model published it with an exclusive hard link, which Android's storage policy refuses with "Permission denied", so every import ended with "Cannot publish model; destination may already exist". The link is still tried first; when it is refused for permission, the model is copied into a file created exclusively, so an existing model is still never replaced. The message of any other failure now ends with the system error.
+
+  </details>
+
 ## 1.98.2
 
 ### Patch Changes
