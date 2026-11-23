@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.98.2
+
+### Patch Changes
+
+- fix(companion): never run a symbolic link in the managed directory as the local companion on macOS ([#2451](https://github.com/mihazs/lazysh/pull/2451))
+
+  <details><summary>Details</summary>
+
+  Refs #2450. The local companion lookup trusts a managed copy only when it is the user's own file, not a link, writable by nobody else, but it checked the owner and the write bits and never the file type. A link has mode 0777 on Linux, which the write check rejected by accident, and 0755 on macOS, which it accepted, so a link there could make the app run another file as its companion. A link is now refused by its type on every platform. No default changes.
+
+  </details>
+- feat(terminal): send mouse clicks, drags and taps to mouse-tracking programs on the native terminal ([#2447](https://github.com/mihazs/lazysh/pull/2447))
+
+  <details><summary>Details</summary>
+
+  On a session using the native terminal engine, a program that tracks the mouse (for example `vim` or `htop` with mouse mode) now receives a mouse's button presses, drag motion and releases, and a finger's quick tap as clicks, in addition to wheel scrolling. Native stays off by default, so nothing changes unless Settings, Terminal engine is set to Native.
+
+  </details>
+
 ## 1.98.1
 
 ### Patch Changes
