@@ -10,6 +10,8 @@ use std::{
 };
 
 const CAPTURE_LIMIT: usize = 16 * 1024 * 1024;
+/// The first standalone simulator launch only; see the stage in `ios_simulator_official_server_interoperability`.
+const FIRST_LAUNCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(180);
 
 #[derive(Default)]
 struct CaptureProgress {
@@ -504,6 +506,20 @@ fn ios_artifacts() -> (String, String) {
     )
 }
 
+/// `xcrun simctl spawn --standalone <simulator> <executable> --list`, the launch whose output lists the executable's tests.
+fn simulator_listing(simulator: &str, executable: &str) -> Command {
+    let mut listing = Command::new("xcrun");
+    listing.args([
+        "simctl",
+        "spawn",
+        "--standalone",
+        simulator,
+        executable,
+        "--list",
+    ]);
+    listing
+}
+
 #[test]
 #[ignore = "requires Xcode, a booted iOS Simulator, and official mosh-server"]
 fn ios_simulator_official_server_interoperability() {
@@ -526,17 +542,25 @@ fn ios_simulator_official_server_interoperability() {
     // routing their lifetime through the booted simulator's launchd service.
     // Probe the executable itself so a pre-main/dyld launch stall is reported
     // separately from a test body that fails to finish. Never retry a stall.
+    //
+    // The first standalone launch on a fresh simulator spends tens of seconds in CoreSimulator before the executable
+    // starts: the unified log of run 45092067382 shows simctl reaching simdiskimaged 15 s and SimLaunchHost 36 s after it
+    // started, then the executable's AMFI check, with the 45 s deadline gone (#45). That latency belongs to the simulator,
+    // not to Mosh, so this one launch has its own logged bound; every executable deadline below stays 45 s, and a launch
+    // that exceeds either bound still fails with the same diagnostics. Nothing is retried.
+    println!("iOS Mosh stage: first standalone launch of the simulator");
+    let started = Instant::now();
+    command_output(simulator_listing(&simulator, &units), FIRST_LAUNCH_DEADLINE);
+    println!(
+        "iOS Mosh stage: first standalone launch finished in {} ms (deadline {} ms)",
+        started.elapsed().as_millis(),
+        FIRST_LAUNCH_DEADLINE.as_millis(),
+    );
     println!("iOS Mosh stage: discovering native library tests through standalone launch");
-    let mut discovery = Command::new("xcrun");
-    discovery.args([
-        "simctl",
-        "spawn",
-        "--standalone",
-        &simulator,
-        &units,
-        "--list",
-    ]);
-    let discovered = command_output(discovery, std::time::Duration::from_secs(45));
+    let discovered = command_output(
+        simulator_listing(&simulator, &units),
+        std::time::Duration::from_secs(45),
+    );
     let discovered = String::from_utf8(discovered.stdout).unwrap();
     for required in [
         "scoped_ipv6_addresses_preserve_the_interface_for_the_numeric_resolver",
