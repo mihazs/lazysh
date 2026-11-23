@@ -14,6 +14,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiObject2
 import org.json.JSONObject
 import org.junit.Assume.assumeTrue
@@ -208,26 +209,32 @@ class GotifyAndroidTest {
         check(showing(launcher))
         check(device.openNotification())
         val target = By.pkg("com.android.systemui").text(body(state))
+        var card: UiObject2? = null
+        // SystemUI rebuilds the shade while the app's notifications settle, which invalidates nodes read a moment earlier: a stale node
+        // only means "look again", while a card that is there but wrong still fails the case.
         awaitCondition {
-            if (device.hasObject(target)) true
-            else {
-                // Expand only a Gotify-owned notification row, never an arbitrary shade group.
-                val groups = device.findObjects(By.res("com.android.systemui", "expandableNotificationRow"))
-                for (group in groups) {
-                    if (group.hasObject(By.res("android:id/app_name_text").text("Gotify"))) {
-                        group.findObject(By.res("android:id/expand_button"))?.click()
+            try {
+                val content = device.findObject(target)
+                if (content == null) {
+                    // Expand only a Gotify-owned notification row, never an arbitrary shade group.
+                    for (group in device.findObjects(By.res("com.android.systemui", "expandableNotificationRow"))) {
+                        if (group.hasObject(By.res("android:id/app_name_text").text("Gotify"))) {
+                            group.findObject(By.res("android:id/expand_button"))?.click()
+                        }
                     }
+                    false
+                } else {
+                    var row: UiObject2? = content
+                    var depth = 0
+                    while (row != null && row.resourceName != "com.android.systemui:id/expandableNotificationRow" && depth++ < 8) row = row.parent
+                    check(row?.hasObject(By.text("lazysh")) == true && showing("com.android.systemui"))
+                    check(content.visibleBounds.width() > 0 && content.visibleBounds.height() > 0)
+                    card = content
+                    true
                 }
-                false
-            }
+            } catch (_: StaleObjectException) { false }
         }
-        val content = node(target)
-        var row: UiObject2? = content
-        var depth = 0
-        while (row != null && row.resourceName != "com.android.systemui:id/expandableNotificationRow" && depth++ < 8) row = row.parent
-        check(row?.hasObject(By.text("lazysh")) == true && showing("com.android.systemui"))
-        check(content.visibleBounds.width() > 0 && content.visibleBounds.height() > 0)
-        return content
+        return checkNotNull(card)
     }
 
     private fun key(uid: Int, id: Int) = "${uid / 100000}|$gotify|$id|null|$uid"
