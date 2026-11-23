@@ -2196,7 +2196,9 @@ mod tests {
         let mut command = CommandBuilder::new("sh");
         command.args([
             "-c",
-            "stty -echo; read x; echo BEGIN; seq 1 60000; echo END",
+            // The program writes its own CR LF with output processing off: macOS's tty driver can queue the CR of a
+            // newline twice when its output queue overflows, which would put a stray CR into a stream this case compares byte for byte.
+            "stty -echo -opost; read x; printf 'BEGIN\\r\\n'; seq 1 60000 | awk '{printf \"%s\\r\\n\", $0}'; printf 'END\\r\\n'",
         ]);
         let connected = desktop::start(&state, command, 80, 24, event)
             .await
@@ -2323,7 +2325,10 @@ mod tests {
             let (events, _rx) = events();
             let (core, prepared) = ChecksumCore::prepared();
             terminal_core::offer(&events, Box::new(move || Ok(prepared)));
-            let program = format!("seq 1 3000 | sed 's/^/{tag}:/'; exec sleep 120");
+            // Output processing is off and the CR LF is written by the program, as in the 60000 line case above.
+            let program = format!(
+                "stty -opost; seq 1 3000 | awk -v t={tag} '{{printf \"%s:%s\\r\\n\", t, $0}}'; exec sleep 120"
+            );
             let connected =
                 desktop::start_with_access(&state, access_lease(), shell(&program), 80, 24, events)
                     .await
