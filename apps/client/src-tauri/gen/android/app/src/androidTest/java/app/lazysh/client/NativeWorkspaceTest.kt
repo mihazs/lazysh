@@ -1790,7 +1790,11 @@ class NativeWorkspaceTest {
             capture = observe()
             evaluate(scenario, frameGate.install)
             button("Scan QR with camera")
-            awaitDocument(scenario, "QR camera streaming with a held frame", "${frameGate.held}>=1 && Boolean(document.querySelector('.theme-qr-panel video')?.srcObject)")
+            // Every main run since 2026-11-20 never held a frame here in 120 s (the page stops the camera after 30 s). The video element's
+            // readyState, size, frame count and live tracks, with the held count, say whether the camera delivered frames at all (#2427).
+            val videoObservation = qrVideoObservation(scenario, null)
+            awaitDocument(scenario, "QR camera streaming with a held frame", "${frameGate.held}>=1 && Boolean(document.querySelector('.theme-qr-panel video')?.srcObject)",
+                observe = { remaining -> "${videoObservation(remaining)} held=${evaluateIfPresent(scenario, frameGate.held, 1_000)}" })
             assertEquals("The held frame must come from a live camera track", "true", evaluate(scenario,
                 "Array.from(document.querySelector('.theme-qr-panel video').srcObject.getVideoTracks()).some(x=>x.readyState==='live')"))
             assertTrue("Active capture must open the actual rear camera", capture.openedAny())
