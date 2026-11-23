@@ -1,5 +1,55 @@
 # @lazysh/client
 
+## 1.98.0
+
+### Minor Changes
+
+- feat(files): play video and audio in an isolated frame ([#1892](https://github.com/mihazs/lazysh/pull/1892))
+
+  <details><summary>Details</summary>
+
+  Files now plays video and audio in a frame with no script rights and no access to the app or its native bridge. The native reader checks the file's type from its first bytes and refuses a mislabeled, oversized (over 8 MiB) or linked file. A PDF is opened in the device's PDF viewer instead of drawn in the app. On Linux the preview needs GStreamer's audio plugins and says so when they are missing. Changed default: the content security policy allows `data:` in `media-src`.
+
+  </details>
+- feat(rmux): discover, attach and use rmux sessions with the tmux tools ([#1863](https://github.com/mihazs/lazysh/pull/1863))
+
+  <details><summary>Details</summary>
+
+  Sessions lists rmux next to tmux, Herdr and Zellij, browses a labelled rmux server (tree, new session, rename, windows, panes, split, zoom), attaches it as a terminal, restores it and opens it from `--mux rmux[:LABEL]`. rmux is admitted from `rmux capabilities --json` and probed with `-N`, so discovery never starts a daemon; it is Limited until Jump To and confirmed Chat input are verified on a real rmux. No defaults changed: tmux commands, defaults and saved workspaces are unchanged.
+
+  </details>
+- feat(herdr): follow a Herdr server live and send blocked or done agents to the inbox ([#1876](https://github.com/mihazs/lazysh/pull/1876))
+
+  <details><summary>Details</summary>
+
+  Read a Herdr server's changes from the host companion's `herdr-events` stream while a Herdr view is shown, instead of every 5 seconds, with a polling fallback and a note saying which mode is active (English, Portuguese, Spanish), and turn a Herdr agent that becomes blocked or done into an inbox event with the Herdr pane identity and no command text, deduplicated against the same transition reported by a hook.
+
+  </details>
+
+### Patch Changes
+
+- test(android): drive the Share dialog against a real share service over TLS ([#1920](https://github.com/mihazs/lazysh/pull/1920))
+
+  <details><summary>Details</summary>
+
+  An owned Android runtime case for the optional sharing service (#994, #1738): through the real Share dialog it saves the service origin and management token, uploads an image, lists it in the history, loads and decodes its thumbnail, copies its expiring link and deletes it behind the native confirmation, while the host serves the repository's own `lazysh-share` binary over TLS behind a throwaway root and checks the service's stored bytes, the link and the deletion after each step. Debug builds of the app gain one test-only trust anchor, read from the `LAZYSH_TEST_SHARE_ROOT_PEM` environment variable; release builds compile it out and trust the public roots only, so shipped behaviour is unchanged.
+
+  </details>
+- fix(rmux): start sessions, windows and panes in a directory whose name has format or style markers ([#1863](https://github.com/mihazs/lazysh/pull/1863))
+
+  <details><summary>Details</summary>
+
+  The path is encoded as a literal rmux format. tmux behavior and defaults are unchanged.
+
+  </details>
+- ci(windows): run the tmux, Zellij and Herdr cases from a Windows client against a Linux host ([#1935](https://github.com/mihazs/lazysh/pull/1935))
+
+  <details><summary>Details</summary>
+
+  Refs #1747, part of #1138. The new `native-windows-linux-host` job (pushes to `main` only, non-blocking until its first `main` pass) starts an Ubuntu WSL 2 host on windows-latest with an unprivileged OpenSSH server, tmux, the pinned Zellij 0.45.1 and the same-run stock Herdr, and runs four external-host cases of the Rust client natively on Windows: version and support discovery, and, per multiplexer, attach, tree and actions. The cases take the host from `LAZYSH_TEST_EXTERNAL_SSH_*` environment variables, so they also run on Linux against `.github/scripts/external-linux-host.sh`. Test and CI only; no defaults change.
+
+  </details>
+
 ## 1.97.11
 
 ### Patch Changes

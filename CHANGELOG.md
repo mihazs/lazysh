@@ -10,6 +10,23 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.98.0] - 2026-11-23
+
+### New
+
+- **files:** play video and audio in an isolated frame ([#1892](https://github.com/mihazs/lazysh/pull/1892))
+- **rmux:** discover, attach and use rmux sessions with the tmux tools ([#1863](https://github.com/mihazs/lazysh/pull/1863))
+- **herdr:** follow a Herdr server live and send blocked or done agents to the inbox ([#1876](https://github.com/mihazs/lazysh/pull/1876))
+
+### Fixed
+
+- **rmux:** start sessions, windows and panes in a directory whose name has format or style markers ([#1863](https://github.com/mihazs/lazysh/pull/1863))
+
+### Under the hood
+
+- **android:** drive the Share dialog against a real share service over TLS ([#1920](https://github.com/mihazs/lazysh/pull/1920))
+- **windows:** run the tmux, Zellij and Herdr cases from a Windows client against a Linux host ([#1935](https://github.com/mihazs/lazysh/pull/1935))
+
 ## [1.97.11] - 2026-11-23
 
 ### New
