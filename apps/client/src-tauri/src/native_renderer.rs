@@ -144,6 +144,16 @@ pub(crate) struct Wake {
 /// The receiving end of a [`Wake`], for [`Host::attach`].
 pub(crate) struct Inbox(Receiver<Message>, Wake);
 
+#[cfg(test)]
+impl Inbox {
+    /// Whether the loop was rung within `wait`, as taking the frame would acknowledge it.
+    pub(crate) fn rang(&self, wait: Duration) -> bool {
+        let rang = matches!(self.0.recv_timeout(wait), Ok(Message::Changed));
+        self.1.pending.swap(false, AcqRel);
+        rang
+    }
+}
+
 pub(crate) fn wake() -> (Wake, Inbox) {
     let (to, from) = mpsc::channel();
     let wake = Wake {

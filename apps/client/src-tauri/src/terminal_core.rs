@@ -1280,9 +1280,12 @@ mod native {
         ) -> Result<Json, String> {
             let action: ScrollAction = serde_json::from_value(action)
                 .map_err(|error| format!("Not a scroll action: {error}"))?;
-            self.answer(lease, window, |runtime, rows| {
+            let answer = self.answer(lease, window, |runtime, rows| {
                 runtime.control_scroll(action, rows)
-            })
+            });
+            // The program printed nothing, so no screen change rang the renderer: it must be told the viewport moved.
+            ring(&self.3);
+            answer
         }
 
         fn control_resize(
@@ -1292,9 +1295,11 @@ mod native {
             rows: u32,
             window: Option<usize>,
         ) -> Result<Json, String> {
-            self.answer(lease, window, |runtime, window| {
+            let answer = self.answer(lease, window, |runtime, window| {
                 runtime.control_resize(cols as u16, rows as u16, window)
-            })
+            });
+            ring(&self.3);
+            answer
         }
 
         fn control_query(&self, lease: &AccessLease, query: Json) -> Result<Json, String> {
@@ -1464,6 +1469,17 @@ mod native {
         }))
     }
 
+    /// Rings the renderer host that draws the core, if one does: the screen it holds may have changed.
+    fn ring(ringer: &Ringer) {
+        if let Some(wake) = ringer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            wake.ring();
+        }
+    }
+
     /// A session in the hub whose replies and encoded input go through the returned [`Link`], under
     /// `lease` until a command brings a newer one. The session starts active: it was opened to be looked at.
     /// Its event stream goes to `events`, only while that lease is valid: a locked app is told nothing.
@@ -1484,13 +1500,7 @@ mod native {
             credit: Box::new(move |bytes| credit(bytes)),
             changed: Some(Box::new(move || {
                 bell();
-                if let Some(wake) = drawn
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .as_ref()
-                {
-                    wake.ring();
-                }
+                ring(&drawn);
             })),
         };
         let session = HUB
@@ -1883,6 +1893,33 @@ mod native {
                 ]
             );
             core.close();
+        }
+
+        #[test]
+        fn a_reader_that_scrolls_or_resizes_rings_the_renderer_that_draws_the_core() {
+            let lease = crate::app_lock::AccessState::disabled()
+                .lease(None)
+                .unwrap();
+            let (core, _) = watched_core(&lease);
+            let (_, inbox) = core.drawing().unwrap();
+            let rows: String = (0..30).map(|row| format!("row {row}\r\n")).collect();
+            parsed(&core, rows.as_bytes());
+            // What the program printed rang it; reading the screen changes nothing and rings nothing.
+            assert!(inbox.rang(Duration::from_secs(5)), "the output rang");
+            core.control_snapshot(&lease, None).unwrap();
+            assert!(!inbox.rang(Duration::from_millis(100)), "a read rang");
+            // Nothing was printed, but the viewport moved, or the grid changed, and the pixels must follow.
+            core.control_scroll(&lease, serde_json::json!({"kind": "toTop"}), None)
+                .unwrap();
+            assert!(
+                inbox.rang(Duration::from_secs(5)),
+                "the scroll did not ring"
+            );
+            core.control_resize(&lease, 20, 7, None).unwrap();
+            assert!(
+                inbox.rang(Duration::from_secs(5)),
+                "the resize did not ring"
+            );
         }
 
         #[test]
