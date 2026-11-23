@@ -10,6 +10,16 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.98.2] - 2026-11-23
+
+### New
+
+- **terminal:** send mouse clicks, drags and taps to mouse-tracking programs on the native terminal ([#2447](https://github.com/mihazs/lazysh/pull/2447))
+
+### Fixed
+
+- **companion:** never run a symbolic link in the managed directory as the local companion on macOS ([#2451](https://github.com/mihazs/lazysh/pull/2451))
+
 ## [1.98.1] - 2026-11-23
 
 ### New
