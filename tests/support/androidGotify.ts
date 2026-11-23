@@ -493,7 +493,7 @@ async function runGotifyAndroid(root:string) {
       '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true',`-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.GotifyAndroidTest#${gotifyCase}`,
       // The case's own 600 s deadline must fire (with its phase and timeline) before the runner's 420 s default test timeout.
       '-Pandroid.testInstrumentationRunnerArguments.timeout_msec=700000','-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyAcceptance=true',`-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyNonce=${nonce}`],root);
-    processes.push(native);void native.done.catch(()=>{});const until=performance.now()+780000; // Gradle compiles, packages and installs for over a minute before the native case starts its own 600 s deadline.
+    processes.push(native);void native.done.catch(()=>{});const until=performance.now()+900000; // Gradle compiles, packages and installs for up to about four minutes (hosted: 220 s) before the native case starts its own 600 s deadline.
     const stage=async(step:number,id?:number)=>{
       phase=gotifyNativePhases[step]??'android-native-stage';
       return wait(until,async()=>{

@@ -296,7 +296,7 @@ test.skipIf(process.env.LAZYSH_ANDROID_GOTIFY!=='1')('official Gotify displays a
   const receipt=await ownedGotifyAndroid(resolve(import.meta.dir,'..'));
   expect(receipt).toMatchObject({relayAccepted:3,serverMessages:3,osRecords:3,visibleCards:3,history:true,cleanup:true,native:{passed:1,failed:0,skipped:0}});
   console.log('Owned Gotify Android receipt '+JSON.stringify(receipt));
-},660000);
+},1200000);
 
 
 test('Gotify host failure evidence projects only closed operations and native process metadata',()=>{
