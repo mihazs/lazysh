@@ -17,7 +17,7 @@ beforeEach(async () => { fake = await createFakeAdb(); Object.assign(process.env
 afterEach(async () => { for (const name of Object.keys(LIVE)) delete process.env[name]; await rm(fake.directory, {recursive: true, force: true}); });
 
 const stub = (port: number, events: string[], name: string, failure?: string): Fixture => ({
-  ssh: {port, username: 'tester', fingerprint: 'SHA256:x', privateKey: 'KEY', prompt: 'P>'},
+  ssh: {port, username: 'tester', fingerprint: 'SHA256:x', privateKey: 'KEY', prompt: 'P>', directory: '/tmp/fixture'},
   stop: async () => { events.push(`${name}:stop reverses=${(await reverses()).length}`); if (failure) throw new Error(failure); },
 });
 
@@ -86,6 +86,7 @@ test('host names carry the run nonce, and the kinds of a run are validated', () 
   expect(hostName('smoke', 'a1b2')).toBe('e2e-a1b2-smoke');
   expect(() => hostName('smoke', undefined)).toThrow('LAZYSH_E2E_NONCE is unset');
   expect(hostKinds('ssh, tmux')).toEqual(['ssh', 'tmux']);
+  expect(hostKinds('tmux,sftp')).toEqual(['tmux', 'sftp']);
   expect(() => hostKinds('ssh,zellij')).toThrow('Unknown LAZYSH_E2E_HOSTS entries: zellij');
 });
 

@@ -125,6 +125,10 @@ Committed evidence goes to `docs/architecture/benchmarks/` named `terminal-lane-
 
 `bun test ./tests/waydroid-lane.test.ts` drives the script against stub `waydroid`, `adb` and `systemctl` executables on a `PATH` of their own and asserts exit codes, messages, the calls made to the guest and the evidence JSON: each refusal, the lock, a session started and torn down, a session attached to, the install, instrumentation and benchmark outcomes, the skipped, ignored, failed and crashed cases, and the build entry point. It runs without Waydroid, so it proves the script's logic and none of the guest's behaviour: a stub accepts whatever the script sends. The behaviour against a live guest is checked by a run of the lane itself.
 
+## Capturing the README media
+
+The README screenshots and clips are real captures from this guest, made through the Appium suite: [Capture the README screenshots and clips](../how-to/capture-readme-media.md). A new guest answers `adb connect` with `unauthorized` until its adb key is accepted once, and the lane never changes that.
+
 ## Known blockers
 
 On the maintainer's machine on 2026-11-18 the container is active and the session is stopped, and `waydroid session start` fails in `/usr/lib/waydroid/data/scripts/waydroid-net.sh start`, which needs root. The lane then exits 7 with that line and leaves the session stopped, and no evidence is written. Until it is repaired (as root, outside the lane), Android acceptance rests on the CI emulator, and nothing may be reported as a Waydroid result. The first recorded run of the lane against a live guest is the follow-up that this page's status line waits for.

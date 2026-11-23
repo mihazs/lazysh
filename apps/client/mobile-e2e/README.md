@@ -26,7 +26,7 @@ bun run --cwd apps/client mobile-e2e -- --suite smoke
 ```
 
 Before the first spec the launcher starts owned hosts from `tests/support` and forwards their ports to the guest with
-`adb reverse` (pinned to the serial, removed afterwards). `LAZYSH_E2E_HOSTS` picks them: `ssh` (default; `ssh,herdr` when the three Herdr variables below are set, which the Agent view smoke journey needs), `herdr` and `tmux`
+`adb reverse` (pinned to the serial, removed afterwards). `LAZYSH_E2E_HOSTS` picks them: `ssh` (default; `ssh,herdr` when the three Herdr variables below are set, which the Agent view smoke journey needs), `herdr`, `tmux` and `sftp` (plain SSH with the file-transfer subsystem the Files view reads)
 (these need `LAZYSH_TEST_HERDR`, `LAZYSH_TEST_AGENT_BIN` and `LAZYSH_TEST_RECEIVER_BIN`, or `LAZYSH_TEST_TMUX`), or empty for
 none. The endpoint, fingerprint and private key are in a mode-0600 file in a per-run mode-0700 directory
 (`LAZYSH_E2E_ENDPOINTS`); they are never logged, and the Appium log filters redact clipboard content and key blocks.
@@ -40,6 +40,8 @@ The run clears the app's data at the start of every spec file (`appium:noReset: 
 serial, records window size, density, navigation mode, IME, animation scale, rotation and the app's runtime permissions, and
 restores them after each spec file and at the end. After a crashed run the next one refuses until you restore the device
 or set `LAZYSH_E2E_RECOVER=1`. A lock still held after `LAZYSH_E2E_LOCK_TIMEOUT_S` seconds (default 600) fails the run at once, naming the holder. Set `LAZYSH_E2E_CHROMEDRIVER` to pin a ChromeDriver instead of the automatic download, and `LAZYSH_E2E_APPIUM_PORT` when port 4723 is taken.
+
+`capture/` holds the one spec that is not a test: it records the README screenshots and clips on the Waydroid guest (`bench/readme-capture-run.sh`, [how to](../../../docs/how-to/capture-readme-media.md)). It is never part of a tier.
 
 ## Select what runs
 
