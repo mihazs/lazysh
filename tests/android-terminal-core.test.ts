@@ -1,21 +1,47 @@
 import {expect,test} from 'bun:test';
-import {readFile} from 'node:fs/promises';
+import {mkdtemp,readFile,readdir,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {androidTerminalCoreAcceptance,validateTerminalCoreReport} from './support/androidTerminalCore';
+import {androidTerminalCoreAcceptance,keepDeviceEvidence,validateTerminalCoreReport} from './support/androidTerminalCore';
 
-const nativeCase='theCoreInsideTheAppParsesTheOutputOfARealShellAndReadsItBack';
-const composition=['thePageShowsTheSurfaceThroughItsNativePaneWithItsOverlayAboveAndTheWebViewIsOpaqueAgainWhenItEnds','aPlacedSurfaceChangesNothingOnAPageThatIsNotANativePane','aRecreatedActivityStartsOpaqueAndShowsTheSurfaceAgainOnceItsPagePlacesIt'];
+const core='app.lazysh.client.NativeTerminalCoreTest',composition='app.lazysh.client.NativeTerminalCompositionTest';
+const cases:[string,string][]=[[core,'theCoreInsideTheAppParsesTheOutputOfARealShellAndReadsItBack'],[core,'theProbeRefusesASoftwareRasterizerUnlessTheDebugSwitchAllowsOne'],
+  [composition,'thePageShowsTheSurfaceThroughItsNativePaneWithItsOverlayAboveAndTheWebViewIsOpaqueAgainWhenItEnds'],[composition,'aPlacedSurfaceChangesNothingOnAPageThatIsNotANativePane'],
+  [composition,'aRecreatedActivityStartsOpaqueAndShowsTheSurfaceAgainOnceItsPagePlacesIt']];
 const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
-const row=(body='',name=nativeCase,className='app.lazysh.client.NativeTerminalCoreTest')=>`<testcase name="${name}" classname="${className}" time="1">${body}</testcase>`;
-const compositionRows=()=>composition.map(name=>row('',name,'app.lazysh.client.NativeTerminalCompositionTest'));
+const row=([className,name]:[string,string],body='')=>`<testcase name="${name}" classname="${className}" time="1">${body}</testcase>`;
+const all=(change:(entry:[string,string],index:number)=>string[]=entry=>[row(entry)])=>cases.flatMap(change);
 
 test('the terminal core report counts only its cases, each passing exactly once',()=>{
-  expect(()=>validateTerminalCoreReport(report([row(),...compositionRows()]))).not.toThrow();
-  for(const rows of [[],[row()],compositionRows(),[row(),row(),...compositionRows()],[row(),...compositionRows(),...compositionRows().slice(1)],[row('<skipped/>'),...compositionRows()],
-    [row(),...compositionRows().slice(0,2),row('<failure message="x"/>',composition[2],'app.lazysh.client.NativeTerminalCompositionTest')],
-    [row('<error message="x"/>'),...compositionRows()],[row('','otherCase'),...compositionRows()],
-    [row('',nativeCase,'app.lazysh.client.NativeWorkspaceTest'),...compositionRows()]])
-    expect(()=>validateTerminalCoreReport(report(rows))).toThrow('did not pass exactly once');
+  expect(()=>validateTerminalCoreReport(report(all()))).not.toThrow();
+  const bad:string[][]=[[],[row(cases[0])],all().slice(1)];
+  cases.forEach((entry,at)=>{
+    const only=(variant:(entry:[string,string])=>string[])=>all((each,index)=>index===at?variant(each):[row(each)]);
+    bad.push(only(()=>[]),only(each=>[row(each),row(each)]),only(each=>[row(each,'<skipped/>')]),only(each=>[row(each,'<failure message="x"/>')]),
+      only(each=>[row(each,'<error message="x"/>')]),only(([className,name])=>[row([className,name+'Other'])]),only(([,name])=>[row(['app.lazysh.client.NativeWorkspaceTest',name])]));
+  });
+  for(const rows of bad)expect(()=>validateTerminalCoreReport(report(rows))).toThrow('did not pass exactly once');
+});
+
+test('the evidence the cases left on the device is kept with the results and nothing else is',async()=>{
+  const destination=await mkdtemp(join(tmpdir(),'lazysh-evidence-'));
+  const files:Record<string,string>={'native-probe.json':'{"shippingPolicy":{"available":false}}\n','notes.txt':'not json evidence'};
+  const calls:string[][]=[];
+  const device=async(args:string[])=>{
+    calls.push(args);
+    if(args[1]==='ls')return Object.keys(files).join('\n')+'\n';
+    return files[args[2].split('/').pop()!];
+  };
+  try {
+    expect(await keepDeviceEvidence(device,destination)).toEqual(['native-probe.json']);
+    expect(await readdir(destination)).toEqual(['native-probe.json']);
+    expect(JSON.parse(await readFile(join(destination,'native-probe.json'),'utf8')).shippingPolicy.available).toBe(false);
+    // A device with nothing left (a run that crashed first) is an empty answer, not a failure of the harness.
+    expect(await keepDeviceEvidence(async()=>{throw new Error('no such directory');},destination)).toEqual([]);
+    // What the device returns must be JSON: a truncated write is refused, not kept.
+    files['native-probe.json']='{"shipping';
+    await expect(keepDeviceEvidence(device,destination)).rejects.toThrow();
+  } finally {await rm(destination,{recursive:true,force:true});}
 });
 
 test('the shared Android runtime job leaves the terminal core case to the job that builds the feature and has the fixture',async()=>{

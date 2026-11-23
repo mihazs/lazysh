@@ -136,7 +136,7 @@ test.each([
 });
 
 test('only a pull request that changes the release build configuration builds the release APK with the native engine', async () => {
-  for (const path of ['.github/workflows/release-artifacts.yml', '.github/actions/ghostty-zig/action.yml', '.changeset/release-artifacts.ts', '.github/scripts/apk-engine.ts']) {
+  for (const path of ['.github/workflows/release-artifacts.yml', '.github/actions/ghostty-zig/action.yml', '.changeset/release-artifacts.ts', '.github/scripts/apk-engine.ts', '.github/scripts/software-gpu-switch.sh', 'tests/software-gpu-switch.test.ts']) {
     const outputs = await classify([path]);
     expect(outputs, path).toEqual({ ...pullRequestEverything, android_release_native: 'true' });
     expect((await runningJobs(outputs))['native-android-release-core'], path).toBe(2); // the kill switch on and off

@@ -864,13 +864,43 @@ pub fn terminal_core_available() -> CoreAvailability {
 }
 
 /// What `native_terminal_probe` answers: whether a native terminal can run on this device and, when it cannot, why,
-/// with what the answer cost. The client's registry shows the reason as it is.
+/// with what the answer cost. The client's registry shows the reason as it is. `adapter` is what the renderer would run
+/// on and `seen` every adapter its backends listed, drawn on or not: a device that is refused for having only a CPU
+/// rasterizer shows it there, which is the evidence a release asks of a device.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeProbe {
     available: bool,
     reason: String,
     elapsed_ms: u64,
+    adapter: Option<ProbeAdapter>,
+    seen: Vec<ProbeAdapter>,
+}
+
+/// A GPU adapter as the probe reports it: the name the driver gives, the backend, the kind (`DiscreteGpu`, `Cpu`, ...)
+/// and the driver's own description.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeAdapter {
+    name: String,
+    backend: String,
+    device_type: String,
+    driver: String,
+}
+
+/// What asking the GPU answered: the adapter the renderer would run on, or why it cannot draw, and every adapter seen.
+struct Gpu {
+    chosen: Result<ProbeAdapter, String>,
+    seen: Vec<ProbeAdapter>,
+}
+
+impl Gpu {
+    fn refused(why: impl Into<String>) -> Self {
+        Self {
+            chosen: Err(why.into()),
+            seen: Vec::new(),
+        }
+    }
 }
 
 /// What a probe may cost before the app answers that native cannot be offered. A GPU driver that takes longer to
@@ -880,20 +910,41 @@ const PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 /// The build and host check first (free), then the device: `gpu` names the adapter the renderer would run on, or says
 /// why it cannot draw (no place for a surface, no GPU). It is not called for a build that could not run a native
 /// terminal anyway.
-fn probe(build: CoreAvailability, gpu: impl FnOnce() -> Result<String, String>) -> NativeProbe {
+fn probe(build: CoreAvailability, gpu: impl FnOnce() -> Gpu) -> NativeProbe {
     let started = std::time::Instant::now();
-    let (available, reason) = match build.available.then(gpu) {
-        None => (false, build.reason.into()),
-        Some(Ok(adapter)) => (true, format!("The native terminal can draw on {adapter}")),
-        Some(Err(why)) => (
+    let (available, reason, adapter, seen) = match build.available.then(gpu) {
+        None => (false, build.reason.into(), None, Vec::new()),
+        Some(Gpu {
+            chosen: Ok(adapter),
+            seen,
+        }) => {
+            let software = if adapter.device_type == "Cpu" {
+                ", a software rasterizer the debug switch allowed"
+            } else {
+                ""
+            };
+            let reason = format!(
+                "The native terminal can draw on {} ({}{software})",
+                adapter.name, adapter.backend
+            );
+            (true, reason, Some(adapter), seen)
+        }
+        Some(Gpu {
+            chosen: Err(why),
+            seen,
+        }) => (
             false,
             format!("The native terminal cannot draw on this device: {why}"),
+            None,
+            seen,
         ),
     };
     NativeProbe {
         available,
         reason,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        adapter,
+        seen,
     }
 }
 
@@ -907,6 +958,8 @@ async fn within(
         available: false,
         reason,
         elapsed_ms: budget.as_millis() as u64,
+        adapter: None,
+        seen: Vec::new(),
     };
     match tokio::time::timeout(budget, tauri::async_runtime::spawn_blocking(work)).await {
         Ok(Ok(answer)) => answer,
@@ -927,18 +980,23 @@ fn surface() -> Result<(), String> {
 }
 
 /// The registry's second question, after `terminal_core_available` (#1336): can the renderer draw on this device?
-/// It asks for an adapter under the shipping policy, which refuses CPU rasterizers, and creates its device. Each
-/// platform's surface check joins here with its host. The answer is kept for the life of the process, so the cost is
-/// paid once; a probe over its budget answers "no" for now and the kept answer serves the next start of the registry.
-/// Allowed while locked: it reads the device, nothing of the user's.
+/// It asks for an adapter under the app's policy (`native_renderer::policy`: the shipping one, which refuses CPU
+/// rasterizers, except in a debug build on Android that asked for software) and creates its device. Each
+/// platform's surface check joins here with its host. The answer is kept for the life of the process, per policy, so
+/// the cost is paid once; a probe over its budget answers "no" for now and the kept answer serves the next start of the
+/// registry. Allowed while locked: it reads the device, nothing of the user's.
 #[tauri::command]
 pub async fn native_terminal_probe() -> NativeProbe {
-    static ANSWER: std::sync::OnceLock<NativeProbe> = std::sync::OnceLock::new();
-    within(PROBE_BUDGET, || {
-        ANSWER
+    // One answer per policy: a shipping build has only the first, the debug switch the second.
+    static ANSWERS: [std::sync::OnceLock<NativeProbe>; 2] =
+        [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+    let software = native::software();
+    within(PROBE_BUDGET, move || {
+        ANSWERS[usize::from(software)]
             .get_or_init(|| {
-                probe(terminal_core_available(), || {
-                    surface().and_then(|()| native::gpu())
+                probe(terminal_core_available(), || match surface() {
+                    Ok(()) => native::gpu(),
+                    Err(why) => Gpu::refused(why),
                 })
             })
             .clone()
@@ -969,8 +1027,12 @@ mod native {
         Err(UNAVAILABLE.into())
     }
 
-    pub(super) fn gpu() -> Result<String, String> {
-        Err(UNAVAILABLE.into())
+    pub(super) fn gpu() -> super::Gpu {
+        super::Gpu::refused(UNAVAILABLE)
+    }
+
+    pub(super) fn software() -> bool {
+        false
     }
 }
 
@@ -986,15 +1048,30 @@ mod native {
 
     static HUB: LazyLock<Hub> = LazyLock::new(|| Hub::new(HubConfig::default()));
 
-    /// The adapter the shipping policy picks, as "name (backend)", or the renderer's reason for having none.
-    pub(super) fn gpu() -> Result<String, String> {
-        gpu_under(&lazysh_terminal_renderer_wgpu::Policy::for_platform())
+    /// Whether the app's policy accepts a CPU rasterizer: only a debug build on Android that asked for one.
+    pub(super) fn software() -> bool {
+        crate::native_renderer::policy().allow_software
     }
 
-    fn gpu_under(policy: &lazysh_terminal_renderer_wgpu::Policy) -> Result<String, String> {
-        lazysh_terminal_renderer_wgpu::probe(policy)
-            .map(|adapter| format!("{} ({:?})", adapter.name, adapter.backend))
-            .map_err(|error| error.to_string())
+    /// The adapter the app's policy picks, or the renderer's reason for having none, and every adapter listed.
+    pub(super) fn gpu() -> Gpu {
+        gpu_under(&crate::native_renderer::policy())
+    }
+
+    fn gpu_under(policy: &lazysh_terminal_renderer_wgpu::Policy) -> Gpu {
+        let (chosen, seen) = lazysh_terminal_renderer_wgpu::probe_seen(policy);
+        let adapter = |info: &lazysh_terminal_renderer_wgpu::AdapterInfo| ProbeAdapter {
+            name: info.name.clone(),
+            backend: format!("{:?}", info.backend),
+            device_type: format!("{:?}", info.device_type),
+            driver: info.driver.trim().to_owned(),
+        };
+        Gpu {
+            chosen: chosen
+                .map(|info| adapter(&info))
+                .map_err(|error| error.to_string()),
+            seen: seen.iter().map(adapter).collect(),
+        }
     }
 
     /// Replies and encoded input leave through the transport's input queue under the renderer's
@@ -1437,12 +1514,21 @@ mod native {
             let started = Instant::now();
             let lenient = gpu_under(&policy.clone().with_software());
             let cost = started.elapsed();
-            println!("native terminal GPU probe: {lenient:?} in {cost:?}");
+            println!(
+                "native terminal GPU probe: {:?} of {:?} in {cost:?}",
+                lenient.chosen, lenient.seen
+            );
             assert!(cost < PROBE_BUDGET, "{cost:?}");
             let strict = gpu();
-            match &strict {
-                Ok(adapter) => assert_eq!(lenient.as_ref(), Ok(adapter)),
-                Err(why) => assert!(why.contains("no hardware GPU") == lenient.is_ok(), "{why}"),
+            // This host has no Android debug switch: the shipping policy, whatever the machine offers.
+            assert!(!software());
+            assert_eq!(strict.seen, lenient.seen);
+            match &strict.chosen {
+                Ok(adapter) => assert_eq!(lenient.chosen.as_ref(), Ok(adapter)),
+                Err(why) => assert!(
+                    why.contains("no hardware GPU") == lenient.chosen.is_ok(),
+                    "{why}"
+                ),
             }
         }
 
@@ -2972,20 +3058,36 @@ mod tests {
         ));
     }
 
+    fn adapter(name: &str, device_type: &str) -> ProbeAdapter {
+        ProbeAdapter {
+            name: name.into(),
+            backend: "Vulkan".into(),
+            device_type: device_type.into(),
+            driver: String::new(),
+        }
+    }
+
     #[test]
     fn the_probe_asks_the_gpu_only_of_a_build_that_could_run_native_and_carries_its_reason() {
         let asked = std::cell::Cell::new(0);
-        let ask = |answer: Result<&str, &str>| {
+        let ask = |chosen: Result<ProbeAdapter, &str>, seen: Vec<ProbeAdapter>| {
             asked.set(asked.get() + 1);
-            answer.map(String::from).map_err(String::from)
+            Gpu {
+                chosen: chosen.map_err(String::from),
+                seen,
+            }
         };
-        let missing = probe(availability(false, true), || ask(Ok("unused")));
+        let missing = probe(availability(false, true), || {
+            ask(Ok(adapter("unused", "DiscreteGpu")), Vec::new())
+        });
         assert_eq!((missing.available, asked.get()), (false, 0));
         assert_eq!(missing.reason, NOT_BUILT);
+        let cpu = adapter("llvmpipe", "Cpu");
         let software = probe(availability(true, true), || {
-            ask(Err(
-                "renderer unsupported: no hardware GPU, only a software rasterizer",
-            ))
+            ask(
+                Err("renderer unsupported: no hardware GPU, only a software rasterizer"),
+                vec![cpu.clone()],
+            )
         });
         assert!(!software.available);
         assert!(
@@ -2993,10 +3095,26 @@ mod tests {
             "{}",
             software.reason
         );
-        let drawn = probe(availability(true, true), || ask(Ok("Radeon (Vulkan)")));
+        // What the device offered is reported even when nothing could be chosen.
+        assert_eq!((software.adapter, software.seen), (None, vec![cpu.clone()]));
+        let radeon = adapter("Radeon", "DiscreteGpu");
+        let drawn = probe(availability(true, true), || {
+            ask(Ok(radeon.clone()), vec![radeon.clone(), cpu.clone()])
+        });
         assert!(drawn.available);
         assert!(drawn.reason.contains("Radeon (Vulkan)"), "{}", drawn.reason);
-        assert_eq!(asked.get(), 2);
+        assert!(!drawn.reason.contains("software"), "{}", drawn.reason);
+        assert_eq!(drawn.adapter, Some(radeon.clone()));
+        assert_eq!(drawn.seen, vec![radeon, cpu.clone()]);
+        // A rasterizer is chosen only under the debug switch, and the reason says so.
+        let allowed = probe(availability(true, true), || ask(Ok(cpu.clone()), vec![cpu]));
+        assert!(allowed.available);
+        assert!(
+            allowed.reason.contains("software rasterizer"),
+            "{}",
+            allowed.reason
+        );
+        assert_eq!(asked.get(), 3);
     }
 
     #[tokio::test]
@@ -3005,6 +3123,8 @@ mod tests {
             available: true,
             reason: "drawn".into(),
             elapsed_ms: 3,
+            adapter: Some(adapter("Radeon", "DiscreteGpu")),
+            seen: Vec::new(),
         };
         let kept = answer.clone();
         assert_eq!(within(PROBE_BUDGET, move || kept).await, answer);
@@ -3033,6 +3153,7 @@ mod tests {
         assert_eq!(native_terminal_probe().await, first);
         let answer = serde_json::to_value(&first).unwrap();
         assert!(answer["elapsedMs"].is_u64(), "{answer}");
+        assert!(answer["seen"].is_array(), "{answer}");
         assert!(crate::app_lock::allowed_while_locked(
             "native_terminal_probe"
         ));

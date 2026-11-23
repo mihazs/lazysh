@@ -58,7 +58,7 @@ classify() {
     packages/terminal-runtime/prototypes/linux-surface/scripts/*) add linux_surface terminal_bridge ;;
     packages/*/*) package "$1" ;;
     # The release APK's build configuration: only a pull request touching it builds a release APK with the native engine.
-    .github/workflows/release-artifacts.yml | .github/actions/ghostty-zig/* | .changeset/release-artifacts.ts | .github/scripts/apk-budget.ts | .github/scripts/apk-engine.ts | tests/apk-budget.test.ts) add all android_release ;;
+    .github/workflows/release-artifacts.yml | .github/actions/ghostty-zig/* | .changeset/release-artifacts.ts | .github/scripts/apk-budget.ts | .github/scripts/apk-engine.ts | tests/apk-budget.test.ts | .github/scripts/software-gpu-switch.sh | tests/software-gpu-switch.test.ts) add all android_release ;;
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
     apps/client/src-tauri/gen/android/*) add android ;;
     apps/client/src-tauri/apple/*) add ios ;;

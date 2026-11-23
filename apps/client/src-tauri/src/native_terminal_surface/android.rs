@@ -85,7 +85,8 @@ pub extern "system" fn Java_app_lazysh_client_JniSurface_nativeReady(
                 RawWindowHandle::AndroidNdk(AndroidNdkWindowHandle::new(raw)),
             )
         };
-        let target = Target::on_window(window, width.max(1) as u32, height.max(1) as u32);
+        let target = Target::on_window(window, width.max(1) as u32, height.max(1) as u32)
+            .with_policy(crate::native_renderer::policy());
         panes(|panes| {
             panes.ready(
                 &id,

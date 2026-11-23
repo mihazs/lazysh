@@ -33,7 +33,7 @@ mod fonts;
 mod system;
 mod text;
 
-pub use adapter::{probe, rank, ranked, refusal, AdapterInfo, Policy, Window};
+pub use adapter::{probe, probe_seen, rank, ranked, refusal, AdapterInfo, Policy, Window};
 pub use fonts::{FontError, FontLibrary};
 pub use system::{system_font_dirs, FALLBACK_FAMILY};
 

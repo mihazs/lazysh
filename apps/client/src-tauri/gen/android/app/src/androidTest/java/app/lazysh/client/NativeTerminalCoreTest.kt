@@ -1,10 +1,13 @@
 package app.lazysh.client
 
+import android.os.Build
+import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -43,6 +46,41 @@ class NativeTerminalCoreTest {
     /** The screen once a row of it is exactly `row`, so an echo of the command typed to produce it never counts. */
     private fun awaitRow(row: String) = PageDriver.poll("the row $row on the core's screen", 60) {
         text().takeIf { screen -> screen.lines().any { it.trim() == row } }
+    }
+
+    private fun probe(): JSONObject {
+        val started = System.nanoTime()
+        val answer = JSONObject(PageDriver.invoke("native_terminal_probe"))
+        // What the page waited for, the IPC round trip and the blocking task's start included, beside the probe's own `elapsedMs`.
+        return answer.put("waitedMs", (System.nanoTime() - started) / 1_000_000)
+    }
+
+    /**
+     * What the probe says about this device (#2093, #2094): under the shipping policy, which refuses a CPU rasterizer, and under the debug
+     * build's switch, which a process that sets `LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU` turns on (the CI emulator has no other adapter). The first
+     * call is the cold one, the cost a launch pays; both answers, every adapter seen and the costs are the evidence the job keeps.
+     */
+    @Test fun theProbeRefusesASoftwareRasterizerUnlessTheDebugSwitchAllowsOne() {
+        val switch = "LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU"
+        Os.unsetenv(switch)
+        val shipping = probe()
+        Os.setenv(switch, "1", true)
+        val withSwitch = try { probe() } finally { Os.unsetenv(switch) }
+        Evidence.record("native-probe", JSONObject()
+            .put("device", JSONObject().put("model", Build.MODEL).put("hardware", Build.HARDWARE).put("abi", Build.SUPPORTED_ABIS[0])
+                .put("sdk", Build.VERSION.SDK_INT).put("fingerprint", Build.FINGERPRINT))
+            .put("shippingPolicy", shipping).put("debugSoftwareSwitch", withSwitch))
+
+        assertTrue("the debug switch finds an adapter that can create a device: $withSwitch", withSwitch.getBoolean("available"))
+        val chosen = withSwitch.getJSONObject("adapter")
+        if (shipping.getBoolean("available")) {
+            assertFalse("the shipping policy never chooses a CPU rasterizer: $shipping", shipping.getJSONObject("adapter").getString("deviceType") == "Cpu")
+        } else {
+            // A device whose only adapter is a rasterizer is refused for that, and the switch is what lets it draw.
+            assertTrue("the refusal names a device with no hardware GPU: $shipping", shipping.getString("reason").contains("no hardware GPU"))
+            assertTrue("the switch's adapter is a rasterizer: $withSwitch", chosen.getString("deviceType") == "Cpu")
+        }
+        assertTrue("the answer lists the adapters it saw: $withSwitch", withSwitch.getJSONArray("seen").length() > 0)
     }
 
     @Test fun theCoreInsideTheAppParsesTheOutputOfARealShellAndReadsItBack() {

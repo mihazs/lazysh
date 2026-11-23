@@ -1773,11 +1773,16 @@ jobs:
       - name: Build the arm64 debug app with the terminal core (compiled and linked, not run)
         run: sh .github/scripts/retry-zig-fetch.sh bun run build:android:terminal-core
       - run: sh .github/scripts/native-lib-size.sh arm64-v8a
+      # The control of native-android-release-core's check that a release library has no debug software-GPU switch.
+      - name: The debug library carries the software-GPU switch
+        run: sh .github/scripts/software-gpu-switch.sh present apps/client/src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/liblazysh_lib.so
       # Measured and not needed again; the runner's disk is shared with the x86_64 build, the emulator image and Gradle.
       - run: rm -rf target/aarch64-linux-android apps/client/src-tauri/gen/android/app/build
       - name: Build the x86_64 debug app with the terminal core
         run: sh .github/scripts/retry-zig-fetch.sh bun run build:android:emulator:terminal-core
       - run: sh .github/scripts/native-lib-size.sh x86_64
+      - name: The debug library carries the software-GPU switch
+        run: sh .github/scripts/software-gpu-switch.sh present apps/client/src-tauri/gen/android/app/src/main/jniLibs/x86_64/liblazysh_lib.so
       - *android-owned-kvm
       - *android-runtime-emulator
       - uses: actions/upload-artifact@v4
@@ -1835,6 +1840,9 @@ jobs:
         run: bun .github/scripts/apk-budget.ts android-google-arm64 apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
       - name: Hold the APK to the engine its kill switch calls for
         run: bun .github/scripts/apk-engine.ts apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk google "$LAZYSH_NATIVE_TERMINAL"
+      # The release engine has no way to draw on a CPU rasterizer: the debug switch is not compiled in (native_renderer.rs).
+      - name: The release APK carries no software-GPU switch
+        run: sh .github/scripts/software-gpu-switch.sh absent apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
 
   # Owned OpenSSH password, encrypted-key, rotated-key, bastion, agent-forwarding, Auto-fallback and
   # forced-ET parity cases (#985), the browser preview forward and teardown case (#994) and the
