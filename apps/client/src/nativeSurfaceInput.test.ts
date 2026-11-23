@@ -96,4 +96,15 @@ describe('Android surface input', () => {
     await settle();
     expect(core.inputs).toEqual([]);
   });
+
+  it('sends a paste through the adapter, bracketed only when the program asked, and after the text typed before it', async () => {
+    const {core, adapter, push, input} = await setup();
+    push([{type: 'text', text: 'echo '}, {type: 'paste', text: 'a\nb'}]);
+    await settle();
+    await adapter.write!(new TextEncoder().encode('\x1b[?2004h'));
+    push([{type: 'paste', text: 'c'}]);
+    await settle();
+    expect(core.inputs).toEqual([{data: 'echo ', origin: 'ime'}, {data: 'a\rb', origin: 'paste'}, {data: '\x1b[200~c\x1b[201~', origin: 'paste'}]);
+    input.dispose();
+  });
 });

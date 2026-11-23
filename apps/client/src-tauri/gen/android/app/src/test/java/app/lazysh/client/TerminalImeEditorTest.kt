@@ -35,6 +35,8 @@ class TerminalImeEditorTest {
             if (key.key == "Backspace") line = line.dropLast(1)
         }
 
+        override fun paste(pasted: String) { sent += "<paste:$pasted>" }
+
         override fun unapplied(edit: UnappliedEdit?) { unapplied += edit }
     }
 
@@ -271,5 +273,23 @@ class TerminalImeEditorTest {
         assertNull(TerminalImeEditor.ownedDelta("abcd", "abXd", owned = 3))
         assertEquals("\u007fX", TerminalImeEditor.ownedDelta("abcd", "abcX", owned = 3))
         assertEquals("a tail erase is a Backspace press even before the owned start", "\u007f\u007f", TerminalImeEditor.ownedDelta("abcd", "ab", owned = 4))
+    }
+
+    @Test fun aPasteDeliversWhatWasTypedFirstThenTheTextAsOnePasteAndStartsFresh() {
+        batch { commitText("ls ", 1) }
+        assertTrue(editor.paste("a\nb"))
+        batch { commitText("x", 1) }
+        assertEquals(listOf("ls ", "<paste:a\nb>", "x"), remote.sent)
+    }
+
+    @Test fun aPasteIsRefusedWhileInputIsGated() {
+        open = false
+        assertFalse(editor.paste("secret"))
+        assertEquals(emptyList<String>(), remote.sent)
+    }
+
+    @Test fun anEmptyPasteSendsNothing() {
+        assertTrue(editor.paste(""))
+        assertEquals(emptyList<String>(), remote.sent)
     }
 }

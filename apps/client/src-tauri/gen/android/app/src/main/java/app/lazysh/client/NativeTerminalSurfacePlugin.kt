@@ -66,6 +66,7 @@ class NativeTerminalSurfacePlugin(private val owner: Activity) : Plugin(owner) {
 /** The page's `CoreKeyInput` for a key, so it goes to the core as it is. */
 internal fun eventJson(event: SurfaceInput): JSONObject = when (event) {
     is SurfaceInput.Text -> JSONObject().put("type", "text").put("text", event.text)
+    is SurfaceInput.Paste -> JSONObject().put("type", "paste").put("text", event.text)
     is SurfaceInput.Preedit -> JSONObject().put("type", "preedit").put("text", event.text ?: JSONObject.NULL)
     is SurfaceInput.Key -> with(event.key) {
         JSONObject().put("type", "key").put("code", code).put("key", key)

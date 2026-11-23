@@ -27,6 +27,9 @@ interface TerminalInputSink {
     /** A key press or release that is not text. */
     fun key(key: TerminalKey)
 
+    /** Text pasted from the clipboard (the keyboard's clipboard strip, Shift+Insert): the core brackets it when the program asked for that; a sink without paste receives it as typed text. */
+    fun paste(pasted: String) = text(pasted)
+
     /** An edit that cannot be applied to the remote text, or null once nothing is waiting for review. */
     fun unapplied(edit: UnappliedEdit?)
 }
@@ -164,6 +167,15 @@ class TerminalImeEditor(
             owned = value.length
         }
         sink.key(key)
+        return true
+    }
+
+    /** Pasted text: what the keyboard held is delivered first, then the paste goes as one unit and the editor starts fresh. False while input is gated. */
+    fun paste(pasted: String): Boolean {
+        if (!acceptsInput()) { resetAndResync(); return false }
+        if (pasted.isEmpty()) return true
+        settleOwnership()
+        sink.paste(pasted)
         return true
     }
 

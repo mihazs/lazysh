@@ -54,6 +54,7 @@ export class SurfaceInput implements Disposable {
 
   private apply(event: Awaited<ReturnType<typeof nativeSurface.takeInput>>['events'][number]) {
     if (event.type === 'text') this.adapter.sendInput(event.text, 'ime');
+    else if (event.type === 'paste') this.adapter.paste(event.text);
     else if (event.type === 'key') this.adapter.sendKey(event);
     else this.show(event.text);
   }
