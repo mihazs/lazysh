@@ -17,3 +17,7 @@ practice because the producers are UI-driven calls.
 Removal condition: drop this vendor directory and the `[patch.crates-io]` entry
 when a released wry no longer blocks the main thread on a full MainPipe queue
 (check `main_pipe.rs` of each release, latest checked 0.57.3 still `bounded(8)`).
+
+## Files removed from upstream
+
+- `examples/custom_protocol/wasm.wasm`: a WebAssembly binary used only by an example that is never built here. The F-Droid source scanner reports any WebAssembly file as an error, which stops the verified release build (`Release gate: missing or failed candidate source scan`, v1.98.x). Nothing else is removed; `tests/vendored-binaries.test.ts` keeps binaries out of this directory.
