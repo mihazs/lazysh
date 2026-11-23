@@ -1301,7 +1301,11 @@ exec "$@"
 
         #[tokio::test]
         async fn a_link_resolves_to_a_path_of_the_distribution_and_never_outside_it() {
-            let temp = tempfile::tempdir().unwrap();
+            // The share root is compared with resolved link targets, so it is under the canonical temporary
+            // directory: macOS's is behind the /var symlink.
+            let temp = tempfile::Builder::new()
+                .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
+                .unwrap();
             let share = temp.path().join("share");
             fs::create_dir_all(share.join("home/me")).unwrap();
             fs::write(share.join("home/me/target.txt"), "target").unwrap();
