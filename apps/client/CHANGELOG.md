@@ -1,5 +1,38 @@
 # @lazysh/client
 
+## 1.97.7
+
+### Patch Changes
+
+- fix(voice): release the local Parakeet cache lock when its owner closes ([#2012](https://github.com/mihazs/lazysh/pull/2012))
+
+  <details><summary>Details</summary>
+
+  A child process that inherited the lock's descriptor no longer keeps the cache unavailable after its owner exits (#2009).
+
+  </details>
+- fix(hooks): read the companion store for hook readiness without creating, changing or deleting its files ([#1944](https://github.com/mihazs/lazysh/pull/1944))
+
+  <details><summary>Details</summary>
+
+  `lazysh-agent hooks status` now opens the event store through a read-only SQLite file system layer, so a status read can no longer create the write-ahead index or delete the log of an empty database, even if another process removes a file while it reads. An unreadable store still reports `notChecked`.
+
+  </details>
+- fix(ios): answer a slow Simulator boot, shutdown or reboot as requested instead of DeviceTimeout ([#2002](https://github.com/mihazs/lazysh/pull/2002))
+
+  <details><summary>Details</summary>
+
+  Answer an iOS Simulator boot, shutdown or reboot that `simctl` is still carrying out after ten seconds as requested instead of `DeviceTimeout`, report a reboot whose shutdown is still running as `shutting_down`, report slow iOS discovery as a warning after one retry, and show a note for each answer in the Devices panel. Changed response shape: an iOS reboot can answer `status: "shutting_down"`.
+
+  </details>
+- feat(terminal): Report a terminal problem from Settings, the Workspace tools engine line and the engine notice ([#2389](https://github.com/mihazs/lazysh/pull/2389))
+
+  <details><summary>Details</summary>
+
+  Part of #2092. A new "Report a terminal problem" action opens the lazysh issue form in your browser, prefilled with the terminal engine, your Settings choice, the reasons the app recorded for them and the app version. lazysh sends nothing itself: the browser opens the page and you decide whether to submit. Available in English, Portuguese and Spanish.
+
+  </details>
+
 ## 1.97.6
 
 ### Patch Changes

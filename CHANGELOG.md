@@ -10,6 +10,22 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.97.7] - 2026-11-23
+
+### New
+
+- **terminal:** Report a terminal problem from Settings, the Workspace tools engine line and the engine notice ([#2389](https://github.com/mihazs/lazysh/pull/2389))
+- **browser:** keep the host browser relay's profile until Clear browser data ([#1995](https://github.com/mihazs/lazysh/pull/1995))
+- **browser:** fit the host browser relay's stream to the link with a quality ladder ([#1997](https://github.com/mihazs/lazysh/pull/1997))
+- **browser:** carry navigation, tabs, dialogs and notices over the host browser relay ([#2001](https://github.com/mihazs/lazysh/pull/2001))
+
+### Fixed
+
+- **voice:** release the local Parakeet cache lock when its owner closes ([#2012](https://github.com/mihazs/lazysh/pull/2012))
+- **hooks:** read the companion store for hook readiness without creating, changing or deleting its files ([#1944](https://github.com/mihazs/lazysh/pull/1944))
+- **ios:** answer a slow Simulator boot, shutdown or reboot as requested instead of DeviceTimeout ([#2002](https://github.com/mihazs/lazysh/pull/2002))
+- **herdr:** on macOS the Herdr event stream ends cleanly when the Herdr server closes its socket ([#2402](https://github.com/mihazs/lazysh/pull/2402))
+
 ## [1.97.6] - 2026-11-22
 
 ### New
