@@ -88,6 +88,8 @@ jobs:
       # The kill switch (#1342): `off` builds the client and the app without the native terminal engine (docs/install-and-update.md, "Maintainers").
       - &native-terminal-switch
         name: Resolve the native terminal kill switch
+        # POSIX syntax ($GITHUB_ENV, sh): the Windows runner's default shell is PowerShell, where it fails with an empty FilePath (v1.97.7).
+        shell: bash
         env:
           SWITCH_INPUT: ${{ inputs.native-terminal }}
           SWITCH_VARIABLE: ${{ vars.LAZYSH_NATIVE_TERMINAL }}

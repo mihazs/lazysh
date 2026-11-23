@@ -34,6 +34,9 @@ test('every release build resolves the switch into the environment before its bu
     const steps = workflow.jobs[job].steps as any[];
     const resolve = steps.findIndex(step => step.name === 'Resolve the native terminal kill switch');
     expect(resolve, job).toBeGreaterThan(0);
+    // The step is POSIX shell: a job with a Windows runner runs its steps in PowerShell unless the step names bash (the v1.97.7 publish failed there).
+    const runners = (workflow.jobs[job].strategy?.matrix?.include ?? []).map((entry: any) => entry.os).concat(workflow.jobs[job]['runs-on']);
+    if (runners.some((runner: string) => String(runner).startsWith('windows'))) expect(steps[resolve].shell, job).toBe('bash');
     expect(resolve, job).toBeLessThan(steps.findIndex(step => step.run?.includes(build)));
     for (const [input, variable, expected] of [['default', undefined, 'on'], ['default', 'off', 'off'], ['on', 'off', 'on'], ['off', undefined, 'off']] as const) {
       const root = await directory();
