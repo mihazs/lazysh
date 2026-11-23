@@ -1,3 +1,4 @@
+import {StaleAccessError} from './access';
 import type {TerminalAdapter, TerminalBackendId, TerminalCapabilities} from './terminalAdapter';
 
 export type BackendProbe = {ok: true} | {ok: false; reason: string};
@@ -40,6 +41,18 @@ export type SelectOptions = SessionOptions & {
 export const NOT_REGISTERED = 'not registered';
 export const LACKS_PREFIX = 'lacks ';
 export const DISABLED_IN_BUILD = 'disabled in this build';
+/** A backend that failed to start or broke in a session is recorded as `FAILED_PREFIX` and the error's text; Auto then skips it. */
+export const FAILED_PREFIX = 'failed: ';
+/** `BackendSelection.reason` of a session whose user moved it off the native engine. */
+export const SWITCHED = 'switched';
+const MAX_FAILURE = 200;
+
+/** Where a recorded failure lives: in memory by default; the app keeps it on the device (`terminalBackends.ts`). */
+export type FailureMemory = {get(id: TerminalBackendId): string | undefined; set(id: TerminalBackendId, reason: string): void; clear(id: TerminalBackendId): void};
+const memoryOfFailures = (): FailureMemory => {
+  const failures = new Map<TerminalBackendId, string>();
+  return {get: id => failures.get(id), set: (id, reason) => void failures.set(id, reason), clear: id => void failures.delete(id)};
+};
 
 /**
  * The kill switch, the rollback of last resort: a build made with `LAZYSH_NATIVE_TERMINAL=off` never selects, probes or creates the
@@ -50,7 +63,7 @@ export const nativeTerminalDisabledInBuild = (): boolean => typeof __LAZYSH_NATI
 /** The backend every platform can run: the last resort of every selection. */
 const FALLBACK: TerminalBackendId = 'xterm';
 
-export function createBackendRegistry() {
+export function createBackendRegistry(failures: FailureMemory = memoryOfFailures()) {
   const backends = new Map<TerminalBackendId, BackendRegistration>();
   const probed = new Map<TerminalBackendId, Promise<BackendProbe>>();
   // A probe may be costly (GPU surface); it runs once per registry and its result is the recorded truth.
@@ -71,8 +84,18 @@ export function createBackendRegistry() {
     return probe.ok ? undefined : probe.reason;
   }
 
-  async function select({preference = 'auto', override, requires: needs = [], mosh}: SelectOptions = {}): Promise<BackendSelection> {
-    const requires = mosh ? [...needs, 'canonicalMoshResize' as const] : needs;
+  /** Records the failure and answers the reason as `select` and the diagnostics carry it. */
+  const recordFailure = (id: TerminalBackendId, error: unknown) => {
+    const reason = `${FAILED_PREFIX}${String(error instanceof Error ? error.message : error).slice(0, MAX_FAILURE)}`;
+    failures.set(id, reason);
+    return reason;
+  };
+
+  /** What the session needs of its backend: what it asked for, and canonical Mosh resizing when it is a Mosh session. */
+  const needsOf = ({requires = [], mosh}: SelectOptions = {}) => mosh ? [...requires, 'canonicalMoshResize' as const] : requires;
+
+  async function select(options: SelectOptions = {}): Promise<BackendSelection> {
+    const {preference = 'auto', override} = options, requires = needsOf(options);
     const wanted = override ?? preference;
     const source = override ? 'developer override' : 'preference';
     const order = wanted === 'auto' ? [...backends.values()].filter(backend => backend.autoEligible && backend.id !== FALLBACK).map(backend => backend.id) : [wanted];
@@ -80,7 +103,8 @@ export function createBackendRegistry() {
     if (wanted === 'auto' && nativeTerminalDisabledInBuild() && !order.includes('native')) order.unshift('native');
     const fallbacks: BackendSelection['fallbacks'] = [];
     for (const id of [...order, ...(order.includes(FALLBACK) ? [] : [FALLBACK])]) {
-      const reason = await refusal(id, requires);
+      // A failure is only Auto's to honour: choosing a backend again is how its user retries it.
+      const reason = await refusal(id, requires) ?? (wanted === 'auto' ? failures.get(id) : undefined);
       if (reason !== undefined) { fallbacks.push({id, reason}); continue; }
       return {id, reason: fallbacks.length ? 'fallback' : wanted === 'auto' ? 'automatic' : source, fallbacks};
     }
@@ -96,9 +120,26 @@ export function createBackendRegistry() {
     },
     select,
     refusal,
+    /** The failure recorded for a backend (undefined: none), as `select` records it under Auto. */
+    failure: (id: TerminalBackendId) => failures.get(id),
+    /** A backend broke in a session: Auto keeps away from it until the memory forgets or a start of it works. Answers the recorded reason. */
+    recordFailure,
+    /**
+     * The adapter of one new session. A backend that cannot start its adapter is recorded as failed and the session starts on the
+     * fallback, with the failure among the reasons it records; a refusal of the app's lock is not the backend's failure.
+     */
     async create(options?: SelectOptions) {
-      const selection = await select(options);
-      return {selection, adapter: await backends.get(selection.id)!.create({mosh: options?.mosh})};
+      const selection = await select(options), {id} = selection, session = {mosh: options?.mosh};
+      try {
+        const adapter = await backends.get(id)!.create(session);
+        if (id !== FALLBACK) failures.clear(id);
+        return {selection, adapter};
+      } catch (error) {
+        if (id === FALLBACK || error instanceof StaleAccessError || await refusal(FALLBACK, needsOf(options)) !== undefined) throw error;
+        const reason = recordFailure(id, error);
+        const adapter = await backends.get(FALLBACK)!.create(session);
+        return {selection: {id: FALLBACK, reason: 'fallback', fallbacks: [...selection.fallbacks, {id, reason}]}, adapter};
+      }
     },
   };
 }

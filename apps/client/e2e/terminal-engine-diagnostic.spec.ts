@@ -2,6 +2,7 @@ import {expect,test,type Page} from '@playwright/test';
 import {connectHost} from './fixtures/connectHost';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {closePreferences,openPreferenceCategory,openToolsPageWith,workspaceControl} from './fixtures/workspaceControl';
+import {onEngine} from '../src/e2eTerminalBackend';
 
 const notBuilt='The native terminal core is not built into this app';
 
@@ -54,6 +55,23 @@ for(const {name,storage,coreReason,line} of cases)test(`the Workspace tools menu
   await (await workspaceControl(page,'Preferences')).click();
   await openPreferenceCategory(page,'Terminal');
   await expect(page.getByRole('dialog',{name:'Preferences',exact:true}).getByRole('note').filter({hasText:sentence})).toHaveText(sentence);
+});
+
+test('the Workspace tools menu moves a native session to xterm.js, and the engine line follows',async({page},testInfo)=>{
+  await openSession(page,testInfo.project.name==='phone',preferences({terminalEngine:'native'}));
+  const native={backend:'native',selection:{id:'native',reason:'preference',fallbacks:[]}};
+  expect(await onEngine(page)).toEqual(native);
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await openToolsPageWith(page,'Switch this session to xterm.js');
+  const menu=page.getByRole('dialog',{name:'Workspace tools',exact:true});
+  await menu.getByRole('button',{name:'Switch this session to xterm.js',exact:true}).click();
+  await expect.poll(()=>onEngine(page)).toEqual({backend:'xterm',selection:{id:'xterm',reason:'switched',fallbacks:[]}});
+  await expect(page.locator('.terminal-canvas:visible')).toBeVisible();
+  await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
+  await openToolsPageWith(page,'New connection');
+  const sentence="The current session's terminal engine is xterm.js: you switched this session from the native engine";
+  await expect(menu.getByRole('note').filter({hasText:sentence})).toHaveText(sentence);
+  await expect(menu.getByRole('button',{name:'Switch this session to xterm.js',exact:true})).toHaveCount(0);
 });
 
 test('Settings shows no engine line while no session is open',async({page})=>{

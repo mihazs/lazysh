@@ -4,7 +4,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 const invoke = vi.hoisted(() => vi.fn());
 const inApp = vi.hoisted(() => ({value: true}));
 vi.mock('@tauri-apps/api/core', () => ({invoke, isTauri: () => inApp.value, Channel: class { onmessage?: (event: unknown) => void; }}));
-import {acknowledgeAccessReady, accessSnapshot, applyAccessStatus} from './access';
+import {setLocked} from './test/accessLock';
 import type {TerminalPreferences, TerminalTheme} from './terminalAdapter';
 import {createNativeTerminalAdapter, probeNativeCore, type NativeTerminalOptions, type NativeTerminalOpening} from './tauriNativeCoreBridge';
 
@@ -18,14 +18,6 @@ const commands = () => invoke.mock.calls.map(([command]) => command);
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
 const transport = vi.fn();
-let generation = 0;
-/** The app's access state as the native lock reports it; an unlock is acknowledged the way the shell does. */
-function setLocked(locked: boolean) {
-  const nonce = String(++generation).padStart(64, 'a');
-  applyAccessStatus({initialized: true, supported: true, reason: '', enabled: true, locked, generation: String(generation), ...(locked ? {} : {nonce})});
-  if (!locked) acknowledgeAccessReady(accessSnapshot().epoch);
-  return nonce;
-}
 
 async function open(session: Promise<string> = Promise.resolve('local:7'), options: Partial<NativeTerminalOptions> = {}): Promise<NativeTerminalOpening> {
   const opening = await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: 5000, onTransportEvent: transport, ...options});
