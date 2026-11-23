@@ -530,7 +530,8 @@ export async function realNtfyChallenge(root=resolve(import.meta.dir,'../..')) {
   };
   const nativeDigest=async(apk:string)=>{
     const hash=createHash('sha256');
-    await stream('owned current native library','unzip',['-p',apk,'lib/x86_64/liblazysh_lib.so'],512*1024*1024,bytes=>{hash.update(bytes);});
+    // The debug library outgrew the former 512 MiB bound (519 MiB, #2423); the bound only stops a runaway stream, the digest is incremental.
+    await stream('owned current native library','unzip',['-p',apk,'lib/x86_64/liblazysh_lib.so'],2*1024**3,bytes=>{hash.update(bytes);});
     return hash.digest('hex');
   };
   const normalArtifact=async(configuration='universalDebugRuntimeClasspath',apk?:string)=>{
