@@ -95,7 +95,7 @@ class GotifyAndroidTest {
             phase = "login-restart"
             shell("am force-stop $gotify")
             launchGotify()
-            awaitCondition { device.currentPackageName == gotify }
+            awaitCondition { showing(gotify) }
             phase = "login-restart-history"
             node(emptyHistory())
             phase = "background-home"
@@ -125,7 +125,7 @@ class GotifyAndroidTest {
             }
             phase = "history"
             showCard(states.last()).click()
-            awaitCondition { device.currentPackageName == gotify && device.hasObject(By.res(gotify, "messages_view")) }
+            awaitCondition { showing(gotify) && device.hasObject(By.res(gotify, "messages_view")) }
             for (state in states) node(By.pkg(gotify).text(body(state)))
             stage(4, JSONObject().put("history", true))
         } catch (_: Throwable) {
@@ -198,15 +198,19 @@ class GotifyAndroidTest {
     private fun launcherPackage(output: String): String =
         output.trim().lines().last().substringBefore('/').also { check(it.matches(Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+"))) { "Unrecognized launcher" } }
 
+    // UiDevice.currentPackageName waits for an active-window root and, while the window has none (a starting app), sleeps in a
+    // retry loop that outlasted the runner's test timeout; looking for the package's windows answers at once.
+    private fun showing(pkg: String) = device.hasObject(By.pkg(pkg))
+
     private fun home() {
         check(device.pressHome())
-        awaitCondition { device.currentPackageName == launcher && device.currentPackageName != gotify }
+        awaitCondition { showing(launcher) && !showing(gotify) }
     }
 
     private fun body(state: String) = "${input["alias"]}: $state"
 
     private fun showCard(state: String): UiObject2 {
-        check(device.currentPackageName == launcher)
+        check(showing(launcher))
         check(device.openNotification())
         val target = By.pkg("com.android.systemui").text(body(state))
         awaitCondition {
@@ -226,7 +230,7 @@ class GotifyAndroidTest {
         var row: UiObject2? = content
         var depth = 0
         while (row != null && row.resourceName != "com.android.systemui:id/expandableNotificationRow" && depth++ < 8) row = row.parent
-        check(row?.hasObject(By.text("lazysh")) == true && device.currentPackageName == "com.android.systemui")
+        check(row?.hasObject(By.text("lazysh")) == true && showing("com.android.systemui"))
         check(content.visibleBounds.width() > 0 && content.visibleBounds.height() > 0)
         return content
     }
