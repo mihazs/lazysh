@@ -1437,6 +1437,38 @@ jobs:
           LAZYSH_TEST_WINDOWS_SSH: '1'
         run: bun test tests/windows-ssh-server.test.ts --test-name-pattern 'owned Windows OpenSSH server'
 
+  # A Windows client against a real Linux host (#1747). windows-latest has no Linux machine, so
+  # the host is a WSL Ubuntu with an unprivileged OpenSSH server, tmux, the pinned Zellij and the
+  # same-run stock Herdr, started by .github/scripts/external-linux-host.sh. The Rust client under
+  # test runs natively on Windows and reaches it over loopback.
+  # Non-blocking until its first qualifying hosted pass is recorded on #1747; then remove continue-on-error.
+  native-windows-linux-host:
+    needs: [changes, herdr-native]
+    if: needs.changes.outputs.desktop == 'true'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - *source-bun
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: *rust-cache-main
+      - run: bun install --frozen-lockfile
+      - run: bun run build:native
+      - *stock-herdr-guard
+      - *stock-herdr-download
+      - *stock-herdr-verify
+      - uses: ./.github/actions/windows-linux-host
+        with:
+          herdr: ${{ runner.temp }}\lazysh-stock-herdr\herdr
+
   native-android:
     needs: changes
     if: needs.changes.outputs.android == 'true'

@@ -9,3 +9,6 @@ fastlane/metadata/android/**/*.txt text eol=lf
 
 # Keep the upstream portable-pty patch byte-identical, including its trailing spaces.
 packages/herdr-upstream/vendor/patches/portable-pty/0004-skip-directories-when-resolving-windows-programs.patch -whitespace
+
+# Shell scripts run in WSL and on Linux runners, so a Windows checkout must keep LF.
+.github/scripts/*.sh text eol=lf

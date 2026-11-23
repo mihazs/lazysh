@@ -75,7 +75,7 @@ PR that fails the gate never queues emulator, macOS or Windows work. Pushes to `
 skip the gate and run every job with the full matrix, which is the parity evidence.
 
 Most jobs that are not required to merge never run on a pull request, whatever its paths:
-companion candidates, desktop (macOS, Windows), iOS simulator, Android Mosh, Herdr navigation,
+companion candidates, desktop (macOS, Windows), the Windows client against a Linux host, iOS simulator, Android Mosh, Herdr navigation,
 auxiliary, ntfy, the terminal core and renderer on macOS (`terminal-macos`, report-only) and the terminal core on iOS (`terminal-ios`, report-only). They run on pushes to `main`, and `main-verdict.yml` reports them there. The
 terminal performance gate (`terminal-perf`, report-only) is the exception: it also runs on a pull request that selects the
 terminal runtime area, so a regression shows on the pull request that causes it. The

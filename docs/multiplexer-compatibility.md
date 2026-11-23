@@ -218,6 +218,7 @@ cover:
 - **Unit tests on Linux and windows-latest** (`native-desktop`): version parsing,
   capability gates, command and argv building, tree and event parsing.
 - **Windows local** (#1148): pinned native rmux through ConPTY on windows-latest.
+- **Windows client against a Linux host** (#1747, `native-windows-linux-host`): a WSL 2 Ubuntu host on windows-latest with an unprivileged OpenSSH server, tmux, Zellij and Herdr; discovery, attach, tree and actions run from the Rust client natively on Windows ([how](multiplexers.md#a-windows-client-against-a-linux-host)).
 - **Playwright phone (390×844) and desktop (1280×800)**: badges, notices, Jump To,
   confirmations and launcher plans against a mocked bridge.
 - **Linux native GUI** (`apps/client/native-e2e`): attach, Jump To, restore and the
