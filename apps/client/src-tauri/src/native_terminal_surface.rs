@@ -43,8 +43,10 @@ fn ensure_enabled() -> Result<(), String> {
 struct Surfaces(tauri::plugin::PluginHandle<tauri::Wry>);
 
 /// What the shell knows about a session's surface. `generation` counts the surfaces the session has had
-/// and is 0 until the first exists: it rises on every stop/start, never on a resize.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// and is 0 until the first exists: it rises on every stop/start, never on a resize. `drawing` says whether the
+/// renderer host drew on the surface that exists (`false`: the pane shows its background and nothing else) and `reason`
+/// why not; both are absent where the host cannot tell (a platform with no renderer client, a surface not made yet).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SurfaceState {
     pub placed: bool,
@@ -52,6 +54,10 @@ pub struct SurfaceState {
     pub generation: u32,
     pub width: u32,
     pub height: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
@@ -555,5 +561,21 @@ mod tests {
         .unwrap();
         assert_eq!((state.generation, state.width), (2, 1080));
         assert_eq!(serde_json::to_value(&state).unwrap()["generation"], 2);
+        // Whether the renderer drew, and why not, reach the page when the plugin says; a shell that cannot tell leaves both out.
+        assert_eq!((state.drawing, state.reason.as_deref()), (None, None));
+        assert!(serde_json::to_value(&state)
+            .unwrap()
+            .get("drawing")
+            .is_none());
+        let refused: SurfaceState = serde_json::from_value(serde_json::json!({
+            "placed": true, "ready": true, "generation": 1, "width": 10, "height": 10,
+            "drawing": false, "reason": "no adapter could create a device"
+        }))
+        .unwrap();
+        let sent = serde_json::to_value(&refused).unwrap();
+        assert_eq!(
+            (sent["drawing"].as_bool(), sent["reason"].as_str()),
+            (Some(false), Some("no adapter could create a device"))
+        );
     }
 }

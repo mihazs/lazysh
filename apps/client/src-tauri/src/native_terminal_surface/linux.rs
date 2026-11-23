@@ -307,6 +307,7 @@ impl Host {
                 generation: 1,
                 width: w as u32,
                 height: h as u32,
+                ..SurfaceState::default()
             });
         }
         let wanted = (w, h, pane.background);
@@ -330,6 +331,7 @@ impl Host {
             generation: 1,
             width: w as u32,
             height: h as u32,
+            ..SurfaceState::default()
         })
     }
 
@@ -409,6 +411,7 @@ impl Host {
             generation: 1,
             width: w as u32,
             height: h as u32,
+            ..SurfaceState::default()
         })
     }
 }
@@ -509,6 +512,7 @@ pub(super) async fn state(app: &AppHandle, session: String) -> Result<SurfaceSta
             generation: 0,
             width: 0,
             height: 0,
+            ..SurfaceState::default()
         }))
     })
     .await

@@ -3,6 +3,7 @@ package app.lazysh.client
 import android.app.Activity
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.util.Log
 import android.view.Gravity
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -97,7 +98,7 @@ internal class BackgroundPainter(private val background: () -> Int) : SurfaceCli
 }
 
 /** What a renderer can learn about a session's surface. `generation` is 0 until the first surface exists. */
-internal data class SurfaceState(val placed: Boolean, val ready: Boolean, val generation: Int, val width: Int, val height: Int)
+internal data class SurfaceState(val placed: Boolean, val ready: Boolean, val generation: Int, val width: Int, val height: Int, val drawing: Boolean? = null, val reason: String? = null)
 
 internal class SurfaceUnavailable(message: String) : Exception(message)
 
@@ -114,7 +115,7 @@ internal object TerminalSurfaces {
 
     /** Who draws a session's surface, given its id and the pane's background. The default is the Rust renderer host, which paints the background when it cannot draw. */
     @JvmField var clientFactory: (id: String, background: () -> Int) -> SurfaceClient<Surface> =
-        { id, background -> NativeSurfaceClient(id, background, JniSurface, BackgroundPainter(background)) }
+        { id, background -> NativeSurfaceClient(id, background, JniSurface, BackgroundPainter(background), log = { Log.i("lazysh-native", it) }) }
 
     private class Entry(id: String, factory: (String, () -> Int) -> SurfaceClient<Surface>) {
         var background = Color.BLACK
@@ -184,7 +185,9 @@ internal object TerminalSurfaces {
     fun state(id: String): SurfaceState {
         val entry = entries[id] ?: return SurfaceState(placed = false, ready = false, generation = 0, width = 0, height = 0)
         val ready = entry.lifecycle.current
-        return SurfaceState(entry.host != null, ready != null, entry.lifecycle.generation, ready?.width ?: 0, ready?.height ?: 0)
+        // Only the renderer client can say whether it drew; a surface that is not there yet says nothing, and a test's client has no opinion.
+        val client = if (ready != null) entry.client as? NativeSurfaceClient<*> else null
+        return SurfaceState(entry.host != null, ready != null, entry.lifecycle.generation, ready?.width ?: 0, ready?.height ?: 0, client?.drawing, client?.refusal)
     }
 
     /** One observer per Activity: its destruction drops the host views of its window; the sessions wait for the next page to place them. */
