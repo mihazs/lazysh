@@ -2,6 +2,7 @@ import {useEffect, useState} from 'react';
 import {t} from './i18n/core';
 import type {Preferences} from './preferences';
 import TerminalFeedbackLink from './TerminalFeedbackLink';
+import {FAILED_PREFIX} from './terminalBackendRegistry';
 import {describeRefusal} from './terminalEngineReason';
 
 const choices = [['auto', 'preferencesTerminalEngineAuto'], ['native', 'terminalEngineNative'], ['xterm', 'terminalEngineXterm']] as const;
@@ -12,11 +13,12 @@ const choices = [['auto', 'preferencesTerminalEngineAuto'], ['native', 'terminal
  */
 export default function TerminalEngineChoice({engine, screenReader, update}: {engine: Preferences['terminalEngine']; screenReader: boolean; update: (patch: Partial<Preferences>) => unknown}) {
   // Undefined until the registry has answered; Native stays off meanwhile rather than offer what may be refused.
-  const [answer, setAnswer] = useState<{reason?: string}>();
+  const [answer, setAnswer] = useState<{reason?: string; failed?: string}>();
   useEffect(() => {
     let current = true;
     // The registry loads with the first session, not with the settings list: its xterm.js adapter is a chunk of its own.
-    import('./terminalBackends').then(({backendRefusal}) => backendRefusal('native', screenReader)).then(reason => ({reason}), (error: unknown) => ({reason: String(error)}))
+    import('./terminalBackends').then(async ({backendRefusal, recordedNativeFailure}) => ({reason: await backendRefusal('native', screenReader), failed: recordedNativeFailure()}))
+      .catch((error: unknown) => ({reason: String(error)}))
       .then(next => { if (current) setAnswer(next); });
     return () => { current = false; };
   }, [screenReader]);
@@ -27,5 +29,6 @@ export default function TerminalEngineChoice({engine, screenReader, update}: {en
     <p id="terminal-engine-help">{t('preferencesTerminalEngineHelp')}</p>
     <p id="terminal-engine-feedback"><TerminalFeedbackLink report={{preference: engine ?? 'auto', reasons: answer?.reason === undefined ? [] : [`native: ${answer.reason}`]}} /> {t('terminalFeedbackHelp')}</p>
     {answer?.reason !== undefined && <p id="terminal-engine-native-off">{t('preferencesTerminalEngineNativeOff', {reason: describeRefusal(answer.reason)})}</p>}
+    {answer?.failed !== undefined && <p id="terminal-engine-native-failed">{t('preferencesTerminalEngineFailed', {detail: answer.failed.slice(FAILED_PREFIX.length)})}</p>}
   </>;
 }

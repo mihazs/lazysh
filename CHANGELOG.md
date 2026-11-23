@@ -10,6 +10,21 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.97.9] - 2026-11-23
+
+### New
+
+- **terminal:** open links with a tap on the native terminal engine ([#2393](https://github.com/mihazs/lazysh/pull/2393))
+- **terminal:** Start on xterm.js when a native session cannot start, and move a native session to xterm.js ([#2386](https://github.com/mihazs/lazysh/pull/2386))
+
+### Fixed
+
+- **ssh:** recover the host-tools connection of Mosh and Eternal Terminal sessions automatically ([#2013](https://github.com/mihazs/lazysh/pull/2013))
+
+### Under the hood
+
+- **ime:** commit CJK through a real IBus into the WebKitGTK terminal and the Chat composer ([#1919](https://github.com/mihazs/lazysh/pull/1919))
+
 ## [1.97.8] - 2026-11-23
 
 ### New

@@ -7,6 +7,11 @@ export type LiveSession = {
   adapter: import('./terminalAdapter').TerminalAdapter;
   /** Which engine this session got and why (preference, developer override, fallback and its reasons), fixed when the session was created. */
   selection: import('./terminalBackendRegistry').BackendSelection;
+  /**
+   * On a session running on the native engine: moves it to xterm.js with its screen, once. `failure` is what broke when it did, recorded so
+   * that Auto stays on xterm.js on this device; without it the user chose to leave. Resolves to whether the screen was carried over.
+   */
+  leaveNative?: (failure?: unknown) => Promise<boolean>;
   connected: boolean;
   disposed?: true;
   local?: true;

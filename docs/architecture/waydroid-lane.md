@@ -141,3 +141,18 @@ WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000 apps/client/bench/waydr
   --apk <artifact>/universal/debug/app-universal-debug.apk --apk <artifact>/androidTest/universal/debug/app-universal-debug-androidTest.apk \
   --instrument app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner app.lazysh.client.NativeTerminalCoreTest
 ```
+
+## Composition cases and the native probe on the guest (#2383, #2381)
+
+Recorded on 2026-11-22 on the same guest (Android 13 x86_64, host GL, Mesa radeonsi on a Navi 14), with the x86_64 debug APKs of CI run 45049588618 (`lazysh-android-debug-x86_64`, the head of [#2384](https://github.com/mihazs/lazysh/pull/2384): main plus the transparent WebView, built with the `native-terminal` feature). Two things were learnt that no earlier run showed.
+
+**The composition cases pass on the guest.** [terminal-lane-composition-waydroid.json](benchmarks/terminal-lane-composition-waydroid.json), `status` `passed`: the three cases of `NativeTerminalCompositionTest` ran, each in its own instrumentation step, 3 passed, 0 failed, 0 skipped. They look at the composited screen (`UiAutomation.takeScreenshot`) on the real MainActivity and its Tauri WebView: a placed surface shows through the page's native pane and an opaque DOM overlay stays above it, the WebView is opaque again once the surface is removed, an xterm.js-style page looks the same with a surface placed, and a recreated Activity shows the surface again once its page places it. The class run as a whole (one `am instrument` for the three cases) ended with `Process crashed` in the second case, after the Activity recreation of the first; it happened twice, left no tombstone (`tombstoned: crash socket received short read`), and does not happen on the CI emulator. Cause unknown; the lane therefore runs each case on its own. These are composition cases with a stand-in pane and the surface painted by `BackgroundPainter`: the real pane over a drawn session is [the native session case](../android-testing.md#a-native-terminal-session-through-the-real-ui-2390).
+
+**The guest gives wgpu an adapter that passes the shipping policy.** [terminal-probe-waydroid.json](benchmarks/terminal-probe-waydroid.json): `native_terminal_probe` answered `available: true`, `The native terminal can draw on AMD Radeon Graphics (RADV NAVI14) (Vulkan)`, in 99 ms (101 ms as the page waited), the first call of the process, with CPU rasterizers refused: the guest's Vulkan loader reaches the host's RADV driver. That was one call through the page (the WebView DevTools socket), not a lane step, because the probe case of #2381 was not in the APK that was installed; its lane run (`NativeTerminalCoreTest`, both policies, the adapters it saw and the cost) is still to be recorded. The CI emulator's answer for the same question is the opposite: SwiftShader only, refused under the shipping policy (`terminal-core-evidence/native-probe.json` of the `lazysh-android-terminal-core-results` artifact).
+
+Operational notes from the day:
+
+- Each CI run signs its debug APKs with a key of its own, so installing the artifact of another run over an installed one fails (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`); the guest's app and instrumentation packages were uninstalled first. The guest app held only a default preference and no host.
+- `waydroid app launch app.lazysh.client` thaws the guest before a step, and the lane lock must be held for every use of the guest, including a launch or an uninstall: a window-focus change spoils another run that holds it.
+- A desktop hard reset stops the Waydroid session (`Session: STOPPED`); starting it needs root, so the lane cannot start it again.
+

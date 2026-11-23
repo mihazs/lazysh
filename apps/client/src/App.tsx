@@ -154,7 +154,7 @@ async function prepareSession(
   lease: AccessLease,
   mosh = false,
 ) {
-  const { createTerminalAdapter } = await import("./terminalBackends");
+  const { createTerminalAdapter, recordNativeFailure } = await import("./terminalBackends");
   const { adapter, selection } = await createTerminalAdapter({ preference: getPreferences().terminalEngine, mosh });
   lease.assert();
   const session: LiveSession = {
@@ -232,6 +232,14 @@ async function prepareSession(
     Object.assign(onEvent, {link: adapter.transport}), adapter.transport.onEvent = onEvent;
     // The core applies Mosh's frames itself, so the data handler's failure check never runs: its refusal of one arrives as the adapter's event.
     adapter.subscribe(failDisplay, ['failure']);
+    let leaving: Promise<boolean> | undefined;
+    // shortcut: a Mosh session cannot leave the native engine, because the xterm.js terminal would need the canonical-resize controller the native adapter holds; move it with the terminal if that is asked for.
+    if (!mosh) session.leaveNative = failure => leaving ??= (async () => {
+      // The device remembers a failure whether or not this session could move.
+      const recorded = failure === undefined ? undefined : recordNativeFailure(failure);
+      const { handBackToXterm } = await import("./nativeHandback");
+      return handBackToXterm(session, {onEvent, createXterm: async () => (await createTerminalAdapter({override: "xterm"})).adapter, failure: recorded});
+    })().catch(error => { leaving = undefined; throw error; });
   }
   return { session, onEvent, establish };
 }
@@ -1392,6 +1400,10 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(!request.claim())return Promise.reject(new LocalUiError('attachmentPasteUnavailable'));
     return api.write(live.id,data);
   }
+  /** The user's choice to move a native session to xterm.js; the engine line and the pane follow the session. */
+  function leaveNativeEngine(session: LiveSession) {
+    session.leaveNative?.().then(carried => { if (!carried) setError(t('terminalEngineSwitchLost')); }, error => setError(errorMessage(error)));
+  }
   function openTerminalAttachments(session: LiveSession, target?: 'composer') {
     if(!mounted.current || !lease.current() || currentView.current.activeId!==session.id
       || currentView.current.view!=='terminal' || document.visibilityState!=='visible'
@@ -2226,6 +2238,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       {id:'connections',title:t('navigationConnections'),content:<div className="workspace-tools-group">
         <p className="terminal-engine-line" role="note">{t('terminalEngineOfSession',{engine:describeTerminalEngine(active.selection)})}</p>
         <TerminalFeedbackLink report={reportOfSession(active.selection,getPreferences().terminalEngine)}/>
+        {active.leaveNative && <button type="button" onClick={()=>{closeTools();void leaveNativeEngine(active);}}>{t('terminalEngineSwitchToXterm')}</button>}
         {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
         {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
         {!sideMenuMode && active.connected && !active.local && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
@@ -2606,7 +2619,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               >
                 {sessions.map((session) => (
                   <TerminalPane
-                    key={session.id}
+                    key={`${session.id}:${session.adapter.backend}`}
                     session={session}
                     active={activeId === session.id && view === "terminal" && sessionViewOf(session) !== "agent"}
                     swiping={swipeFrom!==null && activeId === session.id}

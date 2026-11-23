@@ -1,6 +1,7 @@
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import type {TerminalAdapter, TerminalBackendId, TerminalCapabilities} from './terminalAdapter';
-import {createBackendRegistry, type BackendProbe} from './terminalBackendRegistry';
+import {StaleAccessError} from './access';
+import {createBackendRegistry, type BackendProbe, type FailureMemory} from './terminalBackendRegistry';
 
 const capabilities = (over: Partial<TerminalCapabilities> = {}): TerminalCapabilities => ({
   nativeRendering: false, selection: true, scrollback: true, mouseReporting: true, ime: true, accessibility: true,
@@ -8,11 +9,11 @@ const capabilities = (over: Partial<TerminalCapabilities> = {}): TerminalCapabil
 });
 const adapter = (backend: TerminalBackendId) => ({backend}) as TerminalAdapter;
 
-function registry(native: {probe?: BackendProbe | Error; autoEligible?: boolean; capabilities?: Partial<TerminalCapabilities>} = {}) {
-  const r = createBackendRegistry();
+function registry(native: {probe?: BackendProbe | Error; autoEligible?: boolean; capabilities?: Partial<TerminalCapabilities>; create?: () => TerminalAdapter; failures?: FailureMemory} = {}) {
+  const r = createBackendRegistry(native.failures);
   const probe = vi.fn(() => { if (native.probe instanceof Error) throw native.probe; return native.probe ?? {ok: true} as BackendProbe; });
   r.register({id: 'xterm', capabilities: capabilities(), autoEligible: true, probe: () => ({ok: true}), create: () => adapter('xterm')});
-  r.register({id: 'native', capabilities: capabilities({nativeRendering: true, ...native.capabilities}), autoEligible: native.autoEligible ?? false, probe, create: () => adapter('native')});
+  r.register({id: 'native', capabilities: capabilities({nativeRendering: true, ...native.capabilities}), autoEligible: native.autoEligible ?? false, probe, create: native.create ?? (() => adapter('native'))});
   return {r, probe};
 }
 
@@ -129,5 +130,62 @@ describe('release gate', () => {
     const {r} = registry();
     expect((await r.select()).id).toBe('xterm');
     expect((await r.select({preference: 'native'})).id).toBe('native');
+  });
+});
+
+describe('a native session that fails to start', () => {
+  const broken = () => { throw new Error('terminal_core_open: no surface'); };
+  const failed = {id: 'native', reason: 'failed: terminal_core_open: no surface'};
+
+  it('starts on xterm.js, records the failure among the reasons and keeps Auto away from native afterwards', async () => {
+    const {r} = registry({autoEligible: true, create: broken});
+    const first = await r.create();
+    expect([first.adapter.backend, first.selection]).toEqual(['xterm', {id: 'xterm', reason: 'fallback', fallbacks: [failed]}]);
+    expect(r.failure('native')).toBe(failed.reason);
+    // Auto does not try native again, and says why.
+    expect(await r.create()).toMatchObject({adapter: {backend: 'xterm'}, selection: {id: 'xterm', reason: 'fallback', fallbacks: [failed]}});
+    expect((await r.select()).fallbacks).toEqual([failed]);
+  });
+
+  it('lets an explicit Native choice try again, and forgets the failure once a start works', async () => {
+    let works = false;
+    const {r} = registry({autoEligible: true, create: () => { if (!works) broken(); return adapter('native'); }});
+    await r.create();
+    expect(await r.refusal('native')).toBeUndefined();
+    expect(await r.create({preference: 'native'})).toMatchObject({selection: {id: 'xterm', fallbacks: [failed]}});
+    works = true;
+    expect(await r.create({preference: 'native'})).toMatchObject({adapter: {backend: 'native'}, selection: {id: 'native', reason: 'preference'}});
+    expect(r.failure('native')).toBeUndefined();
+    expect((await r.create()).selection).toEqual({id: 'native', reason: 'automatic', fallbacks: []});
+  });
+
+  it('records a failure that happens in a session the same way, bounded, and answers the reason', async () => {
+    const {r} = registry({autoEligible: true});
+    expect(r.recordFailure('native', new Error('x'.repeat(500)))).toBe(`failed: ${'x'.repeat(200)}`);
+    expect((await r.select()).fallbacks).toEqual([{id: 'native', reason: `failed: ${'x'.repeat(200)}`}]);
+  });
+
+  it('keeps the failure in the memory it was given, so a device keeps it', async () => {
+    const kept = new Map<string, string>();
+    const memory: FailureMemory = {get: id => kept.get(id), set: (id, reason) => void kept.set(id, reason), clear: id => void kept.delete(id)};
+    await registry({autoEligible: true, create: broken, failures: memory}).r.create();
+    expect([...kept]).toEqual([['native', failed.reason]]);
+    expect((await registry({autoEligible: true, failures: memory}).r.select()).fallbacks).toEqual([failed]);
+  });
+
+  it('does not count a locked app as a failure of the engine, and cannot fall back from xterm.js', async () => {
+    const {r} = registry({autoEligible: true, create: () => { throw new StaleAccessError(); }});
+    await expect(r.create()).rejects.toBeInstanceOf(StaleAccessError);
+    expect(r.failure('native')).toBeUndefined();
+    const lone = createBackendRegistry();
+    lone.register({id: 'xterm', capabilities: capabilities(), autoEligible: true, probe: () => ({ok: true}), create: () => { throw new Error('no DOM'); }});
+    await expect(lone.create()).rejects.toThrow('no DOM');
+  });
+
+  it('does not fall back when the fallback itself is refused (a requirement it cannot meet)', async () => {
+    const r = createBackendRegistry();
+    r.register({id: 'xterm', capabilities: capabilities({accessibility: false}), autoEligible: true, probe: () => ({ok: true}), create: () => adapter('xterm')});
+    r.register({id: 'native', capabilities: capabilities(), autoEligible: false, probe: () => ({ok: true}), create: broken});
+    await expect(r.create({preference: 'native', requires: ['accessibility']})).rejects.toThrow('terminal_core_open: no surface');
   });
 });

@@ -388,7 +388,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_descheduled_reader_is_not_charged_its_wait_against_the_query_budget() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = lazysh_common::test_support::private_tempdir();
         let path = directory.path().join("opencode.db");
         Connection::open(&path)
             .unwrap()

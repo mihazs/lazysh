@@ -12,7 +12,7 @@ import type {TerminalAdapter} from "./terminalAdapter";
 import {XtermTerminalAdapter} from "./xtermTerminalAdapter";
 import {openNativeTerminalAdapter} from "./nativeTerminalAdapter";
 import {createHeadlessCore} from "./xterm/nativeCoreHeadless";
-import {accessSnapshot,applyAccessStatus} from './access';
+import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from './access';
 import {setGestureInsets,unknownInsets} from './gestureInsets';
 const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), fit:vi.fn(), propose:vi.fn(), zellijNavigate: vi.fn(), invoke: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
 vi.mock("@tauri-apps/api/core", async importOriginal => ({...await importOriginal<typeof import("@tauri-apps/api/core")>(), invoke:mocks.invoke}));
@@ -125,6 +125,36 @@ describe('selection on a native session',()=>{
     await act(async()=>{await vi.advanceTimersByTimeAsync(20);});
     expect(adapter.selectedText()).toBe('hello world');
     vi.useRealTimers();
+  });
+});
+describe('a native session whose surface the shell cannot place',()=>{
+  /** A pane on a native session over the stand-in core, in a container that has a box, with a shell that refuses every surface command. */
+  async function refusedSurface() {
+    vi.spyOn(Element.prototype,'getBoundingClientRect').mockReturnValue({x:0,y:0,left:0,top:0,right:300,bottom:100,width:300,height:100,toJSON:()=>({})});
+    mocks.invoke.mockRejectedValue('no surface host');
+    const adapter=await openNativeTerminalAdapter(createHeadlessCore({rows:3}));
+    const leaveNative=vi.fn().mockResolvedValue(true),reportError=vi.fn();
+    const view=render(<TerminalPane session={{id:'native',name:'Host',connected:true,adapter,leaveNative} as unknown as LiveSession} active reportError={reportError} />);
+    return {adapter,leaveNative,reportError,view};
+  }
+  afterEach(()=>vi.restoreAllMocks());
+
+  it('moves the session to xterm.js with the shell\'s reason, which the device records',async()=>{
+    acknowledgeAccessReady(accessSnapshot().epoch);
+    const {adapter,leaveNative,reportError,view}=await refusedSurface();
+    await waitFor(()=>expect(leaveNative).toHaveBeenCalledWith('no surface host'));
+    expect(reportError).toHaveBeenCalledWith('no surface host');
+    view.unmount();
+    await adapter.dispose();
+  });
+
+  it('keeps the session where it is when the app is locked, which refuses the shell\'s commands without the engine failing',async()=>{
+    access(true);
+    const {adapter,leaveNative,reportError,view}=await refusedSurface();
+    await waitFor(()=>expect(reportError).toHaveBeenCalledWith('no surface host'));
+    expect(leaveNative).not.toHaveBeenCalled();
+    view.unmount();
+    await adapter.dispose();
   });
 });
 it('sizes the toolbar keys from the saved key height and follows a change without remounting',()=>{

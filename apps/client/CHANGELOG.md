@@ -1,5 +1,40 @@
 # @lazysh/client
 
+## 1.97.9
+
+### Patch Changes
+
+- feat(terminal): open links with a tap on the native terminal engine ([#2393](https://github.com/mihazs/lazysh/pull/2393))
+
+  <details><summary>Details</summary>
+
+  A tap or click on a URL, an OSC 8 hyperlink or a file path in the native terminal engine now asks the engine what is under it and opens it through the same confirmation as xterm.js: a web address is offered to Open or Copy, and a path is opened only when the host confirms the file. A hold still selects, a drag still scrolls or selects, and a program that tracks the mouse keeps its clicks. Native stays off by default, so nothing changes unless Settings, Terminal engine is set to Native.
+
+  </details>
+- feat(terminal): Start on xterm.js when a native session cannot start, and move a native session to xterm.js ([#2386](https://github.com/mihazs/lazysh/pull/2386))
+
+  <details><summary>Details</summary>
+
+  Part of #1342 and #2092. Only an explicit Native choice reaches the native engine today, and nothing changes for Auto or xterm.js. A native session that fails to start now begins on xterm.js and the engine line says why; the failure is remembered on the device, so Auto keeps away from the native engine until lazysh is updated, and choosing Native in Settings tries it again. A native session has a new Workspace tools action, "Switch this session to xterm.js", which carries the screen, cursor and modes over (scrollback is not carried over); a session whose surface cannot be placed switches on its own.
+
+  Not tried on an Android device.
+
+  </details>
+- fix(ssh): recover the host-tools connection of Mosh and Eternal Terminal sessions automatically ([#2013](https://github.com/mihazs/lazysh/pull/2013))
+
+  <details><summary>Details</summary>
+
+  Active Mosh and Eternal Terminal sessions now restore their command-only SSH connection when it closes, without replaying interrupted commands. This changes the default recovery behavior; jump hosts, agent forwarding, biometric and unsaved credentials still need manual recovery.
+
+  </details>
+- test(ime): commit CJK through a real IBus into the WebKitGTK terminal and the Chat composer ([#1919](https://github.com/mihazs/lazysh/pull/1919))
+
+  <details><summary>Details</summary>
+
+  Add a Linux native GUI case for desktop input methods (#1734, slice 3 of #982): an owned IBus daemon with its Pinyin engine runs under the owned Xvfb display, real X key events type `nihao` and Space into the WebKitGTK terminal, and the owned SSH receiver must hold exactly the committed `你好` bytes once. The same input method then fills the Chat composer draft. The Linux GUI job installs `ibus`, `ibus-gtk3`, `ibus-libpinyin` and `xdotool`. Test infrastructure only; the app is unchanged.
+
+  </details>
+
 ## 1.97.8
 
 ### Patch Changes

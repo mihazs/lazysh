@@ -217,7 +217,7 @@ pub fn clear(state: &Path) -> Result<bool> {
 #[cfg(test)]
 mod race_tests {
     use super::*;
-    use std::{sync::mpsc, time::Duration};
+    use std::time::Duration;
 
     #[test]
     fn profile_coordination_does_not_block_browser_settings() {
@@ -333,8 +333,11 @@ mod race_tests {
         assert!(clear(&state).unwrap());
     }
 
+    // Windows never sweeps (every owner counts as alive), so there is no stale decision for the hook to pause at.
+    #[cfg(unix)]
     #[test]
     fn stale_sweep_cannot_remove_a_fresh_kept_claim() {
+        use std::sync::mpsc;
         let state = tempfile::tempdir().unwrap();
         let state_path = state.path().join("state");
         let root = root(&state_path).unwrap();

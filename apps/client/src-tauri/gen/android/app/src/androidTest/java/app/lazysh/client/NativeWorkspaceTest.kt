@@ -1808,7 +1808,18 @@ class NativeWorkspaceTest {
             capture = observe()
             evaluate(scenario, frameGate.install)
             button("Scan QR with camera")
-            awaitDocument(scenario, "QR camera streaming with a held frame", "${frameGate.held}>=1 && Boolean(document.querySelector('.theme-qr-panel video')?.srcObject)")
+            // Every main run since 2026-11-20 fails here: the wait times out after 120 s, or returns only after the page's own 30 s deadline
+            // has stopped the camera. The video element's readyState, size, frame count and live tracks, with the held count, say when the camera
+            // delivered a frame (#2427). Each sample is also printed with the time since the Scan click, so a wait that passes late stays readable.
+            val videoObservation = qrVideoObservation(scenario, null)
+            val waitStarted = System.nanoTime()
+            awaitDocument(scenario, "QR camera streaming with a held frame", "${frameGate.held}>=1 && Boolean(document.querySelector('.theme-qr-panel video')?.srcObject)",
+                observe = { remaining ->
+                    val sample = "${videoObservation(remaining)} held=${evaluateIfPresent(scenario, frameGate.held, 1_000)}"
+                    println("lazysh QR held-frame wait +${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted)} ms: $sample")
+                    sample
+                })
+            println("lazysh QR held-frame wait done +${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted)} ms")
             assertEquals("The held frame must come from a live camera track", "true", evaluate(scenario,
                 "Array.from(document.querySelector('.theme-qr-panel video').srcObject.getVideoTracks()).some(x=>x.readyState==='live')"))
             assertTrue("Active capture must open the actual rear camera", capture.openedAny())
