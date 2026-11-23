@@ -1245,6 +1245,8 @@ jobs:
             with_system_fonts_text_is_drawn_from_a_font_and_follows_the_family_list
             bold_text_follows_the_bold_preferences_and_changes_live
             a_program_that_chose_no_cursor_gets_the_preferred_one_and_a_program_that_did_keeps_its_own
+            the_cell_a_page_divides_its_pane_by_is_the_cell_the_renderer_draws
+            a_core_of_80_by_24_is_drawn_with_the_looks_a_phone_gets_before_its_page_sends_one_and_is_not_blank
           )
           for case_name in "${guards[@]}"; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "native_renderer::tests::$case_name" | grep -Fx -- "native_renderer::tests::$case_name: test"

@@ -16,7 +16,7 @@ mod android;
 #[cfg(all(target_os = "linux", native_terminal_core))]
 pub(crate) mod linux;
 #[cfg(native_terminal_core)]
-mod panes;
+pub(crate) mod panes;
 
 /// Longest session id the shell accepts; the renderer's ids are UUIDs, a local terminal's `local:` and a UUID.
 const MAX_SESSION_LEN: usize = 64;
@@ -237,6 +237,42 @@ async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
 ))]
 async fn relook(_: &AppHandle, _: String) -> Result<(), String> {
     Err(unavailable())
+}
+
+/// One cell of the renderer's grid, in device pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CellSize {
+    width: u32,
+    height: u32,
+}
+
+/// A font size a renderer can draw and a ratio a display can have; NaN is neither.
+fn cell_request_is_sane(font_size: f64, dpr: f64) -> bool {
+    (MIN_FONT_PX..=MAX_FONT_PX).contains(&font_size) && dpr > 0.0 && dpr <= MAX_DPR
+}
+
+/// The cell the renderer draws for a font size in CSS pixels on a display of `dpr` device pixels per CSS pixel, so
+/// the page can tell how many columns and rows a pane holds (#2397). It answers from the renderer's own rule and
+/// reads nothing of a session; a build without the native terminal has no renderer to ask.
+#[tauri::command]
+pub async fn native_terminal_surface_cell(font_size: f64, dpr: f64) -> Result<CellSize, String> {
+    ensure_enabled()?;
+    if !cell_request_is_sane(font_size, dpr) {
+        return Err("Invalid terminal cell request.".into());
+    }
+    #[cfg(native_terminal_core)]
+    {
+        let cell = crate::native_renderer::cell_metrics(font_size as f32, dpr as f32)
+            .map_err(|error| error.to_string())?;
+        Ok(CellSize {
+            width: cell.cell_width,
+            height: cell.cell_height,
+        })
+    }
+    #[cfg(not(native_terminal_core))]
+    {
+        Err("This build has no native terminal surface.".into())
+    }
 }
 
 /// Ends the session's surface; its generation count goes with it. A session that was never placed is not an error.
@@ -507,6 +543,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_cell_is_asked_for_a_font_and_a_display_that_can_exist() {
+        assert!(cell_request_is_sane(14.0, 2.625) && cell_request_is_sane(MIN_FONT_PX, 1.0));
+        assert!(cell_request_is_sane(MAX_FONT_PX, MAX_DPR));
+        for (size, dpr) in [
+            (0.0, 1.0),
+            (MIN_FONT_PX - 0.5, 1.0),
+            (MAX_FONT_PX + 1.0, 1.0),
+            (14.0, 0.0),
+            (14.0, -1.0),
+            (14.0, MAX_DPR + 0.5),
+            (f64::NAN, 1.0),
+            (14.0, f64::NAN),
+            (f64::INFINITY, 1.0),
+            (14.0, f64::INFINITY),
+        ] {
+            assert!(!cell_request_is_sane(size, dpr), "{size} at {dpr}");
+        }
+    }
+
+    #[test]
+    fn a_cell_crosses_the_boundary_as_its_width_and_height() {
+        let cell = serde_json::to_value(CellSize {
+            width: 22,
+            height: 44,
+        })
+        .unwrap();
+        assert_eq!(cell, serde_json::json!({"width": 22, "height": 44}));
+    }
+
     #[cfg(native_terminal_disabled)]
     #[test]
     fn the_surface_is_refused_disabled_in_this_build() {
@@ -539,6 +605,7 @@ mod tests {
         for protected in [
             "native_terminal_surface_place",
             "native_terminal_surface_look",
+            "native_terminal_surface_cell",
             "native_terminal_surface_state",
             "native_terminal_surface_input",
             "native_terminal_surface_focus",

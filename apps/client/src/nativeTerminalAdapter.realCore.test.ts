@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {describe, expect, it, vi} from 'vitest';
 import {nativeCapabilities, openNativeTerminalAdapter} from './nativeTerminalAdapter';
+import {defaults, terminalPreferences} from './preferences';
 import {runTerminalAdapterContract} from './terminalAdapter.contract';
 import {passedCases, untestedCapabilities} from './terminalCapabilityTests';
 import {openStdioCore} from './test/stdioNativeCore';
@@ -113,6 +114,34 @@ describe.skipIf(!binary)('NativeTerminalAdapter over the real core', () => {
         const text = c.core ? c.core.text : c.text;
         expect(offered, c.id).toEqual(text === null ? [] : [text]);
       }
+    } finally { await adapter.dispose(); }
+  });
+
+  it('sizes the real core to its pane: the grid the pane holds is the grid the core has, after each change of the pane or the font', async () => {
+    const core = await openStdioCore(binary!);
+    // The renderer's cell: 0.6 x 1.2 of the font size in device pixels.
+    const adapter = await openNativeTerminalAdapter(core, {cell: async (fontSize, dpr) => ({width: Math.round(fontSize * 0.6 * dpr), height: Math.round(fontSize * 1.2 * dpr)})});
+    const element = document.createElement('div');
+    element.id = `real-core-pane-${anchors++}`;
+    document.body.append(element);
+    const pane = {width: 480, height: 240};
+    element.getBoundingClientRect = () => ({...pane, x: 0, y: 0, left: 0, top: 0, right: pane.width, bottom: pane.height, toJSON: () => ({})});
+    const coreGrid = (columns: number, rows: number) => vi.waitFor(async () => {
+      const {state} = await core.snapshot();
+      expect([state.columns, state.rows]).toEqual([columns, rows]);
+    });
+    try {
+      await adapter.attach({kind: 'native', anchorId: element.id, surface: 'real-core-session'});
+      adapter.applyPreferences({...terminalPreferences(defaults), fontSize: 10});
+      await coreGrid(80, 20);
+      expect(adapter.size()).toEqual({columns: 80, rows: 20});
+      Object.assign(pane, {width: 245, height: 481});
+      adapter.fit();
+      await coreGrid(40, 40);
+      expect(adapter.size()).toEqual({columns: 40, rows: 40});
+      adapter.applyPreferences({...terminalPreferences(defaults), fontSize: 20});
+      await coreGrid(20, 20);
+      expect(adapter.size()).toEqual({columns: 20, rows: 20});
     } finally { await adapter.dispose(); }
   });
 
