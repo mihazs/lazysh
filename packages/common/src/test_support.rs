@@ -5,7 +5,8 @@ pub fn private_tempdir() -> tempfile::TempDir {
         use std::os::unix::fs::PermissionsExt;
         tempfile::Builder::new()
             .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir()
+            // Under the canonical temporary directory: macOS's is behind the /var symlink, which a SQLITE_OPEN_NOFOLLOW store refuses.
+            .tempdir_in(std::env::temp_dir().canonicalize().unwrap())
             .unwrap()
     };
     #[cfg(windows)]
@@ -174,5 +175,13 @@ mod tests {
             std::path::Path::new("other"),
             b"/private/fixture"
         ));
+    }
+
+    /// Stores opened with SQLITE_OPEN_NOFOLLOW refuse a path with a symbolic link in it, and macOS's temporary directory is behind one.
+    #[cfg(unix)]
+    #[test]
+    fn a_private_tempdir_has_no_symbolic_link_in_its_path() {
+        let directory = super::private_tempdir();
+        assert_eq!(directory.path().canonicalize().unwrap(), directory.path());
     }
 }
