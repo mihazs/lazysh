@@ -95,7 +95,10 @@ class GotifyAndroidTest {
             phase = "login-restart"
             shell("am force-stop $gotify")
             launchGotify()
-            awaitCondition { showing(gotify) }
+            // A launch right after the force-stop can be lost while the old process is still being cleaned up; start it again, as a
+            // user would tap the icon again, if no window of the app has appeared after a while.
+            var polls = 0
+            awaitCondition { showing(gotify) || run { if (++polls % 150 == 0) launchGotify(); false } }
             phase = "login-restart-history"
             node(emptyHistory())
             phase = "background-home"
@@ -130,7 +133,7 @@ class GotifyAndroidTest {
             stage(4, JSONObject().put("history", true))
         } catch (_: Throwable) {
             // Never propagate upstream exceptions, credentials, shell output or UI trees to JUnit.
-            throw AssertionError("Owned Gotify acceptance failed: $phase\nOwned Gotify timeline: ${timeline.toString().trim()}")
+            throw AssertionError("Owned Gotify acceptance failed: $phase\nOwned Gotify timeline: ${timeline.toString().trim()}${screenEvidence()}")
         }
     }
 
@@ -286,8 +289,16 @@ class GotifyAndroidTest {
             unique("  mHidden==false") && unique("  mIntercept=false")
     }
 
-    private fun shell(command: String): String {
-        check(SystemClock.elapsedRealtime() < deadline)
+    // Which of a fixed set of packages own a window now, and (TEMPORARY diagnosis) the last fatal crashes, as printable ASCII.
+    private fun screenEvidence(): String = try {
+        val shown = listOf(gotify, "app.lazysh.client", "com.android.systemui", "com.android.permissioncontroller", "com.android.settings", "android")
+            .filter { device.hasObject(By.pkg(it)) }
+        val crash = shell("logcat -d -b crash -t 30", bounded = false).replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|").takeLast(600)
+        "\nOwned Gotify windows: ${shown.joinToString(" ")}\nOwned Gotify crash: $crash"
+    } catch (_: Throwable) { "" }
+
+    private fun shell(command: String, bounded: Boolean = true): String {
+        check(!bounded || SystemClock.elapsedRealtime() < deadline)
         return ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).use { stream ->
             val bytes = stream.readNBytes(131073)
             check(bytes.size <= 131072)

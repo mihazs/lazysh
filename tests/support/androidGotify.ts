@@ -159,6 +159,17 @@ export function gotifyNativeFailure(xml:string):GotifyFixturePhase|undefined {
   }catch{return;}
 }
 /** The seconds at which the native case entered each closed phase, as `phase=seconds` pairs; anything else is dropped. */
+const gotifyNativeWindowNames=['com.github.gotify','app.lazysh.client','com.android.systemui','com.android.permissioncontroller','com.android.settings','android'] as const;
+/** The packages that owned a window when the native case failed (a fixed set), and a sanitized crash-buffer tail (temporary diagnosis). */
+export function gotifyNativeScreen(xml:string):string|undefined {
+  try {
+    const text=gotifyNativeFailureText(xml)??'';
+    const windows=/^Owned Gotify windows: ([a-z. ]{0,200})\r?$/m.exec(text)?.[1]??'';
+    const crash=/^Owned Gotify crash: ([A-Za-z0-9 .:_\/|-]{0,600})\r?$/m.exec(text)?.[1];
+    const names=windows.split(' ').filter(Boolean);
+    return crash!==undefined&&names.every(name=>gotifyNativeWindowNames.some(known=>known===name))?`windows=[${names.join(' ')}] crash=[${crash}]`:undefined;
+  }catch{return;}
+}
 export function gotifyNativeTimeline(xml:string):string|undefined {
   try {
     const line=/^Owned Gotify timeline: ([a-z0-9= -]{1,1200})\r?$/m.exec(gotifyNativeFailureText(xml)??'')?.[1];
@@ -549,6 +560,8 @@ async function runGotifyAndroid(root:string) {
           phase=gotifyNativeFailure(report)??phase;
           const timeline=gotifyNativeTimeline(report);
           if(timeline)console.error('Gotify native phase entry seconds',timeline);
+          const screen=gotifyNativeScreen(report);
+          if(screen)console.error('Gotify native screen',screen);
         }
       }catch{/* Missing or malformed reports retain the closed host failure phase. */}
     }

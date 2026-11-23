@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {OwnedProcess} from './support/ownedProcess';
 import {resolve} from 'node:path';
-import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyServerEnvironment,gotifyFailurePhase,gotifyNativeFailure,gotifyNativeTimeline,gotifyHostDiagnostic,gotifyContinuityOperation,gotifyStageWaitOperation,gotifyNativePhase,observeGotifyNativePhase} from './support/androidGotify';
+import {gotifyStage,gotifyMessage,gotifyNativeReport,gotifyPrivateCommand,gotifyUid,gotifyCase,gotifyOfficialArtifact,gotifyPrivateStage,gotifyProxyAdmission,gotifyDeviceAction,GotifyReverse,gotifyInstalledApk,OwnedGotifyPackages,ownedGotifyAndroid,gotifyServerEnvironment,gotifyFailurePhase,gotifyNativeFailure,gotifyNativeTimeline,gotifyNativeScreen,gotifyHostDiagnostic,gotifyContinuityOperation,gotifyStageWaitOperation,gotifyNativePhase,observeGotifyNativePhase} from './support/androidGotify';
 
 const nonce='0123456789abcdef0123456789abcdef';
 const unobservedAdbd={sampleState:'not-observed',outcome:'unavailable',elapsed:'unavailable',exitCode:null};
@@ -70,6 +70,11 @@ test('failed owned native reports expose only a closed failure phase and cannot 
     expect(gotifyNativeTimeline(report(`java.lang.AssertionError: Owned Gotify acceptance failed: login\nOwned Gotify timeline: ${bad}\n`))).toBeUndefined();
   expect(gotifyNativeTimeline(timelined.replace('GotifyAndroidTest"','ForeignTest"'))).toBeUndefined();
   expect(gotifyNativeTimeline(xml)).toBeUndefined();
+  const screened=(windows:string,crash:string)=>report(`java.lang.AssertionError: Owned Gotify acceptance failed: login\nOwned Gotify timeline: login=1\nOwned Gotify windows: ${windows}\nOwned Gotify crash: ${crash}\n`);
+  expect(gotifyNativeScreen(screened('com.github.gotify android','E AndroidRuntime|FATAL EXCEPTION'))).toBe('windows=[com.github.gotify android] crash=[E AndroidRuntime|FATAL EXCEPTION]');
+  expect(gotifyNativeScreen(screened('','')) ).toBe('windows=[] crash=[]');
+  for(const [windows,crash] of [['com.example.other',''],['com.github.gotify','secret=1;rm'],['com.github.gotify','x'.repeat(601)]])
+    expect(gotifyNativeScreen(screened(windows,crash))).toBeUndefined();
   expect(()=>gotifyNativeReport(xml)).toThrow();
   for(const bad of [report('private-token'),report(failure.replace('login','unknown')),
     report(failure.replace('login','login-private-token')),xml.replace('GotifyAndroidTest','ForeignTest'),
