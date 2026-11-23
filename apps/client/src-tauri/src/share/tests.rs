@@ -71,6 +71,7 @@ async fn lock_invalidates_enrollment_reads_and_cancels_uploads_and_thumbnail() {
 struct Fixture {
     directory: tempfile::TempDir,
     origin: String,
+    root_pem: String,
     backend: Option<tokio::task::JoinHandle<()>>,
     tls: tokio::task::JoinHandle<()>,
     stop: Option<oneshot::Sender<()>>,
@@ -119,6 +120,7 @@ impl Fixture {
         Self {
             directory,
             origin: front.origin,
+            root_pem: front.root_pem,
             backend: Some(backend),
             tls,
             stop: Some(stop),
@@ -321,6 +323,22 @@ async fn actual_https_upload_history_and_delete_work_without_exposing_management
             .shares
             .is_empty()
     );
+    fixture.stop().await;
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn only_a_debug_build_trusts_the_throwaway_root_a_test_host_names() {
+    let fixture = Fixture::new(None).await;
+    let enrollment = fixture.enrollment();
+    // The shipped client trusts public roots only, so the owned service is refused.
+    assert!(list(build(None).unwrap(), &enrollment, 50, None)
+        .await
+        .is_err());
+    std::env::set_var("LAZYSH_TEST_SHARE_ROOT_PEM", &fixture.root_pem);
+    let trusted = list(client().unwrap(), &enrollment, 50, None).await;
+    std::env::remove_var("LAZYSH_TEST_SHARE_ROOT_PEM");
+    assert!(trusted.unwrap().shares.is_empty());
     fixture.stop().await;
 }
 

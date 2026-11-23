@@ -1218,6 +1218,17 @@ class NativeWorkspaceTest {
     }
     private fun closePreferences() =
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
+    /** Closes the Shareable uploads dialog: choosing that category closes Preferences and opens this dialog, which covers and inerts the workspace until it is closed. */
+    private fun closeShareDialog(scenario: ActivityScenario<MainActivity>) {
+        val dialog = "[role=dialog][aria-label='Shareable uploads']"
+        val close = "button[aria-label='Close Shareable uploads']"
+        val gone = "!Boolean(document.querySelector(${JSONObject.quote(dialog)}))"
+        if (evaluate(scenario, gone) == "true") return
+        awaitDocument(scenario, "the Shareable uploads close control", "Boolean(document.querySelector(${JSONObject.quote(close)}))",
+            observe = { remaining -> evaluate(scenario, "JSON.stringify(Array.from(document.querySelectorAll('[role=dialog]')).map(d=>d.getAttribute('aria-label')+':'+d.innerText.slice(0,120)))", remaining) })
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, close)).perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "Shareable uploads closed", gone)
+    }
     private fun webButton(label: String) =
         onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$label']")).perform(webScrollIntoView()).perform(webClick())
     private fun visibleStatus(text: String) =
@@ -4853,7 +4864,11 @@ class NativeWorkspaceTest {
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
         // A live remote connection opens the drawer on Agents; the host list is the Connections tab.
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[data-workspace-mode='connections']")).perform(webClick())
-        awaitDocument(scenario, "hosts drawer open", workspaceElementVisible(add, true))
+        awaitDocument(scenario, "hosts drawer open", workspaceElementVisible(add, true),
+            observe = { remaining -> evaluate(scenario, """JSON.stringify({dialogs:Array.from(document.querySelectorAll('[role=dialog]')).map(d=>d.getAttribute('aria-label')),
+                inert:document.querySelector('main.workspace')?.inert,add:Boolean(document.querySelector(${JSONObject.quote(add)})),
+                mode:Array.from(document.querySelectorAll('[data-workspace-mode]')).filter(x=>x.getAttribute('aria-pressed')==='true'||x.getAttribute('aria-current')).map(x=>x.getAttribute('data-workspace-mode')),
+                text:document.body.innerText.slice(0,160)})""", remaining) })
     }
 
     private fun deleteOwnedHost(scenario: ActivityScenario<MainActivity>, name: String) {
@@ -6452,6 +6467,131 @@ class NativeWorkspaceTest {
             awaitDocument(scenario, "selection actions closed after Copy", "!(${present("$actions button")})")
             awaitClipboardPreviewGone(copiedAt)
             println("lazysh parity: a long press selected one terminal word and Copy wrote exactly that word to the system clipboard")
+        }
+    }
+
+    // The optional sharing service (#1738): the repository's own `lazysh-share` binary, served by the host over TLS
+    // with a throwaway certificate. The debug app trusts that one root through its process environment (see
+    // `share.rs` `test_root`); every other check is the real Share dialog, and the host reads the service's own state.
+    @Test fun ownedShareServiceThroughRealUi() {
+        ownedParityCase(emptyList()) { scenario, parity ->
+            val share = parity.fixture.getJSONObject("share")
+            val origin = share.getString("origin")
+            val name = "share-${parity.nonce}.png"
+            val color = 0xFF145090.toInt()
+            // One exact colour survives the service and the thumbnail decoder bit for bit, so a pixel proves the bytes.
+            val image = java.io.ByteArrayOutputStream().also { output ->
+                val bitmap = android.graphics.Bitmap.createBitmap(64, 32, android.graphics.Bitmap.Config.ARGB_8888)
+                try { bitmap.eraseColor(color); assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)) } finally { bitmap.recycle() }
+            }.toByteArray()
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(image).joinToString("") { "%02x".format(it.toInt() and 255) }
+            val panel = "section[aria-label=\"Shareable uploads\"]"
+            fun status(text: String) = "Array.from(document.querySelectorAll('$panel [role=status]')).some(x=>x.textContent===${JSONObject.quote(text)})"
+            fun awaitPanel(stage: String, expression: String) = awaitDocument(scenario, stage, expression,
+                observe = { evaluate(scenario, "(document.querySelector(${JSONObject.quote(panel)})?.innerText||'').slice(0,400)") })
+            fun button(text: String) = "//section[@aria-label='Shareable uploads']//button[normalize-space(.)=${JSONObject.quote(text)}]"
+            fun click(text: String) {
+                awaitPanel("$text is enabled", "Array.from(document.querySelectorAll('$panel button')).some(x=>x.textContent.trim()===${JSONObject.quote(text)}&&!x.disabled)")
+                onWebView().withElement(findElement(Locator.XPATH, button(text))).perform(webScrollIntoView()).perform(webClick())
+            }
+            fun state(stage: String, uploads: Int, history: Int, downloads: Int, deletes: Int): JSONObject {
+                val facts = parity.control("share")
+                val requests = facts.getJSONObject("requests")
+                assertEquals("$stage: uploads the service received: $facts", uploads, requests.getInt("upload"))
+                assertEquals("$stage: history reads the service received: $facts", history, requests.getInt("history"))
+                assertEquals("$stage: downloads the service received: $facts", downloads, requests.getInt("download"))
+                assertEquals("$stage: deletes the service received: $facts", deletes, requests.getInt("delete"))
+                return facts
+            }
+            Os.setenv("LAZYSH_TEST_SHARE_ROOT_PEM", share.getString("certificate"), true)
+            var passed = false
+            try {
+                // Configure: the origin and the management token go through the real fields.
+                awaitUnlockedWorkspace(scenario, "Share dialog")
+                onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Preferences']")).perform(webClick())
+                preferencesCategory(scenario, "sharing", panel)
+                replaceNativeText(scenario, "$panel input[type=url]", origin)
+                pasteOwnedText(scenario, "$panel input[type=password]", share.getString("token"), parity.label)
+                closeSoftKeyboard()
+                click("Save sharing service")
+                awaitPanel("the sharing service is saved", status("Sharing service saved on this device."))
+                assertEquals("The saved service is empty", 0, state("after configure", 0, 0, 0, 0).getJSONArray("shares").length())
+
+                // Upload: a PNG chosen through the file input (the system picker is not exercised), sent in chunks to the real service.
+                assertEquals("The file input accepted the image", "true", evaluate(scenario, """(()=>{
+                    const input=document.querySelector('$panel input[type=file]');
+                    const bytes=Uint8Array.from(atob(${JSONObject.quote(Base64.encodeToString(image, Base64.NO_WRAP))}),c=>c.charCodeAt(0));
+                    const transfer=new DataTransfer();transfer.items.add(new File([bytes],${JSONObject.quote(name)},{type:'image/png'}));
+                    input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));
+                    return input.files.length===1&&input.files[0].size===bytes.length;})()"""))
+                awaitPanel("the chosen file is described", "(document.querySelector('$panel fieldset:not(:first-of-type) p')?.textContent||'').startsWith(${JSONObject.quote("$name · ")})")
+                click("Upload and create link")
+                awaitPanel("the upload completed", status("Upload complete. Copy its expiring link below."))
+                val stored = state("after upload", 1, 0, 0, 0).getJSONArray("shares")
+                assertEquals("One stored share", 1, stored.length())
+                val first = stored.getJSONObject(0)
+                assertEquals(name, first.getString("name"))
+                assertEquals("image/png", first.getString("mime"))
+                assertEquals(image.size, first.getInt("size"))
+                assertEquals("The service stored exactly the chosen bytes", digest, first.getString("sha256"))
+                assertEquals("The link expires after the default hour", 3600, first.getInt("ttl"))
+                val url = first.getString("url")
+                assertTrue("The link belongs to the owned service: $url", url.startsWith("$origin/s/"))
+
+                // History: a real round trip to the service lists the upload; its thumbnail is fetched and decoded natively.
+                click("Refresh upload history")
+                awaitPanel("the history lists the upload", "Array.from(document.querySelectorAll('$panel ul li strong')).map(x=>x.textContent).join()===${JSONObject.quote(name)}")
+                assertTrue("History read the service", state("after history", 1, 1, 0, 0).getJSONArray("shares").length() == 1)
+                click("Load thumbnail for $name")
+                awaitPanel("the thumbnail shows the uploaded pixels", """(()=>{
+                    const image=document.querySelector('$panel figure.share-thumbnail img');
+                    if(!image||!image.complete||image.naturalWidth!==64||image.naturalHeight!==32)return false;
+                    const canvas=document.createElement('canvas');canvas.width=64;canvas.height=32;
+                    const context=canvas.getContext('2d');context.drawImage(image,0,0);
+                    const pixel=context.getImageData(10,10,1,1).data;
+                    return pixel[0]===20&&pixel[1]===80&&pixel[2]===144&&pixel[3]===255;})()""")
+                state("after thumbnail", 1, 1, 1, 0)
+
+                // Link: the copied link is the stored share's, and its recipient receives the same bytes over TLS.
+                click("Copy link for $name")
+                awaitPanel("the link is copied", status("Expiring link copied."))
+                val instrumentation = InstrumentationRegistry.getInstrumentation()
+                val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                var copied: String? = null
+                instrumentation.runOnMainSync { copied = clipboard.primaryClip?.getItemAt(0)?.text?.toString() }
+                assertEquals("The copied link is the stored share's", url, copied)
+                val opened = parity.control("open", "url" to url)
+                assertEquals("The link serves the share", 200, opened.getInt("status"))
+                assertEquals(digest, opened.getString("sha256"))
+                assertEquals(image.size, opened.getInt("size"))
+
+                // Delete: the native confirmation names the file; confirming revokes the link on the service.
+                // window.confirm blocks the page until the native dialog is answered, so the click must not wait for its own result.
+                awaitPanel("Delete is enabled", "Array.from(document.querySelectorAll('$panel button')).some(x=>x.textContent.trim()===${JSONObject.quote("Delete $name")}&&!x.disabled)")
+                evaluate(scenario, "(()=>{const target=Array.from(document.querySelectorAll('$panel button')).find(x=>x.textContent.trim()===${JSONObject.quote("Delete $name")});setTimeout(()=>target.click(),0);return true;})()")
+                val device = UiDevice.getInstance(instrumentation)
+                val message = device.wait(Until.findObject(By.res("android:id/message")), 10_000)
+                assertNotNull("The delete confirmation must show", message)
+                assertTrue("The confirmation names the file: ${message.text}", message.text.contains(name))
+                val closeBy = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+                while (true) {
+                    device.findObject(By.res("android:id/button1"))?.click()
+                    if (device.wait(Until.gone(By.res("android:id/message")), 3_000)) break
+                    assertTrue("The delete confirmation must close after OK", System.nanoTime() < closeBy)
+                }
+                awaitPanel("the deleted share leaves the list", "document.querySelectorAll('$panel ul li').length===0")
+                val gone = state("after delete", 1, 1, 1, 1)
+                assertEquals("The service holds no share", 0, gone.getJSONArray("shares").length())
+                assertEquals("The deleted link answers not found: $gone", listOf("404"), parityList(gone, "gone"))
+                assertEquals("The copied link no longer serves anything", 404, parity.control("open", "url" to url).getInt("status"))
+                println("lazysh parity: the share service configured, uploaded to, listed, thumbnailed, linked and deleted through the Share dialog over TLS")
+                passed = true
+            } finally {
+                Os.unsetenv("LAZYSH_TEST_SHARE_ROOT_PEM")
+                // Later cases open the hosts drawer, which the open Share dialog covers: close it, and fail here, not in the next case, when it stays.
+                val left = runCatching { closeShareDialog(scenario) }.exceptionOrNull()
+                if (left != null) { if (passed) throw left else println("lazysh parity: the Share dialog could not be closed after a failed share case: ${left.message}") }
+            }
         }
     }
 
