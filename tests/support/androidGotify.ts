@@ -551,7 +551,9 @@ async function runGotifyAndroid(root:string) {
     receipt={schemaVersion:1,scope:'official-gotify-awake-background',head,source,serverExecutableSha256:pins.server.executableSha256,caSha256:digest(ca),officialApkSha256:pins.android.sha256,initialInputApkSha256:nativeHash,installedAppApkSha256:executedApp.sha256,installedTestApkSha256:executedTest.sha256,installedApksStable:true,
       relayAccepted:3,serverMessages:ids.length,osRecords:3,visibleCards:3,history:true,native:result};
     phase='relay-shutdown';relay.child.stdin!.end();await relay.finish('relay worker shutdown',10000);
-  }catch{
+  }catch(thrown){
+    // TEMPORARY diagnosis (removed once the lane is green): the closed phase and the first stack frames of a host rejection.
+    console.error('DIAG host rejection',phase,String((thrown as Error)?.stack).replace(/[^\x20-\x7e\n]/g,'?').slice(0,900));
     primary=true;
     if(phase.startsWith('android-native-stage')&&native&&native.child.exitCode!==null) {
       phase='android-native-exit';
