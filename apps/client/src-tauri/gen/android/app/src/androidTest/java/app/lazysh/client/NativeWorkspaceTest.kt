@@ -1218,23 +1218,16 @@ class NativeWorkspaceTest {
     }
     private fun closePreferences() =
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
-    /** Leaves whatever Preferences page is open and closes Preferences, waiting for the control the layout shows (the list's Close or a category's back button). */
-    private fun leavePreferences(scenario: ActivityScenario<MainActivity>) {
-        // The dialog is labelled with the open category ("Shareable uploads"), not "Preferences", so the settings navigation is what tells it is open.
-        val open = ".settings-navigation"
-        val close = "button[aria-label='Close Preferences']"
-        val back = ".settings-detail-header button"
-        val gone = "!Boolean(document.querySelector(${JSONObject.quote(open)}))"
-        repeat(3) {
-            if (evaluate(scenario, gone) == "true") return
-            awaitDocument(scenario, "a Preferences control to leave by", "$gone || Boolean(document.querySelector(${JSONObject.quote(close)})) || ${workspaceElementVisible(back)}",
-                observe = { remaining -> evaluate(scenario, "JSON.stringify(Array.from(document.querySelectorAll('[role=dialog]')).map(d=>d.getAttribute('aria-label')+':'+d.innerText.slice(0,120)))", remaining) })
-            if (evaluate(scenario, gone) == "true") return
-            val target = if (evaluate(scenario, "Boolean(document.querySelector(${JSONObject.quote(close)}))") == "true") close else back
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, target)).perform(webScrollIntoView()).perform(webClick())
-            Thread.sleep(300)
-        }
-        awaitDocument(scenario, "Preferences closed", gone)
+    /** Closes the Shareable uploads dialog: choosing that category closes Preferences and opens this dialog, which covers and inerts the workspace until it is closed. */
+    private fun closeShareDialog(scenario: ActivityScenario<MainActivity>) {
+        val dialog = "[role=dialog][aria-label='Shareable uploads']"
+        val close = "button[aria-label='Close Shareable uploads']"
+        val gone = "!Boolean(document.querySelector(${JSONObject.quote(dialog)}))"
+        if (evaluate(scenario, gone) == "true") return
+        awaitDocument(scenario, "the Shareable uploads close control", "Boolean(document.querySelector(${JSONObject.quote(close)}))",
+            observe = { remaining -> evaluate(scenario, "JSON.stringify(Array.from(document.querySelectorAll('[role=dialog]')).map(d=>d.getAttribute('aria-label')+':'+d.innerText.slice(0,120)))", remaining) })
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, close)).perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "Shareable uploads closed", gone)
     }
     private fun webButton(label: String) =
         onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(text())='$label']")).perform(webScrollIntoView()).perform(webClick())
@@ -6595,9 +6588,9 @@ class NativeWorkspaceTest {
                 passed = true
             } finally {
                 Os.unsetenv("LAZYSH_TEST_SHARE_ROOT_PEM")
-                // Later cases open the hosts drawer, which Preferences would cover: leave it, and fail here, not in the next case, when it stays.
-                val left = runCatching { leavePreferences(scenario) }.exceptionOrNull()
-                if (left != null) { if (passed) throw left else println("lazysh parity: Preferences could not be left after a failed share case: ${left.message}") }
+                // Later cases open the hosts drawer, which the open Share dialog covers: close it, and fail here, not in the next case, when it stays.
+                val left = runCatching { closeShareDialog(scenario) }.exceptionOrNull()
+                if (left != null) { if (passed) throw left else println("lazysh parity: the Share dialog could not be closed after a failed share case: ${left.message}") }
             }
         }
     }
