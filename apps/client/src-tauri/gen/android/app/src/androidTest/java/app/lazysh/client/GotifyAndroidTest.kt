@@ -91,18 +91,8 @@ class GotifyAndroidTest {
             NativeActivityFixture.scenario
             phase = "login"
             login(origin)
-            // Android shows a foreground-service notification only when notification permission preceded the service start, and the
-            // official app starts the service before its own permission prompt. Restart the logged-in app once, with the permission
-            // already granted, so its "Connected" notification exists before the background check below.
-            phase = "login-restart"
-            shell("am force-stop $gotify")
-            launchGotify()
-            // A launch right after the force-stop can be lost while the old process is still being cleaned up; start it again, as a
-            // user would tap the icon again, if no window of the app has appeared after a while.
-            var polls = 0
-            awaitCondition { showing(gotify) || run { if (++polls % 150 == 0) launchGotify(); false } }
-            phase = "login-restart-history"
-            node(emptyHistory())
+            // The official app starts its service only after its notification permission is granted (its own permission callback runs
+            // the sign-in), so the app's "Connected" notification is expected without restarting it.
             phase = "background-home"
             home()
             phase = "background"

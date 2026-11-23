@@ -27,9 +27,8 @@ dialog and allows the alarm permission the app also asks for through the app-op 
 (`cmd appops set --uid ... SCHEDULE_EXACT_ALARM allow`), because that platform screen is not what this lane qualifies.
 It then sends the app to the background and, for each of `working`, `needs_attention` and `done`,
 requires the relay receipt, the server message, the Android notification record, a visible SystemUI card and finally the
-app's own message history. Android shows a foreground-service notification only when notification permission preceded the
-service start, and the official app starts its service before its own permission prompt, so the case restarts the logged-in
-app once after the grant (`am force-stop`, then a public launch) before it checks the app's "Connected" notification.
+app's own message history. The official app starts its foreground service from its own permission callback, after the
+grant, so its "Connected" notification exists without restarting the app; the case checks it before it publishes anything.
 Installed APKs, UIDs, emulator continuity, the reverse mapping and package cleanup are
 checked before and after; a failure keeps only a closed phase label in `failure.json`.
 
@@ -43,7 +42,8 @@ to server) keeps strict TLS and hostname verification.
 A local run on a Waydroid Android 13 guest confirmed the official 2.10.1 APK logs in to `http://localhost:<port>` through
 `adb reverse`, and that a message posted over the HTTPS listener while the app was in the background became an Android
 notification record owned by the app. The same guest showed the foreground-service behaviour above: the "Connected"
-notification record appeared only after the restart. The guest is not the API 36 target, so this does not replace a passing hosted run.
+notification record appeared only after the app was restarted. The API 36 case does not restart the app, because the app starts its
+service from its own permission callback; the guest is not the API 36 target, so this does not replace a passing hosted run.
 
 ## Not covered
 

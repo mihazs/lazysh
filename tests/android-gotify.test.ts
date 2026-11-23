@@ -54,7 +54,7 @@ test('failed owned native reports expose only a closed failure phase and cannot 
   expect(gotifyNativeFailure(xml)).toBe('android-native-login');
   expect(gotifyNativeFailure(report('<![CDATA['+failure+']]>'))).toBe('android-native-login');
   for(const phase of ['parser-calibration','fixture-input','fixture-identity','fresh-permission','record-calibration','workspace','login-launch','login-url',
-    'login-url-submit','login-auth-form','login-client-name','notification-permission','notification-permission-grant','alarm-permission','login-restart','login-restart-history','background-home','background','background-connected']) {
+    'login-url-submit','login-auth-form','login-client-name','notification-permission','notification-permission-grant','alarm-permission','background-home','background','background-connected']) {
     const observed=gotifyNativeFailure(report(failure.replace('login',phase)));
     expect(observed).toBe(`android-native-${phase}`);
     expect(gotifyFailurePhase(new Error(`Owned Gotify acceptance failed: ${observed}`))).toBe(observed);
@@ -63,9 +63,9 @@ test('failed owned native reports expose only a closed failure phase and cannot 
     expect(gotifyNativeFailure(report(failure.replace('login',phase)).replace('GotifyAndroidTest','ForeignTest'))).toBeUndefined();
   }
   expect(gotifyFailurePhase(new Error(`Owned Gotify acceptance failed: ${gotifyNativeFailure(xml)}`))).toBe('android-native-login');
-  const timelined=report('java.lang.AssertionError: Owned Gotify acceptance failed: login\nOwned Gotify timeline: workspace=4 login=9 login-restart=121\n\tat app.lazysh.client.GotifyAndroidTest(GotifyAndroidTest.kt:1)\n');
+  const timelined=report('java.lang.AssertionError: Owned Gotify acceptance failed: login\nOwned Gotify timeline: workspace=4 login=9 background=121\n\tat app.lazysh.client.GotifyAndroidTest(GotifyAndroidTest.kt:1)\n');
   expect(gotifyNativeFailure(timelined)).toBe('android-native-login');
-  expect(gotifyNativeTimeline(timelined)).toBe('workspace=4 login=9 login-restart=121');
+  expect(gotifyNativeTimeline(timelined)).toBe('workspace=4 login=9 background=121');
   for(const bad of ['workspace=4 private-token=9','workspace=4x','workspace==4','workspace=12345','workspace=4  login=9','Workspace=4','workspace=4;rm'])
     expect(gotifyNativeTimeline(report(`java.lang.AssertionError: Owned Gotify acceptance failed: login\nOwned Gotify timeline: ${bad}\n`))).toBeUndefined();
   expect(gotifyNativeTimeline(timelined.replace('GotifyAndroidTest"','ForeignTest"'))).toBeUndefined();
