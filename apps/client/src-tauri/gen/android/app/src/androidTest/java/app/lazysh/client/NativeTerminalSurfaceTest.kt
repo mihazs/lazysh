@@ -196,6 +196,10 @@ class NativeTerminalSurfaceTest {
         place(PageDriver.anchor("left:10%;top:25%;width:50%;height:30%"))
         awaitReady(1)
         awaitBackground()
+        // The page is told the pane is only a background, and why, instead of being left with what looks like a terminal that displays nothing.
+        val state = state()
+        assertFalse("the renderer host did not draw: $state", state.getBoolean("drawing"))
+        assertTrue("the shell gives a reason: $state", state.optString("reason").isNotEmpty())
     }
 
     @Test fun aDisabledHostRefusesAndShowsNothing() {

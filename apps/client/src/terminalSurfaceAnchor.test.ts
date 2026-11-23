@@ -4,7 +4,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({invoke}));
 
-import {rgbOf, SETTLE_FRAMES, trackSurfaceAnchor} from './terminalSurfaceAnchor';
+import {DRAW_CHECK_TRIES, rgbOf, SETTLE_FRAMES, trackSurfaceAnchor} from './terminalSurfaceAnchor';
 
 /** Frames the tracker asked for, run by hand so a test decides when the page "paints". */
 function frames() {
@@ -44,7 +44,7 @@ const REMOVE = 'native_terminal_surface_remove';
 function scene(rect = {x: 0, y: 0, width: 100, height: 100}, onError = vi.fn()) {
   const f = frames();
   const {div, move} = element(rect);
-  const tracker = trackSurfaceAnchor({session: 's1', element: div, background: () => 0x102030, onError, frame: f.frame, cancelFrame: f.cancelFrame});
+  const tracker = trackSurfaceAnchor({session: 's1', element: div, background: () => 0x102030, onError, frame: f.frame, cancelFrame: f.cancelFrame, wait: () => Promise.resolve()});
   const nudge = async (patch: Partial<typeof rect>, settle = true) => { move(patch); window.dispatchEvent(new Event('scroll')); if (settle) await f.settle(); };
   return {f, tracker, nudge, onError};
 }
@@ -116,6 +116,52 @@ describe('trackSurfaceAnchor', () => {
     expect(onError).toHaveBeenCalledWith('native_surface_disabled');
     await nudge({x: 50});
     expect(names()).toEqual([PLACE, REMOVE]);
+  });
+
+  describe('a surface the renderer could not draw on', () => {
+    const STATE = 'native_terminal_surface_state';
+    const placed = {placed: true, ready: false, generation: 0, width: 0, height: 0};
+    /** The shell answers `place` at once and the states in turn once the surface exists. */
+    const shell = (...states: object[]) => invoke.mockImplementation(async (name: string) => {
+      if (name === PLACE) return placed;
+      if (name === STATE) return states.length > 1 ? states.shift() : states[0];
+      return undefined;
+    });
+
+    it('is reported with the shell\'s reason, once the surface exists, and the surface is taken down', async () => {
+      shell({...placed, ready: true, generation: 1, drawing: false, reason: 'no adapter could create a device'});
+      const {f, onError} = scene();
+      await f.settle();
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+      expect(String(onError.mock.calls[0][0])).toContain('cannot draw on this device: no adapter could create a device');
+      await vi.waitFor(() => expect(names()).toContain(REMOVE));
+    });
+
+    it('is looked for again until the surface exists, and a renderer that draws is never reported', async () => {
+      shell({...placed}, {...placed}, {...placed, ready: true, generation: 1, drawing: true});
+      const {f, tracker, onError} = scene();
+      await f.settle();
+      await vi.waitFor(() => expect(names().filter(name => name === STATE)).toHaveLength(3));
+      await f.settle();
+      expect(onError).not.toHaveBeenCalled();
+      expect(names()).not.toContain(REMOVE);
+      await tracker.stop();
+    });
+
+    it('is not reported by a shell that cannot tell, and the looking has an end', async () => {
+      shell({...placed, ready: true, generation: 1});
+      const quiet = scene();
+      await quiet.f.settle();
+      expect(quiet.onError).not.toHaveBeenCalled();
+      await quiet.tracker.stop();
+      invoke.mockReset();
+      shell({...placed});
+      const never = scene();
+      await never.f.settle();
+      await vi.waitFor(() => expect(names().filter(name => name === STATE)).toHaveLength(DRAW_CHECK_TRIES));
+      expect(never.onError).not.toHaveBeenCalled();
+      await never.tracker.stop();
+    });
   });
 
   it('takes a surface it placed off the screen when a later placement fails', async () => {

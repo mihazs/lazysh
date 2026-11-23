@@ -34,6 +34,7 @@ class NativeTerminalSurfacePlugin(private val owner: Activity) : Plugin(owner) {
     private fun json(state: SurfaceState) = JSObject().apply {
         put("placed", state.placed); put("ready", state.ready); put("generation", state.generation)
         put("width", state.width); put("height", state.height)
+        state.drawing?.let { put("drawing", it) }; state.reason?.let { put("reason", it) }
     }
 
     /** Puts the session's surface at a DOM anchor and creates the session on first use. */

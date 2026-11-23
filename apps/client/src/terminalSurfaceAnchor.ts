@@ -2,7 +2,7 @@ import {invoke} from '@tauri-apps/api/core';
 import type {TerminalPreferences} from './terminalAdapter';
 
 /** What the shell knows about a session's native surface (Android, developer-only: docs/architecture/android-native-surface-host.md). */
-export type SurfaceState = {placed: boolean; ready: boolean; generation: number; width: number; height: number};
+export type SurfaceState = {placed: boolean; ready: boolean; generation: number; width: number; height: number; /** Whether the renderer drew on the surface that exists, and why not; absent where the shell cannot tell. */ drawing?: boolean; reason?: string};
 
 /** One cell of the renderer's grid in device pixels. */
 export type CellSize = {width: number; height: number};
@@ -56,7 +56,12 @@ export type AnchorTrackerOptions = {
   /** Injected by tests. */
   frame?: (callback: () => void) => number;
   cancelFrame?: (handle: number) => void;
+  wait?: (milliseconds: number) => Promise<void>;
 };
+
+/** The surface exists a moment after the place command returns: how long, and how often, the tracker asks the shell whether the renderer drew on it. */
+export const DRAW_CHECK_MS = 150;
+export const DRAW_CHECK_TRIES = 40;
 
 const same = (a: SurfaceAnchor | undefined, b: SurfaceAnchor) =>
   !!a && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height && a.dpr === b.dpr;
@@ -68,7 +73,7 @@ const same = (a: SurfaceAnchor | undefined, b: SurfaceAnchor) =>
  * flight; whatever moved meanwhile goes out as one command with the latest rectangle, never a queue. An element with no box (hidden,
  * detached) ends the surface, and the next time it has one the surface is placed again.
  */
-export function trackSurfaceAnchor({session, element, background, onError, frame = requestAnimationFrame, cancelFrame = cancelAnimationFrame}: AnchorTrackerOptions) {
+export function trackSurfaceAnchor({session, element, background, onError, frame = requestAnimationFrame, cancelFrame = cancelAnimationFrame, wait = ms => new Promise(resolve => setTimeout(resolve, ms))}: AnchorTrackerOptions) {
   let stopped = false;
   let handle: number | undefined;
   let busy = false;
@@ -91,12 +96,31 @@ export function trackSurfaceAnchor({session, element, background, onError, frame
     onError(error);
   };
 
+  /**
+   * A surface the renderer cannot draw on shows the pane's background and nothing else, which on a device looks like a native terminal that displays
+   * nothing. The shell says whether the renderer drew once the surface exists, so a placed pane is asked until it does, and a refusal is a failure
+   * with the shell's reason: the caller shows it and moves the session to xterm.js.
+   */
+  const verify = async (state: SurfaceState | undefined, tries = 0): Promise<void> => {
+    if (stopped || state?.placed !== true || state.drawing === true) return;
+    if (state.ready) {
+      if (state.drawing === false) fail(new Error(`The native terminal cannot draw on this device: ${state.reason ?? 'the renderer refused the surface'}`));
+      return;
+    }
+    if (tries >= DRAW_CHECK_TRIES) return;
+    await wait(DRAW_CHECK_MS);
+    if (stopped) return;
+    // A shell that fails here fails the next place or the stop as well; this look is only a look.
+    const next = await nativeSurface.state(session).catch(() => undefined);
+    return verify(next, tries + 1);
+  };
+
   const send = (anchor: SurfaceAnchor | undefined) => {
     busy = true;
     sent = anchor;
     const done = anchor ? nativeSurface.place(session, anchor, background()) : nativeSurface.remove(session);
     inflight = done;
-    done.then(() => { busy = false; if (!stopped) { quiet = 0; look(); } }, fail);
+    done.then(placed => { busy = false; if (!stopped) { quiet = 0; look(); if (anchor) void verify(placed as SurfaceState | undefined); } }, fail);
   };
 
   const look = () => {

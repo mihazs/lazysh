@@ -16,6 +16,9 @@ internal interface NativeSurface<S : Any> {
 
     /** The session is over. */
     fun remove(id: String)
+
+    /** Why the host last refused this session's surface, or null when it draws or was never asked (a host that cannot tell). */
+    fun reason(id: String): String? = null
 }
 
 internal object JniSurface : NativeSurface<Surface> {
@@ -26,6 +29,7 @@ internal object JniSurface : NativeSurface<Surface> {
     @JvmStatic private external fun nativeChanged(id: String, width: Int, height: Int, density: Float, background: Int): Boolean
     @JvmStatic private external fun nativeLost(id: String, generation: Int)
     @JvmStatic private external fun nativeRemove(id: String)
+    @JvmStatic private external fun nativeReason(id: String): String?
 
     // A library built without the feature loads but has no entry points: that is the same "cannot draw".
     private inline fun <R> linked(otherwise: R, call: () -> R): R = if (!loaded) otherwise else try { call() } catch (_: UnsatisfiedLinkError) { otherwise }
@@ -35,6 +39,8 @@ internal object JniSurface : NativeSurface<Surface> {
     override fun changed(id: String, width: Int, height: Int, density: Float, background: Int) = linked(false) { nativeChanged(id, width, height, density, background) }
     override fun lost(id: String, generation: Int) = linked(Unit) { nativeLost(id, generation) }
     override fun remove(id: String) = linked(Unit) { nativeRemove(id) }
+    // Without the library the answer is the reason there is no renderer at all.
+    override fun reason(id: String): String? = if (!loaded) "this build has no native terminal library" else linked("this build has no native terminal renderer") { nativeReason(id) }
 }
 
 /**
@@ -47,11 +53,17 @@ internal class NativeSurfaceClient<S : Any>(
     private val native: NativeSurface<S>,
     private val fallback: SurfaceClient<S>,
     private val density: () -> Float = { Resources.getSystem().displayMetrics.density },
+    /** Where the stages go: logcat in the app (`lazysh-native`), nowhere in a JVM test. */
+    private val log: (String) -> Unit = {},
 ) : SurfaceClient<S>, AutoCloseable {
-    private var drawing = false
+    /** Whether the renderer host draws on the surface the session has now, and why not when it does not (what the page shows in place of a blank pane). */
+    var drawing = false
+        private set
+    val refusal: String? get() = if (drawing) null else native.reason(id) ?: "the renderer did not draw on the surface"
 
     override fun onSurfaceReady(surface: S, generation: Int, width: Int, height: Int) {
         drawing = native.ready(id, surface, generation, width, height, density(), background())
+        log("surface of $id #$generation ${width}x$height: ${if (drawing) "the renderer draws" else "the pane background only: $refusal"}")
         if (!drawing) fallback.onSurfaceReady(surface, generation, width, height)
     }
 
