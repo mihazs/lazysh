@@ -1220,10 +1220,11 @@ class NativeWorkspaceTest {
         onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
     /** Leaves whatever Preferences page is open and closes Preferences, waiting for the control the layout shows (the list's Close or a category's back button). */
     private fun leavePreferences(scenario: ActivityScenario<MainActivity>) {
-        val dialog = "[role=dialog][aria-label='Preferences']"
+        // The dialog is labelled with the open category ("Shareable uploads"), not "Preferences", so the settings navigation is what tells it is open.
+        val open = ".settings-navigation"
         val close = "button[aria-label='Close Preferences']"
         val back = ".settings-detail-header button"
-        val gone = "!Boolean(document.querySelector(${JSONObject.quote(dialog)}))"
+        val gone = "!Boolean(document.querySelector(${JSONObject.quote(open)}))"
         repeat(3) {
             if (evaluate(scenario, gone) == "true") return
             awaitDocument(scenario, "a Preferences control to leave by", "$gone || Boolean(document.querySelector(${JSONObject.quote(close)})) || ${workspaceElementVisible(back)}",
