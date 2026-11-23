@@ -1880,6 +1880,8 @@ jobs:
         run: echo "ANDROID_NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
       - *android-owned-rust
       - *android-owned-host-dependencies
+      # The native tmux case starts tmux from the owned shell, which is the runner's own.
+      - run: sudo sh .github/scripts/apt-install.sh tmux
       - *android-cache-identity
       - *android-owned-cache
       - run: bun install --frozen-lockfile

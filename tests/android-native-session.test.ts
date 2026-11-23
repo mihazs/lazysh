@@ -6,11 +6,12 @@ import {androidNativeSessionAcceptance,sessionCases,validateNativeSessionReport}
 const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
 const row=([className,name]:readonly [string,string],body='')=>`<testcase name="${name}" classname="${className}" time="1">${body}</testcase>`;
 
-test('the native session report counts its one case passing exactly once',()=>{
-  const [only]=sessionCases;
-  expect(()=>validateNativeSessionReport(report([row(only)]))).not.toThrow();
-  for(const rows of [[],[row(only),row(only)],[row(only,'<skipped/>')],[row(only,'<failure message="x"/>')],[row(only,'<error message="x"/>')],
-    [row([only[0],'otherCase'])],[row(['app.lazysh.client.NativeTerminalCoreTest',only[1]])]])
+test('the native session report counts each of its cases passing exactly once',()=>{
+  const [only,second]=sessionCases;
+  const all=sessionCases.map(c=>row(c));
+  expect(()=>validateNativeSessionReport(report(all))).not.toThrow();
+  for(const rows of [[],[row(only)],[row(second)],[...all,row(only)],[row(only),row(second,'<skipped/>')],[row(only,'<failure message="x"/>'),row(second)],
+    [row(only),row(second,'<error message="x"/>')],[row(only),row([second[0],'otherCase'])],[row(only),row(['app.lazysh.client.NativeTerminalCoreTest',second[1]])]])
     expect(()=>validateNativeSessionReport(report(rows))).toThrow('did not pass exactly once');
 });
 

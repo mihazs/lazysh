@@ -201,15 +201,49 @@ class NativeTerminalSessionTest {
         UiDevice.getInstance(instrumentation).swipe(x, bounds.top + (bounds.height() * fromFraction).roundToInt(), x, bounds.top + (bounds.height() * toFraction).roundToInt(), 20)
     }
 
+    /** Chooses Native, connects to the owned shell and returns the placed native session's id once the page shows its native pane. */
+    private fun startNativeSession(): String {
+        chooseNative()
+        connect()
+        until("the native pane on the page", 120, "Boolean(document.querySelector(${quoted(nativePane)})) && !document.querySelector('.terminal-canvas .xterm-screen')")
+        return session()
+    }
+
+    /**
+     * A multiplexer on the native surface (B10): tmux started from the owned shell draws its status line through the core, a split pane
+     * is drawn beside the first with tmux's border, and the shell inside the panes takes typing. The case reads the core's text, not the DOM.
+     * It needs a tmux on the shell's path, which the job installs, and fails without one.
+     */
+    @Test fun aNativeSessionHostsTmuxWithItsStatusLineAndSplitPanes() {
+        try {
+            val id = startNativeSession()
+            val prompt = fixture.getString("prompt").trim()
+            awaitRow(id, "the prompt", { it == prompt || it.startsWith(prompt) })
+            typeIntoTheSurface("command -v tmux >/dev/null && echo HAVE-TMUX || echo NO-TMUX")
+            val probe = awaitRow(id, "the tmux probe", { it == "HAVE-TMUX" || it == "NO-TMUX" })
+            // A missing tmux fails the case: the job installs it, so its absence is a broken fixture, not a skipped arm.
+            assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
+
+            typeIntoTheSurface("tmux -f /dev/null new-session -s native-mux")
+            val status = awaitRow(id, "tmux's status line", { it.contains("[native-mux]") })
+            evidence.put("statusLine", status.lines().last { it.contains("[native-mux]") }.trim())
+
+            // A second pane: the first one is narrower and keeps working, so the count of panes tmux reports reaches the core as text.
+            typeIntoTheSurface("tmux split-window -h; echo panes=\$(tmux list-panes | wc -l)")
+            awaitRow(id, "two panes", { it.startsWith("panes=2") })
+            awaitRow(id, "tmux's pane border", { it.contains("│") })
+            typeIntoTheSurface("tmux kill-server")
+        } finally {
+            Evidence.record("native-session-tmux", evidence)
+        }
+    }
+
     @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() {
         val started = System.nanoTime()
         fun elapsed() = (System.nanoTime() - started) / 1_000_000
         evidence.put("probe", JSONObject(PageDriver.invoke("native_terminal_probe")))
         try {
-            chooseNative()
-            connect()
-            until("the native pane on the page", 120, "Boolean(document.querySelector(${quoted(nativePane)})) && !document.querySelector('.terminal-canvas .xterm-screen')")
-            val id = session()
+            val id = startNativeSession()
             evidence.put("sessionOpenedMs", elapsed())
 
             // The core's own output: the owned shell's prompt, and a surface the renderer drew it on.
