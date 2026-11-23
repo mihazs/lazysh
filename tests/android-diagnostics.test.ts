@@ -394,7 +394,7 @@ exit "$SDK_EXIT"
   expect(() => process.kill(pid, 0)).toThrow();
   const diagnostics = join(directory, 'apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/system-diagnostics');
   const files = await readdir(diagnostics);
-  expect(files.length).toBe((expectedExit ? 11 : 4) + (watchdog ? 9 : 0));
+  expect(files.length).toBe((expectedExit ? 15 : 4) + (watchdog ? 9 : 0));
   const status = await readFile(join(diagnostics, 'status.txt'), 'utf8');
   for (const name of files) expect((await stat(join(diagnostics, name))).size).toBeLessThanOrEqual(1024 * 1024);
   expect(status).toContain(`test exit=${expectedExit}`);

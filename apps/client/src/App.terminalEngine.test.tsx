@@ -78,3 +78,24 @@ it('keeps every new session on xterm.js in a build with the native engine switch
   expect([first, second].every(session => !session.disposed && session.connected)).toBe(true);
   expect(getPreferences().terminalEngine).toBe('native');
 });
+
+it('keeps a new session off the native engine while Android reports a screen reader, records why, and stops once it is off', async () => {
+  const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36');
+  try {
+    let screenReader = true;
+    mocks.invoke.mockImplementation(async (command: string) => command === 'screen_reader_active' ? screenReader : command === 'terminal_core_available' || command === 'native_terminal_probe' ? {available: true} : undefined);
+    mocks.api.connect.mockResolvedValueOnce({sessionId: 'first'}).mockResolvedValueOnce({sessionId: 'second'});
+    choose('native');
+    const user = await openConnection();
+    const first = await connect(user, 'first');
+    expect(first.adapter.backend).toBe('xterm');
+    expect(first.selection).toEqual({id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'lacks accessibility'}]});
+    expect(getPreferences().screenReader).toBe(false);
+
+    screenReader = false;
+    const second = await connectAnother(user, 'second');
+    // The screen reader no longer refuses it (what else does is the probe's answer, kept for the process).
+    expect(second.selection.fallbacks.map(fallback => fallback.reason)).not.toContain('lacks accessibility');
+    expect(first.selection.fallbacks).toEqual([{id: 'native', reason: 'lacks accessibility'}]);
+  } finally { userAgent.mockRestore(); }
+});

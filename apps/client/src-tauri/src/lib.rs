@@ -50,6 +50,7 @@ mod push;
 mod remote_notifications;
 mod repository;
 mod routing;
+mod screen_reader;
 mod session_background;
 mod sftp_stream;
 mod share;
@@ -128,6 +129,7 @@ pub fn run() {
         .plugin(native_terminal_surface::init())
         .plugin(private_keyboard::init())
         .plugin(file_transfer::init())
+        .plugin(screen_reader::init())
         .plugin(soft_keyboard::init())
         .plugin(tauri_plugin_lazysh_push::init())
         .plugin(tauri_plugin_lazysh_apple_speech::init())
@@ -200,6 +202,7 @@ pub fn run() {
                 app_icons::set_app_icon,
                 private_keyboard::terminal_private_keyboard,
                 soft_keyboard::soft_keyboard,
+                screen_reader::screen_reader_active,
                 theme_links::theme_link_status,
                 theme_links::theme_link_read,
                 theme_links::theme_link_ack,

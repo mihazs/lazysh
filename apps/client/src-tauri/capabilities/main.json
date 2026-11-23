@@ -207,6 +207,7 @@
     "allow-set-app-icon",
     "allow-terminal-private-keyboard",
     "allow-soft-keyboard",
+    "allow-screen-reader-active",
     "allow-apple-status-capability",
     "allow-apple-status-configure",
     "allow-apple-status-publish",

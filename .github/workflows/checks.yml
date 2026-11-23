@@ -1665,6 +1665,10 @@ jobs:
             capture lastanr adb shell dumpsys activity lastanr;
             capture lastanr-traces adb shell dumpsys activity lastanr-traces;
             capture adb-server-log tail -c 1048576 "${TMPDIR:-/tmp}/adb.$(id -u).log";
+            capture focus-windows adb shell "dumpsys window windows | grep -E \"mCurrentFocus|mFocusedApp|Window #\"";
+            capture focus-activity-top adb shell dumpsys activity activities;
+            capture focus-displays adb shell dumpsys window displays;
+            capture focus-ui adb exec-out uiautomator dump /dev/tty;
             capture adb-root adb root;
             capture app-threads adb shell "for p in \$(pidof app.lazysh.client); do kill -3 \$p; debuggerd -b \$p; done; sleep 3; ls -l /data/anr; tail -c 524288 /data/anr/* 2>/dev/null";
             fi;

@@ -4,18 +4,20 @@ import {stubMatchMedia} from './test/stubMatchMedia';
 import type {TerminalAdapter, TerminalCapabilities} from './terminalAdapter';
 import {defaults, savePreferences} from './preferences';
 import {createBackendRegistry, type BackendProbe} from './terminalBackendRegistry';
-import {createTerminalAdapter, recordedNativeFailure, recordNativeFailure, registerNativeBackend} from './terminalBackends';
+import {backendRefusal, createTerminalAdapter, defaultTerminalEngine, recordedNativeFailure, recordNativeFailure, registerNativeBackend} from './terminalBackends';
 import {appVersion} from './version';
 import {describeTerminalEngine} from './terminalEngineReason';
 import {xtermCapabilities} from './xtermTerminalAdapter';
 
 const openCore = vi.hoisted(() => vi.fn());
+const systemReader = vi.hoisted(() => vi.fn(async () => false));
+vi.mock('./androidScreenReader', () => ({systemScreenReader: systemReader}));
 // The real probe and capabilities stay; only opening a core, which needs the Tauri commands, is replaced.
 vi.mock('./tauriNativeCoreBridge', async original => ({...await original<typeof import('./tauriNativeCoreBridge')>(), createNativeTerminalAdapter: openCore}));
 
 beforeAll(stubMatchMedia);
 // The preferences are cached beyond the storage: a screen-reader test must not leave its setting to the next test.
-afterEach(() => { localStorage.clear(); savePreferences(defaults); localStorage.clear(); openCore.mockReset(); });
+afterEach(() => { localStorage.clear(); savePreferences(defaults); localStorage.clear(); openCore.mockReset(); systemReader.mockReset().mockResolvedValue(false); });
 
 const withXterm = () => {
   const registry = createBackendRegistry();
@@ -51,6 +53,35 @@ describe('backend selection for a reader who uses a screen reader', () => {
     expect(reading.selection).toMatchObject({id: 'xterm', fallbacks: []});
     expect(reading.adapter.capabilities.accessibility).toBe(true);
     await reading.adapter.dispose();
+  });
+});
+
+describe('backend selection while Android reports a screen reader (TalkBack, touch exploration)', () => {
+  const lacking = {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: 'lacks accessibility'}]};
+
+  it('keeps a native backend that cannot reach it out of a new session, under Auto and Native, with the reason, though the in-app preference is off', async () => {
+    systemReader.mockResolvedValue(true);
+    for (const preference of ['auto', 'native'] as const)
+      expect((await createTerminalAdapter({preference}, native({accessibility: false}))).selection).toEqual(lacking);
+    expect(await defaultTerminalEngine(native({accessibility: false}))).toBe('xterm');
+  });
+
+  it('keeps Settings\' answer for the Native choice in step: refused while it is on, offered again once it is off', async () => {
+    systemReader.mockResolvedValue(true);
+    expect(await backendRefusal('native', false)).toBe('lacks accessibility');
+    systemReader.mockResolvedValue(false);
+    // Outside the app the probe is what refuses it; the screen reader no longer does.
+    expect(await backendRefusal('native', false)).toBe('this is not the lazysh app');
+  });
+
+  it('gives native back to the next session once it is off, and to a backend that declares accessibility while it is on', async () => {
+    const registry = native({accessibility: false});
+    systemReader.mockResolvedValue(true);
+    expect((await createTerminalAdapter({preference: 'native'}, registry)).selection).toEqual(lacking);
+    systemReader.mockResolvedValue(false);
+    expect((await createTerminalAdapter({preference: 'native'}, registry)).selection.id).toBe('native');
+    systemReader.mockResolvedValue(true);
+    expect((await createTerminalAdapter({preference: 'native'}, native({accessibility: true}))).selection.id).toBe('native');
   });
 });
 

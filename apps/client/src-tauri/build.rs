@@ -91,6 +91,7 @@ fn main() {
         "set_app_icon",
         "terminal_private_keyboard",
         "soft_keyboard",
+        "screen_reader_active",
         "apple_status_capability",
         "apple_status_configure",
         "apple_status_publish",
