@@ -25,7 +25,7 @@ test('the terminal core report counts only its cases, each passing exactly once'
 
 test('the evidence the cases left on the device is kept with the results and nothing else is',async()=>{
   const destination=await mkdtemp(join(tmpdir(),'lazysh-evidence-'));
-  const files:Record<string,string>={'native-probe.json':'{"shippingPolicy":{"available":false}}\n','notes.txt':'not json evidence'};
+  const files:Record<string,string>={'native-probe.json':'{"shippingPolicy":{"available":false}}\n','surface.png':'png bytes','notes.txt':'not json evidence'};
   const calls:string[][]=[];
   const device=async(args:string[])=>{
     calls.push(args);
@@ -33,7 +33,9 @@ test('the evidence the cases left on the device is kept with the results and not
     return files[args[2].split('/').pop()!];
   };
   try {
-    expect(await keepDeviceEvidence(device,destination)).toEqual(['native-probe.json']);
+    expect(await keepDeviceEvidence(device,destination)).toEqual(['native-probe.json','surface.png']);
+    // A picture is pulled from the device, not read as text.
+    expect(calls.filter(call=>call[0]==='pull')).toEqual([['pull','/data/local/tmp/lazysh-evidence/surface.png',join(destination,'surface.png')]]);
     expect(await readdir(destination)).toEqual(['native-probe.json']);
     expect(JSON.parse(await readFile(join(destination,'native-probe.json'),'utf8')).shippingPolicy.available).toBe(false);
     // A device with nothing left (a run that crashed first) is an empty answer, not a failure of the harness.

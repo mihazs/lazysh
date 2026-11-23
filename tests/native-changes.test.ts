@@ -10,7 +10,7 @@ const roots = gitFixtureRoots('lazysh-native-changes-test-');
 afterAll(() => roots.cleanup());
 
 type Outputs = Record<string, string>;
-const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'terminal_bridge', 'terminal_windows', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_terminal_core', 'android_mosh',
+const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'terminal_bridge', 'terminal_windows', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_terminal_core', 'android_terminal_session', 'android_mosh',
   'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'ios', 'terminal_perf', 'terminal_macos', 'linux_surface', 'terminal_ios'];
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
 const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false', android_release_native: 'false',
@@ -90,7 +90,7 @@ async function runningJobs(outputs: Outputs, event = 'push') {
 const neverNightly = "github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
 const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-macos': 1, 'terminal-windows': 1, 'terminal-ios': 1, 'native-linux-surface': 1, 'native-linux': 1, 'native-terminal-bridge': 1, 'native-desktop': 2, 'native-windows-linux-host': 1,
-  'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-zellij': 1,
+  'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, 'native-android-terminal-session': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, 'native-android-tmux': 1, 'native-android-zellij': 1,
   'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-ios-simulator': 1,
   'native-android-biometric': 1, 'native-android-appium': 1 };
 const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-terminal-bridge': 1, 'native-desktop': 2, 'native-windows-linux-host': 1,
@@ -176,13 +176,17 @@ test('a pull request never runs the jobs that are not required to merge, whateve
 test.each([
   ['client UI', ['apps/client/src/App.tsx'], clientRun],
   ['client native Rust', ['apps/client/src-tauri/src/ssh.rs'], clientRun],
+  // Only the native terminal's own sources select the job that drives a native session through the real UI.
+  ['the native terminal core commands', ['apps/client/src-tauri/src/terminal_core.rs'], { ...clientRun, 'native-android-terminal-session': 1 }],
+  ['the native terminal page adapter', ['apps/client/src/nativeTerminalAdapter.ts'], { ...clientRun, 'native-android-terminal-session': 1 }],
+  ['the native session harness', ['tests/support/androidTerminalCore.ts'], { ...androidRun, 'native-android-terminal-session': 1 }],
   ['a client sub-package changelog', ['apps/client/CHANGELOG.md'], clientRun],
   ['a client-only shared package', ['packages/et-transport/src/lib.rs'], clientRun],
   ['client configuration shared with iOS', ['apps/client/src-tauri/tauri.conf.json'], { ...clientRun, ...iosRun }],
   ['the client moon tasks', ['apps/client/moon.yml'], { ...clientRun, ...iosRun }],
   ['agent', ['apps/agent/src/main.rs'], agentRun],
   ['documentation plus agent', ['docs/connections.md', 'apps/agent/src/main.rs'], agentRun],
-  ['Android project', ['apps/client/src-tauri/gen/android/app/build.gradle.kts'], androidRun],
+  ['Android project', ['apps/client/src-tauri/gen/android/app/build.gradle.kts'], { ...androidRun, 'native-android-terminal-session': 1 }],
   ['an Android plugin source set', ['packages/credential-vault/android/src/main/kotlin/Vault.kt'], androidRun],
   ['an Android emulator test', ['tests/android-qr.test.ts'], androidRun],
   ['an Appium spec', ['apps/client/mobile-e2e/specs/smoke/launch.e2e.ts'], clientRun],
@@ -191,10 +195,10 @@ test.each([
   ['an iOS plugin source set', ['packages/display-idle/ios/Sources/Idle.swift'], iosRun],
   ['Herdr', ['packages/herdr-guard/client.rs', 'tests/herdr-notices.test.ts', '.github/herdr-notices/reviewed.json'], herdrRun],
   // The app bridge compiles the runtime, ghostty-vt and the vendored libghostty-vt with the native-terminal feature.
-  ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1, 'native-android-terminal-core': 1 }],
-  ['the terminal renderer, which the app compiles with the same feature', ['packages/terminal-renderer-wgpu/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1, 'native-android-terminal-core': 1 }],
+  ['the terminal runtime', ['packages/terminal-runtime/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1, 'native-android-terminal-core': 1, 'native-android-terminal-session': 1 }],
+  ['the terminal renderer, which the app compiles with the same feature', ['packages/terminal-renderer-wgpu/src/lib.rs'], { ...alwaysRun, 'herdr-native': 1, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1, 'native-android-terminal-core': 1, 'native-android-terminal-session': 1 }],
   ...(['packages/herdr-upstream/crates/ghostty-vt/src/lib.rs', 'packages/herdr-upstream/vendor/libghostty-vt/build.zig'] as const).map(path => [
-    `the vendored Herdr binding the terminal runtime builds on and its library (${path})`, [path], { ...herdrRun, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1, 'native-android-terminal-core': 1 }] as const),
+    `the vendored Herdr binding the terminal runtime builds on and its library (${path})`, [path], { ...herdrRun, 'terminal-perf': 1, 'native-terminal-bridge': 1, 'terminal-windows': 1, 'native-android-terminal-core': 1, 'native-android-terminal-session': 1 }] as const),
   ['the Linux composition probe, a standalone prototype crate', ['packages/terminal-runtime/prototypes/linux-surface/src/main.rs'], { ...alwaysRun, 'native-linux-surface': 1 }],
   ["the probe's harness, which also drives the real app's surface host", ['packages/terminal-runtime/prototypes/linux-surface/scripts/check.py'], { ...alwaysRun, 'native-linux-surface': 1, 'native-terminal-bridge': 1 }],
   ["Herdr's own source, which the terminal runtime does not build on", ['packages/herdr-upstream/src/main.rs'], { ...herdrRun, 'terminal-perf': 1 }],

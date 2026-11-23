@@ -64,6 +64,8 @@
     "test:android-voice": "moon run client:test-android-voice",
     "test:android-terminal-core": "moon run client:test-android-terminal-core",
     "test:android-terminal-core:ci": "moon run client:test-android-terminal-core-ci",
+    "test:android-native-session": "moon run client:test-android-native-session",
+    "test:android-native-session:ci": "moon run client:test-android-native-session-ci",
     "test:android-gestures": "moon run client:test-android-gestures",
     "test:android-biometric": "moon run client:test-android-biometric"
   },
