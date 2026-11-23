@@ -324,8 +324,9 @@ fn finish(state: &VoiceState, id: &str, cancel: bool) -> Result<()> {
         model_header(&temporary)?;
         import.file.sync_all().map_err(|_| "Cannot save model")?;
         // Exclusive linking publishes without replacing an existing model.
-        fs::hard_link(&temporary, state.path(&import.name)?)
-            .map_err(|_| "Cannot publish model; destination may already exist")?;
+        fs::hard_link(&temporary, state.path(&import.name)?).map_err(|error| {
+            format!("Cannot publish model; destination may already exist ({error})")
+        })?;
         Ok(())
     })();
     drop(import.file);
