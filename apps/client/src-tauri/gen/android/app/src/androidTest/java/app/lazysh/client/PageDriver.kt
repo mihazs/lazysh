@@ -24,6 +24,13 @@ internal object PageDriver {
         }
     }
 
+    /** The result of `block` run on the UI thread against the Activity in front. */
+    fun <T> onActivity(block: (MainActivity) -> T): T {
+        var out: Any? = null
+        scenario.onActivity { out = block(it) }
+        @Suppress("UNCHECKED_CAST") return out as T
+    }
+
     /** Two screen rectangles agree to within a pixel of rounding. */
     fun near(a: Rect, b: Rect) = listOf(a.left - b.left, a.top - b.top, a.right - b.right, a.bottom - b.bottom).all { abs(it) <= 1 }
 
