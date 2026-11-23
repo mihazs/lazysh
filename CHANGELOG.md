@@ -10,6 +10,17 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.97.10] - 2026-11-23
+
+### New
+
+- **android:** Keep the native terminal engine off while TalkBack or another screen reader is on ([#2392](https://github.com/mihazs/lazysh/pull/2392))
+
+### Fixed
+
+- **tmux:** stop Jump To and Chat input from crashing your tmux server when another client connects ([#2398](https://github.com/mihazs/lazysh/pull/2398))
+- **android:** stop the app freezing when the screen is recreated ([#2420](https://github.com/mihazs/lazysh/pull/2420))
+
 ## [1.97.9] - 2026-11-23
 
 ### New
