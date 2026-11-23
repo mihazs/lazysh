@@ -4,6 +4,9 @@ import type {TerminalPreferences} from './terminalAdapter';
 /** What the shell knows about a session's native surface (Android, developer-only: docs/architecture/android-native-surface-host.md). */
 export type SurfaceState = {placed: boolean; ready: boolean; generation: number; width: number; height: number};
 
+/** One cell of the renderer's grid in device pixels. */
+export type CellSize = {width: number; height: number};
+
 /** An element's `getBoundingClientRect()` in CSS pixels and the page's `devicePixelRatio`. */
 export type SurfaceAnchor = {x: number; y: number; width: number; height: number; dpr: number};
 
@@ -22,6 +25,8 @@ export const nativeSurface = {
   place: (session: string, anchor: SurfaceAnchor, background: number) => invoke<SurfaceState>('native_terminal_surface_place', {session, anchor, background}),
   /** How the session is drawn, from its next surface on and at once on one that is drawing; the shell keeps it, so it may come before the surface. */
   look: (session: string, look: SurfaceLook) => invoke<void>('native_terminal_surface_look', {session, look}),
+  /** The cell the renderer draws for a font size in CSS pixels on a display of `dpr` device pixels per CSS pixel: the grid a pane holds is made of these. */
+  cell: (fontSize: number, dpr: number) => invoke<CellSize>('native_terminal_surface_cell', {fontSize, dpr}),
   remove: (session: string) => invoke<void>('native_terminal_surface_remove', {session}),
   /** Waits for what the keyboard typed since the last call; each event comes once. */
   takeInput: (session: string) => invoke<{events: SurfaceInputEvent[]}>('native_terminal_surface_input', {session}),

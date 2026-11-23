@@ -13,7 +13,7 @@ import type {
 } from './terminalAdapter';
 import {TerminalEvents} from './terminalEvents';
 import type {CoreKeyInput} from './terminalPlatformKeys';
-import {nativeSurface, type SurfaceLook} from './terminalSurfaceAnchor';
+import {nativeSurface, type CellSize, type SurfaceLook} from './terminalSurfaceAnchor';
 import {searchRows} from './terminalText';
 
 /** Honest for a core without a renderer (`ime` is xterm.js' input observation and `mouseReporting` is its DOM wheel dispatch, which this backend does not have: its keyboards are the capture and the Android input view, and its wheel reports go to the core): it parses, scrolls and answers questions about the screen, and draws nothing. `canonicalMoshResize` holds for a core that follows Mosh's frames (`NativeCoreBridge.canonicalFrames`); `enableCanonicalResize` refuses one that cannot. */
@@ -32,7 +32,12 @@ export type NativeAdapterOptions = {
   theme?: TerminalTheme;
   /** How a surface's session is told its look (`native_terminal_surface_look`); injected by tests. */
   look?: (session: string, look: SurfaceLook) => Promise<unknown>;
+  /** The renderer's cell for a font size and a display density (`native_terminal_surface_cell`); injected by tests. */
+  cell?: (fontSize: number, dpr: number) => Promise<CellSize>;
 };
+
+/** The most columns or rows the transport takes (`check_size` in the shell). */
+const MAX_GRID = 1000;
 
 /**
  * The native backend: the terminal's state lives in a Rust core behind a {@link NativeCoreBridge}. The adapter keeps a
@@ -63,10 +68,13 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private taps: Disposable | undefined;
   private interceptor: ((event: KeyboardEvent) => boolean) | undefined;
   private preferences: TerminalPreferences | undefined;
-  /** The session the shell's surface is under, and the look it was last sent (as JSON) and the commands that carry it, in order. */
+  /** The session the shell's surface is under (only a pane with a surface has a renderer), and the look it was last sent (as JSON) and the commands that carry it, in order. */
   private surface: string | undefined;
   private looked: string | undefined;
   private lookQueue: Promise<unknown> = Promise.resolve();
+  /** The renderer's cell for the font size and display density `key` names, as the shell last answered, and the key asked for last: its cell sizes the grid. */
+  private cell: (CellSize & {dpr: number; key: string}) | undefined;
+  private cellKey: string | undefined;
   private active = true;
   private disposed: Promise<void> | undefined;
   /** Set once a Mosh session asked for it: the transport's frames decide the grid and `requestSize` is an intent. */
@@ -101,6 +109,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.anchor = anchor;
     this.surface = target.kind === 'native' ? target.surface : undefined;
     this.sendLook();
+    this.measure();
     this.capture?.dispose(); this.pointer?.dispose();
     this.pointer = attachPointerSelection(this, anchor);
     this.tapLinks();
@@ -263,8 +272,27 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   }
 
   metrics() {
-    const {columns, rows, scrollbackLines} = this.mirror.state, rect = this.screenBounds();
-    return {columns, rows, cellWidth: rect && columns ? rect.width / columns : 0, cellHeight: rect && rows ? rect.height / rows : 0, scrollbackLines};
+    const {columns, rows, scrollbackLines} = this.mirror.state, rect = this.screenBounds(), {cell} = this;
+    return {columns, rows, cellWidth: cell ? cell.width / cell.dpr : rect && columns ? rect.width / columns : 0, cellHeight: cell ? cell.height / cell.dpr : rect && rows ? rect.height / rows : 0, scrollbackLines};
+  }
+
+  /** The key the renderer's cell is asked and kept under: it depends on the font size and the display density. */
+  private cellFor() { return this.preferences && `${this.preferences.fontSize}@${window.devicePixelRatio}`; }
+
+  /** Asks the shell for the renderer's cell once for each font size and display density, and fits the grid when it answers. */
+  private measure() {
+    const {surface, preferences} = this, key = this.cellFor();
+    if (!surface || !preferences || key === undefined || key === this.cellKey || this.disposed) return;
+    this.cellKey = key;
+    const dpr = window.devicePixelRatio;
+    const refused = () => { if (this.cellKey === key) this.cellKey = undefined; };
+    (this.options.cell ?? nativeSurface.cell)(preferences.fontSize, dpr).then(cell => {
+      if (this.cellKey !== key || this.disposed) return;
+      // A shell that answers with anything but a cell has no renderer to size the grid by.
+      if (!(cell?.width > 0 && cell?.height > 0)) return refused();
+      this.cell = {width: cell.width, height: cell.height, dpr, key};
+      this.fit();
+    }, refused);
   }
 
   /** The renderer's surface draws with the preferences that decide its look; it is told once for each change, and again if the shell refused. */
@@ -284,6 +312,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   applyPreferences(preferences: TerminalPreferences) {
     this.preferences = preferences;
     this.sendLook();
+    this.measure();
     const next = JSON.stringify(preferences.theme);
     if (this.disposed || next === this.theme) return;
     this.theme = next;
@@ -345,9 +374,10 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   }
 
   cellAt(clientX: number, clientY: number): TerminalCell | undefined {
-    const rect = this.screenBounds(), {columns, rows, viewport} = this.mirror.state;
+    const rect = this.screenBounds(), {columns, rows, viewport} = this.mirror.state, {cell} = this;
     if (!rect || rect.width <= 0 || rect.height <= 0 || columns <= 0 || rows <= 0) return;
-    const column = Math.floor((clientX - rect.left) / (rect.width / columns)), row = Math.floor((clientY - rect.top) / (rect.height / rows));
+    // The renderer draws whole cells from the pane's top left, so a pane that is not a whole number of them has a margin at the right and bottom.
+    const column = Math.floor((clientX - rect.left) / (cell ? cell.width / cell.dpr : rect.width / columns)), row = Math.floor((clientY - rect.top) / (cell ? cell.height / cell.dpr : rect.height / rows));
     if (!Number.isFinite(column) || !Number.isFinite(row)) return;
     return {x: Math.min(columns - 1, Math.max(0, column)), y: viewport.top + Math.min(rows - 1, Math.max(0, row))};
   }
@@ -417,12 +447,28 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.emit({type: 'selection', range: undefined});
   }
 
-  // No renderer draws yet, so there is no DOM to lay out (#1327). The typed-input editor is the capture's, on desktop and iOS.
+  // The renderer draws on a surface, so there is no DOM to lay out (#1327). The typed-input editor is the capture's, on desktop and iOS.
   inputElement() { return this.capture?.element; }
   screenElement() { return undefined; }
-  layoutRowHeight() { return 0; }
-  proposeSize(): TerminalSize | undefined { return undefined; }
-  fit() {}
+  /** One row of the renderer's grid in layout pixels; 0 until the shell has said how big a cell is (and without a surface). */
+  layoutRowHeight() { return this.cell ? this.cell.height / this.cell.dpr : 0; }
+
+  /** The whole cells the pane holds at the renderer's cell size: the surface is `round(css * dpr)` device pixels, from which the renderer draws a grid of whole cells. */
+  proposeSize(): TerminalSize | undefined {
+    const rect = this.anchor?.getBoundingClientRect(), {cell} = this;
+    // The cell of an earlier font size or density says nothing about the grid until the shell answers for the current one.
+    if (!rect || !cell || cell.key !== this.cellFor()) return undefined;
+    const columns = Math.min(MAX_GRID, Math.floor(Math.round(rect.width * cell.dpr) / cell.width)), rows = Math.min(MAX_GRID, Math.floor(Math.round(rect.height * cell.dpr) / cell.height));
+    return columns > 0 && rows > 0 ? {columns, rows} : undefined;
+  }
+
+  /** Resizes the grid to what the pane holds; the page sends the new size to the transport, which the core follows. */
+  fit() {
+    this.measure();
+    const size = this.proposeSize(), {columns, rows} = this.mirror.state;
+    if (size && (size.columns !== columns || size.rows !== rows)) this.requestSize(size);
+  }
+
   syncViewport() {}
   interceptKeys(handler: (event: KeyboardEvent) => boolean): Disposable {
     this.interceptor = handler;

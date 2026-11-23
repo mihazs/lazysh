@@ -42,6 +42,10 @@ fn look() -> Look {
 
 /// A session of `COLS` x `ROWS` cells and the inbox its `changed` hook rings.
 pub(crate) fn session() -> (Session, Inbox) {
+    session_of(COLS, ROWS)
+}
+
+fn session_of(cols: u16, rows: u16) -> (Session, Inbox) {
     let (wake, inbox) = wake();
     let hooks = Hooks {
         writer: Arc::new(NoPeer),
@@ -49,7 +53,7 @@ pub(crate) fn session() -> (Session, Inbox) {
         changed: Some(wake.hook()),
     };
     let config = Config {
-        size: Size::new(COLS, ROWS),
+        size: Size::new(cols, rows),
         scrollback_bytes: 64 * 1024,
         ..Config::default()
     };
@@ -453,6 +457,111 @@ fn a_program_that_chose_no_cursor_gets_the_preferred_one_and_a_program_that_did_
         .set_look(default(CursorVisualStyle::Underline, false))
         .unwrap();
     shown.shows(&underline, "the preferred underline");
+}
+
+#[test]
+fn the_cell_a_page_divides_its_pane_by_is_the_cell_the_renderer_draws() {
+    let theme = Theme::default();
+    for (font_px, scale) in [(14.0, 1.0), (14.0, 2.625), (10.0, 3.0), (32.0, 1.5)] {
+        let cell = cell_metrics(font_px, scale).unwrap();
+        let look = Look {
+            font_px,
+            scale,
+            ..look()
+        };
+        assert_eq!(
+            look.appearance().unwrap().metrics,
+            cell,
+            "{font_px} at {scale}"
+        );
+        // A steady block cursor fills its cell with the theme's cursor colour: its box is the cell, on the grid.
+        let shown = Shown::new(&format!("{STEADY}\x1b[3;4H"), look);
+        let drawn = |image: &Image| {
+            let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0, 0);
+            let mut hit = false;
+            for (x, y) in (0..image.height).flat_map(|y| (0..image.width).map(move |x| (x, y))) {
+                if image.pixel(x, y) == theme.cursor {
+                    (hit, left, top, right, bottom) =
+                        (true, left.min(x), top.min(y), right.max(x), bottom.max(y));
+                }
+            }
+            hit.then_some((left, top, right, bottom))
+        };
+        let (left, top) = (3 * cell.cell_width, 2 * cell.cell_height);
+        let expected = (
+            left,
+            top,
+            left + cell.cell_width - 1,
+            top + cell.cell_height - 1,
+        );
+        wait(
+            &format!("{font_px} at {scale}: the cursor fills its cell"),
+            || {
+                shown
+                    .image()
+                    .is_some_and(|image| drawn(&image) == Some(expected))
+            },
+        );
+    }
+    // A phone: 14 px text at 2.625 device pixels to a CSS pixel, on a surface of 1080 x 1900 pixels.
+    let phone = cell_metrics(14.0, 2.625).unwrap();
+    assert_eq!((phone.cell_width, phone.cell_height), (22, 44));
+    assert_eq!(
+        (1080 / phone.cell_width, 1900 / phone.cell_height),
+        (49, 43)
+    );
+    // Nothing the renderer cannot draw has a cell.
+    assert_eq!(cell_metrics(0.0, 1.0), Err(RenderError::InvalidSize));
+}
+
+#[test]
+fn a_core_of_80_by_24_is_drawn_with_the_looks_a_phone_gets_before_its_page_sends_one_and_is_not_blank(
+) {
+    // The look of a pane on a phone (2.625 device pixels to a CSS pixel) the page has not sent preferences to:
+    // the machine's monospace, then the bundled font, in the default theme on the pane's background (#2457).
+    let look = crate::native_terminal_surface::panes::look("android-defaults", 2.625, 0x10_13_11);
+    assert!(look.system_fonts, "the shipped look draws with fonts");
+    let metrics = look.appearance().unwrap().metrics;
+    let (width, height) = (80 * metrics.cell_width, 24 * metrics.cell_height);
+    let (session, inbox) = session_of(80, 24);
+    let target = Target::new(width, height).with_policy(Policy::for_platform().with_software());
+    let host = Host::attach(session.clone(), inbox, target, 1, look.clone())
+        .expect("a GPU adapter is required");
+    prints(
+        &session,
+        "lazysh@phone:~$ ls -la\r\ntotal 4\r\n\x1b[1;34mdocs\x1b[0m  notes.txt\r\n\x1b[41m red \x1b[0m",
+    );
+    let read = |state: &mut Loop| state.renderer.as_mut().map(|r| r.read_image().unwrap());
+    // Text is the theme's light foreground: count the pixels that are, which the pane's dark background and the
+    // cursor's gold never are.
+    let light = |image: &Image| {
+        (0..image.height)
+            .flat_map(|y| (0..image.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let p = image.pixel(x, y);
+                p.r > 0xc0 && p.g > 0xc0 && p.b > 0xc0
+            })
+            .count()
+    };
+    wait("text is drawn", || {
+        host.ask(read)
+            .unwrap()
+            .is_some_and(|image| light(&image) > 100)
+    });
+    let image = host.ask(read).unwrap().unwrap();
+    assert_eq!((image.width, image.height), (width, height));
+    assert_eq!(
+        image.pixel(width - 1, height - 1),
+        look.theme.background,
+        "the rest of the grid is the pane's background"
+    );
+    // The red cell of the fourth row is drawn in its own colour, so colour reaches the frame too.
+    let red = Theme::default().palette[1];
+    assert!(
+        (0..image.height).any(|y| (0..image.width).any(|x| image.pixel(x, y) == red)),
+        "the red cell is drawn"
+    );
+    session.close();
 }
 
 #[test]

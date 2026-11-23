@@ -310,6 +310,7 @@ pub fn run() {
                 edge_gestures::edge_gesture_insets,
                 native_terminal_surface::native_terminal_surface_place,
                 native_terminal_surface::native_terminal_surface_look,
+                native_terminal_surface::native_terminal_surface_cell,
                 native_terminal_surface::native_terminal_surface_remove,
                 native_terminal_surface::native_terminal_surface_state,
                 native_terminal_surface::native_terminal_surface_input,

@@ -102,14 +102,20 @@ pub(crate) struct Look {
     pub cursor: Option<CursorDefault>,
 }
 
+/// The cell the renderer draws, in device pixels, for a font of `font_px` CSS pixels on a display of `scale` device
+/// pixels per CSS pixel: the grid of a pane is as many of these as its surface holds.
+// shortcut: a cell is 0.6 x 1.2 of the font size and the renderer fits the font to it (one
+// cell is the advance of `0`); take the cell from the font's own metrics when a font
+// whose advance is not 0.6 em shows text of the wrong size.
+pub(crate) fn cell_metrics(font_px: f32, scale: f32) -> Result<CellMetrics, RenderError> {
+    let thirds = (font_px * scale * 3.0).round() as u32;
+    CellMetrics::default().scaled(thirds, 40)
+}
+
 impl Look {
     pub(crate) fn appearance(&self) -> Result<Appearance, RenderError> {
-        // shortcut: a cell is 0.6 x 1.2 of the font size and the renderer fits the font to it (one
-        // cell is the advance of `0`); take the cell from the font's own metrics when a font
-        // whose advance is not 0.6 em shows text of the wrong size.
-        let thirds = (self.font_px * self.scale * 3.0).round() as u32;
         Ok(Appearance {
-            metrics: CellMetrics::default().scaled(thirds, 40)?,
+            metrics: cell_metrics(self.font_px, self.scale)?,
             font_families: self
                 .font_family
                 .split(',')
