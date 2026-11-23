@@ -10,6 +10,21 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.98.3] - 2026-11-23
+
+### New
+
+- **terminal:** Size a native terminal's columns and rows to its pane, so the remote program draws for the screen it has ([#2458](https://github.com/mihazs/lazysh/pull/2458))
+
+### Fixed
+
+- **terminal:** say why a native terminal cannot draw and move to xterm.js instead of showing a blank pane ([#2460](https://github.com/mihazs/lazysh/pull/2460))
+- **voice:** import a Whisper model on Android, where hard links in app storage are refused ([#2469](https://github.com/mihazs/lazysh/pull/2469))
+
+### Documentation
+
+- **readme:** describe lazysh as a released app with current platforms and features, not a development preview ([#2470](https://github.com/mihazs/lazysh/pull/2470))
+
 ## [1.98.2] - 2026-11-23
 
 ### New
