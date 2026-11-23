@@ -295,6 +295,30 @@ pub fn voice_import_chunk(
 ) -> Protected<()> {
     access.run_sync(|| with_import_access(&state, &id, || chunk(&state, &id, offset, &bytes)))
 }
+/// Puts `temporary` at `destination` without replacing anything there. Exclusive linking does it where hard links are allowed;
+/// Android's storage policy answers a link in app storage with "Permission denied" (os error 13, seen on the owned emulator,
+/// #2468), so that case copies into a file created exclusively instead.
+fn publish(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    match fs::hard_link(temporary, destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            publish_by_copy(temporary, destination)
+        }
+        other => other,
+    }
+}
+fn publish_by_copy(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    let mut target = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    let copied =
+        std::io::copy(&mut File::open(temporary)?, &mut target).and_then(|_| target.sync_all());
+    if copied.is_err() {
+        drop(target);
+        let _ = fs::remove_file(destination);
+    }
+    copied
+}
 fn finish(state: &VoiceState, id: &str, cancel: bool) -> Result<()> {
     let mut pending = state
         .import
@@ -323,8 +347,7 @@ fn finish(state: &VoiceState, id: &str, cancel: bool) -> Result<()> {
         }
         model_header(&temporary)?;
         import.file.sync_all().map_err(|_| "Cannot save model")?;
-        // Exclusive linking publishes without replacing an existing model.
-        fs::hard_link(&temporary, state.path(&import.name)?).map_err(|error| {
+        publish(&temporary, &state.path(&import.name)?).map_err(|error| {
             format!("Cannot publish model; destination may already exist ({error})")
         })?;
         Ok(())
@@ -502,6 +525,27 @@ pub fn voice_cancel(state: State<'_, VoiceState>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_model_is_published_by_copy_without_replacing_one_that_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let temporary = dir.path().join("import.part");
+        fs::write(&temporary, b"new model bytes").unwrap();
+        let destination = dir.path().join("ggml-tiny.en.bin");
+        publish_by_copy(&temporary, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new model bytes");
+        fs::write(&temporary, b"another import").unwrap();
+        assert!(publish_by_copy(&temporary, &destination).is_err());
+        assert_eq!(
+            fs::read(&destination).unwrap(),
+            b"new model bytes",
+            "an existing model is never replaced"
+        );
+        assert!(publish(&temporary, &destination).is_err());
+        let other = dir.path().join("ggml-base.bin");
+        publish(&temporary, &other).unwrap();
+        assert_eq!(fs::read(&other).unwrap(), b"another import");
+    }
+
     use super::*;
     const WER_LIMIT: f64 = 0.5;
     #[test]
