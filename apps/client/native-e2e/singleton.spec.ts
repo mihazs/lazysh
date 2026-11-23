@@ -50,8 +50,12 @@ it('opens a caller-relative literal directory in the original GUI and observes t
   await fixture.secondary(['--dir',name],caller);
   const terminal=await browser.$('.terminal-canvas .xterm-screen');await terminal.waitForDisplayed({timeout:20_000});
   expect(await fixture.appOwner()).toEqual(owner);
+  // Keys typed before the shell has started and printed its prompt can be lost, so the case waits for that, then types, and a failure shows what the terminal held.
+  let shown='';
+  await browser.waitUntil(async()=>{shown=await terminal.getText();return shown.trim().length>0;},{timeout:20_000,timeoutMsg:'Owned local shell printed no prompt'});
   await terminal.click();await browser.keys(['p','w','d','\uE007']);
-  await browser.waitUntil(async()=>(await terminal.getText()).includes(expected),{timeout:20_000,timeoutMsg:'Owned local shell cwd was not observed'});
+  try {await browser.waitUntil(async()=>{shown=await terminal.getText();return shown.includes(expected);},{timeout:20_000});}
+  catch {throw new Error(`Owned local shell cwd was not observed; terminal text ${JSON.stringify(shown.slice(-600))}; expected ${JSON.stringify(expected)}`);}
   expect(fixture.connections).toBe(0);
 });
 
