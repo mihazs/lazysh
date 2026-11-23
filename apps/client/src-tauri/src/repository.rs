@@ -126,11 +126,18 @@ async fn read_blob(
     Ok(bytes)
 }
 
-fn invalid(message: &str) -> SshError {
+pub(crate) fn invalid(message: &str) -> SshError {
     SshError::new("invalid_repository", message)
 }
 fn refused(error: Invalid) -> SshError {
     invalid(error.message())
+}
+/// A directory path the host can be asked about (also used before reading media).
+pub(crate) fn check_directory(path: &str) -> Result<()> {
+    review::check_directory(path).map_err(refused)
+}
+pub(crate) fn check_file_path(value: &str) -> Result<()> {
+    review::check_file_path(value).map_err(refused)
 }
 fn git(path: &str, args: &[&str]) -> Result<Cmd> {
     Ok(Cmd::new(
