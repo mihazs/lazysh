@@ -1,5 +1,31 @@
 # @lazysh/client
 
+## 1.97.10
+
+### Patch Changes
+
+- fix(tmux): stop Jump To and Chat input from crashing your tmux server when another client connects ([#2398](https://github.com/mihazs/lazysh/pull/2398))
+
+  <details><summary>Details</summary>
+
+  tmux 3.4 to 3.7c kill the whole server (SIGSEGV, every session lost) when a format walks the clients while a new client has connected but not yet sent its terminal name, and the guards behind Jump To, the display admission and Chat input walked them. The guards now read a client's terminal only after tmux reports that client's session and process, so a command run from another terminal at the same moment no longer takes the server down.
+
+  </details>
+- fix(android): stop the app freezing when the screen is recreated ([#2420](https://github.com/mihazs/lazysh/pull/2420))
+
+  <details><summary>Details</summary>
+
+  Rotating the device or changing the theme could hang the app with an "not responding" dialog while the web view still had queued updates. The queue between the app and the web view no longer has a size limit that the main thread could wait on forever.
+
+  </details>
+- feat(android): Keep the native terminal engine off while TalkBack or another screen reader is on ([#2392](https://github.com/mihazs/lazysh/pull/2392))
+
+  <details><summary>Details</summary>
+
+  Part of #1329. A new terminal session on Android uses xterm.js, and Settings shows Native as turned off with the reason, while Android reports a screen reader: touch exploration (TalkBack) or an enabled service that speaks or brailles the screen. This used to depend on the in-app Screen reader announcements preference alone. Settings asks again when you return to the app. A session that is already open keeps its engine. Only an explicit Native choice reaches the native engine today, so nothing changes for Auto or xterm.js.
+
+  </details>
+
 ## 1.97.9
 
 ### Patch Changes
