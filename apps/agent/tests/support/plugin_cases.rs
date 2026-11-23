@@ -63,7 +63,13 @@ pub fn load(runtime: &Path, script: &str, plugin: &Path, state: &Path, bare: boo
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    // Name what the plugin host wrote: a bare `is_empty` assertion hid it when this failed on a loaded runner.
+    assert!(
+        output.stdout.is_empty() && output.stderr.is_empty(),
+        "plugin host wrote stderr={:?} stdout={:?}: {command:?}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 /// The companion's snapshot shows the one working session the event started.
 pub fn assert_working(report: &Value, agent: &str, session: &str) {
