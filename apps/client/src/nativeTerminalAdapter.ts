@@ -285,11 +285,14 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     if (!surface || !preferences || key === undefined || key === this.cellKey || this.disposed) return;
     this.cellKey = key;
     const dpr = window.devicePixelRatio;
+    const refused = () => { if (this.cellKey === key) this.cellKey = undefined; };
     (this.options.cell ?? nativeSurface.cell)(preferences.fontSize, dpr).then(cell => {
       if (this.cellKey !== key || this.disposed) return;
-      this.cell = {...cell, dpr, key};
+      // A shell that answers with anything but a cell has no renderer to size the grid by.
+      if (!(cell?.width > 0 && cell?.height > 0)) return refused();
+      this.cell = {width: cell.width, height: cell.height, dpr, key};
       this.fit();
-    }, () => { if (this.cellKey === key) this.cellKey = undefined; });
+    }, refused);
   }
 
   /** The renderer's surface draws with the preferences that decide its look; it is told once for each change, and again if the shell refused. */

@@ -112,6 +112,18 @@ describe('the grid of a native terminal follows its pane', () => {
     expect(cell).toHaveBeenCalledTimes(3);
   });
 
+  it('ignores an answer that is not a cell', async () => {
+    const {adapter, cell, preferences} = await open();
+    cell.mockResolvedValueOnce({} as never);
+    adapter.applyPreferences(preferences);
+    await settle();
+    expect(adapter.proposeSize()).toBeUndefined();
+    expect(adapter.layoutRowHeight()).toBe(0);
+    expect(adapter.cellAt(40, 25), 'the grid is stretched over the pane until there is a cell').toEqual({x: 1, y: 0});
+    adapter.fit();
+    await vi.waitFor(() => expect(adapter.proposeSize()).toBeDefined());
+  });
+
   it('has nothing to fit without a renderer surface or a pane with a box', async () => {
     const {adapter, cell, preferences, intents} = await open(null);
     const start = adapter.size();
