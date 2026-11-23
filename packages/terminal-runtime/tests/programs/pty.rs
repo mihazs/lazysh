@@ -48,8 +48,20 @@ fn marker() -> String {
     format!("{}-{n}", std::process::id())
 }
 
+/// Whether `pid` is running. A process that was killed and is not yet reaped by its parent (a zombie, `Z`,
+/// or `X`) keeps its `/proc/<pid>` entry but runs nothing, so only an absent or such an entry is not running.
+pub fn running(pid: i32) -> bool {
+    // The state is the first field after the command name, which is in parentheses and may contain any byte.
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit_once(')')
+            .and_then(|(_, fields)| fields.trim_start().chars().next())
+            .is_some_and(|state| !matches!(state, 'Z' | 'X'))
+    })
+}
+
 /// Kill every process whose environment carries `marker` (Linux; elsewhere nothing is found) and wait,
-/// bounded, until they are gone.
+/// bounded, until they are no longer running. A killed process stops showing its environment as soon as it
+/// releases its memory, which is before it has exited, so the processes killed are waited for by pid.
 pub fn reap_descendants(marker: &str) {
     let needle = format!("{MARKER}={marker}");
     let found = || -> Vec<i32> {
@@ -67,9 +79,12 @@ pub fn reap_descendants(marker: &str) {
             .collect()
     };
     let deadline = Instant::now() + Duration::from_secs(5);
+    let mut killed: Vec<i32> = Vec::new();
     loop {
         let pids = found();
-        if pids.is_empty() || Instant::now() > deadline {
+        killed.extend(&pids);
+        if (pids.is_empty() && !killed.iter().any(|pid| running(*pid))) || Instant::now() > deadline
+        {
             return;
         }
         for pid in pids {
