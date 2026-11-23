@@ -13,7 +13,6 @@ import androidx.test.uiautomator.UiDevice
 import kotlin.math.roundToInt
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -231,7 +230,6 @@ class NativeTerminalSessionTest {
             // The typed line and the answer add far more ink than a steady cursor does.
             val typed = settled("the answer") { ink(it) > ink(drawn) + 200 }
             evidence.put("answerDrawnMs", elapsed()).put("inkAfterAnswer", ink(typed))
-            assertTrue("the answer is drawn below the prompt: ${ink(typed)} against ${ink(drawn)} non-background pixels", ink(typed) > ink(drawn))
 
             // Output that does not fit the screen, then a finger scrolls the pane back through it.
             typeIntoTheSurface("seq 1 150")

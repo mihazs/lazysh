@@ -62,12 +62,18 @@ export async function runTerminalCases(run:TerminalCaseRun,root=resolve(import.m
     await device(['shell','rm','-rf','--',evidenceDirectory]);
     // A failed case leaves the most useful evidence (the pictures and measurements up to the failure), so it is kept before the failure is raised.
     const evidenceTo=join(results,run.evidenceName);
-    try { await new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
+    const gradle=new OwnedProcess(join(android,'gradlew'),['-p',android,':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug','-PlazyshTerminalCoreAcceptance=true',
       `-Pandroid.testInstrumentationRunnerArguments.class=${run.classes.join(',')}`,
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`,
-      ...(run.arguments??[]).map(argument=>`-Pandroid.testInstrumentationRunnerArguments.${argument}`)],root).finish(`actual Android ${run.title} instrumentation`,900_000); }
-    catch(failure) { await keepDeviceEvidence(device,evidenceTo).catch(()=>[]); throw failure; }
+      ...(run.arguments??[]).map(argument=>`-Pandroid.testInstrumentationRunnerArguments.${argument}`)],root);
+    try { await gradle.finish(`actual Android ${run.title} instrumentation`,900_000); }
+    catch(failure) {
+      // Gradle's own words (a compile error of the test APK, a refused install) are the only explanation of a run that never reached a case.
+      console.error(`Gradle output, last 6000 characters:\n${(gradle.stdout+gradle.stderr).slice(-6000)}`);
+      await keepDeviceEvidence(device,evidenceTo).catch(()=>[]);
+      throw failure;
+    }
     const reports=(await readdir(report,{recursive:true})).filter(name=>name.endsWith('.xml'));
     if(reports.length!==1)throw new Error(`Expected one ${run.title} report`);
     validateCases(await readFile(join(report,reports[0]),'utf8'),run.cases);
