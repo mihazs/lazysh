@@ -1,0 +1,114 @@
+{
+  "schema": 1,
+  "run": "waydroid native probe, one call through the page (not the lane harness)",
+  "recordedAt": "2026-11-22, about 18:35Z, minutes after startedAt of terminal-lane-composition-waydroid.json",
+  "app": {
+    "package": "app.lazysh.client",
+    "versionName": "1.97.4",
+    "sourceCommit": "27d8ceb57b56a47f8dbd5392c36d08ddd2c48230 (the head of PR #2384: main plus the transparent WebView; the probe is main's)",
+    "buildType": "debug, x86_64, native-terminal feature"
+  },
+  "apk": {
+    "artifact": "lazysh-android-debug-x86_64 of CI run 45049588618",
+    "sha256": "6a0f6aa2fc7e8f8a26e7e7742613f21c13efe9e0d340bbfd167f509ab5d60315"
+  },
+  "environment": {
+    "device": {
+      "serial": "192.168.240.112:5555",
+      "model": "WayDroid x86_64 Device",
+      "abi": "x86_64",
+      "wmSize": "Physical size: 1920x1080",
+      "wmDensity": "Physical density: 180"
+    },
+    "waydroidImage": {
+      "waydroid": "1.6.3",
+      "fingerprint": "waydroid/lineage_waydroid_x86_64/waydroid_x86_64:13/TQ3A.230901.001/eng.aleast.20260927.215901:userdebug/test-keys",
+      "display": "lineage_waydroid_x86_64-userdebug 13 TQ3A.230901.001 eng.aleast.20260927.215901 test-keys",
+      "flavor": "lineage_waydroid_x86_64-userdebug",
+      "lineageVersion": "20.0-20260927-VANILLA-waydroid_x86_64",
+      "sessionStartedByLane": false
+    },
+    "androidVersion": {
+      "release": "13",
+      "sdk": "33"
+    },
+    "gpuPath": {
+      "path": "host-gl",
+      "egl": "mesa",
+      "gralloc": "minigbm_gbm_mesa",
+      "glesRenderer": "AMD, AMD Radeon Graphics (radeonsi, navi14, ACO, DRM 3.64, 7.3.4-1-cachyos), OpenGL ES 3.2 Mesa 26.0.8"
+    },
+    "appRevision": {
+      "commit": "27d8ceb57b56a47f8dbd5392c36d08ddd2c48230",
+      "dirty": false,
+      "package": "app.lazysh.client",
+      "versionName": "1.97.4",
+      "versionCode": "1097004"
+    },
+    "guestIme": {
+      "default": "com.android.inputmethod.latin/.LatinIME",
+      "enabled": [
+        "com.android.inputmethod.latin/.LatinIME",
+        "io.appium.settings/.UnicodeIME"
+      ]
+    },
+    "vendorImesInstalled": []
+  },
+  "method": "After the lane run of terminal-lane-composition-waydroid.json the app was started with `waydroid app launch app.lazysh.client`, the WebView DevTools socket was forwarded with `adb forward` and the page called `invoke('native_terminal_probe')` with the access nonce of `app_lock_status`, as the page does. It was the first call in that process, so its cost includes loading the driver.",
+  "answer": {
+    "available": true,
+    "reason": "The native terminal can draw on AMD Radeon Graphics (RADV NAVI14) (Vulkan)",
+    "elapsedMs": 99
+  },
+  "pageWaitedMs": 101,
+  "findings": [
+    "The shipping policy (CPU rasterizers refused) passed in the guest: wgpu found the host's Vulkan adapter, a RADV driver on a Navi 14, through the guest's Vulkan loader.",
+    "The probe cost 99 ms cold in a debug build, inside the 2 s budget; the page's own wait was 101 ms.",
+    "The answer did not list the adapters it saw and did not carry a device type: that is the probe of main before #2381. The case NativeTerminalCoreTest.theProbeRefusesASoftwareRasterizerUnlessTheDebugSwitchAllowsOne records both on the lane."
+  ],
+  "limits": "Waydroid is the Android acceptance environment for the native-engine release (ADR 0001, Amendment 6). Its guest is x86_64 on the host GPU or a software rasterizer, so these timings are not a device result and every acceptedRisk below is not measured.",
+  "acceptedRisk": [
+    {
+      "id": "energy",
+      "gate": "G16",
+      "status": "accepted risk, not measured",
+      "reason": "Waydroid has no phone battery to read, so battery energy cannot be compared between engines."
+    },
+    {
+      "id": "vendor-ime",
+      "gate": "G6",
+      "status": "accepted risk, not measured",
+      "reason": "Gboard and SwiftKey are not part of the guest unless installed and run; see vendorImesInstalled in the environment block and the guest IME."
+    },
+    {
+      "id": "real-gpu-drivers",
+      "gate": "G13",
+      "status": "accepted risk, not measured",
+      "reason": "The guest draws through the host GPU path or a software rasterizer, not a phone GPU driver."
+    },
+    {
+      "id": "touch",
+      "gate": "G13",
+      "status": "accepted risk, not measured",
+      "reason": "Touches are injected events; a real digitizer, palm rejection and pressure are not exercised."
+    },
+    {
+      "id": "thermal",
+      "gate": "G14",
+      "status": "accepted risk, not measured",
+      "reason": "A workstation host does not throttle like a phone; sustained-load behaviour is unknown."
+    },
+    {
+      "id": "aarch64",
+      "gate": "G12",
+      "status": "accepted risk, not measured",
+      "reason": "The guest is x86_64; the arm64 build that ships has not run here."
+    },
+    {
+      "id": "vendor-webview-rom",
+      "gate": "G14",
+      "status": "accepted risk, not measured",
+      "reason": "One WebView and one LineageOS-based image; vendor WebView and ROM variation are not covered."
+    }
+  ]
+}
