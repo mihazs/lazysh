@@ -2131,6 +2131,10 @@ jobs:
           # The companion's `herdr-events` stream against an owned real Herdr: a renamed case must not pass with zero tests.
           cargo test --locked -p lazysh-agent --test herdr_events -- --list --ignored | grep -c ': test$' | grep -Fx 1
           cargo test --locked -p lazysh-agent --test herdr_events -- --ignored
+          # The client's own agent_watch_start and agent_watch_stop over owned OpenSSH against the same stock Herdr (#1692, #1877).
+          events=ssh::tests::openssh_herdr_events_report_a_blocked_and_a_finished_agent_within_a_bound
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$events" -- --list --ignored --exact | grep -Fx -- "$events: test"
+          LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$events" -- --ignored --exact
           # A renamed case must not turn the local attach cases into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored local::attach_tests::runtime::real_ | grep -c ': test$' | grep -Fx 4
           # A renamed case must not turn the local-session cases into a zero-test pass.

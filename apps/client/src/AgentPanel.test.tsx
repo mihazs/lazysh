@@ -21,6 +21,8 @@ function deferredRead() {
   const promise=new Promise<unknown>((yes,no)=>{resolve=yes;reject=no;});
   return {promise,resolve,reject};
 }
+/** These tests count tree reads: a host without an event stream is the case they cover, so the stream cannot open. */
+const noStream=<T,>(answer:(command:string)=>T)=>(command:string)=>command==='agent_watch_start'?Promise.reject(new Error('no stream')):answer(command);
 async function pollingClock(run:(invoke:typeof import('@tauri-apps/api/core').invoke)=>Promise<void>) {
   vi.useFakeTimers();
   try {await run((await import('@tauri-apps/api/core')).invoke);}
@@ -512,7 +514,7 @@ describe('live Herdr discovery',()=>{
   it('keeps loaded navigation rows enabled during passive reads and blocks only the explicit action',()=>pollingClock(async invoke=>{
     let reads=0;const poll=deferredRead(),action=deferredRead();
     // `reads` counts snapshot reads only; stock Herdr has no guard to ask where the client is.
-    vi.mocked(invoke).mockImplementation(command=>command==='herdr_chat'?Promise.reject({kind:'herdr_chat_unavailable'}):command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):++reads===1?Promise.resolve(tree):poll.promise);
+    vi.mocked(invoke).mockImplementation(noStream(command=>command==='herdr_chat'?Promise.reject({kind:'herdr_chat_unavailable'}):command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):++reads===1?Promise.resolve(tree):poll.promise));
     const navigate=vi.fn(()=>action.promise.then(()=>{})),close=vi.fn();
     render(<HerdrNavigation sessionId="steady-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={navigate} onAttach={vi.fn(async()=>{})} onClose={close}/>);
     await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
@@ -530,7 +532,7 @@ describe('live Herdr discovery',()=>{
   }));
   it('folds a live status group behind its unchanged heading and restores the same row without a read or navigation',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');
-    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+    vi.mocked(invoke).mockImplementation(noStream(command=>Promise.resolve(command==='multiplexer_sessions'?[{name:'default'}]:tree)));
     const navigate=vi.fn(async()=>{});
     render(<HerdrNavigation sessionId="fold-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={navigate} onAttach={vi.fn(async()=>{})} onClose={vi.fn()}/>);
     const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
@@ -624,8 +626,8 @@ describe('live Herdr discovery',()=>{
   it('keeps live rows, counts and search stable while polling and retains a failed read until its replacement settles',()=>pollingClock(async invoke=>{
       let pending!:ReturnType<typeof deferredRead>;
       let reads=0;
-      vi.mocked(invoke).mockImplementation(command=>command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):
-        ++reads===1?Promise.resolve(tree):(pending=deferredRead()).promise);
+      vi.mocked(invoke).mockImplementation(noStream(command=>command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):
+        ++reads===1?Promise.resolve(tree):(pending=deferredRead()).promise));
       render(<HerdrAgentsPanel sessionId="stable-live" visible/>);
       await act(async()=>{await vi.advanceTimersByTimeAsync(0);});
       const region=screen.getByRole('region',{name:'Live Herdr agents'}),live=within(region);
@@ -775,13 +777,13 @@ describe('live Herdr discovery',()=>{
     try {
       const {invoke}=await import('@tauri-apps/api/core');
       let complete!:(value:unknown)=>void;
-      vi.mocked(invoke).mockImplementation(command=>command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):new Promise(resolve=>{complete=resolve;}));
+      vi.mocked(invoke).mockImplementation(noStream(command=>command==='multiplexer_sessions'?Promise.resolve([{name:'default'}]):new Promise(resolve=>{complete=resolve;})));
       render(<HerdrAgentsPanel sessionId="bounded-host" visible/>);
       await act(async()=>{await vi.advanceTimersByTimeAsync(15000);});
-      expect(vi.mocked(invoke).mock.calls.map(([name])=>name)).toEqual(['multiplexer_sessions','herdr_tree']);
+      expect(vi.mocked(invoke).mock.calls.map(([name])=>name).filter(name=>name!=='agent_watch_start')).toEqual(['multiplexer_sessions','herdr_tree']);
       await act(async()=>complete(tree));expect(screen.getByText('builder')).toBeTruthy();
       await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
-      expect(vi.mocked(invoke).mock.calls.map(([name])=>name)).toEqual(['multiplexer_sessions','herdr_tree','multiplexer_sessions','herdr_tree']);
+      expect(vi.mocked(invoke).mock.calls.map(([name])=>name).filter(name=>!name.startsWith('agent_watch'))).toEqual(['multiplexer_sessions','herdr_tree','multiplexer_sessions','herdr_tree']);
     } finally {cleanup();vi.useRealTimers();}
   });
 

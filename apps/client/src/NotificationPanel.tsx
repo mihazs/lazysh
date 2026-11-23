@@ -9,6 +9,8 @@ import { isTauri } from '@tauri-apps/api/core';
 import { isAndroidApp } from './isAndroidApp';
 import { isPermissionGranted, onAction, registerActionTypes, requestPermission } from '@tauri-apps/plugin-notification';
 import { collectInbox, getInbox, openInboxEvent, updateInbox, useInbox, type InboxRow, type InboxSession } from './notificationStore';
+import { herdrTransitionEvent, type HerdrTransition } from './herdrEvents';
+import { collectHerdrTransition, reportedByHerdr } from './herdrInbox';
 
 const inboxGroups = [['needs_attention', 'inboxNeedsYou'], ['working', 'inboxWorking'], ['done', 'inboxDone']] as const;
 import { errorMessage } from './SessionTools';
@@ -39,7 +41,8 @@ export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) 
             const snapshot = await invoke('agent_snapshot', { sessionId: session.id });
             const valid = () => active && getInbox().monitoring && currentSessions.current.some(item => item.id === session.id && item.connected);
             if (!valid()) continue;
-            const alerts = await collectInbox(session, snapshot, !baselineHosts.current.has(session.hostId), valid, false);
+            // A turn Herdr already reported is not a second alert when the hook's report of it arrives.
+            const alerts = (await collectInbox(session, snapshot, !baselineHosts.current.has(session.hostId), valid, false)).filter(event => !reportedByHerdr(event));
             if (!valid()) continue;
             baselineHosts.current.add(session.hostId);
             if (alerts.length && getInbox().notifications && await isPermissionGranted()) {
@@ -59,6 +62,23 @@ export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) 
     const refresh = () => void poll();
     window.addEventListener('lazysh-inbox-refresh', refresh);
     return () => { active = false; window.clearInterval(timer); window.removeEventListener('lazysh-inbox-refresh', refresh); };
+  }, [state.monitoring, sessionKey]);
+  // A pane the open Herdr view follows that became blocked or done: the stream tells at once, without the next poll.
+  useEffect(() => {
+    if (!state.monitoring || !isTauri()) return;
+    let active = true;
+    const changed = (event: Event) => void (async () => {
+      const transition = (event as CustomEvent<HerdrTransition>).detail;
+      const session = currentSessions.current.find(item => item.id === transition.sessionId && item.connected);
+      if (!session || !active || !getInbox().monitoring) return;
+      const valid = () => active && getInbox().monitoring && currentSessions.current.some(item => item.id === session.id && item.hostId === session.hostId && item.connected);
+      const alert = await collectHerdrTransition(session, transition, valid);
+      if (alert && valid() && getInbox().notifications && await isPermissionGranted() && valid() && getInbox().notifications) {
+        await invoke('notify_agent_attention', { sessionId: session.id, agent: alert.agent, project: alert.project, eventId: alert.eventId });
+      }
+    })().catch(e => { if (active) updateInbox({ error: errorMessage(e).slice(0, 2000) }); });
+    window.addEventListener(herdrTransitionEvent, changed);
+    return () => { active = false; window.removeEventListener(herdrTransitionEvent, changed); };
   }, [state.monitoring, sessionKey]);
   useEffect(() => {
     if (!state.notifications || !isTauri()) return;
