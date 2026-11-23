@@ -9,12 +9,15 @@ export function isMultiplexerAction(action: GestureAction): action is Multiplexe
 }
 
 const defaultPrefix = 'Ctrl+b';
-const prefixKey = (kind: 'tmux' | 'herdr') => `lazysh.multiplexer.prefix.${kind}`;
+/** rmux keeps tmux's prefix keys, so tmux and rmux terminals share one saved prefix and one binding table. */
+export type PrefixKind = 'tmux' | 'rmux' | 'herdr';
+const family = (kind: PrefixKind) => kind === 'herdr' ? 'herdr' : 'tmux';
+const prefixKey = (kind: PrefixKind) => `lazysh.multiplexer.prefix.${family(kind)}`;
 /** The prefix saved from the multiplexer shortcut panel, or Ctrl+b. */
-export function storedPrefix(kind: 'tmux' | 'herdr'): string {
+export function storedPrefix(kind: PrefixKind): string {
   try { return localStorage.getItem(prefixKey(kind)) || defaultPrefix; } catch { return defaultPrefix; }
 }
-export function savePrefix(kind: 'tmux' | 'herdr', prefix: string) { localStorage.setItem(prefixKey(kind), prefix); }
+export function savePrefix(kind: PrefixKind, prefix: string) { localStorage.setItem(prefixKey(kind), prefix); }
 /** A prefix is exactly one parsed key, never a literal or a multi-step chord. */
 export function validPrefix(prefix: string): boolean {
   try { return !prefix.startsWith('text:') && !/\s/.test(prefix.trim()) && parseChordSteps(prefix).length === 1; }
@@ -34,8 +37,8 @@ const prefixBindings: Record<'tmux' | 'herdr', Record<MultiplexerAction, readonl
   tmux: {nextTab: ['n'], previousTab: ['p'], nextPane: ['o'], previousPane: [':', 'text:select-pane -t :.-', 'Enter'], zoomPane: ['z']},
   herdr: {nextTab: ['n'], previousTab: ['p'], nextPane: ['l'], previousPane: ['h'], zoomPane: ['z']},
 };
-export function multiplexerSteps(kind: 'tmux' | 'herdr', action: MultiplexerAction, prefix = storedPrefix(kind)): string[] {
-  return prefixedSteps(prefix, ...prefixBindings[kind][action]);
+export function multiplexerSteps(kind: PrefixKind, action: MultiplexerAction, prefix = storedPrefix(kind)): string[] {
+  return prefixedSteps(prefix, ...prefixBindings[family(kind)][action]);
 }
 
 /**

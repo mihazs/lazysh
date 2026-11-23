@@ -74,12 +74,20 @@ pub async fn multiplexer_history(
                         &crate::tmux_server::TmuxServer::for_session(
                             &session.bindings,
                             tmux_server.as_deref(),
+                            Some(crate::tmux_server::Binary::Tmux),
                         )?,
                         MAX_LINES,
                     )?,
                     None,
                 ),
                 MultiplexerKind::Zellij => (crate::zellij::history_command(&name)?, None),
+                // rmux discovery lists `history` as missing, so the panel never offers it; a direct call is refused.
+                MultiplexerKind::Rmux => {
+                    Err::<(String, Option<usize>), _>(crate::ssh::SshError::new(
+                        "invalid_target",
+                        "History is not available for rmux yet",
+                    ))?
+                }
                 MultiplexerKind::Herdr => (
                     crate::herdr::focused_history_command(&session, &name, HERDR_LINES, &access)
                         .await?,

@@ -14,6 +14,14 @@ it('sends each tmux and Herdr action as its prefix followed by the default bindi
   ]);
 });
 
+it('gives rmux the tmux prefix, binding table and saved prefix', () => {
+  localStorage.setItem('lazysh.multiplexer.prefix.tmux', 'Ctrl+a');
+  expect(storedPrefix('rmux')).toBe('Ctrl+a');
+  expect(multiplexerSteps('rmux', 'nextTab')).toEqual(['\x01', 'n']);
+  expect(multiplexerSteps('rmux', 'previousPane', 'Ctrl+b')).toEqual(multiplexerSteps('tmux', 'previousPane', 'Ctrl+b'));
+  expect(storedPrefix('herdr')).toBe('Ctrl+b');
+});
+
 it('uses the prefix saved by the shortcut panel for its own multiplexer only', () => {
   localStorage.setItem('lazysh.multiplexer.prefix.herdr', 'Ctrl+a');
   expect(storedPrefix('herdr')).toBe('Ctrl+a');
@@ -24,9 +32,9 @@ it('uses the prefix saved by the shortcut panel for its own multiplexer only', (
 });
 
 it('resolves level-aware defaults by multiplexer presence and leaves explicit choices alone', () => {
-  const resolved = (kind?: 'tmux' | 'herdr' | 'zellij') => Object.fromEntries(gestureSlots.map(slot => [slot, resolveGesture('auto', slot, kind)]).filter(([, action]) => action !== 'none'));
+  const resolved = (kind?: 'tmux' | 'rmux' | 'herdr' | 'zellij') => Object.fromEntries(gestureSlots.map(slot => [slot, resolveGesture('auto', slot, kind)]).filter(([, action]) => action !== 'none'));
   const multiplexer = {twoLeft: 'nextTab', twoRight: 'previousTab', twoUp: 'nextPane', twoDown: 'previousPane', pinch: 'zoomPane', pullShallow: 'nextTab', pullDeep: 'nextSession'};
-  for (const kind of ['tmux', 'herdr', 'zellij'] as const) expect(resolved(kind)).toEqual(multiplexer);
+  for (const kind of ['tmux', 'rmux', 'herdr', 'zellij'] as const) expect(resolved(kind)).toEqual(multiplexer);
   expect(resolved()).toEqual({twoLeft: 'nextSession', twoRight: 'previousSession', twoUp: 'openAgents', twoDown: 'openWorkspaces', pinch: 'fontSize', pullDeep: 'nextSession'});
   expect(resolveGesture('auto', undefined, 'tmux')).toBe('none');
   expect(resolveGesture('find', 'pullShallow', 'tmux')).toBe('find');

@@ -9,8 +9,22 @@ use tauri::State;
 #[serde(rename_all = "lowercase")]
 pub enum MultiplexerKind {
     Tmux,
+    Rmux,
     Herdr,
     Zellij,
+}
+impl MultiplexerKind {
+    /// tmux and rmux share one command stack: attach, tree, actions and `-L` labels.
+    pub(crate) fn binary(self) -> Option<crate::tmux_server::Binary> {
+        match self {
+            Self::Tmux => Some(crate::tmux_server::Binary::Tmux),
+            Self::Rmux => Some(crate::tmux_server::Binary::Rmux),
+            Self::Herdr | Self::Zellij => None,
+        }
+    }
+    pub(crate) fn is_tmux_family(self) -> bool {
+        self.binary().is_some()
+    }
 }
 #[derive(Debug, Serialize)]
 pub struct PersistentSession {
@@ -50,23 +64,24 @@ fn server_token(value: &str) -> Result<&str> {
 fn fresh_server_token() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
-/// One tmux command string, the words quoted for tmux's own parser (single quotes, `#` doubled for formats).
-fn tmux_command_string(words: &[&str]) -> String {
+/// One tmux command string, the words quoted for the server's own parser (single quotes, `#` doubled for tmux's formats;
+/// rmux keeps a name as typed).
+fn tmux_command_string(binary: crate::tmux_server::Binary, words: &[&str]) -> String {
     words
         .iter()
-        .map(|word| format!("'{}'", word.replace('#', "##").replace('\'', "'\\''")))
+        .map(|word| format!("'{}'", binary.literal_name(word).replace('\'', "'\\''")))
         .collect::<Vec<_>>()
         .join(" ")
 }
 /// Runs `inner` only on the tmux server that carries `token`; on any other it fails with "can't find pane" and does
 /// nothing. The check and the command are one tmux invocation, so a server replaced in between cannot be targeted.
-fn fenced(token: &str, inner: &[&str]) -> Result<Vec<String>> {
+fn fenced(binary: crate::tmux_server::Binary, token: &str, inner: &[&str]) -> Result<Vec<String>> {
     server_token(token)?;
     Ok(vec![
         "if-shell".into(),
         "-F".into(),
         format!("#{{==:#{{{SERVER_TOKEN}}},{token}}}"),
-        tmux_command_string(inner),
+        tmux_command_string(binary, inner),
         "select-pane -t '%lazysh-stale-server'".into(),
     ])
 }
@@ -76,10 +91,11 @@ const HERDR_SESSIONS: &str = "herdr session list --json";
 pub(crate) fn attach_command(kind: MultiplexerKind, value: &str) -> Result<String> {
     text(value, 200)?;
     Ok(match kind {
-        MultiplexerKind::Tmux => {
+        MultiplexerKind::Tmux | MultiplexerKind::Rmux => {
             format!(
                 "{} attach-session -t {}",
-                crate::tmux_server::TmuxServer::Default.prefix(),
+                crate::tmux_server::TmuxServer::default_for(kind.binary().unwrap_or_default())
+                    .prefix(),
                 tmux_arg(&format!("={value}"))
             )
         }
@@ -112,13 +128,16 @@ pub struct Entry {
 }
 impl Entry {
     pub(crate) fn server(&self) -> Result<crate::tmux_server::TmuxServer> {
-        if !matches!(self.kind, MultiplexerKind::Tmux) && self.tmux_server.is_some() {
-            return Err(SshError::new(
-                "invalid_tmux_server",
-                "tmux server context is only valid for tmux",
-            ));
-        }
-        crate::tmux_server::TmuxServer::parse(self.tmux_server.as_deref())
+        let Some(binary) = self.kind.binary() else {
+            if self.tmux_server.is_some() {
+                return Err(SshError::new(
+                    "invalid_tmux_server",
+                    "tmux server context is only valid for tmux and rmux",
+                ));
+            }
+            return Ok(crate::tmux_server::TmuxServer::default());
+        };
+        crate::tmux_server::TmuxServer::parse_for(binary, self.tmux_server.as_deref())
     }
     pub(crate) fn validate(&self) -> Result<()> {
         attach_command(self.kind, &self.name)?;
@@ -167,7 +186,7 @@ impl Entry {
                     "tmux",
                     "-u",
                     "-L",
-                    server.name(),
+                    server.label(),
                     "new-session",
                     "-A",
                     "-s",
@@ -179,11 +198,18 @@ impl Entry {
                     "tmux",
                     "-u",
                     "-L",
-                    server.name(),
+                    server.label(),
                     "attach-session",
                     "-t",
                     &target,
                 ]
+            }
+            // shortcut: rmux is attached over SSH only; a local PTY needs its own verified `new-session -A` and Windows story.
+            (MultiplexerKind::Rmux, _) => {
+                return Err(SshError::new(
+                    "invalid_target",
+                    "rmux sessions in local terminals are not available yet",
+                ))
             }
             (MultiplexerKind::Herdr, _) => vec!["herdr", "--session", &self.name],
             (MultiplexerKind::Zellij, true) => vec!["zellij", "attach", "--create", &self.name],
@@ -194,7 +220,7 @@ impl Entry {
     pub(crate) fn command(&self) -> Result<String> {
         self.validate()?;
         match self.kind {
-            MultiplexerKind::Tmux => Ok(format!(
+            MultiplexerKind::Tmux | MultiplexerKind::Rmux => Ok(format!(
                 "{} attach-session -t {}",
                 self.server()?.prefix(),
                 tmux_arg(&format!("={}", self.name))
@@ -213,12 +239,14 @@ impl Entry {
         self.validate()?;
         let (tool, version) = match self.kind {
             MultiplexerKind::Tmux => ("tmux", "-V"),
+            // rmux is admitted by its capability record, never by `-V` (which prints tmux branding).
+            MultiplexerKind::Rmux => ("rmux", "capabilities --json"),
             MultiplexerKind::Herdr => ("herdr", "--version"),
             MultiplexerKind::Zellij => ("zellij", "--version"),
         };
         let mut command =
             format!("command -v {tool} >/dev/null 2>&1 && {tool} {version} >/dev/null 2>&1");
-        if matches!(self.kind, MultiplexerKind::Tmux) {
+        if self.kind.is_tmux_family() {
             let server = self.server()?;
             let exists = format!(
                 "{} has-session -t {} 2>/dev/null",
@@ -279,7 +307,7 @@ impl Entry {
                 error
             }
         })?;
-        if !self.create_if_missing && !matches!(self.kind, MultiplexerKind::Tmux) {
+        if !self.create_if_missing && !self.kind.is_tmux_family() {
             let live = if herdr {
                 let output = crate::ssh::exec_for_access(
                     session,
@@ -416,7 +444,7 @@ pub(crate) fn persistent_sessions(
                 .collect()
         }
         MultiplexerKind::Zellij => output.lines().map(str::to_owned).collect(),
-        MultiplexerKind::Tmux => {
+        MultiplexerKind::Tmux | MultiplexerKind::Rmux => {
             return Err(SshError::new(
                 "invalid_target",
                 "Use the tmux workspace tree",
@@ -454,7 +482,7 @@ pub async fn multiplexer_sessions(
                     Cmd::new(&[], &["herdr", "session", "list", "--json"]).herdr()
                 }
                 MultiplexerKind::Zellij => zellij_sessions_command(),
-                MultiplexerKind::Tmux => {
+                MultiplexerKind::Tmux | MultiplexerKind::Rmux => {
                     return Err(SshError::new(
                         "invalid_target",
                         "Use the tmux workspace tree",
@@ -479,6 +507,7 @@ pub struct MultiplexerTree {
     tmux_available: bool,
     herdr_available: bool,
     zellij_available: bool,
+    rmux_available: bool,
     tools: Vec<Tool>,
     /// The identity of the tmux server these rows came from (see `SERVER_TOKEN`); destructive actions carry it back.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -490,6 +519,8 @@ pub struct MultiplexerTree {
 pub enum Support {
     Full,
     Degraded,
+    /// Present but not admitted; `Tool::reason` says why.
+    Unsupported,
 }
 #[derive(Debug, Serialize)]
 pub struct Tool {
@@ -497,6 +528,60 @@ pub struct Tool {
     version: Option<String>,
     support: Support,
     missing: &'static [&'static str],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+}
+/// What `rmux capabilities --json` prints about the installed binary; the daemon is never asked.
+#[derive(Deserialize)]
+struct RmuxCapabilities {
+    version: String,
+    binary_contract_version: u32,
+    wire_version: u32,
+    public_contract: Vec<String>,
+    control_mode: RmuxControlMode,
+}
+#[derive(Deserialize)]
+struct RmuxControlMode {
+    entrypoint: String,
+}
+// shortcut: rmux stays Limited until its Jump To control client and confirmed input are verified on a real rmux (#1675).
+const RMUX_MISSING: &[&str] = &["jump", "confirmedInput", "history"];
+/// Admission from the binary contract and control mode, not from `rmux -V`; `daemon` is `stale` when the running
+/// daemon refused this client's protocol, which only a daemon restart fixes.
+fn rmux_tool(capabilities: &str, daemon: &str) -> Tool {
+    let parsed = serde_json::from_str::<RmuxCapabilities>(capabilities)
+        .ok()
+        .filter(|rmux| {
+            rmux.binary_contract_version == 1
+                && rmux
+                    .public_contract
+                    .iter()
+                    .any(|contract| contract == "control-mode")
+                && rmux.control_mode.entrypoint == "rmux -C"
+                && rmux.wire_version == 8
+        });
+    let unsupported = |version: Option<String>, reason| Tool {
+        kind: MultiplexerKind::Rmux,
+        version,
+        support: Support::Unsupported,
+        missing: &[],
+        reason: Some(reason),
+    };
+    let Some(rmux) = parsed else {
+        return unsupported(None, "capabilities");
+    };
+    let version = Some(rmux.version)
+        .filter(|v| !v.is_empty() && v.len() <= 64 && !v.chars().any(char::is_control));
+    if daemon == "stale" {
+        return unsupported(version, "daemonWire");
+    }
+    Tool {
+        kind: MultiplexerKind::Rmux,
+        version,
+        support: Support::Degraded,
+        missing: RMUX_MISSING,
+        reason: None,
+    }
 }
 
 fn numbers(value: &str) -> Option<Vec<u32>> {
@@ -504,13 +589,19 @@ fn numbers(value: &str) -> Option<Vec<u32>> {
 }
 /// The one table from `(kind, version line)` to support; untested versions stay degraded.
 fn tool(kind: MultiplexerKind, line: &str) -> Tool {
+    if matches!(kind, MultiplexerKind::Rmux) {
+        let (capabilities, daemon) = line.rsplit_once('\t').unwrap_or((line, "ok"));
+        return rmux_tool(capabilities, daemon);
+    }
     let name = match kind {
+        MultiplexerKind::Rmux => unreachable!("rmux is admitted by capabilities above"),
         MultiplexerKind::Tmux => "tmux",
         MultiplexerKind::Zellij => "zellij",
         MultiplexerKind::Herdr => "herdr",
     };
     let version = line.trim().strip_prefix(name).map(str::trim);
     let missing: &'static [&'static str] = match kind {
+        MultiplexerKind::Rmux => unreachable!("rmux is admitted by capabilities above"),
         MultiplexerKind::Tmux => &["jump", "confirmedInput"],
         // Input to one named pane (`--pane-id`) and the JSON pane list are verified only on the tested 0.45.1.
         // `dump-screen --path` (stdout when omitted) exists from 0.45; older Zellij takes a positional path.
@@ -547,6 +638,7 @@ fn tool(kind: MultiplexerKind, line: &str) -> Tool {
         ],
     };
     let full = version.is_some_and(|version| match kind {
+        MultiplexerKind::Rmux => unreachable!("rmux is admitted by capabilities above"),
         // `next-3.6` is a tmux development build; a letter suffix is a patch release.
         MultiplexerKind::Tmux => numbers(
             version
@@ -570,6 +662,7 @@ fn tool(kind: MultiplexerKind, line: &str) -> Tool {
             Support::Degraded
         },
         missing: if full { &[] } else { missing },
+        reason: None,
     }
 }
 // A Windows OpenSSH login shell (PowerShell or cmd) cannot parse the POSIX discovery script.
@@ -672,8 +765,32 @@ fn discovery_command(
     backend: crate::herdr_backend::HerdrBackend,
     positive_unix: bool,
 ) -> String {
-    let tmux = server.prefix();
-    format!("{}; {}; {}; if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} set-option -s -o -q {SERVER_TOKEN} {} && {tmux} list-panes -a -F {}; fi", probe("tmux", "-V"), herdr_probe(backend, positive_unix), probe("zellij", "--version"), fresh_server_token(), quote(PANE_FORMAT))
+    let panes = quote(PANE_FORMAT);
+    // rmux is admitted by `capabilities --json`; `-N` and read-only commands never start its daemon. A daemon that refuses this
+    // client's protocol is reported as `stale`, which only restarting it fixes.
+    let rmux_server = match server.binary() {
+        crate::tmux_server::Binary::Rmux => server.clone(),
+        crate::tmux_server::Binary::Tmux => {
+            crate::tmux_server::TmuxServer::default_for(crate::tmux_server::Binary::Rmux)
+        }
+    };
+    let rmux = rmux_server.probe_prefix();
+    let rmux_probe = format!("if command -v rmux >/dev/null 2>&1; then c=$(rmux capabilities --json 2>/dev/null | tr -d '\\r\\n' | head -c 65536); d=ok; if {rmux} list-sessions 2>&1 | grep -Eq 'incompatible protocol|unsupported RMUX wire version'; then d=stale; fi; printf 'rmux\\t1\\t%s\\t%s\\n' \"$c\" \"$d\"; else printf 'rmux\\t0\\n'; fi");
+    // Both families name the server first (see `SERVER_TOKEN`), then list its panes; rmux's `-N` never starts a daemon, and where
+    // tmux stays quiet about an already named server rmux exits 1, which must not stop the listing.
+    let token = fresh_server_token();
+    let listing = if matches!(server.binary(), crate::tmux_server::Binary::Rmux) {
+        format!("if command -v rmux >/dev/null 2>&1; then {rmux} set-option -s -o -q {SERVER_TOKEN} {token} >/dev/null 2>&1; {rmux} list-panes -a -F {panes} 2>/dev/null || true; fi")
+    } else {
+        let tmux = server.prefix();
+        format!("if command -v tmux >/dev/null 2>&1 && {tmux} has-session 2>/dev/null; then {tmux} set-option -s -o -q {SERVER_TOKEN} {token} && {tmux} list-panes -a -F {panes}; fi")
+    };
+    format!(
+        "{}; {}; {}; {rmux_probe}; {listing}",
+        probe("tmux", "-V"),
+        herdr_probe(backend, positive_unix),
+        probe("zellij", "--version")
+    )
 }
 
 fn parse_tree(output: &str) -> Result<MultiplexerTree> {
@@ -699,10 +816,12 @@ fn parse_tree(output: &str) -> Result<MultiplexerTree> {
     let tmux_available = available(MultiplexerKind::Tmux, "tmux")?;
     let herdr_available = available(MultiplexerKind::Herdr, "herdr")?;
     let zellij_available = available(MultiplexerKind::Zellij, "zellij")?;
+    let rmux_available = available(MultiplexerKind::Rmux, "rmux")?;
     let mut tree = MultiplexerTree {
         tmux_available,
         herdr_available,
         zellij_available,
+        rmux_available,
         tools,
         server_token: None,
         sessions: Vec::new(),
@@ -871,18 +990,26 @@ pub enum TmuxAction {
     },
 }
 #[cfg(test)]
+fn action_command_for(
+    action: &TmuxAction,
+    server: &crate::tmux_server::TmuxServer,
+) -> Result<String> {
+    Ok(action_cmd(action, server)?.render())
+}
+#[cfg(test)]
 fn action_command(action: &TmuxAction) -> Result<String> {
-    Ok(action_cmd(action, &crate::tmux_server::TmuxServer::Default)?.render())
+    action_command_for(action, &crate::tmux_server::TmuxServer::default())
 }
 pub(crate) fn action_cmd(
     action: &TmuxAction,
     server: &crate::tmux_server::TmuxServer,
 ) -> Result<Cmd> {
-    // tmux expands `#` in names and directories as a format, so a literal one is doubled.
-    let word = |value: &str| tmux_word(&value.replace('#', "##"));
+    let binary = server.binary();
+    // tmux expands `#` in names as a format, so a literal one is doubled; rmux stores a name as typed.
+    let word = |value: &str| tmux_word(&binary.literal_name(value));
     let directory = |value: &str| -> Result<String> {
         text(value, 4096)?;
-        Ok(word(value))
+        Ok(tmux_word(&binary.literal_directory(value)))
     };
     let args: Vec<String> = match action {
         TmuxAction::CreateSession {
@@ -966,11 +1093,11 @@ pub(crate) fn action_cmd(
         }
         TmuxAction::CloseSession { target, server } => {
             id(target, '$')?;
-            fenced(server, &["kill-session", "-t", target])?
+            fenced(binary, server, &["kill-session", "-t", target])?
         }
         TmuxAction::ClosePane { target, server } => {
             id(target, '%')?;
-            fenced(server, &["kill-pane", "-t", target])?
+            fenced(binary, server, &["kill-pane", "-t", target])?
         }
         TmuxAction::RenamePane {
             target,
@@ -979,7 +1106,7 @@ pub(crate) fn action_cmd(
         } => {
             id(target, '%')?;
             text(value, 200)?;
-            fenced(server, &["select-pane", "-t", target, "-T", value])?
+            fenced(binary, server, &["select-pane", "-t", target, "-T", value])?
         }
         TmuxAction::ResizePane {
             target,
@@ -998,6 +1125,7 @@ pub(crate) fn action_cmd(
                 ResizeDirection::Down => "-D",
             };
             fenced(
+                binary,
                 server,
                 &["resize-pane", "-t", target, flag, &amount.to_string()],
             )?
@@ -1068,6 +1196,8 @@ async fn local_discovery(
             version.lines().next().unwrap_or_default()
         ));
     }
+    // rmux is reached over SSH only; the line keeps the discovery output the shape `parse_tree` reads.
+    output.push_str("rmux\t0\n");
     if tmux
         && ran(host, access, &server.cmd(&["has-session"]))
             .await?
@@ -1091,24 +1221,47 @@ async fn local_discovery(
     Ok(output)
 }
 
-/// The host a tmux command runs on and the tmux server it addresses.
+/// The binary a command's `kind` expects (tmux when absent); a Herdr or Zellij kind is refused.
+pub(crate) fn family_binary(
+    kind: Option<MultiplexerKind>,
+) -> Result<Option<crate::tmux_server::Binary>> {
+    kind.map(|kind| {
+        kind.binary()
+            .ok_or_else(|| SshError::new("invalid_target", "Use the tmux or rmux workspace tree"))
+    })
+    .transpose()
+}
+
+/// The host a tmux-family command runs on and the server it addresses; `kind` names the family (tmux when absent).
 pub(crate) async fn tmux_target(
     state: &AppState,
     local: &LocalState,
     session_id: &str,
     requested: Option<&str>,
+    kind: Option<MultiplexerKind>,
     access: &AccessLease,
 ) -> Result<(Host, crate::tmux_server::TmuxServer)> {
     use crate::tmux_server::TmuxServer;
+    let binary = family_binary(kind)?;
     let host = Host::resolve(state, local, session_id, access).await?;
     let server = match &host {
-        Host::Remote(session) => TmuxServer::for_session(&session.bindings, requested)?,
+        Host::Remote(session) => TmuxServer::for_session(&session.bindings, requested, binary)?,
         #[cfg(desktop)]
-        Host::Local(_) => TmuxServer::attached_or(
-            crate::local::tmux_server(local, session_id, access)
-                .map_err(|error| SshError::new("disconnected", error))?,
-            requested,
-        )?,
+        Host::Local(_) => {
+            // shortcut: rmux is reached over SSH only; a local rmux needs its own verified discovery and Windows story (#1148).
+            if binary == Some(crate::tmux_server::Binary::Rmux) {
+                return Err(SshError::new(
+                    "invalid_target",
+                    "rmux sessions in local terminals are not available yet",
+                ));
+            }
+            TmuxServer::attached_or(
+                crate::local::tmux_server(local, session_id, access)
+                    .map_err(|error| SshError::new("disconnected", error))?,
+                requested,
+                binary,
+            )?
+        }
     };
     Ok((host, server))
 }
@@ -1133,12 +1286,20 @@ pub async fn multiplexer_tree(
     local: State<'_, LocalState>,
     session_id: String,
     tmux_server: Option<String>,
+    kind: Option<MultiplexerKind>,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<MultiplexerTree> {
     access
         .run(async {
-            let (host, server) =
-                tmux_target(&state, &local, &session_id, tmux_server.as_deref(), &access).await?;
+            let (host, server) = tmux_target(
+                &state,
+                &local,
+                &session_id,
+                tmux_server.as_deref(),
+                kind,
+                &access,
+            )
+            .await?;
             let output = match &host {
                 Host::Remote(session) => crate::ssh::exec_for_access(
                     session,
@@ -1166,12 +1327,20 @@ pub async fn tmux_action(
     session_id: String,
     action: TmuxAction,
     tmux_server: Option<String>,
+    kind: Option<MultiplexerKind>,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<()> {
     access
         .run(async {
-            let (host, server) =
-                tmux_target(&state, &local, &session_id, tmux_server.as_deref(), &access).await?;
+            let (host, server) = tmux_target(
+                &state,
+                &local,
+                &session_id,
+                tmux_server.as_deref(),
+                kind,
+                &access,
+            )
+            .await?;
             host.run(&access, &action_cmd(&action, &server)?).await?;
             Ok(())
         })
@@ -1252,6 +1421,7 @@ mod tests {
         std::os::unix::fs::symlink("/bin/sh", tools.path().join("sh")).unwrap();
         for (kind, tool) in [
             (MultiplexerKind::Tmux, "tmux"),
+            (MultiplexerKind::Rmux, "rmux"),
             (MultiplexerKind::Herdr, "herdr"),
             (MultiplexerKind::Zellij, "zellij"),
         ] {
@@ -1277,7 +1447,7 @@ mod tests {
     }
     #[test]
     fn parses_exact_ids_and_refuses_ambiguous_output() {
-        let tree = parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t1\tzellij 0.45.1\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\t0123456789abcdef0123456789abcdef\t80\t24\tbuild\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\t0123456789abcdef0123456789abcdef\t40\t24\ta\tb\x1b[31m\n").unwrap();
+        let tree = parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t1\tzellij 0.45.1\nrmux\t0\n$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tclaude\t/work\t0123456789abcdef0123456789abcdef\t80\t24\tbuild\n$0\twork\t@2\t0\tagent\t1\t%5\t1\t0\tzsh\t/work\t0123456789abcdef0123456789abcdef\t40\t24\ta\tb\x1b[31m\n").unwrap();
         assert_eq!(
             tree.server_token.as_deref(),
             Some("0123456789abcdef0123456789abcdef")
@@ -1291,17 +1461,22 @@ mod tests {
         );
         // A program-set title keeps a stray tab and drops control characters; it never shifts the other fields.
         assert_eq!((panes[1].width, panes[1].title.as_str()), (40, "ab[31m"));
-        assert!(parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\nmalformed\n").is_err());
+        assert!(
+            parse_tree("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\nrmux\t0\nmalformed\n").is_err()
+        );
         assert!(parse_tree(
-            "tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n$0\twork\t@2\t0\tagent\t1\t%4x\t0\t1\tzsh\t/work\t\t80\t24\t\n"
+            "tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\nrmux\t0\n$0\twork\t@2\t0\tagent\t1\t%4x\t0\t1\tzsh\t/work\t\t80\t24\t\n"
         )
         .is_err());
         // One read names one server: a differing or malformed token is refused, an empty one means none was set.
         let row = |token: &str, pane: &str| {
             format!("$0\twork\t@2\t0\tagent\t1\t{pane}\t0\t1\tzsh\t/work\t{token}\t80\t24\tt\n")
         };
-        let read =
-            |rows: String| parse_tree(&format!("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n{rows}"));
+        let read = |rows: String| {
+            parse_tree(&format!(
+                "tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\nrmux\t0\n{rows}"
+            ))
+        };
         let good = "0123456789abcdef0123456789abcdef";
         assert!(read(row("", "%4")).unwrap().server_token.is_none());
         assert!(read(row(good, "%4") + &row("fedcba9876543210fedcba9876543210", "%5")).is_err());
@@ -1320,7 +1495,10 @@ mod tests {
             "$0\twork\t@2\t0\tagent\t1\t%4\t0\t1\tzsh\t/work\t\twide\t24\t",
         ] {
             assert!(
-                parse_tree(&format!("tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\n{row}\n")).is_err(),
+                parse_tree(&format!(
+                    "tmux\t1\ttmux 3.4\nherdr\t0\nzellij\t0\nrmux\t0\n{row}\n"
+                ))
+                .is_err(),
                 "{row}"
             );
         }
@@ -1359,7 +1537,8 @@ mod tests {
         assert!(!tool(Zellij, "zellij 0.45.1")
             .missing
             .contains(&"confirmedInput"));
-        let tree = parse_tree("tmux\t1\ttmux 3.2a\nherdr\t0\nzellij\t1\tzellij 0.45.1\n").unwrap();
+        let tree = parse_tree("tmux\t1\ttmux 3.2a\nherdr\t0\nzellij\t1\tzellij 0.45.1\nrmux\t0\n")
+            .unwrap();
         assert_eq!(
             serde_json::to_value(&tree).unwrap()["tools"],
             serde_json::json!([
@@ -1368,7 +1547,7 @@ mod tests {
             ])
         );
         // The pre-version format is not accepted as a version-less success.
-        assert!(parse_tree("tmux\t1\nherdr\t0\nzellij\t0\n").is_err());
+        assert!(parse_tree("tmux\t1\nherdr\t0\nzellij\t0\nrmux\t0\n").is_err());
     }
     #[test]
     fn non_posix_login_shells_are_reported_as_unsupported_host_shells() {
@@ -1387,6 +1566,21 @@ mod tests {
         ] {
             let kind = error.kind();
             assert_eq!(host_shell(error).kind(), kind);
+        }
+    }
+    /// Makes the host tools a discovery script may call visible on a `PATH` that holds only stub multiplexers.
+    #[cfg(unix)]
+    fn link_system_tools(directory: &std::path::Path, names: &[&str]) {
+        for name in names {
+            let real = std::process::Command::new("/bin/sh")
+                .args(["-c", &format!("command -v {name}")])
+                .output()
+                .unwrap();
+            std::os::unix::fs::symlink(
+                String::from_utf8(real.stdout).unwrap().trim(),
+                directory.join(name),
+            )
+            .unwrap();
         }
     }
     #[cfg(unix)]
@@ -1413,22 +1607,12 @@ mod tests {
             .unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        for name in ["sh", "head"] {
-            let real = Command::new("/bin/sh")
-                .args(["-c", &format!("command -v {name}")])
-                .output()
-                .unwrap();
-            std::os::unix::fs::symlink(
-                String::from_utf8(real.stdout).unwrap().trim(),
-                tools.path().join(name),
-            )
-            .unwrap();
-        }
+        link_system_tools(tools.path(), &["sh", "head"]);
         let output = Command::new("/bin/sh")
             .args([
                 "-c",
                 &discovery_command(
-                    &crate::tmux_server::TmuxServer::Default,
+                    &crate::tmux_server::TmuxServer::default(),
                     Default::default(),
                     false,
                 ),
@@ -1460,6 +1644,240 @@ mod tests {
             std::fs::read_to_string(calls).unwrap(),
             "tmux -V\nzellij --version\ntmux -u -L default has-session\n"
         );
+    }
+    const RMUX_CAPABILITIES: &str = r#"{"version":"0.10.0","binary_contract_version":1,"wire_version":8,"public_contract":["cli","json-output","format-tokens","control-mode"],"capabilities":["rpc.detached"],"control_mode":{"entrypoint":"rmux -C"}}"#;
+    #[test]
+    fn rmux_is_admitted_by_its_capability_record_and_never_by_a_version_line() {
+        use Support::*;
+        let no_control_mode = RMUX_CAPABILITIES.replace("control-mode", "cli");
+        let wire_nine = RMUX_CAPABILITIES.replace("\"wire_version\":8", "\"wire_version\":9");
+        let contract_two = RMUX_CAPABILITIES.replace(
+            "\"binary_contract_version\":1",
+            "\"binary_contract_version\":2",
+        );
+        let not_a_control_client = RMUX_CAPABILITIES.replace("rmux -C", "rmux");
+        for (capabilities, daemon, support, version, reason) in [
+            (RMUX_CAPABILITIES, "ok", Degraded, Some("0.10.0"), None),
+            (
+                RMUX_CAPABILITIES,
+                "stale",
+                Unsupported,
+                Some("0.10.0"),
+                Some("daemonWire"),
+            ),
+            (
+                wire_nine.as_str(),
+                "ok",
+                Unsupported,
+                None,
+                Some("capabilities"),
+            ),
+            (
+                contract_two.as_str(),
+                "ok",
+                Unsupported,
+                None,
+                Some("capabilities"),
+            ),
+            (
+                no_control_mode.as_str(),
+                "ok",
+                Unsupported,
+                None,
+                Some("capabilities"),
+            ),
+            (
+                not_a_control_client.as_str(),
+                "ok",
+                Unsupported,
+                None,
+                Some("capabilities"),
+            ),
+            // `rmux -V` prints tmux branding, and an rmux without `capabilities` prints nothing.
+            ("tmux 3.4", "ok", Unsupported, None, Some("capabilities")),
+            ("", "ok", Unsupported, None, Some("capabilities")),
+        ] {
+            let tool = tool(MultiplexerKind::Rmux, &format!("{capabilities}\t{daemon}"));
+            assert_eq!(
+                (tool.support, tool.version.as_deref(), tool.reason),
+                (support, version, reason),
+                "{capabilities} {daemon}"
+            );
+            assert_eq!(
+                tool.missing.is_empty(),
+                support == Unsupported,
+                "{capabilities} {daemon}"
+            );
+        }
+        let tree = parse_tree(&format!(
+            "tmux\t0\nherdr\t0\nzellij\t0\nrmux\t1\t{RMUX_CAPABILITIES}\tstale\n"
+        ))
+        .unwrap();
+        let tree = serde_json::to_value(&tree).unwrap();
+        assert_eq!(tree["rmuxAvailable"], true);
+        assert_eq!(
+            tree["tools"],
+            serde_json::json!([{"kind":"rmux","version":"0.10.0","support":"unsupported","missing":[],"reason":"daemonWire"}])
+        );
+        let tree = parse_tree(&format!(
+            "tmux\t0\nherdr\t0\nzellij\t0\nrmux\t1\t{RMUX_CAPABILITIES}\tok\n"
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&tree).unwrap()["tools"],
+            serde_json::json!([{"kind":"rmux","version":"0.10.0","support":"degraded","missing":["jump","confirmedInput","history"]}])
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rmux_discovery_never_starts_a_daemon_and_reports_a_stale_one() {
+        use std::{os::unix::fs::PermissionsExt, process::Command};
+        let tools = tempfile::tempdir().unwrap();
+        let calls = tools.path().join("calls");
+        let stale = tools.path().join("stale");
+        let stub = format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> {calls}
+case "$*" in
+  "capabilities --json") printf '{{\n  "version": "0.10.0",\n  "binary_contract_version": 1,\n  "wire_version": 8,\n  "public_contract": ["cli", "control-mode"],\n  "control_mode": {{"entrypoint": "rmux -C"}}\n}}\n';;
+  *list-sessions*) if [ -e {stale} ]; then echo 'rmux: unsupported RMUX wire version 7; supported range is 8..=8' >&2; exit 1; fi; echo 'work: 1 windows';;
+  *set-option*) ;;
+  *list-panes*) printf '$0\twork\t@1\t0\tsh\t1\t%%0\t0\t1\tsh\t/tmp\t\t80\t24\tsh\n';;
+  *) exit 9;;
+esac
+"#,
+            calls = quote(calls.to_str().unwrap()),
+            stale = quote(stale.to_str().unwrap())
+        );
+        let path = tools.path().join("rmux");
+        std::fs::write(&path, stub).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        link_system_tools(tools.path(), &["sh", "head", "tr", "grep"]);
+        let discover = |server: &crate::tmux_server::TmuxServer| {
+            let output = Command::new("/bin/sh")
+                .args(["-c", &discovery_command(server, Default::default(), false)])
+                .env_clear()
+                .env("PATH", tools.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            serde_json::to_value(parse_tree(&String::from_utf8(output.stdout).unwrap()).unwrap())
+                .unwrap()
+        };
+        let rmux = crate::tmux_server::TmuxServer::parse_for(
+            crate::tmux_server::Binary::Rmux,
+            Some("a b"),
+        )
+        .unwrap();
+        let tree = discover(&rmux);
+        assert_eq!(
+            (&tree["tmuxAvailable"], &tree["rmuxAvailable"]),
+            (&serde_json::json!(false), &serde_json::json!(true))
+        );
+        assert_eq!(tree["tools"][0]["support"], "degraded");
+        assert_eq!(tree["sessions"][0]["windows"][0]["panes"][0]["id"], "%0");
+        // Browsing a tmux server still probes rmux, in its default namespace.
+        let tree = discover(&crate::tmux_server::TmuxServer::default());
+        assert_eq!(tree["rmuxAvailable"], true);
+        assert_eq!(tree["sessions"], serde_json::json!([]));
+        std::fs::write(&stale, "").unwrap();
+        let tree = discover(&rmux);
+        assert_eq!(tree["tools"][0]["support"], "unsupported");
+        assert_eq!(tree["tools"][0]["reason"], "daemonWire");
+        let log = std::fs::read_to_string(calls).unwrap();
+        let calls = log.lines().collect::<Vec<_>>();
+        assert!(calls.contains(&"capabilities --json"));
+        for call in calls.iter().filter(|call| **call != "capabilities --json") {
+            assert!(
+                call.starts_with("-u -N -L "),
+                "discovery must never start a daemon: {call}"
+            );
+            assert!(
+                !call.contains("new-session") && !call.contains("attach"),
+                "{call}"
+            );
+        }
+        assert!(calls.contains(&"-u -N -L a b list-sessions"));
+        assert!(calls
+            .iter()
+            .any(|call| call.starts_with("-u -N -L a b list-panes -a -F ")));
+    }
+    #[test]
+    fn rmux_reuses_the_tmux_command_stack_with_its_own_binary() {
+        let entry: Entry = serde_json::from_value(
+            serde_json::json!({"kind":"rmux","name":"work 'literal;","tmuxServer":"named 'server"}),
+        )
+        .unwrap();
+        assert_eq!(
+            entry.command().unwrap(),
+            "rmux -u -L 'named '\\''server' attach-session -t '=work '\\''literal\\;'"
+        );
+        let preflight = entry.preflight_command(Default::default(), false).unwrap();
+        assert!(preflight.contains("rmux capabilities --json"));
+        assert!(!preflight.contains("rmux -V") && !preflight.contains("tmux"));
+        assert!(preflight.contains("has-session") && !preflight.contains("new-session"));
+        assert_eq!(
+            attach_command(MultiplexerKind::Rmux, "work").unwrap(),
+            "rmux -u -L 'default' attach-session -t '=work'"
+        );
+        assert!(default_entry_command(MultiplexerKind::Rmux, "created")
+            .unwrap()
+            .contains("new-session -d -s"));
+        for invalid in [
+            serde_json::json!({"kind":"rmux","name":"work","tmuxServer":"/tmp/socket"}),
+            serde_json::json!({"kind":"rmux","name":""}),
+        ] {
+            assert!(serde_json::from_value::<Entry>(invalid)
+                .unwrap()
+                .validate()
+                .is_err());
+        }
+        let rmux = crate::tmux_server::TmuxServer::parse_for(
+            crate::tmux_server::Binary::Rmux,
+            Some("lab"),
+        )
+        .unwrap();
+        assert_eq!(
+            action_command_for(
+                &TmuxAction::SelectWindow {
+                    target: "@3".into()
+                },
+                &rmux
+            )
+            .unwrap(),
+            "rmux -u -L lab select-window -t @3"
+        );
+        // tmux expands `#` in names, so it is doubled for tmux; rmux stores what it is given.
+        let create = TmuxAction::CreateSession {
+            name: "a#(b)".into(),
+            directory: "/w#1".into(),
+        };
+        assert_eq!(
+            action_command_for(&create, &rmux).unwrap(),
+            "rmux -u -L lab new-session -d -s 'a#(b)' -c '#{l:/w##1}'"
+        );
+        // rmux receives a literal format for each start directory.
+        let split = |directory: &str| {
+            action_command_for(
+                &TmuxAction::SplitPane {
+                    target: "%1".into(),
+                    horizontal: true,
+                    directory: directory.into(),
+                },
+                &rmux,
+            )
+            .unwrap()
+        };
+        assert!(split("/w#{x}##").ends_with("-c '#{l:/w##{x#}####}'"));
+        assert!(split("/w#(y)##").ends_with("-c '#{l:/w##(y)####}'"));
+        // All three actions use the same literal encoding.
+        assert!(action_command_for(&create, &rmux)
+            .unwrap()
+            .ends_with("-c '#{l:/w##1}'"));
+        assert!(action_command(&create)
+            .unwrap()
+            .ends_with("new-session -d -s 'a##(b)' -c '/w##1'"));
+        assert!(persistent_sessions(MultiplexerKind::Rmux, "").is_err());
     }
     #[test]
     fn validates_targets_and_quotes_names_and_format_directories() {
@@ -1519,6 +1937,7 @@ mod tests {
                 app.state(),
                 id.clone(),
                 Some(server.clone()),
+                None,
                 lease(),
             ))
         };
@@ -1529,6 +1948,7 @@ mod tests {
                 id.clone(),
                 action,
                 Some(server.clone()),
+                None,
                 lease(),
             ))
         };
@@ -1617,6 +2037,7 @@ mod tests {
             app.state(),
             id.clone(),
             Some(server.clone()),
+            None,
         ))
         .await;
         assert_eq!(listed.len(), 1);
@@ -1631,6 +2052,7 @@ mod tests {
             app.state(),
             id.clone(),
             Some("ls-other".into()),
+            None,
             lease(),
         ))
         .await;
@@ -1842,84 +2264,170 @@ mod tests {
     #[test]
     #[ignore = "requires tmux on PATH; runs an isolated temporary server"]
     fn real_tmux_lifecycle_and_literal_names() {
+        lifecycle_and_literal_names(crate::tmux_server::Binary::Tmux);
+    }
+    #[test]
+    #[ignore = "requires the pinned rmux on PATH; runs an isolated temporary daemon"]
+    fn real_rmux_lifecycle_and_literal_names() {
+        lifecycle_and_literal_names(crate::tmux_server::Binary::Rmux);
+    }
+    /// Drives product discovery and every `TmuxAction` against a real server; the parsed tree must equal the binary's own `list-panes -a`.
+    fn lifecycle_and_literal_names(binary: crate::tmux_server::Binary) {
+        use crate::tmux_server::{Binary, TmuxServer};
         use std::process::Command;
         let temp = tempfile::tempdir().unwrap();
         let socket = temp.path().join("tmux.sock");
+        let server = TmuxServer::default_for(binary);
+        // tmux gets an explicit socket path; rmux resolves `-L` under RMUX_TMPDIR, so the product prefix runs unchanged.
         let scoped = |command: String| {
-            let command = command.replacen(
-                "tmux ",
-                &format!("tmux -f /dev/null -S {} ", quote(socket.to_str().unwrap())),
-                1,
-            );
+            let command = match binary {
+                Binary::Tmux => command.replacen(
+                    "tmux ",
+                    &format!("tmux -f /dev/null -S {} ", quote(socket.to_str().unwrap())),
+                    1,
+                ),
+                Binary::Rmux => command,
+            };
             let mut process = Command::new("sh");
             process.arg("-c").arg(command).env_remove("TMUX");
+            // rmux gets a private home, a plain shell and its own socket directory; the tmux case keeps the environment it always ran in.
+            if matches!(binary, Binary::Rmux) {
+                process
+                    .env_remove("RMUX")
+                    .env("HOME", temp.path())
+                    .env("SHELL", "/bin/sh")
+                    .env("RMUX_TMPDIR", temp.path());
+            }
             process
         };
         let run =
             |command: String| lazysh_common::test_support::successful_output(&mut scoped(command));
         let read_tree = || {
-            // As a discovery read does: name the server, then list its panes.
+            // As a discovery read does: name the server (rmux exits 1 when it is already named), then list its panes.
             run(format!(
-                "tmux set-option -s -o -q {SERVER_TOKEN} {}",
-                fresh_server_token()
+                "{} set-option -s -o -q {SERVER_TOKEN} {}{}",
+                server.prefix(),
+                fresh_server_token(),
+                if matches!(binary, Binary::Rmux) {
+                    " || true"
+                } else {
+                    ""
+                }
             ));
-            let rows = run(format!("tmux list-panes -a -F {}", quote(PANE_FORMAT)));
-            parse_tree(&format!("tmux\t1\t\nherdr\t0\nzellij\t0\n{rows}")).unwrap()
+            let rows = run(format!(
+                "{} list-panes -a -F {}",
+                server.prefix(),
+                quote(PANE_FORMAT)
+            ));
+            let tree =
+                parse_tree(&format!("tmux\t1\t\nherdr\t0\nzellij\t0\nrmux\t0\n{rows}")).unwrap();
+            if matches!(binary, Binary::Rmux) {
+                let product =
+                    parse_tree(&run(discovery_command(&server, Default::default(), false)))
+                        .unwrap();
+                let product = serde_json::to_value(&product).unwrap();
+                // A pane's command changes from the multiplexer to its shell while it starts, and rmux names an unnamed
+                // window after that command, so two reads never compare either; an explicit window name is asserted below.
+                let stable = |value: serde_json::Value| {
+                    let mut sessions = value["sessions"].clone();
+                    for session in sessions.as_array_mut().unwrap() {
+                        for window in session["windows"].as_array_mut().unwrap() {
+                            window["name"] = serde_json::Value::Null;
+                            for pane in window["panes"].as_array_mut().unwrap() {
+                                pane["command"] = serde_json::Value::Null;
+                            }
+                        }
+                    }
+                    sessions
+                };
+                assert_eq!(
+                    stable(product.clone()),
+                    stable(serde_json::to_value(&tree).unwrap())
+                );
+                assert_eq!(product["rmuxAvailable"], true);
+                let rmux = product["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|tool| tool["kind"] == "rmux")
+                    .unwrap();
+                assert_eq!(rmux["support"], "degraded", "{rmux}");
+            }
+            tree
         };
-        struct Server(std::path::PathBuf);
+        struct Server(Binary, std::path::PathBuf, std::path::PathBuf);
         impl Drop for Server {
             fn drop(&mut self) {
-                let _ = Command::new("tmux")
-                    .arg("-S")
-                    .arg(&self.0)
-                    .arg("kill-server")
-                    .output();
+                let mut kill = Command::new(self.0.name());
+                match self.0 {
+                    Binary::Tmux => kill.arg("-S").arg(&self.1),
+                    Binary::Rmux => kill.args(["-L", "default"]).env("RMUX_TMPDIR", &self.2),
+                };
+                let _ = kill.arg("kill-server").output();
             }
         }
-        let _server = Server(socket.clone());
+        let _server = Server(binary, socket.clone(), temp.path().to_owned());
         let directory = temp.path().to_str().unwrap().to_owned();
         let name = "literal'$(touch nope)#(printf bad);".to_owned();
-        run(action_command(&TmuxAction::CreateSession {
-            name: name.clone(),
-            directory: directory.clone(),
-        })
+        run(action_command_for(
+            &TmuxAction::CreateSession {
+                name: name.clone(),
+                directory: directory.clone(),
+            },
+            &server,
+        )
         .unwrap());
         let tree = read_tree();
         assert_eq!(tree.sessions[0].name, name);
         assert!(!temp.path().join("nope").exists());
         let session = tree.sessions[0].id.clone();
         let pane = tree.sessions[0].windows[0].panes[0].id.clone();
-        run(action_command(&TmuxAction::SplitPane {
-            target: pane.clone(),
-            horizontal: true,
-            directory: directory.clone(),
-        })
+        run(action_command_for(
+            &TmuxAction::SplitPane {
+                target: pane.clone(),
+                horizontal: true,
+                directory: directory.clone(),
+            },
+            &server,
+        )
         .unwrap());
-        run(action_command(&TmuxAction::ZoomPane {
-            target: pane.clone(),
-        })
+        run(action_command_for(
+            &TmuxAction::ZoomPane {
+                target: pane.clone(),
+            },
+            &server,
+        )
         .unwrap());
-        run(action_command(&TmuxAction::SelectPane { target: pane }).unwrap());
-        run(action_command(&TmuxAction::CreateWindow {
-            target: session.clone(),
-            name: "second".into(),
-            directory,
-        })
+        run(action_command_for(&TmuxAction::SelectPane { target: pane }, &server).unwrap());
+        run(action_command_for(
+            &TmuxAction::CreateWindow {
+                target: session.clone(),
+                name: "second".into(),
+                directory,
+            },
+            &server,
+        )
         .unwrap());
-        run(action_command(&TmuxAction::RenameSession {
-            target: session,
-            name: "renamed".into(),
-        })
+        run(action_command_for(
+            &TmuxAction::RenameSession {
+                target: session,
+                name: "renamed".into(),
+            },
+            &server,
+        )
         .unwrap());
         let tree = read_tree();
         assert_eq!(tree.sessions[0].name, "renamed");
         assert_eq!(tree.sessions[0].windows.len(), 2);
         // Selecting a pane that is not in the shown window brings its window forward and makes that pane the active one.
-        run(action_command(&TmuxAction::SplitPane {
-            target: tree.sessions[0].windows[1].panes[0].id.clone(),
-            horizontal: false,
-            directory: temp.path().to_str().unwrap().to_owned(),
-        })
+        run(action_command_for(
+            &TmuxAction::SplitPane {
+                target: tree.sessions[0].windows[1].panes[0].id.clone(),
+                horizontal: false,
+                directory: temp.path().to_str().unwrap().to_owned(),
+            },
+            &server,
+        )
         .unwrap());
         let tree = read_tree();
         assert!(tree.sessions[0].windows[0].active && !tree.sessions[0].windows[1].active);
@@ -1930,9 +2438,12 @@ mod tests {
             .unwrap()
             .id
             .clone();
-        run(action_command(&TmuxAction::SelectPane {
-            target: hidden.clone(),
-        })
+        run(action_command_for(
+            &TmuxAction::SelectPane {
+                target: hidden.clone(),
+            },
+            &server,
+        )
         .unwrap());
         let tree = read_tree();
         assert!(!tree.sessions[0].windows[0].active && tree.sessions[0].windows[1].active);
@@ -1943,14 +2454,20 @@ mod tests {
             .unwrap();
         assert_eq!(shown.id, hidden);
         let window = &tree.sessions[0].windows[1].id;
-        run(action_command(&TmuxAction::RenameWindow {
-            target: window.clone(),
-            name: "new #{session_name} title;".into(),
-        })
+        run(action_command_for(
+            &TmuxAction::RenameWindow {
+                target: window.clone(),
+                name: "new #{session_name} title;".into(),
+            },
+            &server,
+        )
         .unwrap());
-        run(action_command(&TmuxAction::SelectWindow {
-            target: window.clone(),
-        })
+        run(action_command_for(
+            &TmuxAction::SelectWindow {
+                target: window.clone(),
+            },
+            &server,
+        )
         .unwrap());
         let tree = read_tree();
         assert_eq!(
@@ -1958,9 +2475,12 @@ mod tests {
             "new #{session_name} title;"
         );
         let first = tree.sessions[0].windows[0].id.clone();
-        run(action_command(&TmuxAction::CloseWindow {
-            target: window.clone(),
-        })
+        run(action_command_for(
+            &TmuxAction::CloseWindow {
+                target: window.clone(),
+            },
+            &server,
+        )
         .unwrap());
         let tree = read_tree();
         assert_eq!(
@@ -1973,38 +2493,46 @@ mod tests {
         );
         // The window is gone: closing it again fails and takes nothing else with it.
         let again = scoped(
-            action_command(&TmuxAction::CloseWindow {
-                target: window.clone(),
-            })
+            action_command_for(
+                &TmuxAction::CloseWindow {
+                    target: window.clone(),
+                },
+                &server,
+            )
             .unwrap(),
         )
         .output()
         .unwrap();
         assert!(!again.status.success());
         assert_eq!(read_tree().sessions[0].windows.len(), 1);
-        // History reads the pane's scrollback from tmux, not from a client: line 1 survives 5000 lines.
-        run("tmux set-option -g history-limit 50000".into());
-        let server = crate::tmux_server::TmuxServer::Default;
-        run(action_command(&TmuxAction::CreateSession {
-            name: "history".into(),
-            directory: temp.path().to_str().unwrap().to_owned(),
-        })
-        .unwrap());
-        run("tmux send-keys -t '=history:' 'seq 1 5000' Enter".into());
-        let history = crate::multiplexer_history::read_numbered_5000(
-            || {
-                run(
-                    history_command("history", &server, crate::multiplexer_history::MAX_LINES)
-                        .unwrap(),
-                )
-            },
-            None,
-        );
-        assert!(!history.truncated);
-        assert!(history.text.lines().any(|line| line == "1"));
-        assert!(history.lines >= 5000);
-        // The history session is done: the layout actions below run in the one session the test built.
-        run("tmux kill-session -t '=history:'".into());
+        if matches!(binary, Binary::Tmux) {
+            // History reads the pane's scrollback from tmux, not from a client: line 1 survives 5000 lines.
+            run("tmux set-option -g history-limit 50000".into());
+            run(action_command_for(
+                &TmuxAction::CreateSession {
+                    name: "history".into(),
+                    directory: temp.path().to_str().unwrap().to_owned(),
+                },
+                &server,
+            )
+            .unwrap());
+            run("tmux send-keys -t '=history:' 'seq 1 5000' Enter".into());
+            let history = crate::multiplexer_history::read_numbered_5000(
+                || {
+                    run(
+                        history_command("history", &server, crate::multiplexer_history::MAX_LINES)
+                            .unwrap(),
+                    )
+                },
+                None,
+            );
+            assert!(!history.truncated);
+            assert!(history.text.lines().any(|line| line == "1"));
+            assert!(history.lines >= 5000);
+            // The history session is done: the layout actions below run in the one session the test built.
+            run("tmux kill-session -t '=history:'".into());
+        }
+        let action_command = |action: &TmuxAction| action_command_for(action, &server);
         // Pane title, geometry and close, each read back from the parsed tree.
         let tree = read_tree();
         let live = || {
@@ -2087,10 +2615,105 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["second"]
         );
+        // A directory whose name holds a format, a quote, a trailing `;` or a `#` that is no format is the one a new session, window and split pane start in.
+        let panes_start_in =
+            |directory: &str, count: usize, select: &dyn Fn(&MultiplexerTree) -> Vec<String>| {
+                let expected = vec![directory.to_owned(); count];
+                let mut found = select(&read_tree());
+                // A new pane reports its directory once its shell has started.
+                for _ in 0..50 {
+                    if found == expected {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    found = select(&read_tree());
+                }
+                assert_eq!(found, expected, "{binary:?}");
+            };
+        let paths = |panes: &[MuxPane]| {
+            panes
+                .iter()
+                .map(|pane| pane.path.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut directories = vec![
+            "it's #{x};",
+            "w#{pane_id}#(echo hi)##b",
+            "no#(echo hi)##format",
+        ];
+        // tmux's existing style-marker behavior is tracked separately in #2043.
+        if matches!(binary, Binary::Rmux) {
+            directories.push("style#[b]#{literal}## and } trailing ");
+        }
+        for (index, odd) in directories.iter().enumerate() {
+            let odd = temp.path().canonicalize().unwrap().join(odd);
+            std::fs::create_dir(&odd).unwrap();
+            let odd = odd.to_str().unwrap().to_owned();
+            let label = format!("odd{index}");
+            run(action_command_for(
+                &TmuxAction::CreateSession {
+                    name: label.clone(),
+                    directory: odd.clone(),
+                },
+                &server,
+            )
+            .unwrap());
+            panes_start_in(&odd, 1, &|tree| {
+                let session = tree.sessions.iter().find(|session| session.name == label);
+                paths(&session.unwrap().windows[0].panes)
+            });
+            let session = read_tree().sessions[0].id.clone();
+            run(action_command_for(
+                &TmuxAction::CreateWindow {
+                    target: session,
+                    name: label.clone(),
+                    directory: odd.clone(),
+                },
+                &server,
+            )
+            .unwrap());
+            let window = |tree: &MultiplexerTree| {
+                let window = tree.sessions[0]
+                    .windows
+                    .iter()
+                    .find(|window| window.name == label);
+                window
+                    .unwrap()
+                    .panes
+                    .iter()
+                    .map(|pane| (pane.id.clone(), pane.path.clone()))
+                    .collect::<Vec<_>>()
+            };
+            run(action_command_for(
+                &TmuxAction::SplitPane {
+                    target: window(&read_tree())[0].0.clone(),
+                    horizontal: true,
+                    directory: odd.clone(),
+                },
+                &server,
+            )
+            .unwrap());
+            panes_start_in(&odd, 2, &|tree| {
+                window(tree).into_iter().map(|pane| pane.1).collect()
+            });
+        }
         // The server is replaced on the same socket: tmux hands out the same ids again, and every action built from
         // the old server's tree is refused without touching the replacement (#2044).
         let stale = live();
-        run("tmux kill-server".into());
+        run(format!("{} kill-server", server.prefix()));
+        if matches!(binary, Binary::Tmux) {
+            // kill-server returns before the old server has exited, and a command sent meanwhile reaches it ("server exited
+            // unexpectedly"): wait until nothing answers, so the next one starts the replacement.
+            for _ in 0..100 {
+                let probe = scoped(format!("{} has-session", server.prefix()))
+                    .output()
+                    .unwrap();
+                if String::from_utf8_lossy(&probe.stderr).contains("no server running") {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
         run(action_command(&TmuxAction::CreateSession {
             name: "replacement".into(),
             directory: temp.path().to_str().unwrap().into(),
@@ -2142,7 +2765,7 @@ mod tests {
             let again = scoped(command).output().unwrap();
             assert!(again.status.success());
         }
-        assert!(!scoped("tmux has-session".into())
+        assert!(!scoped(format!("{} has-session", server.prefix()))
             .output()
             .unwrap()
             .status

@@ -277,7 +277,7 @@ previews keep the inert renderer (`ChatMarkdown`) because they show untrusted fi
 | Agent detected, a records-only adapter whose records name the reported session (GitHub Copilot CLI, Kimi CLI, Droid) | The records of that session, read-only in the timeline under a partial label ("Partial: these are the records Kimi CLI wrote for this pane, read-only, so they can lag behind the terminal and leave out what it does not record. Answer in the terminal."), the agent's last reported hook state in the header, and **Show terminal**. No composer and no dialog answers; the records are read again every 5 seconds, straight away while pages remain. The adapter's discovery has to name the session id the hook reported, exactly once: when it names none, or two files claim it, the row below applies. Tmux and Zellij panes only: under Herdr the view follows Herdr's own agent list, which has no records-only conversations. |
 | Agent detected, no reader in this view (Grok Build, every other records-only adapter, hook-only agents) | The agent's name and last reported hook state, labelled as state only ("This view shows only the last reported state of Pi. Its conversation stays in the terminal."), with **Show terminal**, no composer and no transcript read. An agent the view can read whose history is not reported says to turn on reported history in the companion instead. Records of an adapter not named above stay in the Chat tool view. |
 | A TUI dialog is open that no source can lift | A banner "The agent is waiting for you in the terminal" with **Show terminal**. The view does not switch by itself. |
-| Session cannot accept confirmed input (a Zellij older than 0.45.1, plain PTY, rmux, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
+| Session cannot accept confirmed input (a Zellij older than 0.45.1, plain PTY, rmux until #1675, web build; local sessions follow the same rules, see [Local workspace](local-workspace.md)) | Read-only Agent view; the composer offers **Stage in terminal**. |
 | Zellij 0.45.1 or newer, the agent's pane named by its own hook report | One report of the attached session binds by itself; with several, the list asks which, and the pick takes input to its own pane. See [Zellij input](#zellij-input). |
 | Watch stream unavailable | Polling, with a "delayed" hint. |
 | Transcript lags (Claude writes asynchronously) | State comes from hooks or protocol, not from transcript recency. |
@@ -577,7 +577,7 @@ Limits: a prompt is at most 4,096 bytes (no long paste), the mode key stays in t
 answered from the Agents board (the Agent view's approval dock needs the exact-pane binding of #1536), and the pane test reads only the first two words
 of the pane's command line. A
 stale report of an agent that has since exited leaves a shell in its pane, which the foreground check
-refuses. rmux (not yet a supported multiplexer, #1140) and plain PTY or local sessions (no proof that the
+refuses. rmux (Limited until its confirmed input is verified, #1675) and plain PTY or local sessions (no proof that the
 agent is the foreground process of the session's PTY, #1133) keep Stage in terminal.
 
 ## Terminals lazysh starts
