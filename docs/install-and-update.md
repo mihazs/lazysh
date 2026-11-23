@@ -79,7 +79,7 @@ through Obtainium have been device-tested in this documentation change.
 1. Install Obtainium from its [official project](https://github.com/ImranR98/Obtainium#installation).
 2. In Obtainium, add the source URL `https://github.com/mihazs/lazysh` using its
    GitHub source. Leave prerelease inclusion **off** for the published release
-   channel; a stable GitHub tag still describes a development-preview app.
+   channel.
 3. Choose **one** APK flavor using the APK/link regular-expression filter
    (wording varies by Obtainium version). Use `lazysh-.*-android-foss-arm64\.apk$`
    for FOSS, or `lazysh-.*-android-google-arm64\.apk$` for Google. These expressions

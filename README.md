@@ -11,16 +11,18 @@
 
 lazysh is a **free, open-source SSH client and remote development workspace** for connecting to your own development machines from mobile and desktop. Persistent work stays in host-side sessions; coding-agent visibility is optional.
 
-Connect directly to servers you control, pick up a **tmux, Herdr, or Zellij** session, and inspect supported **Claude Code, Codex, and OpenCode** records. Your remote processes and agents run on your own host, not on a lazysh server.
+Connect directly to servers you control, pick up a **tmux, rmux, Herdr, or Zellij** session, and inspect supported **Claude Code, Codex, and OpenCode** records. Your remote processes and agents run on your own host, not on a lazysh server.
 
-> **Development preview.** GitHub releases include Android, Linux and Windows packages, but feature coverage and real-device acceptance vary. Apple app distribution and F-Droid inclusion remain pending. Check the [installation guide](docs/install-and-update.md), release notes and [public roadmap](docs/roadmap.md) before trying a build.
+[![Latest release](https://img.shields.io/github/v/release/mihazs/lazysh)](https://github.com/mihazs/lazysh/releases) [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-[**Download Preview**](https://github.com/mihazs/lazysh/releases) · [Documentation](#documentation) · [Explore the workflows](#what-you-can-do) · [Contribute](CONTRIBUTING.md)
+> **Status.** lazysh ships regular releases with Android (Google and FOSS APKs), Linux (AppImage and Debian) and Windows (x64 installer) apps, plus a host companion for Linux, macOS and Windows. Real-device acceptance is still incomplete, macOS and iOS app packages are not published, and F-Droid inclusion is pending. See the [releases](https://github.com/mihazs/lazysh/releases), [changelog](CHANGELOG.md), [installation guide](docs/install-and-update.md) and [public roadmap](docs/roadmap.md).
+
+[**Download**](https://github.com/mihazs/lazysh/releases) · [Documentation](#documentation) · [Explore the workflows](#what-you-can-do) · [Contribute](CONTRIBUTING.md)
 
 ## Why lazysh?
 
 - **Leave your desk, not your workflow.** A mobile-friendly SSH terminal is useful when you need to check a build, fix something on a remote machine, or return to a session while away from your laptop.
-- **Let remote work keep running.** Reconnect to host-side tmux, Herdr, or Zellij sessions instead of relying on a phone or laptop to keep a shell alive.
+- **Let remote work keep running.** Reconnect to host-side tmux, rmux, Herdr, or Zellij sessions instead of relying on a phone or laptop to keep a shell alive.
 - **Keep an eye on AI coding work.** Read supported agent events and transcripts through an optional companion, without moving the agent runtime to a hosted lazysh service.
 - **Use your own infrastructure.** Ordinary SSH requires no lazysh account, subscription, or proprietary connection relay. Extra sync, sharing, voice, and notification services are optional and have their own setup requirements.
 
@@ -30,12 +32,11 @@ Use [Obtainium](https://github.com/ImranR98/Obtainium) to install and track upda
 from `https://github.com/mihazs/lazysh`. Select one Android ARM64 APK flavor and
 keep that signing channel. Follow the [Obtainium setup, APK filters and verification
 steps](docs/install-and-update.md#android). Manual APK download remains available.
-This is a development preview; installation through Obtainium still needs
-native device verification.
+Installation through Obtainium has not been verified on a physical device.
 
 ## Get started
 
-Download a package from [GitHub Releases](https://github.com/mihazs/lazysh/releases), then follow the [installation and update guide](docs/install-and-update.md) for architecture, signing, checksums and platform-specific limitations. Published packages do not establish full platform or device acceptance.
+Download the latest package from [GitHub Releases](https://github.com/mihazs/lazysh/releases), then follow the [installation and update guide](docs/install-and-update.md) for architecture, signing, checksums and platform-specific limitations. Published packages do not establish full platform or device acceptance.
 
 To build from source instead:
 
@@ -65,10 +66,13 @@ There is **no required cloud account** for a direct SSH connection. Credentials 
 - Direct SSH with password or private-key authentication, explicit host-key verification, and optional single-hop bastion routing.
 - Multiple terminal tabs and native terminal input, with [themes and preferences](docs/themes.md).
 - SSH, Mosh, and Eternal Terminal (ET) transport options, with different platform and interoperability limits.
+- A [credential vault](docs/credentials.md) backed by the device's native credential store (opt-in, never plaintext), plus optional [encrypted sync](docs/sync.md) to your own WebDAV folder.
+- Interface in English, Brazilian Portuguese (`pt-BR`) and Spanish (`es`); see [localization](docs/localization.md).
+- On Android Google builds, an opt-in **native terminal engine** (Settings, Terminal engine). xterm.js remains the default; FOSS builds do not include the engine. See the [terminal migration plan](docs/architecture/terminal-migration-plan.md).
 
 ### Resume remote development sessions
 
-- Discover and attach to **tmux**, **Herdr**, and **Zellij** sessions on a remote host.
+- Discover and attach to **tmux**, **rmux**, **Herdr**, and **Zellij** sessions on a remote host.
 - Navigate supported sessions, windows, and panes without replacing the original SSH shell.
 - Keep long-running builds, shells, and agent processes alive **when the host-side multiplexer is configured to preserve them**. lazysh itself does not guarantee process persistence.
 
@@ -78,6 +82,7 @@ See [durable workspaces](docs/multiplexers.md).
 
 - Inspect supported lifecycle snapshots and recorded transcripts for tools such as **Claude Code, Codex, and OpenCode**.
 - Use the optional, self-installed [Rust companion](docs/companion.md) over your existing verified SSH connection; ordinary terminal access works without it.
+- Answer a waiting Claude Code or Codex permission request from your phone with opt-in [remote approvals](docs/approvals.md), and get [inbox and push notifications](docs/notifications.md) (UnifiedPush on all Android builds, optional FCM on Google builds; both off by default).
 - Review selected content and stage terminal input through explicit user actions. Agent coverage and interactive controls vary by integration; recorded activity is **not** proof that an agent is still running.
 
 See [agent companion setup](docs/companion.md) and [confirmed terminal input](docs/chat-terminal-input.md).
@@ -89,7 +94,7 @@ See [agent companion setup](docs/companion.md) and [confirmed terminal input](do
 - Use SSH-forwarded [web previews](docs/previews.md), [image attachments](docs/attachments.md), and optional [speech dictation](docs/voice.md).
 - Open a [local desktop terminal](docs/local-terminal.md) without an SSH server.
 
-Some capabilities require remote tools or separate configuration, and native/mobile behavior is still being verified. Refer to each guide before relying on a feature in production.
+Some capabilities require remote tools or separate configuration, and some native and mobile behavior is not yet verified on physical devices. Refer to each guide before relying on a feature in production.
 
 ## Platforms and availability
 
@@ -97,11 +102,12 @@ lazysh shares a **Rust + Tauri 2 + React/xterm.js** client across desktop and mo
 
 | Target | Availability |
 | --- | --- |
-| **Android** | ARM64 Google and FOSS APKs on GitHub Releases; Android 7.0 / API 24+. Physical-device and feature acceptance remain incomplete. |
+| **Android** | ARM64 Google and FOSS APKs on GitHub Releases (installable with Obtainium or manually); Android 7.0 / API 24+. Physical-device acceptance remains incomplete. |
 | **iPhone / iPad** | iOS 16+; Xcode on macOS and an unsigned simulator build. Public iOS distribution is not available. |
-| **macOS** | macOS 13+; native source builds. |
+| **macOS** | macOS 13+; app built from source only (no published app package). The host companion is published for macOS x64 and ARM64. |
 | **Linux** | x64 AppImage and Debian packages on GitHub Releases; runtime dependencies vary by distribution. |
 | **Windows** | x64 installer on GitHub Releases; unsigned publisher warning and native GUI acceptance limitations apply. |
+| **Host companion** | Linux x64/ARM64, macOS x64/ARM64 and Windows x64 executables on GitHub Releases; in-app installation targets Linux and macOS hosts. |
 
 <details>
 <summary><strong>Platform-specific build commands</strong></summary>
@@ -130,7 +136,7 @@ Start with the [documentation map](docs/README.md), organized by the outcome you
 
 ## Join the project
 
-**Interested in an open-source mobile SSH client for remote development and AI-agent workflows?** [Star lazysh on GitHub](https://github.com/mihazs/lazysh) to follow its progress, try the source preview, or share feedback.
+**Interested in an open-source mobile SSH client for remote development and AI-agent workflows?** [Star lazysh on GitHub](https://github.com/mihazs/lazysh) to follow its progress, try a release, or share feedback.
 
 - [Browse the public roadmap](docs/roadmap.md) to see planned and in-progress work.
 - [Report a bug or suggest an improvement](https://github.com/mihazs/lazysh/issues/new).
