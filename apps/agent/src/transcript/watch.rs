@@ -584,6 +584,15 @@ mod tests {
         // A different file of the same size and a newer message at the same path.
         fs::rename(&path, directory.path().join("old.jsonl")).unwrap();
         fs::write(&path, chain(2).replace("text 1", "text X")).unwrap();
+        // Without a file identity only the modification time tells the same-size replacement apart, and a
+        // coarse filesystem clock (Windows) stamps both writes alike.
+        let replacement = fs::File::options().write(true).open(&path).unwrap();
+        replacement
+            .set_modified(
+                replacement.metadata().unwrap().modified().unwrap() + Duration::from_secs(2),
+            )
+            .unwrap();
+        drop(replacement);
         let rotated = watch.poll().unwrap();
         // Only Unix exposes a file identity, so only there is a replaced file known to be a rewrite;
         // elsewhere the same change arrives as an in-place upsert of the entry that differs.

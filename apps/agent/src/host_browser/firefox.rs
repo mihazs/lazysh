@@ -691,7 +691,7 @@ mod tests {
             .collect();
         assert_eq!(
             preferences["browser.download.dir"],
-            json!(format!("{}/downloads", profile.display()))
+            json!(profile.join("downloads").to_str().unwrap())
         );
         assert_eq!(preferences["browser.download.useDownloadDir"], json!(false));
         assert_eq!(preferences["permissions.default.geo"], json!(2));

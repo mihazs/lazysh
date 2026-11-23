@@ -584,7 +584,8 @@ mod tests {
             admit_update(&worker_state, || {
                 entered_tx.send(()).unwrap();
                 resume_rx.recv().unwrap();
-                Command::new("/bin/true").spawn()
+                // `true` is /bin/true on Linux and /usr/bin/true on macOS.
+                Command::new("true").spawn()
             })
             .unwrap()
             .unwrap()
