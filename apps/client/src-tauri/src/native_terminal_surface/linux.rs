@@ -6,7 +6,7 @@
 //! from a `wl_shm` buffer. Everything but [`display`] runs on the GTK main thread.
 use super::panes::look;
 use super::{Anchor, SurfaceState};
-use crate::native_renderer::Host as Renderer;
+use crate::native_renderer::{Host as Renderer, Look};
 use gtk::glib::translate::ToGlibPtr;
 use gtk::prelude::*;
 use lazysh_terminal_renderer_wgpu::{Policy, Target, Window};
@@ -85,6 +85,8 @@ impl<I: Proxy + 'static, U> Dispatch<I, U> for Quiet {
 }
 
 struct Pane {
+    /// The session the pane shows, whose look the renderer takes.
+    session: String,
     surface: WlSurface,
     child: WlSubsurface,
     anchor: Anchor,
@@ -94,10 +96,22 @@ struct Pane {
     renderer: Option<Renderer>,
     /// The surface's size in device pixels, as of the last `show`.
     size: (i32, i32),
-    /// The ratio and background the renderer's look was made for.
-    looked: (f64, u32),
+    /// The look the renderer was given.
+    looked: Look,
     /// The attached buffer with the width, height and colour it was filled for.
     shown: Option<(WlBuffer, WlShmPool, (i32, i32, u32))>,
+}
+
+impl Pane {
+    /// The renderer draws with the look the session has now (its preferences, this display's ratio and the pane's
+    /// background) if that is not the one it was given.
+    fn relook(&mut self) {
+        let wanted = look(&self.session, self.anchor.dpr as f32, self.background);
+        if let Some(renderer) = self.renderer.as_ref().filter(|_| self.looked != wanted) {
+            let _ = renderer.set_look(wanted.clone());
+            self.looked = wanted;
+        }
+    }
 }
 
 impl Drop for Pane {
@@ -227,13 +241,14 @@ impl Host {
                 surface.set_input_region(Some(&nothing));
                 nothing.destroy();
                 Pane {
+                    session: session.clone(),
                     surface,
                     child,
                     anchor,
                     background,
                     renderer: None,
                     size: (0, 0),
-                    looked: (anchor.dpr, background),
+                    looked: look(&session, anchor.dpr as f32, background),
                     shown: None,
                 }
             }
@@ -283,10 +298,7 @@ impl Host {
         if let Some(renderer) = &pane.renderer {
             // The swapchain is the size of the surface in device pixels.
             let _ = renderer.resize(w as u32, h as u32);
-            if pane.looked != (pane.anchor.dpr, pane.background) {
-                let _ = renderer.set_look(look(pane.anchor.dpr as f32, pane.background));
-                pane.looked = (pane.anchor.dpr, pane.background);
-            }
+            pane.relook();
             pane.surface.commit();
             self.settle();
             return Ok(SurfaceState {
@@ -346,11 +358,11 @@ impl Host {
         let window = unsafe { Window::wayland(display, wl_surface) };
         let (w, h) = (pane.size.0 as u32, pane.size.1 as u32);
         let target = Target::on_window(window, w, h).with_policy(policy());
-        let look = look(pane.anchor.dpr as f32, pane.background);
-        match Renderer::attach(surface, inbox, target, 1, look) {
+        let look = look(session, pane.anchor.dpr as f32, pane.background);
+        match Renderer::attach(surface, inbox, target, 1, look.clone()) {
             Ok(renderer) => {
                 pane.renderer = Some(renderer);
-                pane.looked = (pane.anchor.dpr, pane.background);
+                pane.looked = look;
             }
             Err(error) => eprintln!("native terminal renderer: {error}"),
         }
@@ -457,6 +469,19 @@ pub(super) async fn place(
             };
             host.place(session, anchor, background)
         })
+    })
+    .await
+}
+
+/// The session's preferences changed: its pane's renderer takes them.
+pub(super) async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
+    on_main(app, move |_| {
+        HOST.with_borrow_mut(|slot| {
+            if let Some(pane) = slot.as_mut().and_then(|host| host.panes.get_mut(&session)) {
+                pane.relook();
+            }
+        });
+        Ok(())
     })
     .await
 }

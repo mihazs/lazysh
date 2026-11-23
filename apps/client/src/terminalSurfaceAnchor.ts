@@ -1,10 +1,14 @@
 import {invoke} from '@tauri-apps/api/core';
+import type {TerminalPreferences} from './terminalAdapter';
 
 /** What the shell knows about a session's native surface (Android, developer-only: docs/architecture/android-native-surface-host.md). */
 export type SurfaceState = {placed: boolean; ready: boolean; generation: number; width: number; height: number};
 
 /** An element's `getBoundingClientRect()` in CSS pixels and the page's `devicePixelRatio`. */
 export type SurfaceAnchor = {x: number; y: number; width: number; height: number; dpr: number};
+
+/** What decides how the renderer draws a session (its colours, glyphs and cursor): the terminal preferences it is told, not the ones that are the page's own (history, keys). */
+export type SurfaceLook = Pick<TerminalPreferences, 'theme' | 'fontFamily' | 'fontSize' | 'cursorStyle' | 'cursorBlink' | 'brightBold' | 'boldColor'>;
 
 /** What the surface's keyboard editor delivered (Android, #1328): committed text, keys as the core takes them, and the composing text. */
 export type SurfaceInputEvent =
@@ -16,6 +20,8 @@ export type SurfaceInputEvent =
 /** The app commands; the renderer never reaches the Kotlin plugin directly. */
 export const nativeSurface = {
   place: (session: string, anchor: SurfaceAnchor, background: number) => invoke<SurfaceState>('native_terminal_surface_place', {session, anchor, background}),
+  /** How the session is drawn, from its next surface on and at once on one that is drawing; the shell keeps it, so it may come before the surface. */
+  look: (session: string, look: SurfaceLook) => invoke<void>('native_terminal_surface_look', {session, look}),
   remove: (session: string) => invoke<void>('native_terminal_surface_remove', {session}),
   /** Waits for what the keyboard typed since the last call; each event comes once. */
   takeInput: (session: string) => invoke<{events: SurfaceInputEvent[]}>('native_terminal_surface_input', {session}),

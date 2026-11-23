@@ -12,6 +12,7 @@
 mod blink;
 mod clipboard;
 mod colors;
+mod cursor;
 mod doorbell;
 mod frame;
 mod hub;
@@ -31,7 +32,7 @@ mod titles;
 pub use blink::{BlinkClock, FramePacer, BLINK_HALF_PERIOD};
 pub use clipboard::{clipboard_consent_text, MAX_CLIPBOARD_TEXT_BYTES};
 pub use doorbell::Doorbell;
-pub use frame::{Cell, Frame, Row};
+pub use frame::{Cell, CursorDefault, Frame, Row};
 pub use hub::{
     Hooks, Hub, HubConfig, HubError, Origin, PtyWriter, Refused, Session, SessionError, Stats,
 };
@@ -42,8 +43,8 @@ pub use links::{LinkHit, PathLink, UrlLink};
 pub use mosh::{DisplayFailure, MAX_COLS, MAX_FRAME_CELLS, MAX_ROWS};
 pub use reference::{Image, ReferenceRenderer};
 pub use render::{
-    Appearance, CellMetrics, DrawPlan, Overlay, RenderError, RenderStats, RendererCore, Resume,
-    Screen, Selection, SelectionKind, TerminalRenderer, Theme,
+    Appearance, BoldText, CellMetrics, DrawPlan, Overlay, RenderError, RenderStats, RendererCore,
+    Resume, Screen, Selection, SelectionKind, TerminalRenderer, Theme,
 };
 pub use runtime::{
     control_window, scrollback_bytes_for_lines, Config, ControlAnswer, ControlCursor, ControlEvent,

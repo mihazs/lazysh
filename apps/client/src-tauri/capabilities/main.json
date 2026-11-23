@@ -73,6 +73,7 @@
     "allow-edge-gesture-exclusion",
     "allow-edge-gesture-insets",
     "allow-native-terminal-surface-place",
+    "allow-native-terminal-surface-look",
     "allow-native-terminal-surface-remove",
     "allow-native-terminal-surface-state",
     "allow-native-terminal-surface-input",

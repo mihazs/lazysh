@@ -9,11 +9,11 @@ mod golden;
 use golden::select;
 mod support;
 
-use lazysh_terminal_runtime::layout::row_draws;
+use lazysh_terminal_runtime::layout::{row_draws, Draw};
 use lazysh_terminal_runtime::{
-    Appearance, CellMetrics, CursorVisualStyle, Frame, Image, Overlay, ReferenceRenderer,
-    RenderError, RendererCore, Resume, RgbColor, Screen, SelectionKind, TerminalRenderer,
-    TerminalRuntime, Theme,
+    Appearance, BoldText, CellMetrics, CursorDefault, CursorVisualStyle, Frame, Image, Overlay,
+    ReferenceRenderer, RenderError, RendererCore, Resume, RgbColor, Screen, SelectionKind,
+    TerminalRenderer, TerminalRuntime, Theme,
 };
 use support::*;
 
@@ -183,6 +183,90 @@ fn cursor_shapes_and_the_selection_use_the_theme() {
     r.present().unwrap();
     assert_eq!(px(&r, 4, 1, 1, 1), theme.selection_background);
     assert_eq!(px(&r, 3, 1, 1, 1), theme.background);
+}
+
+#[test]
+fn the_preferred_cursor_is_drawn_until_a_program_chooses_its_own_and_again_when_it_gives_it_back() {
+    let bar = CursorDefault {
+        style: CursorVisualStyle::Bar,
+        blink: true,
+    };
+    let shape = |rt: &mut TerminalRuntime| {
+        let cursor = rt.snapshot().unwrap().cursor;
+        (cursor.visual_style, cursor.blinking)
+    };
+    let mut rt = runtime(10, 2);
+    use CursorVisualStyle::{Bar, Block, Underline};
+    assert_eq!(
+        shape(&mut rt),
+        (Block, false),
+        "the VT's own cursor, the preference not set"
+    );
+    rt.set_cursor_default(Some(bar));
+    assert_eq!(shape(&mut rt), (Bar, true), "nothing sent: the preference");
+    // A steady block is the VT's own default too, so only the bytes tell a choice from none.
+    for (bytes, expected, why) in [
+        (
+            &b"\x1b[2 q"[..],
+            (Block, false),
+            "a steady block the program asked for",
+        ),
+        (b"\x1b[0 q", (Bar, true), "given back"),
+        (b"\x1b[4 q", (Underline, false), "a steady underline"),
+        (
+            b"\x1b[6 q",
+            (Bar, false),
+            "a steady bar is a choice, not the preference's blink",
+        ),
+        (b"\x1b[ q", (Bar, true), "no parameter is 0"),
+        (
+            b"\x1b[1 q",
+            (Block, true),
+            "a blinking block, which is the VT's own request too",
+        ),
+        (b"\x1bc", (Bar, true), "a full reset gives it back"),
+    ] {
+        feed(&mut rt, bytes);
+        assert_eq!(shape(&mut rt), expected, "{why}");
+    }
+    // A sequence split across two chunks, and what is not DECSCUSR.
+    feed(&mut rt, b"\x1b[");
+    feed(&mut rt, b"3 q");
+    assert_eq!(shape(&mut rt), (Underline, true));
+    feed(&mut rt, b"\x1b[7 q\x1b[?2 q");
+    assert_eq!(shape(&mut rt), (Underline, true), "the VT ignores them too");
+    // The preference changes live, and switching it off leaves the VT's cursor.
+    feed(&mut rt, b"\x1b[0 q");
+    rt.set_cursor_default(Some(CursorDefault {
+        style: Underline,
+        blink: false,
+    }));
+    assert_eq!(shape(&mut rt), (Underline, false));
+    rt.set_cursor_default(None);
+    assert_eq!(shape(&mut rt), (Block, false));
+}
+
+#[test]
+fn a_frame_is_made_when_only_the_cursors_choice_changed_what_is_drawn() {
+    let mut rt = runtime(10, 2);
+    rt.set_cursor_default(Some(CursorDefault {
+        style: CursorVisualStyle::Bar,
+        blink: false,
+    }));
+    rt.snapshot().unwrap();
+    assert!(rt.take_frame().unwrap().is_none(), "nothing changed");
+    // The VT's state is the same steady block before and after; what is drawn is not.
+    feed(&mut rt, b"\x1b[2 q");
+    let frame = rt.take_frame().unwrap().expect("the cursor changed");
+    assert_eq!(frame.cursor.visual_style, CursorVisualStyle::Block);
+    feed(&mut rt, b"\x1b[0 q");
+    let frame = rt.take_frame().unwrap().expect("and changed back");
+    assert_eq!(frame.cursor.visual_style, CursorVisualStyle::Bar);
+    feed(&mut rt, b"\x1b[0 q");
+    assert!(
+        rt.take_frame().unwrap().is_none(),
+        "giving back what it never took changes nothing"
+    );
 }
 
 #[test]
@@ -453,6 +537,136 @@ fn suspend_device_loss_and_destroy_recover_from_core_state() {
     assert_eq!(r.draw(), Err(RenderError::Destroyed));
     assert_eq!(r.resume(), Err(RenderError::Destroyed));
     assert_eq!(r.surface().rgb.len(), 0, "destroy released the buffers");
+}
+
+/// The colour of the glyph in each of the first `cells` cells of row 0, in the order of the cells; `None` where nothing is
+/// drawn. The grid has one more column, so the cursor is not on a cell that is read.
+fn glyph_colors(bytes: &[u8], cells: u16, appearance: &Appearance) -> Vec<Option<RgbColor>> {
+    let mut rt = runtime(cells + 1, 1);
+    feed(&mut rt, bytes);
+    let mut screen = Screen::new();
+    screen.apply(&rt.snapshot().unwrap()).unwrap();
+    let draws = row_draws(&screen, 0, appearance);
+    let width = appearance.metrics.cell_width;
+    (0..u32::from(cells))
+        .map(|cell| {
+            draws.iter().find_map(|draw| match draw {
+                Draw::Glyph(glyph) if glyph.x / width == cell => Some(glyph.color),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn bold_text_is_drawn_bright_or_in_the_bold_colour_only_when_the_appearance_says_so() {
+    let theme = Theme::default();
+    let (plain, bright, custom) = (
+        Appearance::default(),
+        Appearance {
+            bold: BoldText {
+                bright: true,
+                color: None,
+            },
+            ..Appearance::default()
+        },
+        Appearance {
+            bold: BoldText {
+                bright: true,
+                color: Some(rgb(0x336699)),
+            },
+            ..Appearance::default()
+        },
+    );
+    // Bold red (SGR 31), red, bold bright red (91), bold default, bold 256-colour red, bold truecolor, bold white (37).
+    let bytes = b"\x1b[1;31mA\x1b[0m\x1b[31mB\x1b[0m\x1b[1;91mC\x1b[0m\x1b[1mD\x1b[0m\x1b[1;38;5;1mE\x1b[0m\x1b[1;38;2;1;2;3mF\x1b[0m\x1b[1;37mG\x1b[0m";
+    let (red, bright_red, white, bright_white) = (
+        theme.palette[1],
+        theme.palette[9],
+        theme.palette[7],
+        theme.palette[15],
+    );
+    let colors = |appearance| glyph_colors(bytes, 7, appearance);
+    let some = |colors: [RgbColor; 7]| colors.map(Some).to_vec();
+    assert_eq!(
+        colors(&plain),
+        some([
+            red,
+            red,
+            bright_red,
+            theme.foreground,
+            red,
+            rgb(0x010203),
+            white
+        ]),
+        "bold changes the glyph and nothing else by default"
+    );
+    assert_eq!(
+        colors(&bright),
+        some([bright_red, red, bright_red, theme.foreground, bright_red, rgb(0x010203), bright_white]),
+        "a bold base colour takes its bright variant; a colour that is not one of the eight is left alone"
+    );
+    assert_eq!(
+        colors(&custom),
+        some([
+            bright_red,
+            red,
+            bright_red,
+            rgb(0x336699),
+            bright_red,
+            rgb(0x010203),
+            bright_white
+        ]),
+        "bold text in the default colour takes the bold colour"
+    );
+}
+
+#[test]
+fn the_bold_colour_follows_inverse_and_faint_like_the_default_colour_it_replaces() {
+    let (bold, theme) = (rgb(0x336699), Theme::default());
+    let appearance = Appearance {
+        bold: BoldText {
+            bright: false,
+            color: Some(bold),
+        },
+        ..Appearance::default()
+    };
+    let mut rt = runtime(4, 1);
+    feed(&mut rt, b"\x1b[1;7m \x1b[0m\x1b[1;2mF\x1b[0m\x1b[2mf");
+    let mut screen = Screen::new();
+    screen.apply(&rt.snapshot().unwrap()).unwrap();
+    let draws = row_draws(&screen, 0, &appearance);
+    let fill = |x| {
+        draws.iter().find_map(|draw| match draw {
+            Draw::Rect(rect) if rect.x == x * appearance.metrics.cell_width && rect.w > 1 => {
+                Some(rect.color)
+            }
+            _ => None,
+        })
+    };
+    assert_eq!(
+        fill(0),
+        Some(bold),
+        "inverse puts the bold colour behind the cell"
+    );
+    let glyph = |x| {
+        draws.iter().find_map(|draw| match draw {
+            Draw::Glyph(glyph) if glyph.x == x * appearance.metrics.cell_width => Some(glyph.color),
+            _ => None,
+        })
+    };
+    let half = |a: u8, b: u8| ((u16::from(a) + u16::from(b)) / 2) as u8;
+    let faint = |c: RgbColor| RgbColor {
+        r: half(c.r, theme.background.r),
+        g: half(c.g, theme.background.g),
+        b: half(c.b, theme.background.b),
+    };
+    assert_eq!(glyph(1), Some(faint(bold)), "faint halves the bold colour");
+    assert_eq!(
+        glyph(2),
+        Some(faint(theme.foreground)),
+        "and a plain cell is not bold"
+    );
 }
 
 #[test]

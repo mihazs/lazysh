@@ -12,7 +12,7 @@
 //! cluster, cell or width changes the image without any font being involved.
 
 use crate::frame::Cell;
-use crate::render::{Appearance, CellMetrics, Screen, Theme};
+use crate::render::{Appearance, CellMetrics, Screen};
 use ghostty_vt::{CellColor, CellWide, CursorVisualStyle, RgbColor};
 
 const DOTS_HIGH: u32 = 7;
@@ -83,7 +83,7 @@ fn paint<'a>(
 ) {
     let (theme, m) = (&appearance.theme, appearance.metrics);
     let (fg, bg) = colors(
-        theme,
+        appearance,
         cell,
         selected,
         cursor == Some(CursorVisualStyle::Block),
@@ -170,10 +170,28 @@ fn underline(
     }
 }
 
-/// Text and background of a cell after inverse, faint, selection and a block cursor, in that order.
-fn colors(theme: &Theme, cell: &Cell, selected: bool, block_cursor: bool) -> (RgbColor, RgbColor) {
+/// The text colour before inverse: the cell's own, or what [`crate::BoldText`] makes of a bold cell's.
+fn text_color(appearance: &Appearance, cell: &Cell) -> RgbColor {
+    let (theme, bold) = (&appearance.theme, appearance.bold);
+    match (cell.style.bold, cell.style.fg_color, bold.color) {
+        (true, None, Some(color)) => color,
+        (true, Some(CellColor::Palette(index @ 0..=7)), _) if bold.bright => {
+            theme.palette[usize::from(index) + 8]
+        }
+        _ => cell.fg.unwrap_or(theme.foreground),
+    }
+}
+
+/// Text and background of a cell after bold, inverse, faint, selection and a block cursor, in that order.
+fn colors(
+    appearance: &Appearance,
+    cell: &Cell,
+    selected: bool,
+    block_cursor: bool,
+) -> (RgbColor, RgbColor) {
+    let theme = &appearance.theme;
     let (mut fg, mut bg) = (
-        cell.fg.unwrap_or(theme.foreground),
+        text_color(appearance, cell),
         cell.bg.unwrap_or(theme.background),
     );
     if cell.style.inverse {

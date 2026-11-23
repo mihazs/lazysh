@@ -16,17 +16,19 @@
 //! * **Overlay.** The selection the session holds (`Session::set_selection`, absolute rows, so it
 //!   stays on its rows while the reader scrolls), and the text a keyboard is composing, drawn at
 //!   the cursor.
-//! * **Appearance.** [`Look`] is the user's preferences: the theme (the cursor's colour included)
-//!   and the font: the machine's fonts for the family list, and the renderer's bundled one (#1325).
-//!   The cursor's shape and blink are the core's, frame by frame (#2218).
+//! * **Appearance.** [`Look`] is the user's preferences: the theme (the cursor's colour included),
+//!   the font (the machine's fonts for the family list, and the renderer's bundled one, #1325), how
+//!   bold text is coloured and the cursor a program that chose none gets, which the core puts in
+//!   its frames. The cursor's shape and blink are otherwise the program's, frame by frame (#2218).
 //!
 //! Nothing in the app attaches a surface yet: the first caller is a platform surface (#1327).
 #![cfg_attr(not(test), allow(dead_code))]
 
 use lazysh_terminal_renderer_wgpu::{FontLibrary, Policy, Target, WgpuRenderer};
 use lazysh_terminal_runtime::{
-    Appearance, BlinkClock, Cell, CellMetrics, CellStyle, CellWide, Frame, FramePacer, Overlay,
-    RenderError, Session, SessionError, TerminalRenderer, Theme, BLINK_HALF_PERIOD,
+    Appearance, BlinkClock, BoldText, Cell, CellMetrics, CellStyle, CellWide, CursorDefault, Frame,
+    FramePacer, Overlay, RenderError, Session, SessionError, TerminalRenderer, Theme,
+    BLINK_HALF_PERIOD,
 };
 use std::sync::atomic::{AtomicBool, Ordering::AcqRel};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -94,6 +96,10 @@ pub(crate) struct Look {
     /// Without it glyphs are the reference renderer's dot patterns, which is what the tests that
     /// compare pixels with that renderer draw.
     pub system_fonts: bool,
+    /// Bright bold and the bold colour.
+    pub bold: BoldText,
+    /// The cursor a program that chose none gets; `None` leaves the VT's own.
+    pub cursor: Option<CursorDefault>,
 }
 
 impl Look {
@@ -111,6 +117,7 @@ impl Look {
                 .filter(|family| !family.is_empty())
                 .collect(),
             theme: self.theme,
+            bold: self.bold,
         })
     }
 
@@ -404,6 +411,13 @@ impl Loop {
                 .clone()
                 .map_or(Ok(()), |fonts| renderer.set_fonts(fonts))
         })?;
+        // The core draws the default cursor into its frames, so a new one needs the screen again from a snapshot.
+        if look.cursor != self.look.cursor {
+            let _ = self
+                .session
+                .with(|runtime| runtime.set_cursor_default(look.cursor));
+            self.stale = true;
+        }
         self.look = look;
         Ok(())
     }
@@ -478,6 +492,8 @@ impl Host {
         look: Look,
     ) -> Result<Self, String> {
         let Inbox(from, wake) = inbox;
+        // A closed session fails the first surface just below, so there is nothing to tell.
+        let _ = session.with(|runtime| runtime.set_cursor_default(look.cursor));
         let state = Loop {
             session,
             wake: wake.clone(),

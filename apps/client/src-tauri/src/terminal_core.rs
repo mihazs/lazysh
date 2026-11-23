@@ -1037,6 +1037,9 @@ mod native {
 }
 
 #[cfg(native_terminal_core)]
+pub(crate) use native::{css_color, theme_of};
+
+#[cfg(native_terminal_core)]
 mod native {
     use super::*;
     use lazysh_terminal_runtime::{
@@ -1113,7 +1116,7 @@ mod native {
     ];
 
     /// `#rgb`, `#rrggbb` or `#rrggbbaa` (the forms a lazysh theme holds; the alpha, which only a selection uses, is dropped).
-    fn css_color(text: &str) -> Option<RgbColor> {
+    pub(crate) fn css_color(text: &str) -> Option<RgbColor> {
         let digits = text.strip_prefix('#')?;
         if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return None;
@@ -1134,7 +1137,7 @@ mod native {
     /// The colours a `TerminalTheme` gives a core to report: the default foreground, background and cursor, the
     /// sixteen ANSI colours and `extendedAnsi` (palette entries 16 and up). What it does not name is what xterm.js
     /// draws, so the core and the xterm.js engine answer a probe alike. Selection colours are the renderer's.
-    fn theme_of(json: &Json) -> Result<Theme, String> {
+    pub(crate) fn theme_of(json: &Json) -> Result<Theme, String> {
         let object = json
             .as_object()
             .ok_or("The terminal theme must be an object")?;

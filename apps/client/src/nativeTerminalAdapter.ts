@@ -13,6 +13,7 @@ import type {
 } from './terminalAdapter';
 import {TerminalEvents} from './terminalEvents';
 import type {CoreKeyInput} from './terminalPlatformKeys';
+import {nativeSurface, type SurfaceLook} from './terminalSurfaceAnchor';
 import {searchRows} from './terminalText';
 
 /** Honest for a core without a renderer (`ime` is xterm.js' input observation and `mouseReporting` is its DOM wheel dispatch, which this backend does not have: its keyboards are the capture and the Android input view, and its wheel reports go to the core): it parses, scrolls and answers questions about the screen, and draws nothing. `canonicalMoshResize` holds for a core that follows Mosh's frames (`NativeCoreBridge.canonicalFrames`); `enableCanonicalResize` refuses one that cannot. */
@@ -29,6 +30,8 @@ export type NativeAdapterOptions = {
   refreshMs?: number;
   /** The theme the core was opened with, so `applyPreferences` tells the core only about a change. */
   theme?: TerminalTheme;
+  /** How a surface's session is told its look (`native_terminal_surface_look`); injected by tests. */
+  look?: (session: string, look: SurfaceLook) => Promise<unknown>;
 };
 
 /**
@@ -60,6 +63,10 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private taps: Disposable | undefined;
   private interceptor: ((event: KeyboardEvent) => boolean) | undefined;
   private preferences: TerminalPreferences | undefined;
+  /** The session the shell's surface is under, and the look it was last sent (as JSON) and the commands that carry it, in order. */
+  private surface: string | undefined;
+  private looked: string | undefined;
+  private lookQueue: Promise<unknown> = Promise.resolve();
   private active = true;
   private disposed: Promise<void> | undefined;
   /** Set once a Mosh session asked for it: the transport's frames decide the grid and `requestSize` is an intent. */
@@ -92,6 +99,8 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     const anchor = target.kind === 'native' ? document.getElementById(target.anchorId) : target.element;
     if (!anchor) throw new Error('The native terminal anchor is not mounted.');
     this.anchor = anchor;
+    this.surface = target.kind === 'native' ? target.surface : undefined;
+    this.sendLook();
     this.capture?.dispose(); this.pointer?.dispose();
     this.pointer = attachPointerSelection(this, anchor);
     this.tapLinks();
@@ -258,9 +267,23 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     return {columns, rows, cellWidth: rect && columns ? rect.width / columns : 0, cellHeight: rect && rows ? rect.height / rows : 0, scrollbackLines};
   }
 
+  /** The renderer's surface draws with the preferences that decide its look; it is told once for each change, and again if the shell refused. */
+  private sendLook() {
+    const {surface, preferences} = this;
+    if (!surface || !preferences || this.disposed) return;
+    const {theme, fontFamily, fontSize, cursorStyle, cursorBlink, brightBold, boldColor} = preferences;
+    const look: SurfaceLook = {theme, fontFamily, fontSize, cursorStyle, cursorBlink, brightBold, boldColor};
+    const sent = JSON.stringify(look);
+    if (sent === this.looked) return;
+    this.looked = sent;
+    const send = this.options.look ?? nativeSurface.look;
+    this.lookQueue = this.lookQueue.then(() => send(surface, look)).catch(() => { if (this.looked === sent) this.looked = undefined; });
+  }
+
   /** The renderer applies fonts and colours; the input editor reads them for the preedit and `optionAsMeta` for its keys, and the core needs the theme to answer a program that asks what its colours are. */
   applyPreferences(preferences: TerminalPreferences) {
     this.preferences = preferences;
+    this.sendLook();
     const next = JSON.stringify(preferences.theme);
     if (this.disposed || next === this.theme) return;
     this.theme = next;

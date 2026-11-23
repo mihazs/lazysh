@@ -24,6 +24,11 @@ const MAX_SESSION_LEN: usize = 64;
 const MAX_PIXELS: f64 = 16_384.0;
 /// A phone's ratio is 2 to 4; anything past this is a corrupt page, not a display.
 const MAX_DPR: f64 = 8.0;
+/// The preferences allow 10 to 32 CSS pixels; a renderer draws what a page could still ask for beyond that.
+const MIN_FONT_PX: f64 = 4.0;
+const MAX_FONT_PX: f64 = 128.0;
+/// A CSS `font-family` list: a few names.
+const MAX_FONT_FAMILY: usize = 1024;
 
 /// A surface is refused on every platform by a build made with `LAZYSH_NATIVE_TERMINAL=off` (the kill switch, see `build.rs`).
 fn ensure_enabled() -> Result<(), String> {
@@ -109,6 +114,49 @@ impl Anchor {
     }
 }
 
+/// The cursor styles of the preferences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorStyle {
+    Block,
+    Underline,
+    Bar,
+}
+
+/// How the renderer draws a session: the preferences that decide its colours, glyphs and cursor. The theme is the
+/// client's `TerminalTheme`, as `terminal_core_theme` takes it, and `font_size` is in CSS pixels (what a pinch
+/// changes); the cursor is the one a program that never chose its own has.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+// The look is read by the renderer's host, which only a build with the native terminal has.
+#[cfg_attr(not(native_terminal_core), allow(dead_code))]
+pub struct SurfaceLook {
+    theme: serde_json::Value,
+    font_family: String,
+    font_size: f64,
+    cursor_style: CursorStyle,
+    cursor_blink: bool,
+    bright_bold: bool,
+    bold_color: Option<String>,
+}
+
+impl SurfaceLook {
+    /// A readable font size and a short family list without control characters: what a renderer can draw and a
+    /// page cannot use to make the host do work. The theme and the colours are checked where they are read.
+    fn validate(&self) -> Result<(), String> {
+        let family = !self.font_family.trim().is_empty()
+            && self.font_family.len() <= MAX_FONT_FAMILY
+            && !self.font_family.chars().any(char::is_control);
+        let size =
+            self.font_size.is_finite() && (MIN_FONT_PX..=MAX_FONT_PX).contains(&self.font_size);
+        if family && size {
+            Ok(())
+        } else {
+            Err("Invalid terminal look.".into())
+        }
+    }
+}
+
 /// Puts the session's surface at the anchor and creates the session on first use. `background` is `0xRRGGBB`,
 /// what shows until a renderer draws.
 #[tauri::command]
@@ -147,6 +195,48 @@ pub async fn native_terminal_surface_place(
         let _ = app;
         Err(unavailable())
     }
+}
+
+/// Tells the renderer how the session looks (the preferences the page applies): from its next surface on, and
+/// at once on one that is drawing. Kept by the shell, so it may come before the surface exists.
+#[tauri::command]
+pub async fn native_terminal_surface_look(
+    app: AppHandle,
+    session: String,
+    look: SurfaceLook,
+) -> Result<(), String> {
+    ensure_enabled()?;
+    validate_session(&session)?;
+    look.validate()?;
+    #[cfg(native_terminal_core)]
+    {
+        panes::remember(&session, &look)?;
+        relook(&app, session).await
+    }
+    #[cfg(not(native_terminal_core))]
+    {
+        let _ = app;
+        Err("This build has no native terminal surface.".into())
+    }
+}
+
+/// The surface the platform drew `session` on takes the look just remembered; none is not an error.
+#[cfg(all(target_os = "android", native_terminal_core))]
+async fn relook(_: &AppHandle, session: String) -> Result<(), String> {
+    android::relook(&session)
+}
+
+#[cfg(all(target_os = "linux", native_terminal_core))]
+async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
+    linux::relook(app, session).await
+}
+
+#[cfg(all(
+    native_terminal_core,
+    not(any(target_os = "android", target_os = "linux"))
+))]
+async fn relook(_: &AppHandle, _: String) -> Result<(), String> {
+    Err(unavailable())
 }
 
 /// Ends the session's surface; its generation count goes with it. A session that was never placed is not an error.
@@ -352,6 +442,71 @@ mod tests {
         );
     }
 
+    fn page_look(extra: serde_json::Value) -> Result<SurfaceLook, serde_json::Error> {
+        let mut look = serde_json::json!({
+            "theme": {}, "fontFamily": "monospace", "fontSize": 14, "cursorStyle": "bar",
+            "cursorBlink": true, "brightBold": false,
+        });
+        look.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(look)
+    }
+
+    #[test]
+    fn the_look_is_read_from_the_pages_preferences_and_only_a_drawable_one_passes() {
+        let look =
+            page_look(serde_json::json!({"boldColor": "#336699", "cursorStyle": "underline"}))
+                .unwrap();
+        assert_eq!(
+            (
+                look.cursor_style,
+                look.font_size,
+                look.bold_color.as_deref()
+            ),
+            (CursorStyle::Underline, 14.0, Some("#336699"))
+        );
+        assert!(look.validate().is_ok());
+        for size in [MIN_FONT_PX, 10.0, 32.0, MAX_FONT_PX] {
+            assert!(
+                page_look(serde_json::json!({"fontSize": size}))
+                    .unwrap()
+                    .validate()
+                    .is_ok(),
+                "{size}"
+            );
+        }
+        let long = "a".repeat(MAX_FONT_FAMILY + 1);
+        for bad in [
+            serde_json::json!({"fontSize": MIN_FONT_PX - 0.5}),
+            serde_json::json!({"fontSize": MAX_FONT_PX + 1.0}),
+            serde_json::json!({"fontSize": 0}),
+            serde_json::json!({"fontSize": -14}),
+            serde_json::json!({"fontFamily": ""}),
+            serde_json::json!({"fontFamily": "  "}),
+            serde_json::json!({"fontFamily": long}),
+            serde_json::json!({"fontFamily": "mono\nspace"}),
+        ] {
+            assert!(page_look(bad.clone()).unwrap().validate().is_err(), "{bad}");
+        }
+        // A size no JSON can hold as a finite number never reaches the check.
+        assert!(page_look(serde_json::json!({"fontSize": "14"})).is_err());
+        let wrong = [
+            serde_json::json!({"cursorStyle": "hollow"}),
+            serde_json::json!({"theme": null, "cursorBlink": "yes"}),
+        ];
+        for bad in wrong {
+            assert!(page_look(bad).is_err());
+        }
+        assert!(
+            serde_json::from_value::<SurfaceLook>(
+                serde_json::json!({"theme": {}, "fontFamily": "m", "fontSize": 14})
+            )
+            .is_err(),
+            "a look without its cursor and bold preferences is refused"
+        );
+    }
+
     #[cfg(native_terminal_disabled)]
     #[test]
     fn the_surface_is_refused_disabled_in_this_build() {
@@ -383,6 +538,7 @@ mod tests {
         assert!(allowed_while_locked("native_terminal_surface_remove"));
         for protected in [
             "native_terminal_surface_place",
+            "native_terminal_surface_look",
             "native_terminal_surface_state",
             "native_terminal_surface_input",
             "native_terminal_surface_focus",

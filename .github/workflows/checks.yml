@@ -1243,11 +1243,22 @@ jobs:
             a_blinking_cursor_redraws_only_its_row_once_per_phase_without_any_output
             the_preferences_decide_the_cells_the_colours_and_the_fonts
             with_system_fonts_text_is_drawn_from_a_font_and_follows_the_family_list
+            bold_text_follows_the_bold_preferences_and_changes_live
+            a_program_that_chose_no_cursor_gets_the_preferred_one_and_a_program_that_did_keeps_its_own
           )
           for case_name in "${guards[@]}"; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "native_renderer::tests::$case_name" | grep -Fx -- "native_renderer::tests::$case_name: test"
           done
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- native_renderer::tests::
+          # The platform surface's bookkeeping and the look its page sends (#2380) draw on the same offscreen target.
+          surface_guards=(
+            native_terminal_surface::panes::tests::a_session_is_drawn_with_the_look_its_page_sent_on_every_display_and_the_default_before
+            native_terminal_surface::panes::tests::a_look_the_renderer_cannot_use_is_refused_and_changes_nothing
+            native_terminal_surface::panes::tests::a_new_look_reaches_a_drawing_session_and_waits_for_one_that_is_not
+          )
+          for case_name in "${surface_guards[@]}"; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- --list --exact "$case_name" | grep -Fx -- "$case_name: test"
+          done
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib -- native_renderer::tests:: native_terminal_surface::panes::
       # Real OpenSSH and the official Mosh server (#1564), built with the feature on. The fixture's core is a stand-in.
       - *official-mosh-fixture
       - name: Deliver real OpenSSH and Mosh output to a core with the feature on
