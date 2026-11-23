@@ -25,7 +25,7 @@ export const gotifyStates=['working','needs_attention','done'] as const;
 export const gotifyCase='ownedOfficialGotifyDisplaysFiniteEventsWhileBackgrounded';
 const gotifyNativeFailures=['admission','parser-calibration','fixture-input','fixture-identity','fresh-permission','record-calibration','workspace','login',
   'login-launch','login-url','login-url-submit','login-auth-form','login-client-name',
-  'notification-permission','notification-permission-grant','alarm-permission','background-home','background','background-connected','message-0','message-1','message-2','history'] as const;
+  'notification-permission','notification-permission-grant','alarm-permission','background-home','background','background-connected','message-0','message-1','message-2','history-open','history'] as const;
 const gotifyNativePhases=['android-native-stage-0','android-native-stage-1','android-native-stage-2','android-native-stage-3','android-native-stage-4'] as const;
 const gotifyFixturePhases=['admission','clean source checkout','tracked fixture source','official Gotify artifact',
   'official Gotify APK signature','official Gotify package','official Gotify server extraction','current test-support relay build','source checkout',
@@ -166,7 +166,7 @@ export function gotifyNativeScreen(xml:string):string|undefined {
     const text=gotifyNativeFailureText(xml)??'';
     const windows=/^Owned Gotify windows: ([a-z. ]{0,200})\r?$/m.exec(text)?.[1]??'';
     const tail=(name:string)=>new RegExp(`^Owned Gotify ${name}: ?([A-Za-z0-9 .:_\\/|-]{0,2000})\\r?$`,'m').exec(text)?.[1];
-    const logs=['crash','boot','events','record','cause'].map(name=>[name,tail(name)] as const);
+    const logs=['crash','boot','events','record','cause','texts'].map(name=>[name,tail(name)] as const);
     const names=windows.split(' ').filter(Boolean);
     return logs.every(([,value])=>value!==undefined)&&names.every(name=>gotifyNativeWindowNames.some(known=>known===name))?
       `windows=[${names.join(' ')}] ${logs.map(([name,value])=>`${name}=[${value}]`).join(' ')}`:undefined;

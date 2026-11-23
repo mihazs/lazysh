@@ -119,9 +119,10 @@ class GotifyAndroidTest {
                 stage(index + 1, JSONObject().put("messageId", id).put("state", state)
                     .put("osRecord", true).put("visibleCard", true).put("background", true))
             }
-            phase = "history"
+            phase = "history-open"
             showCard(states.last()).click()
             awaitCondition { showing(gotify) && device.hasObject(By.res(gotify, "messages_view")) }
+            phase = "history"
             for (state in states) node(By.pkg(gotify).text(body(state)))
             stage(4, JSONObject().put("history", true))
         } catch (failure: Throwable) {
@@ -298,7 +299,8 @@ class GotifyAndroidTest {
         "\nOwned Gotify windows: ${shown.joinToString(" ")}\nOwned Gotify crash: ${log("logcat -d -b crash -t 30", 30).takeLast(900)}" +
             "\nOwned Gotify boot: ${log("logcat -d -b all -e BOOT_COMPLETED -t 10", 10).takeLast(900)}" +
             "\nOwned Gotify events: ${log("logcat -d -b events -e com.github.gotify -t 40", 40)}" +
-            "\nOwned Gotify record: ${record()}"
+            "\nOwned Gotify record: ${record()}" +
+            "\nOwned Gotify texts: ${texts()}"
     } catch (_: Throwable) { "" }
 
     // TEMPORARY diagnosis: the exception class and its first stack frame inside this class, as printable ASCII.
@@ -307,6 +309,12 @@ class GotifyAndroidTest {
         return "\nOwned Gotify cause: ${(failure.javaClass.simpleName + " " + failure.message.orEmpty().take(100) + " " + frame?.methodName + ":" + frame?.lineNumber)
             .replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|")}"
     }
+
+    // The texts the app's windows show (TEMPORARY diagnosis; the case's own messages and labels, no credential), as printable ASCII.
+    private fun texts(): String = runCatching {
+        device.findObjects(By.pkg(gotify)).mapNotNull { runCatching { it.text }.getOrNull() }.take(14).joinToString("|") { it.take(70) }
+            .replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|").takeLast(1000)
+    }.getOrDefault("unavailable")
 
     // The app's foreground-service record as the failing "Connected" check saw it (TEMPORARY diagnosis).
     private fun record(): String = shell("cmd notification get ${key(gotifyUid, -1)}", bounded = false).lineSequence()
