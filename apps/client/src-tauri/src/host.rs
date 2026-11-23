@@ -499,6 +499,15 @@ impl Host {
     }
     /// Uploads and previews act on this Windows device, so a WSL session refuses them: they would
     /// write to or reach a port of Windows while the terminal runs in the distribution.
+    /// Whether paths the user gives for this host follow Windows' rules: this device when it is Windows and the session is
+    /// not inside a WSL distribution (a distribution's paths are POSIX), never an SSH host.
+    pub(crate) fn uses_windows_paths(&self) -> bool {
+        match self {
+            Self::Remote(_) => false,
+            #[cfg(desktop)]
+            Self::Local(host) => cfg!(windows) && host.wsl.is_none(),
+        }
+    }
     pub(crate) fn refuse_in_wsl(&self, what: &str) -> Result<()> {
         match self {
             #[cfg(desktop)]
