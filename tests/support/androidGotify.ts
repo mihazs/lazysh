@@ -430,7 +430,8 @@ async function runGotifyAndroid(root:string) {
     processes.push(child);await writePrivateInput(Buffer.from(JSON.stringify(value)),child.child.stdin!,()=>child.finish('private Gotify input',5000));
     if(suffix.endsWith('.tmp')) {
       const from=`files/.lazysh-gotify-${nonce}${suffix}`,to=from.replace(/\.tmp$/,'.json');
-      await shell(['shell','run-as','app.lazysh.client','sh','-c',`'ln ${from} ${to} && rm ${from}'`]);
+      // An app uid may not create hard links on API 36 (also through run-as), so the closed file is renamed into place, once.
+      await shell(['shell','run-as','app.lazysh.client','sh','-c',`'[ ! -e ${to} ] && mv ${from} ${to}'`]);
     }
   };
   try {
