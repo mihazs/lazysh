@@ -4,13 +4,13 @@ import {chmod,lstat,mkdir,mkdtemp,readFile,readdir,readlink,realpath,rm,stat,wri
 import {createServer,type Socket} from 'node:net';
 import {userInfo} from 'node:os';
 import {basename,dirname,join,resolve} from 'node:path';
-import {setTimeout as delay} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {OwnedProcess,descendants,identity,type OwnedPid} from '../../../tests/support/ownedProcess';
-import {assertDirectDriverEnvironment,guiEnvironment,listenerInode,namespaceArguments} from './policy';
+import {assertDirectDriverEnvironment,guiEnvironment,inputMethodEnvironment,listenerInode,namespaceArguments} from './policy';
+import {OwnedInputMethod} from './inputMethod';
 import {acceptedConnectionOwner,socketInventory} from './socketOwner';
 import {ClientTargetObserver} from './clientObserver';
-import {executable} from './tools';
+import {executable,until} from './tools';
 import {acceptedEndpointRoles,assertDistinctPorts,driverPorts,type OwnedPorts} from './ports';
 
 const ROOT=fileURLToPath(new URL('../../../',import.meta.url));
@@ -18,11 +18,6 @@ const BUS_NAME='app.lazysh.client.SingleInstance';
 type Browser=Awaited<ReturnType<typeof import('webdriverio').remote>>;
 type AppOwner={name:string;pid:number;start:string};
 
-async function until<T>(stage:string,probe:()=>Promise<T|undefined>,milliseconds=30_000):Promise<T> {
-  const deadline=performance.now()+milliseconds;
-  do {const value=await probe();if(value!==undefined)return value;await delay(25);}while(performance.now()<deadline);
-  throw new Error(`Owned native GUI deadline: ${stage}`);
-}
 export function disposableVaultArguments(directory:string):string[] {
   if(!directory.startsWith('/tmp/lazysh-native-gui-')||resolve(directory)!==directory||/[\x00-\x1f\x7f]/.test(directory))throw new Error('Invalid disposable vault directory');
   return ['--foreground','--unlock','--components=secrets',`--control-directory=${join(directory,'runtime')}`];
@@ -55,6 +50,7 @@ export class NativeGui {
   private clientObserver?:ClientTargetObserver;
   private xclipFile='';
   private readonly clipboardOwners:OwnedProcess[]=[];
+  private ibus?:OwnedInputMethod;
   private env:NodeJS.ProcessEnv;
   private busAddress:string;
   private xSocket='';
@@ -78,18 +74,20 @@ export class NativeGui {
   });
   stage='fixture startup';
   connections=0;
-  private constructor(readonly directory:string,readonly binary:string,private readonly testWorker:OwnedPid,private readonly disposableVault=false) {this.busAddress=`unix:path=${directory}/runtime/bus`;this.env=guiEnvironment(directory,this.busAddress);}
+  private constructor(readonly directory:string,readonly binary:string,private readonly testWorker:OwnedPid,private readonly disposableVault=false,private readonly inputMethod=false) {this.busAddress=`unix:path=${directory}/runtime/bus`;this.env=guiEnvironment(directory,this.busAddress);}
 
   static async start() {return this.startOwned(false);}
   static async startWithDisposableVault() {return this.startOwned(true);}
   static async startWithReducedMotion() {return this.startOwned(false,true);}
-  private static async startOwned(disposableVault:boolean,reducedMotion=false) {
+  /** A real IBus daemon and Pinyin engine on the owned display; the application's GTK input-method module talks to it. */
+  static async startWithInputMethod() {return this.startOwned(false,false,true);}
+  private static async startOwned(disposableVault:boolean,reducedMotion=false,inputMethod=false) {
     if(process.platform!=='linux'||!process.getuid||process.getuid()===0)throw new Error('Native GUI acceptance requires an unprivileged Linux account');
     assertDirectDriverEnvironment(process.env);
     const binary=await executable(join(ROOT,'target/release/lazysh'),'fresh bundled application','lazysh');
     const testWorker=await identity(process.pid);if(!testWorker)throw new Error('Native GUI test worker identity unavailable');
     const directory=await mkdtemp('/tmp/lazysh-native-gui-');
-    const fixture=new NativeGui(directory,binary,testWorker,disposableVault);
+    const fixture=new NativeGui(directory,binary,testWorker,disposableVault,inputMethod);
     try {await fixture.setup(reducedMotion);return fixture;}
     catch(error) {try{await fixture.stop();}catch(cleanup){throw new AggregateError([error,cleanup],'Native GUI startup and cleanup failed');}throw error;}
   }
@@ -164,6 +162,10 @@ export class NativeGui {
     const [driverPort,nativePort]=await driverPorts();
     this.ports.driver=driverPort;this.ports.native=nativePort;assertDistinctPorts(this.ports);
     if(this.disposableVault)await this.startDisposableVault();
+    if(this.inputMethod) {
+      this.env=inputMethodEnvironment(this.env,`unix:path=${this.directory}/runtime/ibus`);
+      this.ibus=await OwnedInputMethod.start(this.directory,this.env);
+    }
     this.driver=this.namespaced(this.driverFile,['--port',String(driverPort),'--native-port',String(nativePort),'--native-host','127.0.0.1','--native-driver',this.nativeDriverFile]);
     await until('owned driver listeners',async()=>await this.ownsListener(driverPort,this.driverFile)&&await this.ownsListener(nativePort,this.nativeDriverFile)?true:undefined);
     await this.openBrowser();
@@ -312,6 +314,10 @@ export class NativeGui {
     },2000);
     if(!/\bboolean false\s*$/.test(await this.busCall('NameHasOwner','org.freedesktop.secrets')))throw new Error('Disposable Secret Service name survived cleanup');
   }
+  get inputMethodSession() {
+    if(!this.ibus)throw new Error('Owned input method was not started');
+    return this.ibus;
+  }
   async appOwner():Promise<AppOwner> {
     await this.assertDisplay();
     const name=await this.busName(BUS_NAME);
@@ -416,6 +422,7 @@ export class NativeGui {
       },2000);},
       async()=>{await this.stopDisposableVault();},
       async()=>{for(const server of this.servers.values())await server.stop();},
+      async()=>{await this.ibus?.stop();},
       async()=>{for(const owner of this.clipboardOwners)await owner.stop();},
       async()=>{if(this.display)await this.display.stop();},
       async()=>{if(this.bus)await this.bus.stop();},

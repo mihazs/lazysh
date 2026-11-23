@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
+import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
 import AgentPanel from '../AgentPanel';
@@ -81,6 +81,8 @@ it('retains the exact settings revision/booleans through held save and translate
   let reject!:(reason:unknown)=>void;
   vi.mocked(invoke).mockImplementation(async command=>command==='get_companion_settings'?companionSettings:command==='get_host_browser_settings'?hostBrowserSettings:command==='get_notification_policy'?notificationPolicy:new Promise((_,no)=>{reject=no;}));
   render(<CompanionSettingsPanel sessionId={agentBoardSession}/>);fireEvent.click(await screen.findByLabelText(t('companionDevices')));fireEvent.click(screen.getByRole('button',{name:t('companionSave')}));
+  // The panel's own notification-policy fetch lands late; the call snapshot must include it.
+  await waitFor(()=>expect(vi.mocked(invoke).mock.calls.some(([command])=>command==='get_notification_policy')).toBe(true));
   await languagesKeep(()=>{expect(screen.getByRole('status').textContent).toBe(t('companionBusy'));expect(screen.getByLabelText(t('companionDevices'))).toHaveProperty('checked',false);});
   expect(invoke).toHaveBeenLastCalledWith('update_companion_settings',{sessionId:agentBoardSession,settings:{expectedRevision:7,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:false}},{headers:{'X-Lazysh-Access':'c'.repeat(64)}});
   const raw='companionUnsupported <native/user/path> {{error}}';await act(async()=>{reject({key:'companionUnsupported',message:raw});});
