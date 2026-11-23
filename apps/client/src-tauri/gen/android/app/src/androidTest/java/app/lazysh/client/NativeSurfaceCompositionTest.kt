@@ -144,8 +144,12 @@ class NativeSurfaceCompositionTest {
             try {
                 until("$strategy in place") { ui { near(screenRect(host.view), expectedRect(realWebView(it), anchor)) } }
                 // DOWN then CANCEL: the web page under the surface must not receive a click.
+                var where = ""
                 ui { activity ->
                     val centre = IntArray(2).also { host.view.getLocationInWindow(it) }
+                    where = "view ${host.view.width}x${host.view.height} at ${centre[0]},${centre[1]} shown=${host.view.isShown} alpha=${host.view.alpha} " +
+                        "windowFocused=${activity.hasWindowFocus()} decor=${activity.window.decorView.width}x${activity.window.decorView.height} " +
+                        "siblingsAbove=${(host.view.parent as ViewGroup).let { p -> (p.indexOfChild(host.view) + 1 until p.childCount).map { p.getChildAt(it).javaClass.simpleName + ":" + p.getChildAt(it).visibility } }}"
                     val x = centre[0] + host.view.width / 2f
                     val y = centre[1] + host.view.height / 2f
                     val now = SystemClock.uptimeMillis()
@@ -155,7 +159,7 @@ class NativeSurfaceCompositionTest {
                         event.recycle()
                     }
                 }
-                assertEquals("$strategy receives touches inside its rectangle", reached, host.touches.get() > 0)
+                assertEquals("$strategy receives touches inside its rectangle ($where)", reached, host.touches.get() > 0)
             } finally { ui { host.detach() } }
         }
     }
