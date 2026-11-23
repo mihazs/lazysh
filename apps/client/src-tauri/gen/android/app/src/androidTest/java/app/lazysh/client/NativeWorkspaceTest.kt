@@ -1450,8 +1450,17 @@ class NativeWorkspaceTest {
      */
     private class QrFrameGate(private val key: String = "__lazyshQrFrameGate_" + UUID.randomUUID().toString().replace("-", "")) {
         private val gate = "window[${JSONObject.quote(key)}]"
+        // Holding a frame also records, in the same page task, whether the video's tracks are live and whether a preview shows, then
+        // presses the page's own Cancel button (a script click, as Espresso's web click is) so no harness round trip is needed while streaming.
         val install = "(()=>{const proto=HTMLCanvasElement.prototype,original=proto.toBlob,held=[];" +
-            "$gate={original,held};proto.toBlob=function(callback,type,quality){held.push(()=>original.call(this,callback,type,quality));};return true;})()"
+            "$gate={original,held,live:null,previewed:null};proto.toBlob=function(callback,type,quality){" +
+            "const stream=document.querySelector('.theme-qr-panel video')?.srcObject;" +
+            "$gate.live=stream instanceof MediaStream&&stream.getVideoTracks().some(x=>x.readyState==='live');" +
+            "$gate.previewed=Boolean(document.querySelector('.theme-preview'));" +
+            "held.push(()=>original.call(this,callback,type,quality));" +
+            "setTimeout(()=>Array.from(document.querySelectorAll('.theme-qr-panel button')).find(x=>x.textContent.trim()==='Cancel QR scan')?.click(),0);};return true;})()"
+        val live = "$gate.live===true"
+        val previewed = "$gate.previewed===true"
         val held = "$gate.held.length"
         val release = "(()=>{$gate.held.splice(0).forEach(run=>run());return true;})()"
         val restore = "(()=>{const saved=$gate;if(saved){HTMLCanvasElement.prototype.toBlob=saved.original;saved.held.splice(0).forEach(run=>run());delete window[${JSONObject.quote(key)}];}return true;})()"
@@ -1797,28 +1806,17 @@ class NativeWorkspaceTest {
             assertTrue("Discarded preview must not apply preferences", saved == evaluate(scenario, "localStorage.getItem('lazysh.preferences.v1')"))
             println("lazysh QR UI: decoded preview discarded; camera released; draft unchanged")
             // Active capture: permission is already granted, so Scan opens the rear camera without a sheet. A frame is held
-            // after it is drawn, which proves the stream is live before the explicit cancel.
+            // after it is drawn, which proves the stream is live. While the camera streams, the test's own round trips into the page
+            // (evaluateJavascript through the activity, Espresso's idle wait) have stalled for the page's whole 30 s deadline and then
+            // found the camera already stopped (#2427), so the held frame itself records the proof and presses Cancel in the page, and
+            // the test reads the record only after the camera has stopped.
             capture = observe()
             evaluate(scenario, frameGate.install)
             button("Scan QR with camera")
-            // Every main run since 2026-11-20 fails here: the wait times out after 120 s, or returns only after the page's own 30 s deadline
-            // has stopped the camera. The video element's readyState, size, frame count and live tracks, with the held count, say when the camera
-            // delivered a frame (#2427). Each sample is also printed with the time since the Scan click, so a wait that passes late stays readable.
-            val videoObservation = qrVideoObservation(scenario, null)
-            val waitStarted = System.nanoTime()
-            awaitDocument(scenario, "QR camera streaming with a held frame", "${frameGate.held}>=1 && Boolean(document.querySelector('.theme-qr-panel video')?.srcObject)",
-                observe = { remaining ->
-                    val sample = "${videoObservation(remaining)} held=${evaluateIfPresent(scenario, frameGate.held, 1_000)}"
-                    println("lazysh QR held-frame wait +${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted)} ms: $sample")
-                    sample
-                })
-            println("lazysh QR held-frame wait done +${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted)} ms")
-            assertEquals("The held frame must come from a live camera track", "true", evaluate(scenario,
-                "Array.from(document.querySelector('.theme-qr-panel video').srcObject.getVideoTracks()).some(x=>x.readyState==='live')"))
+            awaitDocument(scenario, "QR active capture held a frame and was cancelled", "${frameGate.held}>=1 && !($preview) && $stopped && $cancelled")
+            assertEquals("The held frame must come from a live camera track", "true", evaluate(scenario, frameGate.live))
+            assertEquals("A frame that was not decoded must not preview", "false", evaluate(scenario, frameGate.previewed))
             assertTrue("Active capture must open the actual rear camera", capture.openedAny())
-            assertEquals("A frame that was not decoded must not preview", "false", evaluate(scenario, preview))
-            button("Cancel QR scan")
-            awaitDocument(scenario, "QR active capture cancelled", "!($preview) && $stopped && $cancelled")
             assertTrue("Native rear camera must be released when the active capture is cancelled", capture.released.await(5, TimeUnit.SECONDS))
             assertEquals("The cancelled request still owns the pipeline until its held frame returns", "false", evaluate(scenario, available))
             evaluate(scenario, frameGate.release)
