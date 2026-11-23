@@ -270,8 +270,10 @@ export class GotifyReverse {
 }
 function packageUid(text:string,name:string) {
   if(!['com.github.gotify','app.lazysh.client','app.lazysh.client.test'].includes(name))throw rejection();
-  const match=new RegExp(`^package:${name.replaceAll('.', '\\.')} uid:([1-9][0-9]*)\\r?\\n?$`).exec(text);
-  const uid=Number(match?.[1]);if(!Number.isSafeInteger(uid)||uid<10000)throw rejection();return uid;
+  // `cmd package list packages -U <name>` filters by substring, so the test package's row accompanies the app's once Gradle installs it.
+  const rows=text.split(/\r?\n/).filter(Boolean).map(row=>/^package:([A-Za-z0-9._]+) uid:([1-9][0-9]*)$/.exec(row));
+  if(rows.length===0||rows.some(row=>row===null)||rows.filter(row=>row![1]===name).length!==1)throw rejection();
+  const uid=Number(rows.find(row=>row![1]===name)![2]);if(!Number.isSafeInteger(uid)||uid<10000)throw rejection();return uid;
 }
 /** Hash the actual installed base APK, fenced by package UID/path/file identities. */
 export async function gotifyInstalledApk(adb:(args:string[])=>Promise<string>,name:string,expected:string,expectedUid?:number) {

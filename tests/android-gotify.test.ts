@@ -199,7 +199,7 @@ test('installed APK proof binds actual package UID, one base path, bounded file 
   const fixture=(fault='')=>{
     let pathReads=0,uidReads=0,statReads=0;
     return (args:string[]):Promise<string>=>Promise.resolve((()=>{
-      if(args[1]==='cmd')return `package:${name} uid:${fault==='uid'&&uidReads++>0?10236:10235}\n`;
+      if(args[1]==='cmd')return `package:${name} uid:${fault==='uid'&&uidReads++>0?10236:10235}\n${fault==='sibling'||fault==='twice'?`package:${name}.test uid:10236\n`:''}${fault==='twice'?`package:${name} uid:10235\n`:''}${fault==='junk'?'Warning: unexpected\n':''}`;
       if(args[1]==='pm')return `package:${fault==='path'&&pathReads++>0?'/data/app/other/base.apk':path}\n${fault==='split'?'package:/data/app/other/split.apk\n':''}`;
       if(args[1]==='stat')return `${fault==='owner'?'10235':'1000'}:${fault==='symlink'?'a1a4':'81a4'}:${fault==='hardlink'?'2':'1'}:${fault==='size'?'2147483649':'100'}:8:${fault==='inode'&&statReads++>0?'1235':'1234'}\n`;
       if(args[1]==='sha256sum')return `${fault==='digest'?'c'.repeat(64):hash}  ${path}\n`;
@@ -207,7 +207,9 @@ test('installed APK proof binds actual package UID, one base path, bounded file 
     })());
   };
   expect(await gotifyInstalledApk(fixture(),name,hash,10235)).toMatchObject({sha256:hash,uid:10235});
-  for(const fault of ['uid','path','split','owner','symlink','hardlink','size','inode','digest'])
+  // The substring filter also lists the test package once Gradle installs it; that sibling row must not break the exact app row.
+  expect(await gotifyInstalledApk(fixture('sibling'),name,hash,10235)).toMatchObject({sha256:hash,uid:10235});
+  for(const fault of ['uid','path','split','owner','symlink','hardlink','size','inode','digest','twice','junk'])
     await expect(gotifyInstalledApk(fixture(fault),name,hash,10235)).rejects.toThrow();
   await expect(gotifyInstalledApk(fixture(),name,hash,10236)).rejects.toThrow();
 });
