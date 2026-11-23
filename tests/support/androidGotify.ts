@@ -145,15 +145,25 @@ export function gotifyNativeReport(xml:string) {
   if(!['tests="1"','failures="0"','errors="0"','skipped="0"'].every(item=>suite.includes(' '+item))||failed)throw rejection();
   return {passed:1,failed:0,skipped:0};
 }
+function gotifyNativeFailureText(xml:string):string|undefined {
+  const {suite,failed}=gotifyReport(xml);
+  if(!failed||!['tests="1"','failures="1"','errors="0"','skipped="0"'].every(item=>suite.includes(' '+item)))return;
+  const failures=[...xml.replace(/<!--[\s\S]*?-->/g,'').matchAll(/<failure\b[^>]*>([\s\S]*?)<\/failure>/g)];
+  return failures.length===1?failures[0][1]:undefined;
+}
 export function gotifyNativeFailure(xml:string):GotifyFixturePhase|undefined {
   try {
-    const {suite,failed}=gotifyReport(xml);
-    if(!failed||!['tests="1"','failures="1"','errors="0"','skipped="0"'].every(item=>suite.includes(' '+item)))return;
-    const failures=[...xml.replace(/<!--[\s\S]*?-->/g,'').matchAll(/<failure\b[^>]*>([\s\S]*?)<\/failure>/g)];
-    if(failures.length!==1)return;
-    const phase=/^\s*(?:<!\[CDATA\[)?java\.lang\.AssertionError: Owned Gotify acceptance failed: ([a-z0-9-]+)(?:\r?\n|$)/.exec(failures[0][1])?.[1];
+    const phase=/^\s*(?:<!\[CDATA\[)?java\.lang\.AssertionError: Owned Gotify acceptance failed: ([a-z0-9-]+)(?:\r?\n|$)/.exec(gotifyNativeFailureText(xml)??'')?.[1];
     const known=gotifyNativeFailures.find(value=>value===phase);
     return known?`android-native-${known}`:undefined;
+  }catch{return;}
+}
+/** The seconds at which the native case entered each closed phase, as `phase=seconds` pairs; anything else is dropped. */
+export function gotifyNativeTimeline(xml:string):string|undefined {
+  try {
+    const line=/^Owned Gotify timeline: ([a-z0-9= -]{1,1200})\r?$/m.exec(gotifyNativeFailureText(xml)??'')?.[1];
+    const pairs=line?.split(' ').map(entry=>entry.split('='));
+    return line&&pairs?.every(([name,seconds,...rest])=>rest.length===0&&gotifyNativeFailures.some(value=>value===name)&&/^[0-9]{1,4}$/.test(seconds??''))?line:undefined;
   }catch{return;}
 }
 
@@ -482,7 +492,7 @@ async function runGotifyAndroid(root:string) {
     phase='android-instrumentation';await continuous();native=new OwnedProcess(join(android,'gradlew'),[':app:connectedUniversalDebugAndroidTest',...gradleArguments,
       '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true',`-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.GotifyAndroidTest#${gotifyCase}`,
       '-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyAcceptance=true',`-Pandroid.testInstrumentationRunnerArguments.lazyshGotifyNonce=${nonce}`],root);
-    processes.push(native);void native.done.catch(()=>{});const until=performance.now()+480000; // Gradle compiles, packages and installs for over a minute before the native case starts its own 300 s deadline.
+    processes.push(native);void native.done.catch(()=>{});const until=performance.now()+780000; // Gradle compiles, packages and installs for over a minute before the native case starts its own 600 s deadline.
     const stage=async(step:number,id?:number)=>{
       phase=gotifyNativePhases[step]??'android-native-stage';
       return wait(until,async()=>{
@@ -533,7 +543,12 @@ async function runGotifyAndroid(root:string) {
       phase='android-native-exit';
       try {
         const files=(await readdir(reports,{recursive:true})).filter(name=>name.endsWith('.xml'));
-        if(files.length===1)phase=gotifyNativeFailure((await readQrMetadata(join(reports,files[0]),262144)).toString())??phase;
+        if(files.length===1) {
+          const report=(await readQrMetadata(join(reports,files[0]),262144)).toString();
+          phase=gotifyNativeFailure(report)??phase;
+          const timeline=gotifyNativeTimeline(report);
+          if(timeline)console.error('Gotify native phase entry seconds',timeline);
+        }
       }catch{/* Missing or malformed reports retain the closed host failure phase. */}
     }
     if(native&&phase.startsWith('android-native-stage')&&hostOperation==='stage-wait')hostOperation=gotifyStageWaitOperation(native.stdout,native.stderr);

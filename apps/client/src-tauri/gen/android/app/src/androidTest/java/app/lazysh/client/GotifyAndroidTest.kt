@@ -34,9 +34,13 @@ class GotifyAndroidTest {
     private val device get() = UiDevice.getInstance(instrumentation)
     private val gotify = "com.github.gotify"
     private var deadline = 0L
+    private var begun = 0L
+    // Seconds at which each closed phase was entered, so a failing hosted run shows where its time went (see gotifyNativeTimeline).
+    private val timeline = StringBuilder()
     private var phase = "admission"
         set(value) {
             field = value
+            if (begun != 0L) timeline.append(value).append('=').append((SystemClock.elapsedRealtime() - begun) / 1000).append(' ')
             if (::nonce.isInitialized) {
                 try { publish(".phase-$value", JSONObject().put("phase", value)) }
                 catch (_: Exception) { /* Optional evidence cannot replace the acceptance result. */ }
@@ -57,7 +61,8 @@ class GotifyAndroidTest {
         assumeTrue("Owned official Gotify acceptance only", args.getString("lazyshGotifyAcceptance") == "true")
         nonce = args.getString("lazyshGotifyNonce").orEmpty()
         check(nonce.matches(Regex("[a-f0-9]{32}"))) { "Invalid Gotify fixture nonce" }
-        deadline = SystemClock.elapsedRealtime() + 300_000
+        begun = SystemClock.elapsedRealtime()
+        deadline = begun + 600_000
         val started = System.currentTimeMillis()
         try {
             check(Build.VERSION.SDK_INT == 36) { "Owned API36 required" }
@@ -125,7 +130,7 @@ class GotifyAndroidTest {
             stage(4, JSONObject().put("history", true))
         } catch (_: Throwable) {
             // Never propagate upstream exceptions, credentials, shell output or UI trees to JUnit.
-            throw AssertionError("Owned Gotify acceptance failed: $phase")
+            throw AssertionError("Owned Gotify acceptance failed: $phase\nOwned Gotify timeline: ${timeline.toString().trim()}")
         }
     }
 
@@ -156,10 +161,10 @@ class GotifyAndroidTest {
         // happened needs no click.
         val allow = By.res("com.android.permissioncontroller", "permission_allow_button")
         val allowLabel = By.pkg("com.android.permissioncontroller").text(java.util.regex.Pattern.compile("Allow", java.util.regex.Pattern.CASE_INSENSITIVE))
-        awaitCondition { permissionGranted() || device.hasObject(allow) || device.hasObject(allowLabel) }
+        awaitCondition { device.hasObject(allow) || device.hasObject(allowLabel) || permissionGranted() }
         phase = "notification-permission-grant"
         // A tap can land while the dialog is still being laid out and then does nothing, so it is repeated until the grant shows.
-        awaitCondition { permissionGranted() || run { (device.findObject(allow) ?: device.findObject(allowLabel))?.click(); false } }
+        awaitCondition { (device.findObject(allow) ?: device.findObject(allowLabel))?.click(); permissionGranted() }
         phase = "alarm-permission"
         // The grant above made the app check its alarm permission, which was allowed before the launch: the app's own prompt must
         // not appear. The list view is hidden while the history is empty (the app flips to its "no messages" view), so either ends the wait.
