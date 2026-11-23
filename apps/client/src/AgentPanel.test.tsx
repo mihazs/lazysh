@@ -532,7 +532,7 @@ describe('live Herdr discovery',()=>{
   }));
   it('folds a live status group behind its unchanged heading and restores the same row without a read or navigation',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');
-    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+    vi.mocked(invoke).mockImplementation(noStream(command=>Promise.resolve(command==='multiplexer_sessions'?[{name:'default'}]:tree)));
     const navigate=vi.fn(async()=>{});
     render(<HerdrNavigation sessionId="fold-navigation" hostLabel="Owned host" mode="agents" visible onNavigate={navigate} onAttach={vi.fn(async()=>{})} onClose={vi.fn()}/>);
     const browser=within(screen.getByRole('region',{name:t('herdrNavigationTitle')}));
