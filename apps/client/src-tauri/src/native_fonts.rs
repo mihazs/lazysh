@@ -235,7 +235,10 @@ mod tests {
         );
         let newer = font("font-a", false);
         fonts.hold(newer.clone());
-        assert_eq!(fonts.named(&list(&["font-a"])), [newer.clone()]);
+        assert_eq!(
+            fonts.named(&list(&["font-a"])),
+            std::slice::from_ref(&newer)
+        );
         assert_ne!(newer, a, "the same name but other bytes is another font");
         fonts.forget("font-a");
         fonts.forget("FONT-b");
