@@ -287,16 +287,22 @@ impl Fixture {
             .await;
     }
     async fn wait_status_until(&self, field: &str, expected: u64, budget: Duration) {
-        tokio::time::timeout(budget, async {
+        // A timeout names the last status it read, so a slow runner is told apart from a count that stopped short.
+        let mut last = Value::Null;
+        let waited = tokio::time::timeout(budget, async {
             loop {
-                if self.status().await[field] == expected {
+                last = self.status().await;
+                if last[field] == expected {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
-        .await
-        .unwrap();
+        .await;
+        assert!(
+            waited.is_ok(),
+            "`{field}` did not reach {expected} within {budget:?}; last relay status: {last}"
+        );
     }
     async fn sender(&self, revision: &str) -> tokio::process::Child {
         let mut child = self
