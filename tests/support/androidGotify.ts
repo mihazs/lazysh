@@ -196,7 +196,7 @@ export function gotifyOfficialArtifact(bytes:Buffer,pin:{size:number;sha256:stri
     if(values.length!==1||values[0]!==signer.sha256)throw rejection();
   }
 }
-/** The cooperating native publisher hardlinks a closed file, then removes its temp link. */
+/** The cooperating native publisher renames a closed file into place (one link); a second link only means a publish in progress. */
 function gotifyPrivateBody(raw:string,uid:number) {
   if(Buffer.byteLength(raw)>8192)throw rejection();
   if(raw==='pending\n')return;

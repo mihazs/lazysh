@@ -405,12 +405,12 @@ class GotifyAndroidTest {
         val fd = Os.open(temporary.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL or OsConstants.O_NOFOLLOW, 0x180)
         val identity = Os.fstat(fd)
         FileOutputStream(fd).use { stream -> stream.write(proof); stream.fd.sync() }
-        // link is exclusive; the host waits for nlink=1 before reading the immutable complete proof.
-        Os.link(temporary.path, file.path)
+        // The app may not create hard links on API 36 (link fails with EACCES), so the closed file is renamed into place: the final
+        // name appears complete, with one link, and only when nothing is there yet.
+        try { Os.lstat(file.path); error("Published file already exists") } catch (missing: ErrnoException) { check(missing.errno == OsConstants.ENOENT) }
+        Os.rename(temporary.path, file.path)
         val published = Os.lstat(file.path)
-        check(published.st_ino == identity.st_ino && published.st_dev == identity.st_dev && published.st_nlink == 2L)
-        Os.remove(temporary.path)
-        check(Os.lstat(file.path).st_nlink == 1L)
+        check(published.st_ino == identity.st_ino && published.st_dev == identity.st_dev && published.st_nlink == 1L)
     }
 
     private fun recordChecks(uid: Int, started: Long) {
