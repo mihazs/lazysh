@@ -157,9 +157,9 @@ class GotifyAndroidTest {
         val allow = By.res("com.android.permissioncontroller", "permission_allow_button")
         val allowLabel = By.pkg("com.android.permissioncontroller").text(java.util.regex.Pattern.compile("Allow", java.util.regex.Pattern.CASE_INSENSITIVE))
         awaitCondition { permissionGranted() || device.hasObject(allow) || device.hasObject(allowLabel) }
-        if (!permissionGranted()) (device.findObject(allow) ?: device.findObject(allowLabel))?.click()
         phase = "notification-permission-grant"
-        awaitCondition { permissionGranted() }
+        // A tap can land while the dialog is still being laid out and then does nothing, so it is repeated until the grant shows.
+        awaitCondition { permissionGranted() || run { (device.findObject(allow) ?: device.findObject(allowLabel))?.click(); false } }
         phase = "alarm-permission"
         // The grant above made the app check its alarm permission, which was allowed before the launch: the app's own prompt must
         // not appear. The list view is hidden while the history is empty (the app flips to its "no messages" view), so either ends the wait.
