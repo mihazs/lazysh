@@ -51,18 +51,26 @@ impl Identity {
     pub(crate) fn from_pty(pid: u32, tty: &std::path::Path) -> Option<Self> {
         identity(&pid.to_string(), tty.to_str()?)
     }
+    /// `checks` expand only for this identity's own, attached client. `&&`, `||` and `==` expand both operands
+    /// and `#{L:}` walks every client, also one that has connected but not yet sent its terminal name: tmux up
+    /// to 3.7c then copies a NULL `client_tty` and the whole server dies with SIGSEGV (#2321). `#{?}` expands
+    /// only the branch it takes, and a client with a session and this PID has finished identifying itself.
+    fn only_this_client(&self, checks: &str) -> String {
+        format!(
+            "#{{?#{{&&:#{{!=:#{{client_session}},}},#{{==:#{{client_pid}},{}}}}},{checks},0}}",
+            self.pid
+        )
+    }
     fn client_condition(&self) -> String {
-        let tuple = format!(
-            "#{{&&:#{{==:#{{client_pid}},{}}},#{{==:#{{client_tty}},{}}}}}",
-            self.pid, self.tty
-        );
-        let attached = format!("#{{&&:#{{!=:#{{client_session}},}},{tuple}}}");
-        format!("#{{&&:#{{==:#{{client_control_mode}},0}},{attached}}}")
+        self.only_this_client(&format!(
+            "#{{&&:#{{==:#{{client_control_mode}},0}},#{{==:#{{client_tty}},{}}}}}",
+            self.tty
+        ))
     }
     pub(crate) fn guard(&self) -> String {
         format!("#{{==:#{{L:#{{?{},1,}}}},1}}", self.client_condition())
     }
-    fn admission(&self) -> String {
+    pub(crate) fn admission(&self) -> String {
         // Verify both loop operators used by navigation and guarded Chat input.
         // Unknown modifiers can expand to nonempty literals on older servers.
         let condition = format!(
