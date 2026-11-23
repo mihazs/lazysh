@@ -11,7 +11,7 @@ export type QrState={phase:'idle'|'permission'|'scanning'|'reading'|'decoding';f
 type Run={intent:number;active:boolean;stream?:MediaStream;video?:HTMLVideoElement;deadline?:ReturnType<typeof setTimeout>;delay?:ReturnType<typeof setTimeout>;wake?:()=>void;publish:(payload:string)=>void};
 // Cancellation stops publication immediately; capacity belongs to the actual async pipeline.
 let pipeline:Run|null=null;
-const cameraMarkers={request:'lazysh qr camera request',resolved:'lazysh qr camera resolved',rejected:'lazysh qr camera rejected',stale:'lazysh qr camera stale',attached:'lazysh qr camera attached',playResolved:'lazysh qr camera play_resolved',playRejected:'lazysh qr camera play_rejected'} as const;
+const cameraMarkers={request:'lazysh qr camera request',resolved:'lazysh qr camera resolved',rejected:'lazysh qr camera rejected',stale:'lazysh qr camera stale',attached:'lazysh qr camera attached',playResolved:'lazysh qr camera play_resolved',playRejected:'lazysh qr camera play_rejected',drawStart:'lazysh qr camera draw_start',drawEnd:'lazysh qr camera draw_end',encodeEnd:'lazysh qr camera encode_end'} as const;
 function cameraMarker(stage:keyof typeof cameraMarkers){
   if(import.meta.env.VITE_LAZYSH_QR_CAMERA_TRACE==='1'){
     try{console.warn(cameraMarkers[stage]);}catch{/* Optional diagnostics cannot change camera behavior. */}
@@ -88,8 +88,12 @@ export function useThemeQr(intent:RefObject<number>,cancelRef:RefObject<(()=>voi
       const size=qrFrameSize(run.video.videoWidth,run.video.videoHeight),canvas=document.createElement('canvas');
       canvas.width=size.width;canvas.height=size.height;
       const context=canvas.getContext('2d');if(!context)throw new QrFailure('encodeFailed');
+      // The trace shows how long the first frame grab of a session takes: on the owned emulator it has blocked the page for 30 s (#2427).
+      cameraMarker('drawStart');
       context.drawImage(run.video,0,0,size.width,size.height);
+      cameraMarker('drawEnd');
       const blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new QrFailure('encodeFailed')),'image/jpeg',.85));
+      cameraMarker('encodeEnd');
       if(!current(run))return;
       if(blob.size<1||blob.size>QR_IMAGE_LIMIT)throw new QrFailure('imageLimit');
       const bytes=await blob.arrayBuffer();const payload=await decode(run,bytes);

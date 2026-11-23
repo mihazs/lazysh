@@ -41,7 +41,7 @@ it.each([false,true])('camera markers retain successful behavior when optional l
   vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE','1');
   const logger=vi.spyOn(console,'warn').mockImplementation(()=>{if(throws)throw new Error('private logger failure sentinel');});
   const view=mount();scan();await screen.findByRole('heading',{name:'QR fixture'});
-  expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera attached'],['lazysh qr camera play_resolved']]);
+  expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera attached'],['lazysh qr camera play_resolved'],['lazysh qr camera draw_start'],['lazysh qr camera draw_end'],['lazysh qr camera encode_end']]);
   expect(invoke).toHaveBeenCalledTimes(1);expect(view.apply).not.toHaveBeenCalled();expect(stop).toHaveBeenCalledTimes(1);
 });
 it('a rejected real camera request logs only fixed request/rejected boundaries',async()=>{
@@ -66,7 +66,7 @@ it('attached camera work does not log play resolution until the actual play prom
   expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera attached']]);
   expect(draw).not.toHaveBeenCalled();expect(invoke).not.toHaveBeenCalled();
   await act(async()=>finish());await screen.findByRole('heading',{name:'QR fixture'});
-  expect(logger).toHaveBeenLastCalledWith('lazysh qr camera play_resolved');expect(invoke).toHaveBeenCalledTimes(1);
+  expect(logger.mock.calls.slice(3)).toEqual([['lazysh qr camera play_resolved'],['lazysh qr camera draw_start'],['lazysh qr camera draw_end'],['lazysh qr camera encode_end']]);expect(invoke).toHaveBeenCalledTimes(1);
 });
 it('play rejection logs only its finite boundary and preserves the existing camera failure',async()=>{
   vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE','1');const logger=vi.spyOn(console,'warn').mockImplementation(()=>{});
