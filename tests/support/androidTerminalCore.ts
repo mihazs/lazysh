@@ -32,7 +32,7 @@ function validateCases(text:string,expected:Cases) {
 }
 
 /** What one owned-device run of native-terminal instrumentation classes needs: the classes, the cases that must each pass once, and where the results go. */
-export type TerminalCaseRun={title:string;classes:readonly string[];cases:Cases;evidenceName:string;evidence:readonly string[];arguments?:readonly string[]};
+export type TerminalCaseRun={title:string;classes:readonly string[];cases:Cases;evidenceName:string;evidence:readonly string[];arguments?:readonly string[];ssh?:{exec?:boolean;shellSeconds?:number}};
 
 /**
  * The real terminal core inside the packaged app (#2145): an owned OpenSSH on this host is the local process whose shell output the app's
@@ -42,7 +42,7 @@ export type TerminalCaseRun={title:string;classes:readonly string[];cases:Cases;
  */
 export async function runTerminalCases(run:TerminalCaseRun,root=resolve(import.meta.dir,'../..')) {
   const {device}=ownedEmulator(run.title,true);
-  const fixture=await SshFixture.start();
+  const fixture=await SshFixture.start(undefined,run.ssh);
   const reverses:number[]=[];
   let remote:string|undefined,primary=false;
   try {
@@ -108,12 +108,14 @@ const gesturesClass='app.lazysh.client.NativeTerminalGesturesTest';
 const tmuxPagesClass='app.lazysh.client.NativeTerminalTmuxPagesTest';
 const zellijPagesClass='app.lazysh.client.NativeTerminalZellijPagesTest';
 const rmuxPagesClass='app.lazysh.client.NativeTerminalRmuxPagesTest';
+// The page's own host commands (discovery, window lists) run over exec channels, which the plain fixture answers with a shell; and a case that drives pages lasts longer than its 90 s.
+const pagesSsh={exec:true,shellSeconds:900} as const;
 export const sessionRuns=[
   {title:'native session',classes:[sessionClass],cases:[[sessionClass,'aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart']],evidenceName:'native-session-evidence',evidence:['native-session.json']},
-  {title:'native gestures',classes:[gesturesClass],cases:[[gesturesClass,'aRealFingerSelectsCopiesAndTapsLinksOnTheNativeSurfaceAndAnOsc52WriteAsksConsent']],evidenceName:'native-gestures-evidence',evidence:['native-gestures.json']},
-  {title:'native tmux pages',classes:[tmuxPagesClass],cases:[[tmuxPagesClass,'tmuxPagesDiscoverAttachSwitchWindowsAndCopyWithConsentOnANativeSession']],evidenceName:'native-tmux-pages-evidence',evidence:['native-tmux-pages.json']},
-  {title:'native Zellij pages',classes:[zellijPagesClass],cases:[[zellijPagesClass,'zellijPagesDiscoverAttachAndSwitchTabsOnANativeSession']],evidenceName:'native-zellij-pages-evidence',evidence:['native-zellij-pages.json']},
-  {title:'native rmux pages',classes:[rmuxPagesClass],cases:[[rmuxPagesClass,'rmuxPagesBrowseAttachAndSwitchWindowsOnANativeSession']],evidenceName:'native-rmux-pages-evidence',evidence:['native-rmux-pages.json']},
+  {title:'native gestures',ssh:pagesSsh,classes:[gesturesClass],cases:[[gesturesClass,'aRealFingerSelectsCopiesAndTapsLinksOnTheNativeSurfaceAndAnOsc52WriteAsksConsent']],evidenceName:'native-gestures-evidence',evidence:['native-gestures.json']},
+  {title:'native tmux pages',ssh:pagesSsh,classes:[tmuxPagesClass],cases:[[tmuxPagesClass,'tmuxPagesDiscoverAttachSwitchWindowsAndCopyWithConsentOnANativeSession']],evidenceName:'native-tmux-pages-evidence',evidence:['native-tmux-pages.json']},
+  {title:'native Zellij pages',ssh:pagesSsh,classes:[zellijPagesClass],cases:[[zellijPagesClass,'zellijPagesDiscoverAttachAndSwitchTabsOnANativeSession']],evidenceName:'native-zellij-pages-evidence',evidence:['native-zellij-pages.json']},
+  {title:'native rmux pages',ssh:pagesSsh,classes:[rmuxPagesClass],cases:[[rmuxPagesClass,'rmuxPagesBrowseAttachAndSwitchWindowsOnANativeSession']],evidenceName:'native-rmux-pages-evidence',evidence:['native-rmux-pages.json']},
 ] as const satisfies readonly TerminalCaseRun[];
 export const validateNativeSessionReport=(text:string,run:TerminalCaseRun=sessionRuns[0])=>validateCases(text,run.cases);
 /** The CI emulator has no GPU the shipping policy accepts, so its run asks for the debug software switch; Waydroid's does not need it. Every run goes on after one failed, so one cycle shows them all. */

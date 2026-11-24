@@ -51,12 +51,19 @@ internal class NativeSessionTouch(private val driver: NativeSessionDriver, priva
         return Grid(originX + pane.getDouble("left") * scale, originY + pane.getDouble("top") * scale, cellWidth * scale, cellHeight * scale, columns, state.getInt("rows"))
     }
 
-    /** The row (of the core's visible screen) and the column where `word` is printed in the row that reads exactly `row`. */
+    /**
+     * The screen row and column where `word` is printed in the row that reads exactly `row`. The core's text has one line for a line the program
+     * printed, however many screen rows the terminal wrapped it over, so each line before it counts for as many rows as its width needs, and the word's
+     * own offset can carry it onto a wrapped row.
+     */
     fun locate(row: String, word: String): Pair<Int, Int> {
+        val columns = JSONObject(driver.invoke("terminal_core_snapshot", session)).getJSONObject("state").getInt("columns")
         val lines = driver.coreText(session).lines()
         val index = lines.indexOfFirst { it.trim() == row }
         check(index >= 0) { "the row '$row' is not on the core's screen" }
-        return Pair(index, lines[index].indexOf(word))
+        val screenRows = lines.take(index).sumOf { maxOf(1, (it.length + columns - 1) / columns) }
+        val offset = lines[index].indexOf(word)
+        return Pair(screenRows + offset / columns, offset % columns)
     }
 
     private fun inject(action: Int, downTime: Long, at: Point) {
@@ -100,7 +107,10 @@ internal class NativeSessionTouch(private val driver: NativeSessionDriver, priva
         (activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(activity)?.toString()
     }
 
-    fun awaitClipboard(expected: String) = PageDriver.poll("the system clipboard to hold exactly '$expected' (it holds '${clipboardText()?.take(80)}')", 20) { Unit.takeIf { clipboardText() == expected } }
+    fun awaitClipboard(expected: String) {
+        try { PageDriver.poll("the system clipboard to hold exactly '$expected'", 20) { Unit.takeIf { clipboardText() == expected } } }
+        catch (error: AssertionError) { throw AssertionError("${error.message}; it holds '${clipboardText()?.take(80)}'", error) }
+    }
 
     /** SystemUI previews a copied clip over the bottom left for a few seconds, which could cover the next tap. */
     fun letTheClipboardPreviewGo() = Thread.sleep(6_000)

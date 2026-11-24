@@ -1900,7 +1900,7 @@ jobs:
       - run: sudo sh .github/scripts/apt-install.sh tmux
       # The native Zellij case starts the pinned Zellij from the owned shell, and the app's Sessions page finds it on the host's path.
       - *pinned-zellij
-      - run: sudo ln -s "$LAZYSH_TEST_ZELLIJ" /usr/local/bin/zellij
+      - run: sudo ln -s "$LAZYSH_TEST_ZELLIJ" /usr/bin/zellij
       - &pinned-rmux
         name: Install the pinned official rmux 0.10.0 release outside the checkout
         # Release asset digest: https://github.com/Helvesec/rmux/releases/download/v0.10.0/SHA256SUMS
@@ -1915,8 +1915,8 @@ jobs:
           test "$("$rmux_root/install/bin/rmux" capabilities --json | jq -r '.version, .wire_version' | paste -sd' ')" = '0.10.0 8'
           echo "$rmux_root/install/bin" >> "$GITHUB_PATH"
           echo "LAZYSH_TEST_RMUX=$rmux_root/install/bin/rmux" >> "$GITHUB_ENV"
-      # rmux finds its daemon next to its real path, so the host's path gets a launcher and not a copy.
-      - run: printf '#!/bin/sh\nexec "%s" "$@"\n' "$LAZYSH_TEST_RMUX" | sudo tee /usr/local/bin/rmux >/dev/null && sudo chmod 755 /usr/local/bin/rmux
+      # rmux finds its daemon next to its real path, so the host's path gets a launcher and not a copy. /usr/bin is on the path of every shell sshd starts.
+      - run: printf '#!/bin/sh\nexec "%s" "$@"\n' "$LAZYSH_TEST_RMUX" | sudo tee /usr/bin/rmux >/dev/null && sudo chmod 755 /usr/bin/rmux
       - *android-cache-identity
       - *android-owned-cache
       - run: bun install --frozen-lockfile
