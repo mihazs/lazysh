@@ -237,8 +237,14 @@ class NativeTerminalSessionTest {
         }
         val bounds = surfaceBounds()
         assertEquals("the screen received the plain terminal tap", true, UiDevice.getInstance(instrumentation).click(bounds.centerX(), bounds.centerY()))
-        PageDriver.poll("the native editor to be served and the keyboard to open after the tap", 30) {
-            (ui { input.hasFocus() && imm.isActive(input) } && keyboardVisible()).takeIf { it }
+        try {
+            PageDriver.poll("the native editor to be served and the keyboard to open after the tap", 30) {
+                (ui { input.hasFocus() && imm.isActive(input) } && keyboardVisible()).takeIf { it }
+            }
+        } catch (error: AssertionError) {
+            val keyboard = keyboardVisible()
+            val editor = ui { "focus=${input.hasFocus()}, served=${imm.isActive(input)}, attached=${input.isAttachedToWindow}" }
+            throw AssertionError("${error.message}; editor $editor, keyboardVisible=$keyboard", error)
         }
         evidence.put("keyboardOpenedOnTap", true)
         evidence.put("keyboardEditorServed", true)
@@ -383,6 +389,9 @@ class NativeTerminalSessionTest {
 
             // A multiplexer in the same session, drawn by the core on the surface that has just been given back.
             hostTmux(id)
+        } catch (error: Throwable) {
+            evidence.put("failure", (error.message ?: error.toString()).take(700))
+            throw error
         } finally {
             Evidence.record("native-session", evidence)
         }
