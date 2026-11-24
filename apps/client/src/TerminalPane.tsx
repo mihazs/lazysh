@@ -789,7 +789,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const output = adapter.observeInput?.((data, userInput, origin) => {
       let value = data;
       const pointerInput = !!pointerInputEvent.current?.eventPhase && !keyboardInputEvent.current?.eventPhase;
-      if (userInput && (!acceptsInput() || document.hidden || !document.hasFocus()
+      // The Android editor holds Android's focus, not the WebView's, so the page reports no focus while the terminal is typed into.
+      if (userInput && (!acceptsInput() || document.hidden || (adapter.inputFocused === undefined && !document.hasFocus())
         || (((adapter.inputFocused ? !adapter.inputFocused() : document.activeElement !== adapter.inputElement()) || adapter.inputElement()?.readOnly) && !literalPaste.current && !pointerInput))) {
         output?.reset(); return;
       }

@@ -122,6 +122,8 @@ describe('toolbar keys on a native session (#2493)',()=>{
     await act(async () => {});
     // The Android editor is the keyboard: it holds it until a page field takes it.
     adapter.inputFocused = () => true;
+    // The editor holds Android's focus, not the WebView's: the page is not the focused document while the terminal is typed into.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     fireEvent.click(screen.getByRole('button', {name: 'ctrl'}));
     adapter.sendInput('c', 'ime');
     adapter.sendInput('c', 'ime');
