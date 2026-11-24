@@ -127,6 +127,34 @@ describe('selection on a native session',()=>{
     vi.useRealTimers();
   });
 });
+describe('the composer on a native session',()=>{
+  async function composeOnNative(draft:string,bracketed=false) {
+    mocks.invoke.mockResolvedValue({});
+    const core=createHeadlessCore({rows:4,columns:20,feed:true});
+    const adapter=await openNativeTerminalAdapter(core);
+    if (bracketed) await adapter.write!(new TextEncoder().encode('\x1b[?2004h'));
+    render(<TerminalPane session={{id:'native',name:'Host',connected:true,adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button',{name:'Compose'}));
+    fireEvent.change(screen.getByRole('textbox',{name:'Compose text'}),{target:{value:draft}});
+    return core;
+  }
+
+  it('Send pastes the draft, presses Enter after it, and clears the composer',async()=>{
+    const core=await composeOnNative('ls -l',true);
+    fireEvent.click(screen.getByRole('button',{name:/Send/}));
+    await waitFor(()=>expect(screen.queryByRole('textbox',{name:'Compose text'})).toBeNull());
+    expect(core.inputs.map(({data})=>data)).toEqual(['\x1b[200~ls -l\x1b[201~','\r']);
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+
+  it('Insert pastes the draft without Enter and clears the composer',async()=>{
+    const core=await composeOnNative('ls -l');
+    fireEvent.click(screen.getByRole('button',{name:/Insert/}));
+    await waitFor(()=>expect(screen.queryByRole('textbox',{name:'Compose text'})).toBeNull());
+    expect(core.inputs.map(({data})=>data)).toEqual(['ls -l']);
+  });
+});
+
 describe('a native session whose surface the shell cannot place',()=>{
   /** A pane on a native session over the stand-in core, in a container that has a box, with a shell that refuses every surface command. */
   async function refusedSurface() {
