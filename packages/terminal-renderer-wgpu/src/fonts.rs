@@ -43,6 +43,7 @@ type Bytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 pub(crate) struct Face {
     data: Bytes,
     offset: u32,
+    pub index: u32,
     key: CacheKey,
     pub bold: bool,
     pub italic: bool,
@@ -175,6 +176,7 @@ impl FontLibrary {
         let color = font.color_palettes().len() > 0 || font.color_strikes().next().is_some();
         let face = Face {
             offset: font.offset,
+            index,
             key: font.key,
             data: data.clone(),
             bold,

@@ -8,12 +8,13 @@ do not depend on what is installed. They are test data only and never ship in an
 | `DejaVuSansMono.subset.ttf`, `-Bold`, `-Oblique` | DejaVu Sans Mono 2.37 | [`LICENSE-DejaVu.txt`](../../fonts/LICENSE-DejaVu.txt) (Bitstream Vera and public domain changes) |
 | `NotoSansMonoCJKjp.subset.otf` | Noto Sans Mono CJK JP (font 5 of `NotoSansCJK-Regular.ttc`) | [`LICENSE-Noto-CJK-OFL.txt`](LICENSE-Noto-CJK-OFL.txt) (SIL OFL 1.1) |
 | `NotoColorEmoji.subset.ttf` | Noto Color Emoji (CBDT) | [`LICENSE-Noto-Emoji-OFL.txt`](LICENSE-Noto-Emoji-OFL.txt) (SIL OFL 1.1) |
+| `NotoColorEmoji-COLRv1.subset.ttf` | Android API 36 system Noto Color Emoji 2.047 (COLRv1, noto-emoji commit `6c211821b8442ab3683a502f9a79b2034293fced`) | [`LICENSE-Noto-Emoji-OFL.txt`](LICENSE-Noto-Emoji-OFL.txt) (SIL OFL 1.1) |
 
 What they hold: Basic Latin, Latin-1, combining diacriticals U+0300-036F, Greek and Cyrillic letters,
 a star, a heart and an arrow in DejaVu; the Japanese and Hangul text of the goldens and Latin letters
 in the CJK font; and in the emoji font a smiley, a heart, a ZWJ family, the Brazilian flag, a thumbs
 up with a skin tone, a keycap and a high voltage sign, with the GSUB ligatures that join them.
-`.notdef` keeps its outline so a missing glyph draws a box.
+`.notdef` keeps its outline so a missing glyph draws a box. The COLRv1 subset covers the smiley and ZWJ family.
 
 Made with fonttools (`pip install fonttools brotli`):
 
@@ -22,4 +23,5 @@ LATIN="U+0020-007E,U+00A0-00FF,U+0300-036F,U+0391-03C9,U+0410-044F,U+2605,U+2764
 pyftsubset DejaVuSansMono.ttf --unicodes="$LATIN" --layout-features='*' --no-hinting --desubroutinize --notdef-outline --output-file=DejaVuSansMono.subset.ttf
 pyftsubset NotoSansMonoCJKjp.otf --text="日本語漢字한국어ひらがなカタカナＡ１ABCabc0 " --layout-features='*' --notdef-outline --output-file=NotoSansMonoCJKjp.subset.otf
 pyftsubset NotoColorEmoji.ttf --text="😀❤️👨‍👩‍👧🇧🇷👍🏽1️⃣⚡" --layout-features='*' --notdef-outline --output-file=NotoColorEmoji.subset.ttf
+pyftsubset android-system/NotoColorEmoji.ttf --text="😀👨‍👩‍👧" --layout-features='*' --name-IDs='*' --output-file=NotoColorEmoji-COLRv1.subset.ttf
 ```

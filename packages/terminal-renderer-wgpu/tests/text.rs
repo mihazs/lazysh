@@ -306,6 +306,37 @@ fn color_glyphs_are_drawn_as_they_are_and_text_takes_the_text_color() {
 }
 
 #[test]
+fn colrv1_draws_a_color_emoji_and_its_zwj_ligature() {
+    let mut fonts = library(Fonts {
+        emoji: false,
+        ..ALL
+    });
+    fonts
+        .add(
+            EMOJI_FAMILY,
+            false,
+            false,
+            include_bytes!("fonts/NotoColorEmoji-COLRv1.subset.ttf"),
+            0,
+        )
+        .unwrap();
+    let img = shoot("😀👨‍👩‍👧", 5, 1, &stack(), fonts.clone());
+    let colorful = region_of(&img, cells(0, 0, 2))
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|p| p[0].abs_diff(p[2]) > 40)
+        .count();
+    assert!(colorful > 50, "the smiley has {colorful} colored pixels");
+
+    let family = cells(2, 0, 2);
+    assert!(ink(&img, family).is_some(), "the ZWJ family is visible");
+    let member = shoot("👨", 3, 1, &stack(), fonts);
+    assert_ne!(region_of(&img, family), region_of(&member, cells(0, 0, 2)));
+    assert_eq!(ink(&img, cells(4, 0, 1)), None);
+}
+
+#[test]
 fn a_zwj_family_is_not_its_first_member() {
     let family = shoot("👨\u{200d}👩\u{200d}👧", 3, 1, &stack(), library(ALL));
     let man = shoot("👨", 3, 1, &stack(), library(ALL));
