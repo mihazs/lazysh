@@ -33,7 +33,7 @@ export const nativeSurface = {
   /** Waits for what the keyboard typed since the last call; each event comes once. */
   takeInput: (session: string) => protectedInvoke<{events: SurfaceInputEvent[]}>('native_terminal_surface_input', {session}),
   /** `keyboard: false` on a release leaves the keyboard open: a field of the page took it. */
-  focus: (session: string, focused: boolean, keyboard = true) => protectedInvoke<void>('native_terminal_surface_focus', {session, focused, keyboard}),
+  focus: (session: string, focused: boolean, keyboard = true, ifIdle?: boolean) => protectedInvoke<void>('native_terminal_surface_focus', {session, focused, keyboard, ifIdle}),
   state: (session: string) => protectedInvoke<SurfaceState>('native_terminal_surface_state', {session}),
 };
 

@@ -306,6 +306,33 @@ class NativeTerminalSessionTest {
         awaitRow(id, "the keys typed after the page's field", { it.startsWith(prompt) && it.endsWith("abcd") })
         typeIntoTheSurface("")
         evidence.put("keyboardHandedBackAndForth", true)
+
+        val key = "lazysh.preferences.v1"
+        val previous = js("localStorage.getItem('$key')")
+        try {
+            js("""(() => {
+                const prefs = JSON.parse(localStorage.getItem('$key') || '{}');
+                localStorage.setItem('$key', JSON.stringify({...prefs, dismissKeyboardOnOverscroll: true}));
+                window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
+                return true;
+            })()""")
+            awaitRow(id, "the prompt after the input was sent", { it == prompt })
+            PageDriver.poll("the keyboard to be open before the swipe", 30) { keyboardVisible().takeIf { it } }
+            drag(0.8, 0.2)
+            PageDriver.poll("the swipe to dismiss the native keyboard", 30) {
+                (ui { !input.hasFocus() } && !keyboardVisible()).takeIf { it }
+            }
+            evidence.put("keyboardDismissedByOverscroll", true)
+        } finally {
+            js("""(() => {
+                if ($previous === null) localStorage.removeItem('$key');
+                else localStorage.setItem('$key', $previous);
+                window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
+                return true;
+            })()""")
+        }
+        PageDriver.invoke("native_terminal_surface_focus", "{session:${quoted(id)},focused:true}")
+        PageDriver.poll("the editor to regain focus after the overscroll check", 30) { ui { input.hasFocus() }.takeIf { it } }
     }
 
     /**

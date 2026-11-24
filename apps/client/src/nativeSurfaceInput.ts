@@ -41,6 +41,7 @@ export class SurfaceInput implements Disposable {
   private readonly preedit: HTMLElement;
   private stopped = false;
   private wantsFocus = false;
+  private focusRequest = 0;
 
   constructor(
     private readonly adapter: NativeTerminalAdapter, private readonly session: string, private readonly anchor: HTMLElement,
@@ -79,8 +80,15 @@ export class SurfaceInput implements Disposable {
   }
   private readonly pageField = (event: FocusEvent) => this.takePage(event.target);
 
-  focus() { this.wantsFocus = true; this.api.focus(this.session, true).catch(noop); }
+  focus() { this.focusRequest++; this.wantsFocus = true; this.api.focus(this.session, true).catch(noop); }
   blur() { this.wantsFocus = false; this.api.focus(this.session, false).catch(noop); }
+
+  dismissKeyboardIfIdle() {
+    const request = this.focusRequest;
+    void this.api.focus(this.session, false, true, true).then(() => {
+      if (request === this.focusRequest) this.wantsFocus = false;
+    }, noop);
+  }
 
   dispose() {
     this.stopped = true;

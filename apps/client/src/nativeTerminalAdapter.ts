@@ -512,6 +512,9 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   }
   focus() { this.capture?.focus(); }
   blur() { this.capture?.blur(); }
+  dismissKeyboardIfIdle() {
+    if (this.capture instanceof SurfaceInput) this.capture.dismissKeyboardIfIdle();
+  }
 
   subscribe(listener: (event: TerminalEvent) => void, types?: readonly TerminalEvent['type'][]): Disposable {
     return this.disposed ? {dispose: noop} : this.events.add(listener, types);
