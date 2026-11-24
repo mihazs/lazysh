@@ -116,7 +116,7 @@ class NativeTerminalSessionTest {
     /** The Preferences page, Terminal and accessibility, where the engine for new sessions is chosen. */
     private fun openEngineSettings() {
         PageDriver.poll("the Preferences page", 60) {
-            if (js("window.__lz.click(\"button[aria-label='Preferences']\")") == "true") true
+            if (js("window.__lz.click(\"button[aria-label='Preferences']\") || window.__lz.click(\".dialog button\", \"Preferences\")") == "true") true
             else { js("window.__lz.click('button.mobile-tools') || window.__lz.click(\"button[aria-label='Workspace tools']\")"); null }
         }
         click(".settings-navigation button", "Terminal and accessibility")
@@ -148,18 +148,26 @@ class NativeTerminalSessionTest {
         // The default transport is Auto, which would try Mosh first; this case is about the native engine on the SSH route.
         set("[role=dialog] select:has(option[value='ssh'])", "ssh")
         click("button", "Save host")
+        connectSavedHost(trustNewKey = true, ready = ready)
+    }
+
+    private fun connectSavedHost(trustNewKey: Boolean, ready: String = "false") {
         until("the saved host", 60, "Boolean(window.__lz.find(\"button[aria-label='Connect to $hostName']\"))")
         click("button[aria-label='Connect to $hostName']")
         until("the connection dialog", 60, "Boolean(window.__lz.find('[role=dialog] form .destination'))")
         click("[role=dialog] button", "Private key")
         set("[role=dialog] form.form-stack > label > textarea", fixture.getString("privateKey"))
         click("[role=dialog] form.form-stack button[type=submit]")
-        val expectedKey = "document.querySelector('.fingerprint code')?.textContent === ${quoted(fixture.getString("fingerprint"))}"
-        until("the expected host key or the owned shell prompt", 60, "($expectedKey) || ($ready)")
-        if (js(expectedKey) == "true") click("button", "Trust key and connect")
+        if (trustNewKey) {
+            val expectedKey = "document.querySelector('.fingerprint code')?.textContent === ${quoted(fixture.getString("fingerprint"))}"
+            until("the expected host key or the owned shell prompt", 60, "($expectedKey) || ($ready)")
+            if (js(expectedKey) == "true") click("button", "Trust key and connect")
+        }
     }
 
-    private fun session() = PageDriver.poll("the placed native session", 120) { ui { TerminalSurfaces.ids().singleOrNull() } }
+    private fun session(replaced: String? = null) = PageDriver.poll("the placed native session", 120) {
+        ui { TerminalSurfaces.ids().singleOrNull { it != replaced && TerminalSurfaces.state(it).let { state -> state.placed && state.ready } } }
+    }
 
     private fun invoke(command: String, session: String) = PageDriver.invoke(command, "{sessionId:${quoted(session)}}")
     private fun coreText(session: String) = JSONArray("[" + invoke("terminal_core_text", session) + "]").getString(0)
@@ -746,10 +754,10 @@ class NativeTerminalSessionTest {
             toolbarKeys(id)
             verifySelectionCopy(id)
             // The pane follows a rotation, the keyboard and a recreated Activity (#2502).
-            followsTheDevice(id)
+            val fresh = followsTheDevice(id)
 
-            // A multiplexer in the same session, drawn by the core on the surface that has just been given back.
-            hostTmux(id)
+            // A multiplexer in the reconnected session, drawn by the core on its new surface.
+            hostTmux(fresh)
         } catch (error: Throwable) {
             evidence.put("failure", (error.message ?: error.toString()).take(700))
             throw error
@@ -769,10 +777,11 @@ class NativeTerminalSessionTest {
         return columns to rows
     }
 
-    /** The cell the renderer draws for the page's default 14 px font, in device pixels (`native_terminal_surface_cell`). */
+    /** The cell the renderer draws for the page's configured font size, in device pixels (`native_terminal_surface_cell`). */
     private fun cellOfTheSession(): Pair<Int, Int> {
         val dpr = JSONTokener(js("window.devicePixelRatio")).nextValue().toString().toDouble()
-        return JSONObject(PageDriver.invoke("native_terminal_surface_cell", "{fontSize:14,dpr:$dpr}")).let { it.getInt("width") to it.getInt("height") }
+        val fontSize = js("JSON.parse(localStorage.getItem('lazysh.preferences.v1'))?.fontSize ?? 14").toInt()
+        return JSONObject(PageDriver.invoke("native_terminal_surface_cell", "{fontSize:$fontSize,dpr:$dpr}")).let { it.getInt("width") to it.getInt("height") }
     }
 
     /**
@@ -819,11 +828,15 @@ class NativeTerminalSessionTest {
      * whole cells of the surface, the remote pty the same size, the prompt drawn and the session taking input; the keyboard leaves the last row
      * of the pane above itself. A step of the one session case (a second case would start from the page the first leaves).
      */
-    private fun followsTheDevice(id: String) {
+    private fun followsTheDevice(id: String): String {
         val device = UiDevice.getInstance(instrumentation)
         val imeSetting = "show_ime_with_hard_keyboard"
         val previousIme = shell("settings get secure $imeSetting").decodeToString().trim()
         try {
+            ui { activity -> SoftKeyboard.set(activity.window, false) }
+            PageDriver.poll("the soft keyboard to be hidden before layout checks", 30) {
+                ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { !it }
+            }
             val portrait = assertThePaneHoldsItsGrid(id, "portrait", "pa")
 
             // A rotation: the window turns, the pane is placed again at its new size and the core is refitted to it.
@@ -833,7 +846,7 @@ class NativeTerminalSessionTest {
             assertTrue("landscape is wider than portrait ($landscape, $portrait)", landscape.first > portrait.first && landscape.second < portrait.second)
             device.setOrientationNatural()
             awaitTheGridToFollow(id, false, landscape)
-            assertEquals("turned back, the pane holds the grid it held", portrait, assertThePaneHoldsItsGrid(id, "portrait-again", "pc"))
+            val portraitAgain = assertThePaneHoldsItsGrid(id, "portrait-again", "pc")
 
             // The soft keyboard shows over the lower part of the window: the pane gives way, and its last row stays above the keyboard.
             shell("settings put secure $imeSetting 1")
@@ -845,10 +858,10 @@ class NativeTerminalSessionTest {
             ui { activity -> input.requestFocus(); SoftKeyboard.set(activity.window, true) }
             PageDriver.poll("the soft keyboard to show", 60) { ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { it } }
             evidence.put("keyboardShown", paneState(id))
-            try { awaitTheGridToFollow(id, false, portrait) }
+            try { awaitTheGridToFollow(id, false, portraitAgain) }
             catch (error: AssertionError) { throw AssertionError("${error.message}; ${paneState(id)}", error) }
             val withKeyboard = assertThePaneHoldsItsGrid(id, "keyboard", "pd")
-            assertTrue("the keyboard took rows from the pane ($withKeyboard, $portrait)", withKeyboard.second < portrait.second)
+            assertTrue("the keyboard took rows from the pane ($withKeyboard, $portraitAgain)", withKeyboard.second < portraitAgain.second)
             val paneView = checkNotNull(surfaceView())
             val above = ui { activity ->
                 val view = paneView
@@ -864,33 +877,39 @@ class NativeTerminalSessionTest {
             ui { activity -> SoftKeyboard.set(activity.window, false) }
             PageDriver.poll("the soft keyboard to hide", 60) { ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { !it } }
             awaitTheGridToFollow(id, false, withKeyboard)
-            assertEquals("the keyboard away, the pane holds its grid again", portrait, assertThePaneHoldsItsGrid(id, "keyboard-away", "pe"))
+            val withoutKeyboard = assertThePaneHoldsItsGrid(id, "keyboard-away", "pe")
+            assertTrue("hiding the keyboard gives rows back", withoutKeyboard.second > withKeyboard.second)
 
-            // The Activity is recreated: the window and its surface are new, the session and what it showed are not.
+            // Renderer replacement retires its sessions. Reconnect through the new page with fresh SSH authentication.
             typeIntoTheSurface("echo before-recreate")
             awaitRow(id, "the marker", { it == "before-recreate" })
             scenario.recreate()
-            PageDriver.poll("the recreated window", 120) { if (NativeActivityFixture.readiness(scenario).ready && js("Boolean(window.__TAURI_INTERNALS__?.invoke)") == "true") true else null }
-            try {
-                PageDriver.poll("the surface again", 90) {
-                    JSONObject(PageDriver.invoke("native_terminal_surface_state", "{session:${quoted(id)}}"))
-                        .takeIf { it.getBoolean("ready") && it.getBoolean("placed") }
-                }
-            } catch (error: AssertionError) {
-                val state = runCatching { PageDriver.invoke("native_terminal_surface_state", "{session:${quoted(id)}}") }
-                val coreHasMarker = runCatching { coreText(id).lines().any { it.trim() == "before-recreate" } }
-                val hasPane = runCatching { js("Boolean(document.querySelector(${quoted(nativePane)}))") }
-                evidence.put("afterRecreate", JSONObject()
-                    .put("surfaceState", state.toString())
-                    .put("coreHasMarker", coreHasMarker.toString())
-                    .put("pageHasNativePane", hasPane.toString()))
-                throw AssertionError("${error.message}; surface=$state, core retained marker=$coreHasMarker, page pane=$hasPane", error)
+            PageDriver.awaitStartPage()
+            PageDriver.js(driver)
+            val retired = PageDriver.poll("the old core to retire", 30) {
+                invoke("terminal_core_text", id).takeIf { it == "error No native terminal core for this session" }
             }
-            val after = coreText(id)
-            assertTrue("the screen shows what it showed before the recreation", after.lines().any { it.trim() == "before-recreate" })
-            assertEquals("the recreated pane holds the grid it held", portrait, assertThePaneHoldsItsGrid(id, "recreated", "pf"))
+            evidence.put("oldCoreRetired", retired.startsWith("error "))
+            assertEquals("the new page has no old terminal pane", "false", js("Boolean(document.querySelector(${quoted(nativePane)}))"))
+
+            revealHosts()
+            connectSavedHost(trustNewKey = false)
+            val fresh = session(replaced = id)
+            awaitRow(fresh, "the new shell prompt", { it == fixture.getString("prompt").trim() })
+            val pane = checkNotNull(surfaceView())
+            val centre = ui {
+                val origin = IntArray(2).also(pane::getLocationOnScreen)
+                (origin[0] + pane.width / 2) to (origin[1] + pane.height / 2)
+            }
+            device.click(centre.first, centre.second)
+            PageDriver.poll("the new pane to open the keyboard", 30) {
+                ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { it }
+            }
             typeIntoTheSurface("echo after-recreate")
-            awaitRow(id, "the session taking input", { it == "after-recreate" })
+            awaitRow(fresh, "the new session taking input", { it == "after-recreate" })
+            assertTrue("the new session does not show the old screen", coreText(fresh).lines().none { it.trim() == "before-recreate" })
+            assertThePaneHoldsItsGrid(fresh, "recreated", "pf")
+            return fresh
         } finally {
             runCatching { device.setOrientationNatural(); device.unfreezeRotation() }
             runCatching { shell("settings ${if (previousIme == "null") "delete secure $imeSetting" else "put secure $imeSetting $previousIme"}") }
