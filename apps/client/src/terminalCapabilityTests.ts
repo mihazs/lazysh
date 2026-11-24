@@ -4,10 +4,11 @@
  * that is renamed, removed or failing takes its capability with it. `terminalBackends.contract.test.ts` holds every
  * registered backend to this table after running the suites below.
  */
-import {describe, expect, it, onTestFinished, type RunnerTestSuite} from 'vitest';
+import {describe, expect, it, onTestFinished, vi, type RunnerTestSuite} from 'vitest';
 import {defaults, terminalPreferences} from './preferences';
 import type {TerminalCapabilities, TerminalPreferences} from './terminalAdapter';
 import type {ContractHarness} from './terminalAdapter.contract';
+import {nativeSurface} from './terminalSurfaceAnchor';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -21,7 +22,7 @@ const cases = {
   mouseLevels: 'reports every mouse tracking level a program can ask for',
   wheel: 'delivers a wheel notch where the pointer is',
   screenReader: 'offers a screen reader one list item per row while that reader is in use',
-  boldColor: 'draws default-coloured bold text in the fixed colour',
+  boldColor: 'applies the fixed colour to default-coloured bold text',
 } as const;
 
 /** The cases that verify each capability. An empty list means no test can observe it yet, so no backend may claim it. */
@@ -68,14 +69,15 @@ export function passedCases(suite: RunnerTestSuite): Set<string> {
  */
 export function runTerminalCapabilityContract(name: string, harness: ContractHarness) {
   /** A new adapter, attached, with the element it is drawn into; it is disposed when the test ends. */
-  async function open() {
+  async function open(surface?: string) {
     const adapter = await harness.create();
     onTestFinished(() => adapter.dispose());
-    const target = harness.target();
+    const mountTarget = harness.target();
+    const target = mountTarget.kind === 'native' && surface ? {...mountTarget, surface} : mountTarget;
     await adapter.attach(target);
     const mount = target.kind === 'dom' ? target.element : document.getElementById(target.anchorId)!;
     const preferences: TerminalPreferences = terminalPreferences(defaults);
-    return {adapter, mount, preferences, write: (data: string) => adapter.write!(new TextEncoder().encode(data))};
+    return {adapter, target, mount, preferences, write: (data: string) => adapter.write!(new TextEncoder().encode(data))};
   }
 
   describe(`TerminalAdapter capability contract: ${name}`, () => {
@@ -112,8 +114,19 @@ export function runTerminalCapabilityContract(name: string, harness: ContractHar
     });
 
     it(cases.boldColor, async () => {
-      const {adapter, mount, preferences, write} = await open();
-      if (!adapter.capabilities.customBoldColor) return;
+      const {adapter, target, mount, preferences, write} = await open('bold-colour');
+      expect(adapter.capabilities.customBoldColor).toBe(true);
+      if (target.kind === 'native') {
+        const look = vi.spyOn(nativeSurface, 'look').mockResolvedValue(undefined);
+        onTestFinished(() => { look.mockRestore(); });
+        adapter.applyPreferences({...preferences, brightBold: false, boldColor: '#336699'});
+        await vi.waitFor(() => expect(look).toHaveBeenLastCalledWith('bold-colour',
+          expect.objectContaining({brightBold: false, boldColor: '#336699'})));
+        adapter.applyPreferences({...preferences, brightBold: false, boldColor: undefined});
+        await vi.waitFor(() => expect(look).toHaveBeenLastCalledWith('bold-colour',
+          expect.objectContaining({brightBold: false, boldColor: undefined})));
+        return;
+      }
       const colourOf = async (text: string) => {
         await write(`\x1b[1m${text}\x1b[0m\r\n`);
         await sleep(30); // the DOM renderer draws on the next animation frame

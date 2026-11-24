@@ -85,6 +85,30 @@ fn shoot(text: &str, cols: u16, rows: u16, ap: &Appearance, fonts: FontLibrary) 
     r.read_image().unwrap()
 }
 
+#[test]
+fn draws_custom_bold_colour_only_on_default_coloured_bold_text() {
+    let mut ap = appearance(&[MONO]);
+    ap.bold.color = Some(lazysh_terminal_runtime::RgbColor { r: 255, g: 0, b: 0 });
+    let image = shoot("\x1b[1mA\x1b[0mA\x1b[1;32mA", 3, 1, &ap, library(ALL));
+    let red_ink = |column| {
+        image.rgb.chunks_exact(3).enumerate().any(|(index, pixel)| {
+            index as u32 % image.width / CW == column
+                && pixel[0] > 128
+                && pixel[1] < 32
+                && pixel[2] < 32
+        })
+    };
+    assert!(
+        red_ink(0),
+        "default-coloured bold glyph uses the custom red"
+    );
+    assert!(!red_ink(1), "regular text keeps its foreground");
+    assert!(
+        !red_ink(2),
+        "explicitly coloured bold text keeps its foreground"
+    );
+}
+
 /// The bounding box `(x0, y0, x1, y1)` (end exclusive) of the pixels in a region that are not the
 /// theme background, or `None` for a blank region.
 fn ink(img: &Image, (rx, ry, rw, rh): (u32, u32, u32, u32)) -> Option<(u32, u32, u32, u32)> {

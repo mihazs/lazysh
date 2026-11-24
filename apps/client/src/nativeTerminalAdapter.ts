@@ -20,7 +20,7 @@ import {searchRows} from './terminalText';
 /** Honest for a core without a renderer (`ime` is xterm.js' input observation and `mouseReporting` is its DOM wheel dispatch, which this backend does not have: its keyboards are the capture and the Android input view, and its wheel reports go to the core): it parses, scrolls and answers questions about the screen, and draws nothing. `canonicalMoshResize` holds for a core that follows Mosh's frames (`NativeCoreBridge.canonicalFrames`); `enableCanonicalResize` refuses one that cannot. */
 export const nativeCapabilities: TerminalCapabilities = {
   nativeRendering: false, selection: true, scrollback: true, mouseReporting: false, ime: false, accessibility: false,
-  screenInspection: true, canonicalMoshResize: true, customBoldColor: false,
+  screenInspection: true, canonicalMoshResize: true, customBoldColor: true,
 };
 
 /** Longest pause between two pulls of the core's state, so IPC calls follow the screen's refresh rate and not the output volume. */
