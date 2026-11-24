@@ -7,8 +7,22 @@ runs:
       with:
         bun-version: 1.3.14
     - uses: dtolnay/rust-toolchain@stable
+    # Compiling cargo-edit takes ~70 s in each of the three jobs a release cycle runs before publication.
+    # Only the pinned editor binary is cached (never a build directory), keyed by this file so a pin change
+    # misses; pull request and other-ref runs restore main's entry and never save one.
+    - id: editor
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/release-tools
+        key: release-tools-cargo-edit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/actions/setup-release/action.yml') }}
     - name: Install the pinned native version editor
+      if: steps.editor.outputs.cache-hit != 'true'
       shell: bash
       run: cargo install cargo-edit --version 0.13.8 --locked --no-default-features --features set-version --root "$RUNNER_TEMP/release-tools"
+    - if: steps.editor.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/release-tools
+        key: ${{ steps.editor.outputs.cache-primary-key }}
     - shell: bash
       run: echo "$RUNNER_TEMP/release-tools/bin" >> "$GITHUB_PATH"
