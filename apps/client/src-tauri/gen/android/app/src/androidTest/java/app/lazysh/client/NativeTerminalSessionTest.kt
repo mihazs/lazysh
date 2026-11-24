@@ -1031,9 +1031,19 @@ class NativeTerminalSessionTest {
             typeIntoTheSurface(
                 "printf '\\ncjk:\\xe6\\x97\\xa5\\xe6\\x9c\\xac\\xe8\\xaa\\x9e|\\nemo:\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x9a\\x80|\\ncmb:e\\xcc\\x81a\\xcc\\x88|\\nzwj:\\xf0\\x9f\\x91\\xa8\\xe2\\x80\\x8d\\xf0\\x9f\\x91\\xa9|\\nend:|\\n'"
             )
-            val screen = awaitRow(id, "the last printed line", { it == "end:|" })
-            val rows = screen.lines()
-            fun rowOf(prefix: String) = rows.indexOfFirst { it.startsWith(prefix) }.also { assertTrue("a screen row starting $prefix in $rows", it >= 0) }
+            awaitRow(id, "the last printed line", { it == "end:|" })
+            val state = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
+            val top = state.getJSONObject("viewport").getInt("top")
+            val rowCount = state.getInt("rows")
+            // Plain-text output joins wrapped lines. Search gives the physical screen row.
+            fun rowOf(prefix: String): Int {
+                val args = JSONObject().put("sessionId", id).put("query", prefix)
+                    .put("direction", "backward").put("from", top + rowCount)
+                val hit = JSONObject(PageDriver.invoke("terminal_core_search", args.toString()))
+                return (hit.getInt("row") - top).also {
+                    assertTrue("a visible screen row starting $prefix: $it", it in 0 until rowCount)
+                }
+            }
             val (cjk, emo, cmb, zwj) = listOf("cjk:", "emo:", "cmb:", "zwj:").map(::rowOf)
             val cell = cellSize()
             evidence.put("cellWidthPx", cell.first).put("cellHeightPx", cell.second)
