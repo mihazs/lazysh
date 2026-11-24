@@ -10,7 +10,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | Gap | Known not to work on native. |
 | N/A | No engine dependency, or xterm.js-only machinery. |
 
-**Summary: 54 features. Works 28, Partial 13, Unproven 6, Gap 4, N/A 3.**
+**Summary: 54 features. Works 29, Partial 12, Unproven 6, Gap 4, N/A 3.**
 
 
 ## Input
@@ -45,7 +45,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | 21 | CJK fallback list, wide cells, emoji | Unproven | Renderer host test `packages/terminal-renderer-wgpu/tests/text.rs` only; Android: [#2507](https://github.com/mihazs/lazysh/issues/2507). |
 | 22 | Cursor style and blink | Partial | `nativeTerminalAdapter.look.test.ts` carries both to the renderer; the preferred style as the default a program resets to is [#2218](https://github.com/mihazs/lazysh/issues/2218). |
 | 23 | Bright bold and custom bold colour | Partial | Renderer accepts both (`panes.rs`); native declares `customBoldColor: false`: [#2506](https://github.com/mihazs/lazysh/issues/2506). |
-| 24 | History lines (scrollback) setting | Partial | Applied when a session opens (`terminalBackends.ts`); an open session does not follow a change: [#2505](https://github.com/mihazs/lazysh/issues/2505). |
+| 24 | History lines (scrollback) setting | Works | Applied when a session opens (`terminalBackends.ts`) and to an open session: `nativeTerminalAdapter.test.ts` 'native History lines setting', `tauriNativeCoreBridge.test.ts` (one `terminal_core_scrollback` per change, retried after a refusal), over the real core `nativeTerminalAdapter.realCore.test.ts` (more rows after a raise, the oldest dropped at once after a cut), `packages/terminal-runtime/tests/scrollback.rs` (the runtime and the hub's accounting), `local.rs` `the_real_core_keeps_the_history_lines_the_setting_changed_to` (the app's command over a PTY, range checked); closes [#2505](https://github.com/mihazs/lazysh/issues/2505). |
 | 25 | Scrolling by finger or wheel, history, follow live output | Works | `terminalAdapter.contract.ts` 'scrolls through history and follows live output again'; `nativeTerminalAdapter.test.ts` (wheel by lines); `e2e/terminal-native-surface.spec.ts` 'a finger drag on the container still scrolls the native terminal'. |
 | 26 | Mouse reporting to programs: click, drag, wheel | Works | `nativePointerSelection.test.ts` (press, motion and release in the cell under the pointer; none while the program does not track); `nativeTerminalAdapter.test.ts` (one wheel report per notch). The `mouseReporting` flag is false by definition (xterm.js' DOM dispatch). |
 | 27 | Pinch zoom | Works | `TerminalPane.test.tsx` 'resizes the text with a pinch, up to the largest size, and sends the renderer the new look' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)); the grid refit: `nativeTerminalAdapter.fit.test.ts`. Real touch on an Android surface: [#2501](https://github.com/mihazs/lazysh/issues/2501). |
@@ -105,5 +105,5 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 1. P0 daily input: [#2489](https://github.com/mihazs/lazysh/issues/2489), [#2490](https://github.com/mihazs/lazysh/issues/2490), [#2493](https://github.com/mihazs/lazysh/issues/2493) (Android input work); the composer ([#2496](https://github.com/mihazs/lazysh/issues/2496)) is fixed in [PR #2497](https://github.com/mihazs/lazysh/pull/2497).
 2. P0 proof of what the pane already does, over the native adapter in Vitest: Find, Paste, OSC 52, Select all, Copy screen and the gestures of #2498 are covered by [PR #2509](https://github.com/mihazs/lazysh/pull/2509) (closes [#2499](https://github.com/mihazs/lazysh/issues/2499)).
 3. P0 on the CI emulator, once the first session case is stable: [#2501](https://github.com/mihazs/lazysh/issues/2501) (selection, Copy, links), [#2502](https://github.com/mihazs/lazysh/issues/2502) (rotation, keyboard insets, recreation), [#2500](https://github.com/mihazs/lazysh/issues/2500) (multiplexer pages).
-4. P1: [#2503](https://github.com/mihazs/lazysh/issues/2503) (keyboard behaviour from a DOM editor), [#2505](https://github.com/mihazs/lazysh/issues/2505) (History lines), [#2507](https://github.com/mihazs/lazysh/issues/2507) (fonts on Android), [#2223](https://github.com/mihazs/lazysh/issues/2223), [#2218](https://github.com/mihazs/lazysh/issues/2218).
+4. P1: [#2503](https://github.com/mihazs/lazysh/issues/2503) (keyboard behaviour from a DOM editor), [#2507](https://github.com/mihazs/lazysh/issues/2507) (fonts on Android), [#2223](https://github.com/mihazs/lazysh/issues/2223), [#2218](https://github.com/mihazs/lazysh/issues/2218).
 5. P2: [#2506](https://github.com/mihazs/lazysh/issues/2506) (bold colour).

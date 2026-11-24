@@ -1,4 +1,8 @@
 //! Host-owned immutable file snapshots retained by the native image lifetime.
+//
+// Modified by lazysh: `Terminal::set_max_scrollback` below (libghostty-vt takes the
+// scrollback byte limit at any time; the binding only set it when the terminal was
+// created); upstream license retained. See ../../PROVENANCE.md.
 use super::{ffi, Error, GhosttyResultExt};
 use crate::pane_graphics_files::{FileStore, OwnedExport};
 use std::ffi::c_void;
@@ -161,5 +165,21 @@ mod tests {
             assert!(out.context.is_null());
             release(ptr::null_mut());
         }
+    }
+}
+
+impl super::Terminal {
+    /// Change the scrollback byte limit of a live terminal; a lower limit drops the oldest whole pages at once.
+    pub fn set_max_scrollback(&mut self, bytes: usize) -> Result<(), Error> {
+        unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
+                (&bytes as *const usize).cast(),
+            )
+            .into_result()?;
+        }
+        self.max_scrollback = bytes;
+        Ok(())
     }
 }

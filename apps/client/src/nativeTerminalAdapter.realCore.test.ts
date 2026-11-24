@@ -117,6 +117,32 @@ describe.skipIf(!binary)('NativeTerminalAdapter over the real core', () => {
     } finally { await adapter.dispose(); }
   });
 
+  it('keeps the History lines the setting says in a session that is open: more rows after a raise, the oldest dropped at once after a cut', async () => {
+    const core = await openStdioCore(binary!, {columns: 80, rows: 24, scrollbackLines: 100});
+    const adapter = await openNativeTerminalAdapter(core);
+    const rows = (from: number, count: number) => bytes(Array.from({length: count}, (_, i) => `${from + i}`.padStart(79, '0')).join('\r\n') + '\r\n');
+    const withHistory = (scrollbackLines: number) => ({...terminalPreferences(defaults), scrollbackLines});
+    const length = async () => (await core.snapshot()).state.viewport.length;
+    try {
+      await adapter.write!(rows(0, 12_000));
+      const small = await length();
+      expect(small, 'a budget of 100 lines keeps about as many rows as its bytes hold, not the 12,000 printed').toBeLessThan(6_000);
+
+      adapter.applyPreferences(withHistory(5_000));
+      await vi.waitFor(() => expect(adapter.metrics().scrollbackLines).toBe(5_000));
+      await adapter.write!(rows(12_000, 12_000));
+      const large = await length();
+      expect(large, 'raised to 5,000 lines').toBeGreaterThanOrEqual(5_000 + 24);
+      expect(large).toBeGreaterThan(small + 2_000);
+
+      adapter.applyPreferences(withHistory(100));
+      await vi.waitFor(async () => expect(await length()).toBeLessThan(small + 1));
+      expect(await length(), 'cut to 100 lines, dropped at once').toBeGreaterThanOrEqual(100 + 24);
+      expect(adapter.metrics().scrollbackLines).toBe(100);
+      expect(adapter.readRows!(adapter.viewport().top + 22, 1)[0]).toContain('23999');
+    } finally { await adapter.dispose(); }
+  });
+
   it('sizes the real core to its pane: the grid the pane holds is the grid the core has, after each change of the pane or the font', async () => {
     const core = await openStdioCore(binary!);
     // The renderer's cell: 0.6 x 1.2 of the font size in device pixels.

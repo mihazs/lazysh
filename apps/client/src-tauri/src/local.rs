@@ -2480,6 +2480,54 @@ mod tests {
         assert_eq!(row.chars().count(), 25, "{text:?}");
         terminal_core::close(&id);
     }
+    /// Needs the `native-terminal` feature (Zig). The History lines setting changed while the session is open (#2505):
+    /// the real core drops the oldest rows at once, and refuses a number outside the setting's range.
+    #[cfg(all(unix, native_terminal_core))]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    async fn the_real_core_keeps_the_history_lines_the_setting_changed_to() {
+        use crate::terminal_core::{self, terminal_core_scrollback, terminal_core_snapshot};
+        let _kept = terminal_core::tests_keeping_cores().read();
+        let state = LocalState::default();
+        let (event, _rx) = events();
+        terminal_core::terminal_core_open(access_lease(), event.clone(), 40, 6, Some(20_000), None)
+            .await
+            .unwrap();
+        let program = r"stty -echo; read x; seq 1 30000; echo done; sleep 20";
+        let connected =
+            desktop::start_with_access(&state, access_lease(), shell(program), 40, 6, event)
+                .await
+                .unwrap();
+        let id = connected.session_id;
+        desktop::write(&state, &id, "go\n".into(), access_lease()).unwrap();
+        real_core_text_with(&id, "done").await;
+        let length = || async {
+            let answer = terminal_core_snapshot(access_lease(), id.clone(), Some(1)).await;
+            answered(answer).unwrap()["state"]["viewport"]["length"]
+                .as_u64()
+                .unwrap()
+        };
+        let before = length().await;
+        assert!(
+            before > 25_000,
+            "20,000 lines keep what the program printed: {before}"
+        );
+        let set = |lines| {
+            let id = id.clone();
+            async move { answered(terminal_core_scrollback(access_lease(), id, lines).await) }
+        };
+        set(100).await.unwrap();
+        let after = length().await;
+        assert!(
+            (100 + 6..before / 2).contains(&after),
+            "cut to 100 lines, dropped at once: {before} -> {after}"
+        );
+        for lines in [0, 99, 20_001] {
+            assert!(set(lines).await.is_err(), "{lines}");
+        }
+        assert_eq!(length().await, after, "a refused number changes nothing");
+        terminal_core::close(&id);
+    }
     /// A local state and a core opened for a terminal of this size, with the Channel the session starts with.
     #[cfg(all(unix, native_terminal_core))]
     async fn open_core(

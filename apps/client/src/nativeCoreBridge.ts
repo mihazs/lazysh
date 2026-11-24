@@ -80,6 +80,8 @@ export interface NativeCoreBridge {
   setActive?(active: boolean): void;
   /** The app's terminal theme changed: the core reports these colours to the programs that ask for them from now on. */
   setTheme?(theme: TerminalTheme): void;
+  /** The History lines setting changed: the core keeps that many rows of history from now on (fewer drops the oldest at once) and answers with its state. Absent: the core keeps the number it opened with. */
+  setScrollback?(lines: number): Promise<NativeCoreSnapshot>;
   /** Present when the core answers questions about the text itself; without it the adapter reads the window of rows. */
   query?<Q extends NativeCoreQuery>(query: Q): Promise<NativeCoreAnswer<Q>>;
   /** The cells the core's renderer highlights as selected; `undefined` clears them. */

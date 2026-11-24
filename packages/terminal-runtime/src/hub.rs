@@ -146,6 +146,11 @@ pub enum SessionError {
     Closed,
     /// The writer refused user input.
     Refused,
+    /// Not even the minimum scrollback fits in what the budget has left ([`Session::set_scrollback_bytes`]).
+    Budget {
+        requested: usize,
+        available: usize,
+    },
 }
 
 impl fmt::Display for SessionError {
@@ -154,6 +159,13 @@ impl fmt::Display for SessionError {
             Self::Core(err) => err.fmt(f),
             Self::Closed => f.write_str("terminal session is closed"),
             Self::Refused => f.write_str("terminal input refused by the access policy"),
+            Self::Budget {
+                requested,
+                available,
+            } => write!(
+                f,
+                "scrollback budget exhausted: {requested} bytes requested, {available} left"
+            ),
         }
     }
 }
@@ -273,7 +285,8 @@ struct Cell {
     attached: AtomicBool,
     released: AtomicBool,
     hooks: Hooks,
-    reserved: usize,
+    /// Scrollback bytes granted; changes only under the registry lock ([`Session::set_scrollback_bytes`]).
+    reserved: AtomicUsize,
     shared: Weak<HubShared>,
     replies_written: AtomicU64,
     replies_dropped: AtomicU64,
@@ -430,7 +443,7 @@ impl Cell {
             {
                 registry.sessions.remove(&self.id);
             }
-            registry.reserved -= self.reserved;
+            registry.reserved -= self.reserved.load(Relaxed);
             shared.workers[self.worker].sessions.fetch_sub(1, Relaxed);
         }
     }
@@ -513,7 +526,7 @@ impl Hub {
             attached: AtomicBool::new(false),
             released: AtomicBool::new(false),
             hooks,
-            reserved: granted,
+            reserved: AtomicUsize::new(granted),
             shared: Arc::downgrade(&self.shared),
             replies_written: AtomicU64::new(0),
             replies_dropped: AtomicU64::new(0),
@@ -640,7 +653,47 @@ impl Session {
     }
 
     pub fn scrollback_granted(&self) -> usize {
-        self.cell.reserved
+        self.cell.reserved.load(Relaxed)
+    }
+
+    /// Change the scrollback budget of the live session (the History lines setting), clamped like
+    /// [`Hub::create`]: to the per-session cap and to what the global budget has left once this session's
+    /// own grant is given back. The granted bytes come back; a request under the minimum that does not fit
+    /// fails and leaves the session as it was. A lower budget drops the oldest history at once.
+    pub fn set_scrollback_bytes(&self, bytes: usize) -> Result<usize, SessionError> {
+        let shared = self.cell.shared.upgrade().ok_or(SessionError::Closed)?;
+        let (previous, granted) = {
+            let mut registry = lock(&shared.registry);
+            if self.cell.released.load(Acquire) {
+                return Err(SessionError::Closed);
+            }
+            let previous = self.cell.reserved.load(Relaxed);
+            let available = shared
+                .config
+                .scrollback_budget
+                .saturating_sub(registry.reserved - previous);
+            let requested = bytes.min(shared.config.session_scrollback_max);
+            let granted = requested.min(available);
+            if granted < requested.min(MIN_SCROLLBACK_BYTES) {
+                return Err(SessionError::Budget {
+                    requested,
+                    available,
+                });
+            }
+            registry.reserved = registry.reserved - previous + granted;
+            self.cell.reserved.store(granted, Relaxed);
+            (previous, granted)
+        };
+        let applied = self.with(|runtime| runtime.set_scrollback_bytes(granted));
+        if !matches!(applied, Ok(Ok(()))) {
+            let mut registry = lock(&shared.registry);
+            if !self.cell.released.load(Acquire) {
+                registry.reserved = registry.reserved - granted + previous;
+                self.cell.reserved.store(previous, Relaxed);
+            }
+        }
+        applied??;
+        Ok(granted)
     }
 
     /// Run `f` on the VT state (size, modes, events, text, scrolling, selection...). It holds the

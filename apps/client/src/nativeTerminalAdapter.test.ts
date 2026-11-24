@@ -4,6 +4,7 @@ import {createHeadlessCore, type HeadlessCore, type HeadlessCoreOptions} from '.
 import {nativeCapabilities, openNativeTerminalAdapter} from './nativeTerminalAdapter';
 import {mountScreenReaderMirror} from './terminalScreenReader';
 import {runTerminalAdapterContract} from './terminalAdapter.contract';
+import {defaults, terminalPreferences} from './preferences';
 import type {NativeCoreBridge, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 
 const text = (value: string) => new TextEncoder().encode(value);
@@ -548,5 +549,29 @@ describe('native selection and typing', () => {
     adapter.sendInput('\x1b[0n', 'terminal-reply');
     adapter.sendKey({type: 'key', code: 'KeyA', key: 'a', mods: {shift: false, ctrl: false, alt: false, meta: false}, repeat: false, release: true, composing: false});
     expect(adapter.selectedText()).toBe('world');
+  });
+});
+
+describe('native History lines setting', () => {
+  it('reaches a session that is open: the core keeps the new number of rows, the metrics say so, and an unchanged number sends nothing', async () => {
+    const core = createHeadlessCore({scrollbackLines: 50});
+    const adapter = await openNativeTerminalAdapter(core);
+    const lines = (count: number) => Array.from({length: count}, (_, i) => `line ${i}`).join('\r\n');
+    const withHistory = (scrollbackLines: number) => ({...terminalPreferences(defaults), scrollbackLines});
+    expect(adapter.metrics().scrollbackLines).toBe(50);
+    adapter.applyPreferences(withHistory(50));
+    await sleep(5);
+    expect(core.calls).not.toContain('scrollback');
+
+    await adapter.write!(text(lines(200)));
+    expect(adapter.viewport().length).toBe(50 + 5);
+    adapter.applyPreferences(withHistory(300));
+    adapter.applyPreferences(withHistory(300));
+    await sleep(5);
+    expect(core.calls.filter(call => call === 'scrollback')).toHaveLength(1);
+    expect(adapter.metrics().scrollbackLines).toBe(300);
+    await adapter.write!(text(`\r\n${lines(400)}`));
+    expect(adapter.viewport().length).toBe(300 + 5);
+    await adapter.dispose();
   });
 });

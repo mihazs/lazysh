@@ -15,7 +15,7 @@ export type StdioCoreOptions = {columns?: number; rows?: number; scrollbackLines
 
 const noop = () => {};
 
-export async function openStdioCore(binary: string, {columns = 20, rows = 5, scrollbackLines = 200}: StdioCoreOptions = {}): Promise<NativeCoreBridge> {
+export async function openStdioCore(binary: string, {columns = 20, rows = 5, scrollbackLines: opened = 200}: StdioCoreOptions = {}): Promise<NativeCoreBridge> {
   const child = spawn(binary, [], {stdio: ['pipe', 'pipe', 'inherit']});
   child.stdin.on('error', noop);
   const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
@@ -44,15 +44,17 @@ export async function openStdioCore(binary: string, {columns = 20, rows = 5, scr
     pending.set(id, {resolve: resolve as (result: unknown) => void, reject});
     child.stdin.write(`${JSON.stringify({jsonrpc: '2.0', id, method, params})}\n`);
   });
+  let scrollbackLines = opened;
   const state = (method: string, params?: object) => request<Answer>(method, params).then((answer): NativeCoreSnapshot => ({window: answer.window, state: {...answer.state, scrollbackLines}}));
 
-  await request('open', {columns, rows, scrollbackLines});
+  await request('open', {columns, rows, scrollbackLines: opened});
   let closing: Promise<void> | undefined;
   return {
     snapshot: () => state('snapshot'),
     scroll: action => state('scroll', {action}),
     feed: bytes => state('feed', {data: Buffer.from(bytes).toString('base64')}),
     resize: size => state('resize', size),
+    setScrollback: async lines => { const snapshot = await state('scrollback', {lines}); scrollbackLines = lines; return {...snapshot, state: {...snapshot.state, scrollbackLines}}; },
     canonicalFrames: () => request<null>('canonical').then(noop),
     async input(data) { await request('input', {text: typeof data === 'string' ? data : new TextDecoder().decode(data)}); },
     // shortcut: the harness encodes text only; give it a `key` method when a real-core key case exists.

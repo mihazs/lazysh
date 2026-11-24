@@ -227,6 +227,7 @@ pub fn run() {
                 terminal_core::terminal_core_resize,
                 terminal_core::terminal_core_set_active,
                 terminal_core::terminal_core_theme,
+                terminal_core::terminal_core_scrollback,
                 terminal_core::terminal_core_selection_text,
                 terminal_core::terminal_core_search,
                 terminal_core::terminal_core_word_at,

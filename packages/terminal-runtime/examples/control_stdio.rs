@@ -9,7 +9,7 @@
 //! state. Methods, each with an optional `window` where it answers with the state:
 //! `open {columns, rows, scrollbackLines, canonicalFrames?}`, `canonical` (a core that was not opened for Mosh becomes one,
 //! before its first byte), `feed {data}` (base64; parsed before it answers), `snapshot`, `scroll {action}`,
-//! `resize {columns, rows}`, `input {text}`, `setActive {active}`, `query {query}` (a `ControlQuery` about the buffer's
+//! `resize {columns, rows}`, `scrollback {lines}` (the History lines setting changed), `input {text}`, `setActive {active}`, `query {query}` (a `ControlQuery` about the buffer's
 //! text, answered with text, a range or a hit), `select {range}` (the cells to highlight, or none) and `close`, which
 //! ends the process.
 //! `cargo run --example control_stdio`.
@@ -84,6 +84,12 @@ struct Scroll {
 struct Resize {
     columns: u16,
     rows: u16,
+    window: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct Scrollback {
+    lines: usize,
     window: Option<usize>,
 }
 
@@ -262,6 +268,18 @@ fn call(hub: &Hub, core: &mut Option<Core>, method: &str, input: Value) -> Resul
             core.answer(window, |runtime, window| {
                 runtime.control_resize(columns, rows, window)
             })
+        }
+        "scrollback" => {
+            // The History lines setting changed: the budget for that many rows at the width the grid has now.
+            let Scrollback { lines, window } = params(input)?;
+            let cols = core
+                .session
+                .with(|runtime| runtime.size().cols)
+                .map_err(failed)?;
+            core.session
+                .set_scrollback_bytes(scrollback_bytes_for_lines(lines, cols))
+                .map_err(failed)?;
+            core.answer(window, |runtime, rows| runtime.control_snapshot(rows))
         }
         "input" => {
             let Input { text } = params(input)?;
