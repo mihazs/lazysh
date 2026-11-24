@@ -131,13 +131,13 @@ it("saves the feature switches through their own revision without touching the h
   fireEvent.click(await screen.findByLabelText("Simulator and emulator streaming"));
   fireEvent.click(screen.getByRole("button",{name:"Save feature switches"}));
   await screen.findByText("Host settings saved for new operations.");
-  expect(invoke).toHaveBeenLastCalledWith("update_host_features",{sessionId:"host-a",features:{expectedRevision:3,simulatorStreamingEnabled:false,portScanEnabled:true}},{ headers:{ "X-Lazysh-Access":expect.any(String) } });
+  expect(calls("update_host_features")).toEqual([["update_host_features",{sessionId:"host-a",features:{expectedRevision:3,simulatorStreamingEnabled:false,portScanEnabled:true}},{ headers:{ "X-Lazysh-Access":expect.any(String) } }]]);
   expect(calls("update_companion_settings")).toHaveLength(0);
   expect((screen.getByLabelText("Simulator and emulator streaming") as HTMLInputElement).checked).toBe(false);
   expect((screen.getByLabelText("Port scanning from the app") as HTMLInputElement).checked).toBe(true);
   // A later settings save must send the settings revision, not the feature revision.
   fireEvent.click(screen.getByLabelText("Recorded usage inspection"));fireEvent.click(screen.getByRole("button",{name:"Save host settings"}));
-  await waitFor(()=>expect(invoke).toHaveBeenLastCalledWith("update_companion_settings",expect.objectContaining({settings:expect.objectContaining({expectedRevision:0})}),expect.anything()));
+  await waitFor(()=>expect(calls("update_companion_settings")).toEqual([["update_companion_settings",expect.objectContaining({settings:expect.objectContaining({expectedRevision:0})}),expect.anything()]]));
 });
 it("reports a stale feature revision, withdraws the switches and shows the host's values after a refresh",async()=>{
   answer({get_companion_settings:[{...settings,features},{...settings,features:{...features,revision:4,portScanEnabled:false}}],update_host_features:[()=>Promise.reject({message:"SettingsConflict"})]});
