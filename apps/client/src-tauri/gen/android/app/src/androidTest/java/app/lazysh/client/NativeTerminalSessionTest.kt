@@ -6,6 +6,8 @@ import android.system.Os
 import android.view.SurfaceView
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -193,10 +195,14 @@ class NativeTerminalSessionTest {
         }
     }
 
+    private fun surfaceBounds(): Rect {
+        val view = checkNotNull(surfaceView())
+        return ui { IntArray(2).also(view::getLocationOnScreen).let { Rect(it[0], it[1], it[0] + view.width, it[1] + view.height) } }
+    }
+
     /** A finger drag over the pane, on the screen, the way a user scrolls it. */
     private fun drag(fromFraction: Double, toFraction: Double) {
-        val view = checkNotNull(surfaceView())
-        val bounds = ui { IntArray(2).also(view::getLocationOnScreen).let { Rect(it[0], it[1], it[0] + view.width, it[1] + view.height) } }
+        val bounds = surfaceBounds()
         val x = bounds.centerX()
         UiDevice.getInstance(instrumentation).swipe(x, bounds.top + (bounds.height() * fromFraction).roundToInt(), x, bounds.top + (bounds.height() * toFraction).roundToInt(), 20)
     }
@@ -222,8 +228,19 @@ class NativeTerminalSessionTest {
         }) { "the session's keyboard editor" }
         val imm = instrumentation.targetContext.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
 
-        PageDriver.invoke("native_terminal_surface_focus", "{session:${quoted(id)},focused:true}")
-        PageDriver.poll("the editor to hold the focus and be served the keyboard", 30) { ui { input.hasFocus() && imm.isActive(input) }.takeIf { it } }
+        fun keyboardVisible() = ui { activity ->
+            ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+        }
+        PageDriver.invoke("native_terminal_surface_focus", "{session:${quoted(id)},focused:false}")
+        PageDriver.poll("the editor and keyboard to be closed before the tap", 30) {
+            (ui { !input.hasFocus() } && !keyboardVisible()).takeIf { it }
+        }
+        val bounds = surfaceBounds()
+        assertEquals("the screen received the plain terminal tap", true, UiDevice.getInstance(instrumentation).click(bounds.centerX(), bounds.centerY()))
+        PageDriver.poll("the native editor to be served and the keyboard to open after the tap", 30) {
+            (ui { input.hasFocus() && imm.isActive(input) } && keyboardVisible()).takeIf { it }
+        }
+        evidence.put("keyboardOpenedOnTap", true)
         evidence.put("keyboardEditorServed", true)
         shell("input text ab")
         awaitRow(id, "the keys typed at the focused editor", { it.startsWith(prompt) && it.endsWith("ab") })
