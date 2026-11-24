@@ -216,7 +216,8 @@ class NativeAcceptanceTest {
                 PageDriver.poll("the cat -v echo of Up", 20) { keyRow().takeIf { rows -> rows.any { it.contains("^[[A") || it.contains("^[OA") } } }
                 fingerTap(".terminal-keys button", "Ctrl")
                 driver.typeIntoTheSurfaceWithoutEnter("d")
-                PageDriver.poll("cat to end", 20) { core().takeIf { text -> text.lines().any { it.trim().endsWith("\$") || it.trim().endsWith("#") || it.trim().endsWith(">") } } }
+                val ended = PageDriver.poll("cat to end", 20) { core().takeIf { text -> text.lines().any { it.trim().endsWith("\$") || it.trim().endsWith("#") || it.trim().endsWith(">") } } }
+                put("endedWith", ended.lines().last { it.isNotBlank() }.trim())
             }
             case("composer-and-page-fields-take-input", "The page's composer and fields still take input while a native session is placed", "P0") {
                 val opener = listOf("button[aria-label='Compose text']", "button[aria-label='Compose']", "button[aria-label='Open composer']")
