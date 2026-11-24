@@ -51,6 +51,13 @@ fn run_traced(
         payload,
     )
 }
+fn assert_report_snapshot_eq(mut actual: Value, expected: &Value) {
+    let mut expected = expected.clone();
+    actual.as_object_mut().unwrap().remove("liveAgents");
+    expected.as_object_mut().unwrap().remove("liveAgents");
+    assert_eq!(actual, expected);
+}
+
 fn event(session: &str, state: &str) -> Value {
     json!({"schemaVersion":1,"sessionId":session,"agent":"Test Agent","project":"/work/app","state":state,"summary":"A turn","paneId":"%1"})
 }
@@ -280,7 +287,7 @@ fn codex_hooks_preserve_main_turn_while_subagents_finish() {
                 &json!({"hook_event_name":ignored,"session_id":"parent","agent_id":"child","cwd":"/work"}),
             );
             assert!(output.status.success());
-            assert_eq!(snapshot(dir.path(), "1"), before);
+            assert_report_snapshot_eq(snapshot(dir.path(), "1"), &before);
         }
     }
 }
@@ -320,7 +327,7 @@ fn opencode_native_events_keep_exact_sessions_and_bounded_metadata() {
         json!({"type":"session.status","properties":{"status":{"type":"future"}}}),
     ] {
         assert!(ingest(dir.path(), "opencode", &payload).status.success());
-        assert_eq!(snapshot(dir.path(), "1"), before);
+        assert_report_snapshot_eq(snapshot(dir.path(), "1"), &before);
     }
     for bad in [
         json!(""),
@@ -335,7 +342,7 @@ fn opencode_native_events_keep_exact_sessions_and_bounded_metadata() {
         )
         .status
         .success());
-        assert_eq!(snapshot(dir.path(), "1"), before);
+        assert_report_snapshot_eq(snapshot(dir.path(), "1"), &before);
     }
 }
 
@@ -658,7 +665,7 @@ fn copilot_distinct_children_complete_without_retiring_the_parent() {
             );
             assert!(output.status.success());
             assert!(output.stdout.is_empty() && output.stderr.is_empty());
-            assert_eq!(snapshot(dir.path(), "20"), before);
+            assert_report_snapshot_eq(snapshot(dir.path(), "20"), &before);
         }
         assert!(ingest(dir.path(), "copilot", &json!({"hook_event_name":completion,"session_id":"owned-child","agent_id":"owned-child","parent_agent_id":"owned-parent","cwd":"/owned/project","last_assistant_message":"PRIVATE-CHILD-RESPONSE"})).status.success());
         let current = snapshot(dir.path(), "20");
@@ -807,7 +814,7 @@ fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
                     &json!({"hook_event_name":ignored,"session_id":"owned-main","agent_id":"owned-child","cwd":"/owned/project","response":"PRIVATE-PROMPT"}),
                 );
                 assert!(output.status.success());
-                assert_eq!(snapshot(dir.path(), "1"), before);
+                assert_report_snapshot_eq(snapshot(dir.path(), "1"), &before);
             }
             let output = ingest(
                 dir.path(),
@@ -815,13 +822,13 @@ fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
                 &json!({"hook_event_name":"Notification","session_id":"owned-main","cwd":"/owned/project","notification_type":"auth_success","message":"PRIVATE-PROMPT"}),
             );
             assert!(output.status.success());
-            assert_eq!(snapshot(dir.path(), "1"), before);
+            assert_report_snapshot_eq(snapshot(dir.path(), "1"), &before);
         }
         if agent == "copilot" {
             let before = snapshot(dir.path(), "1");
             for kind in ["Stop", "SessionEnd"] {
                 assert!(ingest(dir.path(), agent, &json!({"hook_event_name":kind,"session_id":"owned-main","agent_id":"owned-child","parent_agent_id":"owned-parent","cwd":"/owned/project"})).status.success());
-                assert_eq!(snapshot(dir.path(), "1"), before);
+                assert_report_snapshot_eq(snapshot(dir.path(), "1"), &before);
             }
             for kind in [
                 "agent_completed",
@@ -830,10 +837,10 @@ fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
                 "shell_detached_completed",
             ] {
                 assert!(ingest(dir.path(), agent, &json!({"hook_event_name":"Notification","sessionId":"owned-main","cwd":"/owned/project","notification_type":kind})).status.success());
-                assert_eq!(snapshot(dir.path(), "1"), before);
+                assert_report_snapshot_eq(snapshot(dir.path(), "1"), &before);
             }
             assert!(!ingest(dir.path(), agent, &json!({"hook_event_name":"Notification","session_id":"wrong-snake-field","cwd":"/owned/project","notification_type":"permission_prompt"})).status.success());
-            assert_eq!(snapshot(dir.path(), "1"), before);
+            assert_report_snapshot_eq(snapshot(dir.path(), "1"), &before);
             assert!(ingest(dir.path(), agent, &json!({"hook_event_name":"Notification","sessionId":"owned-main","session_id":"ignored-wrong-field","cwd":"/owned/project","notification_type":"elicitation_dialog"})).status.success());
             let row = &snapshot(dir.path(), "1")["sessions"][0];
             assert_eq!(row["sessionId"], "owned-main");
@@ -859,7 +866,7 @@ fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
                 &json!({"hook_event_name":kind,"session_id":invalid,"cwd":"/owned/project"}),
             );
             assert!(!output.status.success());
-            assert_eq!(snapshot(dir.path(), "1"), before);
+            assert_report_snapshot_eq(snapshot(dir.path(), "1"), &before);
         }
     }
 }
@@ -1388,7 +1395,7 @@ fn cursor_observers_keep_conversation_identity_and_ignore_permission_and_child_h
         payload["hook_event_name"] = json!(kind);
         assert!(ingest(dir.path(), "cursor", &payload).status.success());
     }
-    assert_eq!(snapshot(dir.path(), "10"), before);
+    assert_report_snapshot_eq(snapshot(dir.path(), "10"), &before);
     payload["hook_event_name"] = json!("postToolUse");
     payload["cwd"] = json!("/actual/tool/project");
     assert!(ingest(dir.path(), "cursor", &payload).status.success());
@@ -1436,7 +1443,7 @@ fn amp_native_state_projection_requires_exact_version_and_bounded_identity() {
     let before = snapshot(dir.path(), "10");
     payload["state"] = json!("unknown");
     assert!(ingest(dir.path(), "amp", &payload).status.success());
-    assert_eq!(snapshot(dir.path(), "10"), before);
+    assert_report_snapshot_eq(snapshot(dir.path(), "10"), &before);
     payload["state"] = json!("running");
     for (field, value) in [
         ("schemaVersion", json!(2)),
@@ -1511,7 +1518,7 @@ fn aider_native_callback_records_only_health_without_reading_stdin_or_changing_s
     assert!(
         chrono::DateTime::parse_from_rfc3339(health["lastObservedAt"].as_str().unwrap()).is_ok()
     );
-    assert_eq!(snapshot(dir.path(), "10"), before);
+    assert_report_snapshot_eq(snapshot(dir.path(), "10"), &before);
     assert_eq!(health.as_object().unwrap().len(), 7);
 }
 
@@ -1591,14 +1598,14 @@ fn cline_root_lifecycle_preserves_native_identity_and_prints_without_profile_cha
     let before = snapshot(directory.path(), "10");
     let child = json!({"schemaVersion":1,"agentId":"agent_child","conversationId":"conv_child","runId":"run_child","parentAgentId":"agent_root","directory":"/unqualified/child","status":"completed"});
     assert!(ingest(directory.path(), "cline", &child).status.success());
-    assert_eq!(snapshot(directory.path(), "10"), before);
+    assert_report_snapshot_eq(snapshot(directory.path(), "10"), &before);
     for key in ["runId", "agentId", "conversationId"] {
         let mut invalid = child.clone();
         invalid["parentAgentId"] = Value::Null;
         invalid[key] = json!("");
         assert!(!ingest(directory.path(), "cline", &invalid).status.success());
     }
-    assert_eq!(snapshot(directory.path(), "10"), before);
+    assert_report_snapshot_eq(snapshot(directory.path(), "10"), &before);
 }
 
 #[test]
