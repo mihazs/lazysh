@@ -61,7 +61,7 @@ runs:
         ZIG_SHA256: ${{ inputs.zig-sha256 }}
       run: |
         tarball="$HERDR_CI_ROOT/zig-$ZIG_TARGET-0.16.0.tar.xz"
-        sh "$GITHUB_WORKSPACE/.github/scripts/pinned-download.sh" "$ZIG_SHA256" "$tarball" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 180 "https://ziglang.org/download/0.16.0/zig-$ZIG_TARGET-0.16.0.tar.xz"
+        LAZYSH_RESUME_PINNED_DOWNLOAD=1 sh "$GITHUB_WORKSPACE/.github/scripts/pinned-download.sh" "$ZIG_SHA256" "$tarball" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --speed-limit 1024 --speed-time 30 --max-time 720 "https://ziglang.org/download/0.16.0/zig-$ZIG_TARGET-0.16.0.tar.xz"
         printf '%s  %s\n' "$ZIG_SHA256" "$tarball" | sha256sum --check --strict
         tar -xJf "$tarball" -C "$HERDR_CI_ROOT"
         "$ZIG" version
