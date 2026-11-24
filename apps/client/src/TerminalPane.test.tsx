@@ -2066,10 +2066,10 @@ describe('the Herdr switch in the session header', () => {
 
 describe('page features over a native pane', () => {
   /** A pane on a native session over the stand-in core, after the program printed `output`. */
-  async function nativePane(output: string) {
+  async function nativePane(output: string, options?: Parameters<typeof openNativeTerminalAdapter>[1]) {
     mocks.invoke.mockResolvedValue({});
     const core = createHeadlessCore({rows: 4, columns: 20, feed: true});
-    const adapter = await openNativeTerminalAdapter(core);
+    const adapter = await openNativeTerminalAdapter(core, options);
     await adapter.write!(new TextEncoder().encode(output));
     render(<TerminalPane session={{id: 'native', name: 'Host', connected: true, adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
     return {adapter, core};
@@ -2113,5 +2113,42 @@ describe('page features over a native pane', () => {
     await act(async () => { await adapter.write!(new TextEncoder().encode('\x1b]52;c;c2Vjb25k\x07')); });
     fireEvent.click(screen.getByRole('button', {name: 'Deny'}));
     expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
+  });
+
+  it('resizes the text with a pinch, up to the largest size, and sends the renderer the new look', async () => {
+    const look = vi.fn().mockResolvedValue(undefined);
+    await nativePane('', {look, cell: async (fontSize, dpr) => ({width: fontSize * 0.6 * dpr, height: fontSize * 1.2 * dpr})});
+    const canvas = screen.getByLabelText('Terminal for Host');
+    fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 100});
+    fireEvent.pointerDown(canvas, {pointerId: 2, pointerType: 'touch', clientX: 120, clientY: 100});
+    fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: 'touch', clientX: 90, clientY: 100});
+    fireEvent.pointerMove(canvas, {pointerId: 2, pointerType: 'touch', clientX: 130, clientY: 100});
+    expect(getPreferences().fontSize).toBe(28);
+    fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: 'touch', clientX: 0, clientY: 100});
+    fireEvent.pointerMove(canvas, {pointerId: 2, pointerType: 'touch', clientX: 300, clientY: 100});
+    expect(getPreferences().fontSize).toBe(32);
+    await waitFor(() => expect(look).toHaveBeenLastCalledWith('native', expect.objectContaining({fontSize: 32})));
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+
+  it('runs a configured two-finger swipe, tap and swipe action, and nothing while text is selected', async () => {
+    savePreferences({...defaults, pinchZoom: false, gestures: {...defaults.gestures, left: 'tab'}, bodyGestures: {...defaults.bodyGestures, tap: 'escape', swipeLeft: 'tab'}});
+    const {adapter} = await nativePane('hello world');
+    const canvas = screen.getByLabelText('Terminal for Host');
+    swipeTwoLeft(canvas);
+    await waitFor(() => expect(mocks.write).toHaveBeenLastCalledWith('native', '\t'));
+    fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 100});
+    fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 100});
+    await waitFor(() => expect(mocks.write).toHaveBeenCalledTimes(2));
+    vi.useFakeTimers({shouldAdvanceTime: true});
+    fireEvent.pointerDown(canvas, {pointerId: 3, pointerType: 'touch', clientX: 50, clientY: 50});
+    fireEvent.pointerUp(canvas, {pointerId: 3, pointerType: 'touch', clientX: 50, clientY: 50});
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(mocks.write).toHaveBeenLastCalledWith('native', '\x1b');
+    vi.useRealTimers();
+    adapter.select({start: {x: 0, y: 0}, end: {x: 4, y: 0}});
+    const before = mocks.write.mock.calls.length;
+    swipeTwoLeft(canvas);
+    expect(mocks.write).toHaveBeenCalledTimes(before);
   });
 });
