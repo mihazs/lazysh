@@ -31,9 +31,45 @@ pub struct Request {
     profile_root: String,
     expected_plan: Option<String>,
 }
+/// Whether `value` is an absolute provider profile path under the rules of the host that will read it: a drive path
+/// (`C:\Users\me\.claude`, `C:/Users/me`) or a UNC share (`\\server\share\me`) on a Windows device, a POSIX path
+/// everywhere else. Neither accepts control characters, `.` or `..` segments, or more than 4096 bytes; a Windows path
+/// also refuses device namespaces (`\\?\`, `\\.\`) and a colon after the drive (alternate data streams).
+fn profile_path(value: &str, windows: bool) -> bool {
+    if !windows {
+        return resolve::path(value);
+    }
+    let bytes = value.as_bytes();
+    let rest = if bytes.len() > 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
+    {
+        &value[3..]
+    } else if let Some(share) = value.strip_prefix("\\\\") {
+        let mut parts = share.splitn(3, '\\');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some(server), Some(name), Some(rest))
+                if !server.is_empty() && !name.is_empty() && !matches!(server, "?" | ".") =>
+            {
+                rest
+            }
+            _ => return false,
+        }
+    } else {
+        return false;
+    };
+    !rest.is_empty()
+        && value.len() <= 4096
+        && !value.chars().any(char::is_control)
+        && !rest.contains(':')
+        && !rest
+            .split(['\\', '/'])
+            .any(|part| matches!(part, "." | ".."))
+}
 impl Request {
-    fn command(&self) -> Result<String> {
-        if !resolve::path(&self.profile_root) {
+    fn command(&self, windows: bool) -> Result<String> {
+        if !profile_path(&self.profile_root, windows) {
             return Err(error(
                 "invalid_request",
                 "Select an absolute existing provider profile",
@@ -110,7 +146,7 @@ pub(crate) async fn execute(
     request: Request,
     access: &AccessLease,
 ) -> Result<serde_json::Value> {
-    let command = request.command()?;
+    let command = request.command(host.uses_windows_paths())?;
     // The plan a status prints covers the executable's own path, so every action runs from one.
     execute_command(host, &command, access, true).await
 }
@@ -233,6 +269,52 @@ pub(crate) async fn install_keeping_foreign_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A Windows device's own absolute paths are accepted, as POSIX ones are on every other host, and each host refuses the
+    /// other's form: this ran on every platform because the host kind is a parameter.
+    #[test]
+    fn a_profile_path_follows_the_path_rules_of_the_host_that_reads_it() {
+        for windows_path in [
+            r"C:\Users\me\.claude",
+            "c:/Users/me/.claude",
+            r"D:\profiles\a b\.codex",
+            r"\\server\share\me\.claude",
+        ] {
+            assert!(profile_path(windows_path, true), "{windows_path}");
+            assert!(!profile_path(windows_path, false), "{windows_path}");
+        }
+        assert!(profile_path("/home/me/.claude", false));
+        assert!(!profile_path("/home/me/.claude", true));
+        for refused in [
+            "",
+            r"C:\",
+            r"C:\Users\..\me",
+            r"C:\Users\.\me",
+            "C:/Users/../me",
+            r"C:\Users\me\.claude:stream",
+            r"relative\path",
+            r"C:me",
+            r"\\?\C:\Users\me",
+            r"\\.\pipe\x",
+            r"\\server\share",
+            r"\\server\share\",
+            "C:\\Users\\me\n",
+        ] {
+            assert!(!profile_path(refused, true), "{refused:?}");
+        }
+        assert!(!profile_path(&format!("C:\\{}", "a".repeat(4100)), true));
+    }
+    #[test]
+    fn a_windows_profile_path_reaches_the_companion_as_one_literal_argument() {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "agent": "claude", "action": "status", "profileRoot": r"C:\Users\o'me\.claude"
+        }))
+        .unwrap();
+        assert_eq!(
+            request.command(true).unwrap(),
+            r"lazysh-agent hooks status --agent claude --profile-root 'C:\Users\o'\''me\.claude'"
+        );
+        assert!(request.command(false).is_err());
+    }
     #[test]
     fn hook_discovery_defaults_to_v1_and_only_explicit_versions_change_the_command() {
         for version in [None, Some(1)] {
@@ -275,7 +357,7 @@ mod tests {
             expected_plan: None,
         };
         assert_eq!(
-            request.command().unwrap(),
+            request.command(false).unwrap(),
             "lazysh-agent hooks status --agent codex --profile-root '/owned/profile'\\''s $HOME'"
         );
         for (agent, name) in [
@@ -288,18 +370,18 @@ mod tests {
             (Agent::KimiCode, "kimi-code"),
         ] {
             request.agent = agent;
-            assert!(request.command().unwrap().starts_with(&format!(
+            assert!(request.command(false).unwrap().starts_with(&format!(
                 "lazysh-agent hooks status --agent {name} --profile-root "
             )));
         }
         request.action = Action::Install;
-        assert!(request.command().is_err());
+        assert!(request.command(false).is_err());
         request.expected_plan = Some("a".repeat(64));
         assert!(request
-            .command()
+            .command(false)
             .unwrap()
             .ends_with(&format!("--expected-plan '{}'", "a".repeat(64))));
         request.profile_root = "/owned/../foreign".into();
-        assert!(request.command().is_err());
+        assert!(request.command(false).is_err());
     }
 }

@@ -644,7 +644,9 @@ async fn real_local_hook_setup_on_windows_is_template_only() {
     let (app, id) = session(home).await;
     let request = |action: &str| {
         serde_json::from_value(json!({"agent": "claude", "action": action,
-            "profileRoot": home.join(".claude"), "expectedPlan": "0".repeat(64)}))
+            "profileRoot": home.join(".claude"),
+            // A status inspects; only a mutation names the plan it was shown.
+            "expectedPlan": (action != "status").then(|| "0".repeat(64))}))
         .unwrap()
     };
     let hooks = |action: &str| {
