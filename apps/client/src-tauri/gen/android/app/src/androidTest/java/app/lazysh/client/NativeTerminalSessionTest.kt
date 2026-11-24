@@ -71,8 +71,18 @@ class NativeTerminalSessionTest {
 
     @After fun leaveTheAppAsFound() {
         // What the case chose and saved is the app's: end the session, delete the host and give the engine choice back to Auto.
-        runCatching { act("window.__lz.click(\"button[aria-label='Disconnect $hostName']\")") }
-        runCatching { revealHosts(); act("window.__lz.click(\"button[aria-label='Delete $hostName']\")") }
+        runCatching {
+            if (js("window.__lz.click(\"button[aria-label='Disconnect $hostName']\")") != "true" &&
+                js("Boolean(document.querySelector(${quoted(nativePane)}))") == "true"
+            ) {
+                if (js("Boolean(window.__lz.find('.workspace-tools-end'))") != "true") click("button.mobile-tools, button[aria-label='Workspace tools']")
+                click(".workspace-tools-end", "End $hostName connection")
+            }
+        }
+        runCatching {
+            revealHosts()
+            if (js("window.__lz.click(\"button[aria-label='Delete $hostName']\")") == "true") click("[role=dialog] button", "Delete host")
+        }
         runCatching { openEngineSettings(); choose("input[name='terminal-engine'][value='auto']"); act("window.__lz.click(\"button[aria-label='Close Preferences']\")") }
         runCatching { scenario.moveToState(Lifecycle.State.RESUMED) }
     }

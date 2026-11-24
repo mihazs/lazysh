@@ -924,8 +924,10 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   const keyboardTarget = () => composingRef.current ? composerInput.current : session.adapter.inputElement();
   /** Focuses the input, then asks Android for the keyboard, which a focused input alone does not bring back after the system back gesture closed it. */
   function showKeyboard() {
-    focusTerminal(composingRef.current ? composerInput.current : undefined);
-    softKeyboard.request(true);
+    const target = composingRef.current ? composerInput.current : undefined;
+    focusTerminal(target);
+    // The Android terminal editor requests its own IME after it gets focus.
+    if (target !== undefined || !native || session.adapter.inputElement()) softKeyboard.request(true);
   }
   function hideKeyboard() {
     if (composingRef.current) composerInput.current?.blur(); else session.adapter.blur();

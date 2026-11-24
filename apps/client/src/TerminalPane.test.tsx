@@ -2170,6 +2170,7 @@ describe('page features over a native pane', () => {
   }
 
   it('focuses the native editor on a plain touch with default tap settings', async () => {
+    vi.stubGlobal('isTauri', true);
     vi.stubGlobal('matchMedia', (query: string) => ({matches: query === '(pointer: coarse)', addEventListener() {}, removeEventListener() {}}));
     const {adapter} = await nativePane('shell prompt');
     const focus = vi.spyOn(adapter, 'focus');
@@ -2178,6 +2179,7 @@ describe('page features over a native pane', () => {
     fireEvent.pointerDown(canvas, touch);
     fireEvent.pointerUp(canvas, touch);
     expect(focus).toHaveBeenCalledOnce();
+    expect(mocks.invoke.mock.calls.some(([command, args]) => command === "soft_keyboard" && args?.action === "show")).toBe(false);
   });
 
   it('finds a word in the whole buffer, scrolls to it and selects its row, and wraps to the first match', async () => {
