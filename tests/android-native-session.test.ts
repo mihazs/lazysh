@@ -1,20 +1,28 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {androidNativeSessionAcceptance,sessionCases,validateNativeSessionReport} from './support/androidTerminalCore';
+import {androidNativeSessionAcceptance,sessionRuns,validateNativeSessionReport} from './support/androidTerminalCore';
 
 const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
 const row=([className,name]:readonly [string,string],body='')=>`<testcase name="${name}" classname="${className}" time="1">${body}</testcase>`;
 
-test('the native session report counts each of its cases passing exactly once',()=>{
-  const [first,...others]=sessionCases;
-  expect(()=>validateNativeSessionReport(report(sessionCases.map(found=>row(found))))).not.toThrow();
-  for(const rows of [[],[row(first),row(first),...others.map(found=>row(found))],[row(first,'<skipped/>'),...others.map(found=>row(found))],[row(first,'<failure message="x"/>'),...others.map(found=>row(found))],
-    [row(first,'<error message="x"/>'),...others.map(found=>row(found))],[row([first[0],'otherCase']),...others.map(found=>row(found))],
-    [row(['app.lazysh.client.NativeTerminalCoreTest',first[1]]),...others.map(found=>row(found))],
-    // A run that kept only one of the classes (a filter) is no pass.
-    ...sessionCases.map(kept=>[row(kept)])])
-    expect(()=>validateNativeSessionReport(report(rows))).toThrow('did not pass exactly once');
+test('each native session run counts its case passing exactly once',()=>{
+  for(const run of sessionRuns) {
+    const [first]=run.cases;
+    expect(()=>validateNativeSessionReport(report(run.cases.map(found=>row(found))),run)).not.toThrow();
+    for(const rows of [[],[row(first),row(first)],[row(first,'<skipped/>')],[row(first,'<failure message="x"/>')],[row(first,'<error message="x"/>')],
+      [row([first[0],'otherCase'])],[row(['app.lazysh.client.NativeTerminalCoreTest',first[1]])],
+      // Another run's case in this run's report is no pass.
+      ...sessionRuns.filter(other=>other!==run).map(other=>[row(other.cases[0])])])
+      expect(()=>validateNativeSessionReport(report(rows),run)).toThrow('did not pass exactly once');
+  }
+});
+
+test('no two native session runs share a class, an evidence directory or an evidence file',()=>{
+  const unique=(values:string[])=>expect(new Set(values).size).toBe(values.length);
+  unique(sessionRuns.flatMap(run=>run.classes));
+  unique(sessionRuns.map(run=>run.evidenceName));
+  unique(sessionRuns.flatMap(run=>run.evidence));
 });
 
 test('the shared Android runtime job and the terminal core job leave the native session to the job that builds the feature and runs only it',async()=>{

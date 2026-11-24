@@ -1,5 +1,6 @@
 package app.lazysh.client
 
+import androidx.lifecycle.Lifecycle
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertTrue
@@ -14,19 +15,23 @@ abstract class NativePagesCase {
     private val steps = JSONObject()
     private val failures = mutableListOf<String>()
 
-    @Before fun theUnlockedPage() {
-        // A class that ran before this one leaves the app on the page its own cleanup reached: show the hosts list before the start page is awaited.
-        runCatching { PageDriver.js(driver.pageScript); driver.revealHosts() }
-        driver.theUnlockedPage()
-    }
+    @Before fun theUnlockedPage() = driver.theUnlockedPage()
 
-    @After fun leaveTheAppAsFound() = driver.leaveTheAppAsFound()
+    // The job runs each class in a freshly installed app (tests/support/androidTerminalCore.ts), so what the case chose and saved goes with the install
+    // and no cleanup through the page is needed; the window is only given back as it was.
+    @After fun leaveTheWindowResumed() { runCatching { driver.scenario.moveToState(Lifecycle.State.RESUMED) } }
 
     protected fun step(name: String, body: () -> Unit) {
         try { body(); steps.put(name, "pass") } catch (error: Throwable) {
             steps.put(name, "fail: ${error.message}")
             failures.add("$name: ${error.message}")
+            screenshot("step-${failures.size}")
         }
+    }
+
+    /** What the screen showed when something failed, kept beside the evidence. */
+    private fun screenshot(name: String) {
+        runCatching { driver.instrumentation.uiAutomation.takeScreenshot()?.let { Evidence.recordPicture("failed-$name", it) } }
     }
 
     /** Chooses Native, connects to the owned shell and returns the session's id once the core holds the shell's prompt. */
@@ -40,7 +45,7 @@ abstract class NativePagesCase {
     /** Runs `body` (which starts the session and runs the steps), records the evidence under `evidence` and fails if a step did. */
     protected fun session(evidence: String, body: () -> Unit) {
         driver.evidence.put("steps", steps)
-        try { body() } finally { Evidence.record(evidence, driver.evidence) }
+        try { body() } catch (error: Throwable) { screenshot("session"); throw error } finally { Evidence.record(evidence, driver.evidence) }
         assertTrue("steps failed: $failures", failures.isEmpty())
     }
 }

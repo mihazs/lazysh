@@ -1,4 +1,4 @@
-import {mkdir,readdir,readFile,rm,writeFile} from 'node:fs/promises';
+import {cp,mkdir,readdir,readFile,rm,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {OwnedProcess,SshFixture,androidSshCleanup,nativeReportCases,ownedDeviceCleanup,ownedEmulator} from './androidSsh';
 
@@ -67,13 +67,17 @@ export async function runTerminalCases(run:TerminalCaseRun,root=resolve(import.m
       `-Pandroid.testInstrumentationRunnerArguments.class=${run.classes.join(',')}`,
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`,
       ...(run.arguments??[]).map(argument=>`-Pandroid.testInstrumentationRunnerArguments.${argument}`)],root);
+    // Gradle writes the report of every run into the same directory, so a job that runs several keeps each one's beside its evidence.
+    const keepReport=()=>cp(report,join(evidenceTo,'report'),{recursive:true}).catch(()=>undefined);
     try { await gradle.finish(`actual Android ${run.title} instrumentation`,900_000); }
     catch(failure) {
       // Gradle's own words (a compile error of the test APK, a refused install) are the only explanation of a run that never reached a case.
       console.error(`Gradle output, last 6000 characters:\n${(gradle.stdout+gradle.stderr).slice(-6000)}`);
       await keepDeviceEvidence(device,evidenceTo).catch(()=>[]);
+      await keepReport();
       throw failure;
     }
+    await keepReport();
     const reports=(await readdir(report,{recursive:true})).filter(name=>name.endsWith('.xml'));
     if(reports.length!==1)throw new Error(`Expected one ${run.title} report`);
     validateCases(await readFile(join(report,reports[0]),'utf8'),run.cases);
@@ -95,18 +99,29 @@ export const validateTerminalCoreReport=(text:string)=>validateCases(text,coreCa
 export const androidTerminalCoreAcceptance=(root?:string)=>runTerminalCases({title:'terminal core',classes:[nativeClass,compositionClass],cases:coreCases,
   evidenceName:'terminal-core-evidence',evidence:['native-probe.json']},root);
 
-/** The first native session through the real UI (`native-android-terminal-session`): its own cases, so its verdict is its own. */
+/**
+ * The native session through the real UI (`native-android-terminal-session`): one Gradle run for each class, so each starts on a freshly installed app
+ * on its start page (a class cannot rely on the page its predecessor's cleanup reached) and has a verdict of its own.
+ */
 const sessionClass='app.lazysh.client.NativeTerminalSessionTest';
 const gesturesClass='app.lazysh.client.NativeTerminalGesturesTest';
 const tmuxPagesClass='app.lazysh.client.NativeTerminalTmuxPagesTest';
 const zellijPagesClass='app.lazysh.client.NativeTerminalZellijPagesTest';
 const rmuxPagesClass='app.lazysh.client.NativeTerminalRmuxPagesTest';
-export const sessionCases=[[sessionClass,'aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart'],
-  [gesturesClass,'aRealFingerSelectsCopiesAndTapsLinksOnTheNativeSurfaceAndAnOsc52WriteAsksConsent'],
-  [tmuxPagesClass,'tmuxPagesDiscoverAttachSwitchWindowsAndCopyWithConsentOnANativeSession'],
-  [zellijPagesClass,'zellijPagesDiscoverAttachAndSwitchTabsOnANativeSession'],
-  [rmuxPagesClass,'rmuxPagesBrowseAttachAndSwitchWindowsOnANativeSession']] as const;
-export const validateNativeSessionReport=(text:string)=>validateCases(text,sessionCases);
-/** The CI emulator has no GPU the shipping policy accepts, so its run asks for the debug software switch; Waydroid's does not need it. */
-export const androidNativeSessionAcceptance=(root?:string,softwareGpu=true)=>runTerminalCases({title:'native session',classes:[sessionClass,gesturesClass,tmuxPagesClass,zellijPagesClass,rmuxPagesClass],cases:sessionCases,
-  evidenceName:'native-session-evidence',evidence:['native-session.json','native-gestures.json','native-tmux-pages.json','native-zellij-pages.json','native-rmux-pages.json'],arguments:softwareGpu?['lazyshSoftwareGpu=true']:[]},root);
+export const sessionRuns=[
+  {title:'native session',classes:[sessionClass],cases:[[sessionClass,'aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart']],evidenceName:'native-session-evidence',evidence:['native-session.json']},
+  {title:'native gestures',classes:[gesturesClass],cases:[[gesturesClass,'aRealFingerSelectsCopiesAndTapsLinksOnTheNativeSurfaceAndAnOsc52WriteAsksConsent']],evidenceName:'native-gestures-evidence',evidence:['native-gestures.json']},
+  {title:'native tmux pages',classes:[tmuxPagesClass],cases:[[tmuxPagesClass,'tmuxPagesDiscoverAttachSwitchWindowsAndCopyWithConsentOnANativeSession']],evidenceName:'native-tmux-pages-evidence',evidence:['native-tmux-pages.json']},
+  {title:'native Zellij pages',classes:[zellijPagesClass],cases:[[zellijPagesClass,'zellijPagesDiscoverAttachAndSwitchTabsOnANativeSession']],evidenceName:'native-zellij-pages-evidence',evidence:['native-zellij-pages.json']},
+  {title:'native rmux pages',classes:[rmuxPagesClass],cases:[[rmuxPagesClass,'rmuxPagesBrowseAttachAndSwitchWindowsOnANativeSession']],evidenceName:'native-rmux-pages-evidence',evidence:['native-rmux-pages.json']},
+] as const satisfies readonly TerminalCaseRun[];
+export const validateNativeSessionReport=(text:string,run:TerminalCaseRun=sessionRuns[0])=>validateCases(text,run.cases);
+/** The CI emulator has no GPU the shipping policy accepts, so its run asks for the debug software switch; Waydroid's does not need it. Every run goes on after one failed, so one cycle shows them all. */
+export async function androidNativeSessionAcceptance(root?:string,softwareGpu=true) {
+  const failures:string[]=[];
+  for(const run of sessionRuns) {
+    try { await runTerminalCases({...run,arguments:softwareGpu?['lazyshSoftwareGpu=true']:[]},root); }
+    catch(error) { failures.push(`${run.title}: ${error instanceof Error?error.message:String(error)}`);console.error(`The ${run.title} run failed: ${failures.at(-1)}`); }
+  }
+  if(failures.length)throw new Error(`Native session runs failed:\n${failures.join('\n')}`);
+}
