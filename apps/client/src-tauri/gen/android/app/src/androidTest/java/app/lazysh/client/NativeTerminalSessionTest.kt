@@ -295,6 +295,29 @@ class NativeTerminalSessionTest {
         }
     }
 
+    private fun herdrSwitchKeepsKeyboardClosed(id: String, keyboardVisible: () -> Boolean) {
+        val columns = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state").getInt("columns")
+        typeIntoTheSurface("printf '\\033[2J\\033[2;${columns - 8}H│ switch\\033[3;1H'")
+        awaitRow(id, "the Herdr switch button", { it == "│ switch" })
+        val preferenceKey = "lazysh.preferences.v1"
+        val stored = js("localStorage.getItem('$preferenceKey')")
+        fun update(script: String) = js("(() => {$script; window.dispatchEvent(new Event('lazysh-preferences')); return true;})()")
+        try {
+            update("const p=JSON.parse(localStorage.getItem('$preferenceKey') ?? '{}'); p.bodyGestures={...p.bodyGestures,tap:'keyboard'}; localStorage.setItem('$preferenceKey',JSON.stringify(p))")
+            val state = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
+            val bounds = surfaceBounds()
+            val x = bounds.left + ((columns - 4.5) * bounds.width() / columns).roundToInt()
+            val y = bounds.top + (1.5 * bounds.height() / state.getInt("rows")).roundToInt()
+            val device = UiDevice.getInstance(instrumentation)
+            assertEquals("the screen received the Herdr switch tap", true, device.click(x, y))
+            device.waitForIdle()
+            assertEquals("the Herdr switch tap leaves the keyboard closed", false, keyboardVisible())
+            evidence.put("herdrSwitchKeepsKeyboardClosed", true)
+        } finally {
+            update("if ($stored === null) localStorage.removeItem('$preferenceKey'); else localStorage.setItem('$preferenceKey',$stored)")
+        }
+    }
+
     /**
      * Who owns the keyboard (#2489, #2490): the terminal's editor takes Android's view focus when the page asks for it and the keyboard
      * is served to it, a field of the page that takes DOM focus gets the keys instead (the editor lets go), and the terminal gets them
@@ -315,6 +338,7 @@ class NativeTerminalSessionTest {
         PageDriver.poll("the editor and keyboard to be closed before the tap", 30) {
             (ui { !input.hasFocus() } && !keyboardVisible()).takeIf { it }
         }
+        herdrSwitchKeepsKeyboardClosed(id, ::keyboardVisible)
         val bounds = surfaceBounds()
         assertEquals("the screen received the plain terminal tap", true, UiDevice.getInstance(instrumentation).click(bounds.centerX(), bounds.centerY()))
         try {

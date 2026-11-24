@@ -2292,23 +2292,30 @@ describe('page features over a native pane', () => {
     expect(mocks.write).not.toHaveBeenCalled();
   });
 
-  it('keeps Herdr navigation taps from opening the keyboard on a native pane', async () => {
-    savePreferences({...defaults, bodyGestures: {...defaults.bodyGestures, tap: 'keyboard'}});
+  it('keeps a delayed Herdr navigation tap from opening the keyboard after the pane redraws', async () => {
+    savePreferences({...defaults, bodyGestures: {...defaults.bodyGestures, tap: 'keyboard', doubleTap: 'escape'}});
     const {adapter} = await nativePane('\x1b[2;11H│ switch  ');
     const focus = vi.spyOn(adapter, 'focus');
-    const hit = vi.spyOn(adapter, 'cellAt').mockReturnValue({x: 17, y: 1});
+    vi.spyOn(adapter, 'cellAt').mockReturnValue({x: 17, y: 1});
     const canvas = screen.getByLabelText('Terminal for Host');
     const tap = () => {
       const touch = {pointerId: 1, pointerType: 'touch', clientX: 60, clientY: 40};
       fireEvent.pointerDown(canvas, touch);
       fireEvent.pointerUp(canvas, touch);
     };
-    tap();
-    expect(focus).not.toHaveBeenCalled();
+    vi.useFakeTimers({shouldAdvanceTime: true});
+    try {
+      tap();
+      await act(async () => { await adapter.write!(new TextEncoder().encode('\x1b[2Jordinary terminal')); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+      expect(focus).not.toHaveBeenCalled();
 
-    hit.mockReturnValue({x: 3, y: 2});
-    tap();
-    expect(focus).toHaveBeenCalledTimes(1);
+      tap();
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+      expect(focus).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('runs a configured two-finger swipe, tap and swipe action, and nothing while text is selected', async () => {
