@@ -752,7 +752,13 @@ test('mobile terminal keeps one compact header and reaches every session control
   if(phone){
     await page.getByRole('button',{name:'Workspace tools',exact:true}).click();
     await openWorkspaceGroup(page,'connections');
-    await page.getByRole('dialog',{name:'Workspace tools',exact:true}).getByRole('button',{name:'Default multiplexer',exact:true}).click();
+    const tools=page.getByRole('dialog',{name:'Workspace tools',exact:true});
+    await expect(tools.getByRole('button',{name:'Default multiplexer',exact:true})).toHaveCount(0);
+    await openWorkspaceGroup(page,'application');
+    await tools.getByRole('button',{name:'Preferences',exact:true}).click();
+    const settings=page.getByRole('dialog',{name:'Preferences',exact:true});
+    await settings.getByRole('button',{name:'Connections',exact:true}).click();
+    await settings.getByRole('button',{name:'Edit Focus workstation with a long host name',exact:true}).click();
     const editor=page.getByRole('dialog',{name:'Edit host',exact:true});
     const defaultMux=editor.getByRole('combobox',{name:'Default multiplexer',exact:true});
     await expect(defaultMux).toBeFocused();await expect(defaultMux).toBeInViewport();

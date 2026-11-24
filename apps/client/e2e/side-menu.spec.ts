@@ -182,7 +182,7 @@ test.describe('phone, connected session',()=>{
     // Where the controls the page does not list under their old name went: the tabs, the search row and the Add a host row.
     const moved:Record<string,string>={'Open hosts':'Connections','Agents':'Agents navigation','New connection':'Jump to a host','Search saved hosts':'Jump to a host','Jump to':'Workspaces','Sessions':'Open session manager'};
     expect(former.filter(name=>!here.some(label=>label===name||label.startsWith(moved[name]??'\u0000')))).toEqual([]);
-    expect(former).toEqual(expect.arrayContaining(['Switch terminal session','Terminal','Agent','Compose','Workspaces','Files','Sessions','Usage','Attach','Apple status','Transcript','Diff','Preview','Dictate','Devices','Default multiplexer','Preferences','Remote push settings','Open notification inbox','Open encrypted sync','Open shareable uploads','End Attachment fixture connection']));
+    expect(former).toEqual(expect.arrayContaining(['Switch terminal session','Terminal','Agent','Compose','Workspaces','Files','Sessions','Usage','Attach','Apple status','Transcript','Diff','Preview','Dictate','Devices','Preferences','Open notification inbox','Open encrypted sync','Open shareable uploads','End Attachment fixture connection']));
   });
 
   test('each page entry does what its top bar twin did',async({page})=>{
@@ -198,7 +198,7 @@ test.describe('phone, connected session',()=>{
     await choose('Switch terminal session','Agents');
     await expect(page.getByRole('dialog',{name:'Switch terminal session',exact:true})).toBeVisible();
     await page.keyboard.press('Escape');
-    for(const [entry,dialog] of [['Preferences','Preferences'],['Remote push settings','Remote push settings'],['Open notification inbox','Notification inbox'],['Open encrypted sync','Encrypted sync'],['Open shareable uploads','Shareable uploads']] as const) {
+    for(const [entry,dialog] of [['Preferences','Preferences'],['Open notification inbox','Notification inbox'],['Open encrypted sync','Encrypted sync'],['Open shareable uploads','Shareable uploads']] as const) {
       await choose(entry,'Connections');
       await expect(page.getByRole('dialog',{name:dialog,exact:true})).toBeVisible();
       await page.keyboard.press('Escape');

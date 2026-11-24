@@ -310,7 +310,7 @@ it('persists and removes the host default without changing the saved transport',
   expect(mocks.api.saveHost.mock.calls[1][0]).toMatchObject({transport:'et',defaultMultiplexer:undefined});
 });
 
-it('opens the active host multiplexer setting directly from workspace tools without changing its running session',async()=>{
+it('opens the active host multiplexer setting from Preferences without changing its running session',async()=>{
   mocks.api.listHosts.mockResolvedValue([{...host,id:'other-host',name:'Other'},{...host,transport:'mosh'}]);
   mocks.api.connect.mockResolvedValue({sessionId:'settings-current'});
   mocks.api.saveHost.mockResolvedValue(undefined);
@@ -318,7 +318,11 @@ it('opens the active host multiplexer setting directly from workspace tools with
   await selectConnectionTransport(user, 'ssh');
   await user.click(screen.getByRole('button',{name:'Connect'}));
   const terminal=await screen.findByText('Live SSH terminal');
-  await chooseWorkspaceTool(user,'Default multiplexer');
+  await chooseWorkspaceTool(user,'Preferences');
+  const preferences=within(screen.getByRole('dialog',{name:'Preferences'}));
+  await user.click(preferences.getByRole('button',{name:'Connections'}));
+  const defaults=within(preferences.getByRole('region',{name:'Default multiplexer'}));
+  await user.click(defaults.getByRole('button',{name:'Edit Home'}));
   const editor=await screen.findByRole('dialog',{name:'Edit host'});
   const setting=within(editor).getByLabelText('Default multiplexer');
   expect(document.activeElement).toBe(setting);

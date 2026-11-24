@@ -206,11 +206,14 @@ it('starts Workspace tools on seven primary destinations with the other tool gro
   expect(within(screen.getByRole('dialog',{name:'Workspace tools'})).getByRole('tabpanel').getAttribute('aria-label')).toBe('More tools, 2 of 4');
 });
 
-it('exposes remote push settings from Workspace tools',async()=>{
+it('opens remote push settings through Preferences',async()=>{
   const user=userEvent.setup();
   render(<App/>);
   await user.click(await screen.findByRole('button',{name:'Workspace tools'}));
-  await user.click(screen.getByRole('button',{name:'Remote push settings'}));
+  const tools=within(screen.getByRole('dialog',{name:'Workspace tools'}));
+  expect(tools.queryByRole('button',{name:'Remote push settings'})).toBeNull();
+  await user.click(tools.getByRole('button',{name:'Preferences'}));
+  await user.click(screen.getByRole('button',{name:'Notifications'}));
   expect(await screen.findByText('Native push registration controls')).toBeTruthy();
 });
 

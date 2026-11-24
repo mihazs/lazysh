@@ -2240,14 +2240,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         <TerminalFeedbackLink report={reportOfSession(active.selection,getPreferences().terminalEngine)}/>
         {active.leaveNative && <button type="button" onClick={()=>{closeTools();void leaveNativeEngine(active);}}>{t('terminalEngineSwitchToXterm')}</button>}
         {!sideMenuMode && <button type="button" onClick={()=>{closeTools();setPalette(true);}}>{t('appNewConnection')}</button>}
-        {native && active.connected && !active.local && hosts.some(host=>host.id===active.hostId) && <button type="button" onClick={()=>{const host=hosts.find(host=>host.id===active.hostId);if(host){closeTools();setEditorMux(true);setEditor(host);}}}>{t('defaultMuxLabel')}</button>}
         {!sideMenuMode && active.connected && !active.local && jumpSupported && <button type="button" onClick={()=>{closeTools();showNavigation('workspaces');}}>{t('appJumpTo')}</button>}
         {compactTerminal && native && previousWorkspace.length>0 && <section className="mobile-workspace-restore" aria-label={t('appRestorePreviousWorkspace')}>{workspaceRestoreControls}</section>}
       </div>}]:[]),
       {id:'application',title:t('workspaceApplicationOptions'),content:<div className="workspace-tools-group">
         <button type="button" onClick={()=>{closeTools();setPreferences(true);}}>{t('appPreferences')}</button>
         {gesturePhone && <button type="button" onClick={()=>{closeTools();gestureTour.show();}}>{t('gestureTourTitle')}</button>}
-        <button onClick={()=>{closeTools();setPushSettings(true);}}>{t("appRemotePushSettings")}</button>
         <button
          
           disabled={!native}
@@ -2800,7 +2798,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             ...(native?[{id:'connections',section:'general',title:t('preferencesCategoryConnections'),value:t('syncHostCount',{count:hosts.length,value:formatNumber(hosts.length)}),content:<section aria-label={t('defaultMuxLabel')}>
             <h3>{t('defaultMuxLabel')}</h3>
             <p>{t('defaultMuxPreferencesHint')}</p>
-            {hosts.map(host => <button type="button" key={host.id} onClick={()=>{setPreferences(false);setEditor(host);}}>{t('appEditValue1',{value1:host.name})}</button>)}
+            {hosts.map(host => <button type="button" key={host.id} onClick={()=>{setPreferences(false);setEditorMux(true);setEditor(host);}}>{t('appEditValue1',{value1:host.name})}</button>)}
             {!hosts.length && <button type="button" onClick={()=>{setPreferences(false);setEditor('new');}}>{t('appAddHost')}</button>}
           </section>}]:[]),
             {id:'notifications',section:'agents',title:t('preferencesCategoryNotifications'),value:t('appRemotePushSettings'),onSelect:()=>{setPreferences(false);setPushSettings(true);}},
