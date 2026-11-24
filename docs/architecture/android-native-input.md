@@ -1,6 +1,6 @@
 # Android native terminal input
 
-Status: **groundwork, developer builds only; nothing in the app creates it yet.** The soft keyboard, composition and hardware-key half of [#1328](https://github.com/mihazs/lazysh/issues/1328) (epic [#1302](https://github.com/mihazs/lazysh/issues/1302)) exists as a Kotlin bridge with JVM and in-process instrumentation tests. It is not connected to the shared core or to a surface, no renderer exists to show what it types, and touch scrolling, selection handles and the clipboard are not started. xterm.js stays the only engine and the default; no behaviour a user can reach changed. Related: [native rendering](native-rendering.md#input-and-ime) · [runtime](terminal-runtime.md) · [adapter](terminal-adapter.md) · [Android surface composition PoC](android-surface-composition-poc.md) · [migration plan](terminal-migration-plan.md).
+The Android native terminal connects its keyboard editor to the shared terminal core when a session uses the native engine. The Android session test exercises a real tap, shell input, handoff between the terminal and a page field, toolbar modifiers, and redraw after activity restart. [Terminal parity matrix](terminal-native-parity.md) · [Migration plan](terminal-migration-plan.md)
 
 ## Decision: a native input connection, not a hidden DOM editor
 
@@ -21,7 +21,7 @@ Editor setup follows the page's terminal editor: plain multi-line text without a
 
 ## What reaches the core
 
-The bridge delivers through `TerminalInputSink`. `key` is the shape of the `Key` input of the core's `terminal_core_input` command ([runtime](terminal-runtime.md)) field for field (`code`, `key`, `mods` as Shift, Ctrl, Alt and Meta, `repeat`, `release`), which the core maps with `KeyInput::from_dom`: Shift+Enter, Ctrl+C and the protocols a program enabled are encoded by the core, which is held to what xterm.js sends, and not by a byte table here. The Android key codes use the US-layout `code` for each physical key, since Android reports no layout-independent position; the layout's text rides in `key`. `text` has no input variant yet: `CoreInput` carries `Key`, `Mouse`, `Paste` and `Focus`, and a multi-character `key` is deliberately not text. Wiring the bridge needs a `Text` variant that becomes `KeyInput { key: UNIDENTIFIED, text }`, which the core already sends verbatim in every mode, DEL erase units and CR included.
+The surface input relay delivers native keyboard events to the adapter in order. The core encodes hardware events using `KeyInput::from_dom` and handles committed text through `CoreInput::Text`. Android key codes provide the physical key names and the active layout provides the text. The native editor requests the IME after Android processes the touch and cancels pending focus on handoff or detach.
 
 ## Tests and what they establish
 
@@ -30,14 +30,16 @@ The bridge delivers through `TerminalInputSink`. `key` is the shape of the `Key`
 | `TerminalImeEditorTest` (23, JVM) | `:app:testUniversalDebugUnitTest` | The fixed `OwnedImeService` transactions (autocorrect, tail extension, ASCII erase, repeated word, prediction, swipe, composing Backspace, replace previous, SwiftKey's web profile) leave the remote line equal to the editor at every step; composition is never sent; no change is sent twice; identical consecutive commands are both sent; non-ASCII and earlier-line erasures are staged, not replayed; bounds; gating; key ordering. |
 | `TerminalKeysTest` (9, JVM) | same | Shift+Enter is the Enter key with Shift and not text; Ctrl+C keeps `c` as its key; named, function, keypad and punctuation keys; system keys are refused; no two Android keys share a DOM code. |
 | `NativeTerminalInputTest` (8, instrumentation) | `bun run test:android` stage | The real `InputConnection` and `KeyEvent` classes: editor setup, the same transactions replayed in `OwnedImeService`'s order with its expected reads, `getSurroundingText` on API 31 and later, Enter as key event or text, hardware shortcuts, focus loss. |
+| `NativeTerminalSessionTest` | `native-android-terminal-session` | A plain screen tap opens the IME and serves the native editor. Keys reach the shell, move to a page field, and return to the terminal. The shell confirms the toolbar byte sequence. |
 
 Run on Waydroid (Android 13, API 33, x86_64, host AMD GPU): `NativeTerminalInputTest` `OK (8 tests)`.
 
-## Not established
+The owned API 36 emulator passed `NativeTerminalSessionTest` with SwiftShader enabled. The report includes `keyboardOpenedOnTap`, `keyboardEditorServed`, `keyboardHandedBackAndForth`, and `toolbarKeysThroughCatV`. [Emulator result](https://github.com/mihazs/lazysh/pull/2495#issuecomment-7135985972)
 
-- **Gboard and SwiftKey.** The instrumentation replays the transactions in the process. The real keyboard process, the remote `InputConnection` proxy of `OwnedImeService` and both keyboards are not exercised, so the first acceptance criterion of #1328 is not met: it needs a physical device.
-- **Wiring.** No view is created, attached to a surface or given a sink, and no path carries the sink's calls from Kotlin to `terminal_core_input` (nor a `Text` variant for it). The access lease is the core command's, not this bridge's. The surface host is separate open work ([#1327](https://github.com/mihazs/lazysh/issues/1327)).
-- **Touch.** Scrolling, long-press selection with handles, and the clipboard, against the expectations of [#16](https://github.com/mihazs/lazysh/issues/16) and [#938](https://github.com/mihazs/lazysh/issues/938), need the renderer and the core's selection ([#1320](https://github.com/mihazs/lazysh/issues/1320)).
+## Remaining verification
+
+- **Physical-device keyboards.** SwiftKey and Gboard still need typing, composition, and latency checks on a physical device.
+- **Touch and clipboard.** Long-press selection, handle movement, and clipboard consent still need the wider Android acceptance run. [#2501](https://github.com/mihazs/lazysh/issues/2501)
 - **Hardware keyboards.** Only synthetic key events. No physical keyboard, non-US layout, AltGr, or Alt and Meta from an Android keyboard (the core's platform key parity, [#1653](https://github.com/mihazs/lazysh/pull/1653), was held to DOM events), IME-composed hardware input, or dead keys beyond naming them.
 - **Latency.** Keystroke-to-presentation p50/p95/p99 from the [benchmark harness](terminal-benchmarks.md) needs a presenting renderer; no number exists.
 - **Not copied from `terminalIme.ts`** because they are DOM artefacts: key 229, `Process`, `keypress`, `beforeinput` input types and the deferred Enter replay. A keyboard that behaves in a way the fixtures do not cover is the open risk of this bridge.

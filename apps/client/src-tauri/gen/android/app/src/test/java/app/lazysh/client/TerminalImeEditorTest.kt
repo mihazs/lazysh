@@ -292,4 +292,29 @@ class TerminalImeEditorTest {
         assertTrue(editor.paste(""))
         assertEquals(emptyList<String>(), remote.sent)
     }
+
+    /**
+     * A SwiftKey-style session as the keyboard drives the editor (#2489): every letter updates the composing word in its own batch, the space
+     * commits the word with it, the next word is mistyped and replaced by an autocorrect over the previous word, a backspace is a
+     * deleteSurroundingText, and a word is composed again after the caret moves back. The bytes are exact, and nothing is sent twice.
+     */
+    @Test fun aRecordedSwiftKeySequenceSendsExactlyTheBytesTheRemoteLineNeeds() {
+        for (preedit in listOf("h", "he", "hel", "hell", "hello")) batch { setComposingText(preedit, 1) }
+        assertEquals("nothing leaves while the word is composing", emptyList<String>(), remote.sent)
+        batch { commitText("hello", 1); commitText(" ", 1) }
+        assertEquals("the word and its space are one delivery", listOf("hello "), remote.sent)
+        for (preedit in listOf("w", "wo", "wrl", "wrld")) batch { setComposingText(preedit, 1) }
+        batch { commitText("wrld", 1); commitText(" ", 1) }
+        assertEquals("hello wrld ", remote.line)
+        // The autocorrect replaces the word it just committed: the keyboard marks it composing again and commits the correction.
+        batch { setComposingRegion(6, 11); commitText("world ", 1) }
+        assertEquals("hello world ", remote.line)
+        batch { deleteSurroundingText(1, 0) }
+        assertEquals("hello world", remote.line)
+        batch { setComposingText("!", 1); finishComposingText() }
+        assertEquals("hello world!", remote.line)
+        assertRemoteFollowsEditor()
+        // Every delivery is a delta: the correction backs up over the changed tail ("rld ") and types the new one, and nothing is resent.
+        assertEquals(listOf("hello ", "wrld ", "\u007f\u007f\u007f\u007forld ", "\u007f", "!"), remote.sent)
+    }
 }

@@ -222,8 +222,13 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) {
     // Typing clears the selection, as xterm.js' selection service does on user input; a terminal's reply is not typing.
     if (origin !== 'terminal-reply') this.clearSelection();
-    this.send(() => this.bridge.input(data, origin));
+    // What the soft keyboard types takes the toolbar's armed Ctrl or Alt; a paste, a reply and a pointer's text do not.
+    const typed = this.modifier && (origin === 'ime' || origin === 'keyboard') && typeof data === 'string' ? this.modifier(data) : data;
+    this.send(() => this.bridge.input(typed, origin));
   }
+
+  private modifier: ((typed: string) => string) | undefined;
+  setInputModifier(modifier: ((typed: string) => string) | undefined) { this.modifier = modifier; }
 
   /** A key as the DOM reports it, for the core to encode for the modes the program set; `sendInput` carries text. */
   sendKey(input: CoreKeyInput) {

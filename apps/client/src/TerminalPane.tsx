@@ -393,7 +393,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     return()=>element.removeEventListener('touchstart',start);
   },[active,session.id,session.adapter,session.connected,dpadEnabled,preferences.screenReader]);
   const multiplexer = session.local ? undefined : session.attached?.kind;
-  const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || bodyGestureSlots.some(slot => preferences.bodyGestures[slot] !== "none") || (!!multiplexer && preferences.bodyGestures.pinch !== "none"));
+  const nativeTapFocus = native && softKeyboard.open !== null;
+  const customTouch = !preferences.screenReader && (nativeTapFocus || preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || bodyGestureSlots.some(slot => preferences.bodyGestures[slot] !== "none") || (!!multiplexer && preferences.bodyGestures.pinch !== "none"));
   const multiTap = customTouch && (preferences.bodyGestures.doubleTap !== "none" || preferences.bodyGestures.tripleTap !== "none");
 
   useEffect(() => {
@@ -812,7 +813,14 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       if (session.connected) void writeInput(userInput ? 'terminal-user' : 'terminal-nonuser', value, owner).catch(error => reportError(captureUiError(error)));
     }, acceptsInput, setUnappliedEdit);
     imeInput.current = output ?? null;
-    setModifierInput(output?.available ?? false);
+    // A native adapter delivers the keyboard's text itself: the toolbar's modifiers apply to what it types, through this hook, once.
+    adapter.setInputModifier?.(typed => {
+      const state = modifierState.current;
+      const value = state.shift && !state.ctrl && !state.meta && (typed === "\r" || typed === "\n") ? parseChord("Shift+Enter") : modifiedTerminalText(typed, state.ctrl, state.meta);
+      consumeModifiers();
+      return value;
+    });
+    setModifierInput((output?.available ?? false) || !!adapter.setInputModifier);
     const resizeRemote = ({cols, rows}: {cols: number; rows: number}) => {
       if (session.connected && !owner.disposed && inputOwner.current === owner && mounted.current && access.current())
         void api.resize(session.id, cols, rows).catch(error => reportError(captureUiError(error)));
@@ -854,7 +862,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       lanes.forEach(name => element.removeEventListener(name, keyboardLane, true));
       element.removeEventListener("paste", literalLane, true);
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
-      resize.disconnect(); imeInput.current = null; output?.dispose(); size.dispose(); reports.dispose(); links.dispose(); keys.dispose();
+      resize.disconnect(); imeInput.current = null; adapter.setInputModifier?.(undefined); output?.dispose(); size.dispose(); reports.dispose(); links.dispose(); keys.dispose();
       void adapter.detach();
       fit.current = null;
     };
@@ -916,8 +924,10 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   const keyboardTarget = () => composingRef.current ? composerInput.current : session.adapter.inputElement();
   /** Focuses the input, then asks Android for the keyboard, which a focused input alone does not bring back after the system back gesture closed it. */
   function showKeyboard() {
-    focusTerminal(composingRef.current ? composerInput.current : undefined);
-    softKeyboard.request(true);
+    const target = composingRef.current ? composerInput.current : undefined;
+    focusTerminal(target);
+    // The Android terminal editor requests its own IME after it gets focus.
+    if (target !== undefined || !native || session.adapter.inputElement()) softKeyboard.request(true);
   }
   function hideKeyboard() {
     if (composingRef.current) composerInput.current?.blur(); else session.adapter.blur();
@@ -1073,14 +1083,22 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     taps.current = null;
   }
   function tap(x: number, y: number) {
-    if (preferences.bodyGestures.tap === "none" && preferences.bodyGestures.doubleTap === "none" && preferences.bodyGestures.tripleTap === "none") return;
+    const tapAction = nativeTapFocus && preferences.bodyGestures.tap === "none" ? "keyboard" : preferences.bodyGestures.tap;
+    if (tapAction === "none" && preferences.bodyGestures.doubleTap === "none" && preferences.bodyGestures.tripleTap === "none") return;
     const previous = taps.current;
     const count = previous && Date.now() - previous.when <= 350 && Math.hypot(x - previous.x, y - previous.y) < 24 ? previous.count + 1 : 1;
     cancelTaps();
     const slot = count >= 3 ? "tripleTap" : count === 2 ? "doubleTap" : "tap";
     const perform = () => {
       taps.current = null;
-      if (activeRef.current && !composingIme() && !session.adapter.hasSelection()) runGesture(preferences.bodyGestures[slot], slot);
+      const adapter = session.adapter;
+      if (!activeRef.current || composingIme() || adapter.hasSelection()) return;
+      const action = slot === "tap" ? tapAction : preferences.bodyGestures[slot];
+      if (nativeTapFocus && action === "keyboard") {
+        const cell = adapter.cellAt(x, y);
+        if (cell && herdrNavigationCell(adapter, cell.x, cell.y - adapter.viewport().top)) return;
+      }
+      runGesture(action, slot);
     };
     if (count >= 3 || (count === 2 && preferences.bodyGestures.tripleTap === "none") || (count === 1 && preferences.bodyGestures.doubleTap === "none" && preferences.bodyGestures.tripleTap === "none")) perform();
     else taps.current = {count, x, y, when: Date.now(), timer: setTimeout(perform, 350)};

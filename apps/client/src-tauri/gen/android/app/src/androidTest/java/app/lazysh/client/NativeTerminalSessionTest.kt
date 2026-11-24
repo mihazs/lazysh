@@ -6,6 +6,8 @@ import android.system.Os
 import android.view.SurfaceView
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -69,8 +71,18 @@ class NativeTerminalSessionTest {
 
     @After fun leaveTheAppAsFound() {
         // What the case chose and saved is the app's: end the session, delete the host and give the engine choice back to Auto.
-        runCatching { act("window.__lz.click(\"button[aria-label='Disconnect $hostName']\")") }
-        runCatching { revealHosts(); act("window.__lz.click(\"button[aria-label='Delete $hostName']\")") }
+        runCatching {
+            if (js("window.__lz.click(\"button[aria-label='Disconnect $hostName']\")") != "true" &&
+                js("Boolean(document.querySelector(${quoted(nativePane)}))") == "true"
+            ) {
+                if (js("Boolean(window.__lz.find('.workspace-tools-end'))") != "true") click("button.mobile-tools, button[aria-label='Workspace tools']")
+                click(".workspace-tools-end", "End $hostName connection")
+            }
+        }
+        runCatching {
+            revealHosts()
+            if (js("window.__lz.click(\"button[aria-label='Delete $hostName']\")") == "true") click("[role=dialog] button", "Delete host")
+        }
         runCatching { openEngineSettings(); choose("input[name='terminal-engine'][value='auto']"); act("window.__lz.click(\"button[aria-label='Close Preferences']\")") }
         runCatching { scenario.moveToState(Lifecycle.State.RESUMED) }
     }
@@ -181,7 +193,7 @@ class NativeTerminalSessionTest {
     /** The settled surface once it differs from `other`, the one it showed before what the case just did. */
     private fun settledAfter(what: String, other: Bitmap) = settled(what) { checksum(it) != checksum(other) }
 
-    private fun typeIntoTheSurface(command: String) {
+    private fun typeIntoTheSurface(command: String, enter: Boolean = true) {
         val input = checkNotNull(ui { activity ->
             (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<TerminalInputView>().firstOrNull() }
         }) { "the session's keyboard editor" }
@@ -189,14 +201,18 @@ class NativeTerminalSessionTest {
             val connection = checkNotNull(input.onCreateInputConnection(EditorInfo()))
             connection.commitText(command, 1)
             // A line break the keyboard commits as text is a carriage return, as in NativeTerminalInputTest.
-            connection.commitText("\n", 1)
+            if (enter) connection.commitText("\n", 1)
         }
+    }
+
+    private fun surfaceBounds(): Rect {
+        val view = checkNotNull(surfaceView())
+        return ui { IntArray(2).also(view::getLocationOnScreen).let { Rect(it[0], it[1], it[0] + view.width, it[1] + view.height) } }
     }
 
     /** A finger drag over the pane, on the screen, the way a user scrolls it. */
     private fun drag(fromFraction: Double, toFraction: Double) {
-        val view = checkNotNull(surfaceView())
-        val bounds = ui { IntArray(2).also(view::getLocationOnScreen).let { Rect(it[0], it[1], it[0] + view.width, it[1] + view.height) } }
+        val bounds = surfaceBounds()
         val x = bounds.centerX()
         UiDevice.getInstance(instrumentation).swipe(x, bounds.top + (bounds.height() * fromFraction).roundToInt(), x, bounds.top + (bounds.height() * toFraction).roundToInt(), 20)
     }
@@ -207,6 +223,89 @@ class NativeTerminalSessionTest {
         connect()
         until("the native pane on the page", 120, "Boolean(document.querySelector(${quoted(nativePane)})) && !document.querySelector('.terminal-canvas .xterm-screen')")
         return session()
+    }
+
+    /**
+     * Who owns the keyboard (#2489, #2490): the terminal's editor takes Android's view focus when the page asks for it and the keyboard
+     * is served to it, a field of the page that takes DOM focus gets the keys instead (the editor lets go), and the terminal gets them
+     * back when it asks again. The oracle is the keys themselves, injected by the shell as a keyboard would: where they land says who
+     * holds the focus.
+     */
+    private fun keyboardOwnership(id: String) {
+        val prompt = fixture.getString("prompt").trim()
+        val input = checkNotNull(ui { activity ->
+            (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<TerminalInputView>().firstOrNull() }
+        }) { "the session's keyboard editor" }
+        val imm = instrumentation.targetContext.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+
+        fun keyboardVisible() = ui { activity ->
+            ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+        }
+        PageDriver.invoke("native_terminal_surface_focus", "{session:${quoted(id)},focused:false}")
+        PageDriver.poll("the editor and keyboard to be closed before the tap", 30) {
+            (ui { !input.hasFocus() } && !keyboardVisible()).takeIf { it }
+        }
+        val bounds = surfaceBounds()
+        assertEquals("the screen received the plain terminal tap", true, UiDevice.getInstance(instrumentation).click(bounds.centerX(), bounds.centerY()))
+        try {
+            PageDriver.poll("the native editor to be served and the keyboard to open after the tap", 30) {
+                (ui { input.hasFocus() && imm.isActive(input) } && keyboardVisible()).takeIf { it }
+            }
+        } catch (error: AssertionError) {
+            val keyboard = keyboardVisible()
+            val editor = ui { "focus=${input.hasFocus()}, served=${imm.isActive(input)}, attached=${input.isAttachedToWindow}" }
+            throw AssertionError("${error.message}; editor $editor, keyboardVisible=$keyboard", error)
+        }
+        evidence.put("keyboardOpenedOnTap", true)
+        evidence.put("keyboardEditorServed", true)
+        shell("input text ab")
+        awaitRow(id, "the keys typed at the focused editor", { it.startsWith(prompt) && it.endsWith("ab") })
+
+        // A field of the page takes DOM focus, as the composer, a dialog or the search box does.
+        js("(() => { const f = document.createElement('input'); f.id = 'lz-probe'; document.body.appendChild(f); f.focus(); return true; })()")
+        PageDriver.poll("the editor to let go of the focus", 30) { ui { !input.hasFocus() }.takeIf { it } }
+        // The WebView takes Android's focus and the page then reports itself focused; keys sent before that have no document to reach.
+        try { PageDriver.poll("the page to be the focused document", 30) { js("document.hasFocus() && document.activeElement && document.activeElement.id === 'lz-probe'").takeIf { it == "true" } } }
+        catch (error: AssertionError) {
+            val web = ui { activity -> EdgeGestureExclusion.webView(activity.window.decorView)?.let { "webViewFocus=${it.hasFocus()} windowFocus=${it.hasWindowFocus()} editorFocus=${input.hasFocus()}" } }
+            throw AssertionError("${error.message}; $web; page=${js("JSON.stringify({focus: document.hasFocus(), active: document.activeElement && document.activeElement.tagName + '#' + document.activeElement.id})")}", error)
+        }
+        shell("input text zz")
+        PageDriver.poll("the keys to reach the page's field", 30) { js("document.getElementById('lz-probe').value").takeIf { it == "\"zz\"" } }
+        assertEquals("the terminal got none of the page field's keys", false, coreText(id).lines().any { it.trim().endsWith("abzz") || it.trim().endsWith("zz") })
+        js("(() => { const f = document.getElementById('lz-probe'); f.blur(); f.remove(); return true; })()")
+
+        // The terminal asks again and the keys come back to it.
+        PageDriver.invoke("native_terminal_surface_focus", "{session:${quoted(id)},focused:true}")
+        PageDriver.poll("the editor to hold the focus again", 30) { ui { input.hasFocus() }.takeIf { it } }
+        shell("input text cd")
+        awaitRow(id, "the keys typed after the page's field", { it.startsWith(prompt) && it.endsWith("abcd") })
+        typeIntoTheSurface("")
+        evidence.put("keyboardHandedBackAndForth", true)
+    }
+
+    /**
+     * The toolbar's keys on the native session (#2493): `cat -vT` shows what the shell receives. Esc, Tab, Home, End and Shift+Tab are pressed on
+     * the page's toolbar, then Ctrl and a letter the soft keyboard commits (the toolbar's modifier applies to the next character typed), then
+     * Enter; Ctrl+D ends cat. The answer is the one row of caret notation the bytes make.
+     */
+    private fun toolbarKeys(id: String) {
+        // The keys go to cat, not to the shell's line editor: wait until the shell has printed the marker and so started it.
+        typeIntoTheSurface("echo catv-started; cat -vT")
+        awaitRow(id, "cat to have started", { it == "catv-started" })
+        Thread.sleep(500)
+        for (key in listOf("esc", "tab", "Home", "End")) click("button", key)
+        click("button", "Shift")
+        click("button", "tab")
+        click("button", "ctrl")
+        // The IME queues the letter and Enter together so Enter cannot consume the sticky Ctrl first.
+        typeIntoTheSurface("a")
+        try { awaitRow(id, "cat -vT's caret notation of the toolbar's keys", { it == "^[^I^[[H^[[F^[[Z^A" }) }
+        catch (error: AssertionError) { throw AssertionError("${error.message}; the screen held:\n${coreText(id)}", error) }
+        click("button", "ctrl")
+        click("button", "d")
+        awaitRow(id, "the prompt after cat ended", { it == fixture.getString("prompt").trim() })
+        evidence.put("toolbarKeysThroughCatV", true)
     }
 
     /**
@@ -224,18 +323,24 @@ class NativeTerminalSessionTest {
         val pty = awaitRow(id, "the pty's size", { it.startsWith("ptysize=") && it.length > "ptysize=".length })
         evidence.put("ptySize", pty.lines().first { it.trim().startsWith("ptysize=") && it.trim().length > "ptysize=".length }.trim())
         evidence.put("coreSnapshot", runCatching { JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state").let { "${it.getInt("rows")} ${it.getInt("columns")}" } }.getOrElse { "unreadable: ${invoke("terminal_core_snapshot", id).take(200)}" })
-        // The server and a second pane, through tmux's own commands: the answers are text the core parsed.
-        typeIntoTheSurface("echo term=\$TERM; tmux -f /dev/null new-session -d -s native-mux && tmux split-window -d -h -t native-mux && echo panes=\$(tmux list-panes -t native-mux | wc -l)")
-        val answered = awaitRow(id, "tmux's answer for two panes", { it == "panes=2" })
-        evidence.put("tmuxTerm", answered.lines().firstOrNull { it.trim().startsWith("term=") }?.trim() ?: "")
-        // The client attached: tmux draws its two panes with a border and its status line on the last row, as the core's text holds them.
-        // tmux cuts the status line's left part ("[native-mux] ") to its default length of 10 characters, which is why the row starts "[native-mu".
-        typeIntoTheSurface("tmux attach -t native-mux")
-        val screen = awaitRow(id, "tmux's status line on the last row", { it.startsWith("[native-mu") && it.contains("0:bash") })
-        evidence.put("tmuxStatusLine", screen.lines().last { it.startsWith("[native-mu") }.trim()).put("tmuxScreenRows", screen.lines().size)
-        assertEquals("the status line is the screen's last row", screen.lines().last { it.isNotBlank() }.trim(), screen.lines().last { it.startsWith("[native-mu") }.trim())
-        awaitRow(id, "the border between tmux's two panes", { it.contains("│") })
-        typeIntoTheSurface("tmux kill-server")
+        val nonce = fixture.getString("nonce")
+        require(nonce.matches(Regex("[a-f0-9]{32}"))) { "Invalid owned tmux socket nonce" }
+        val mux = "tmux -L lazysh-native-$nonce"
+        try {
+            // The server and a second pane, through tmux's own commands: the answers are text the core parsed.
+            typeIntoTheSurface("echo term=\$TERM; $mux -f /dev/null new-session -d -s native-mux -n check && $mux split-window -d -h -t native-mux && echo panes=\$($mux list-panes -t native-mux | wc -l)")
+            val answered = awaitRow(id, "tmux's answer for two panes", { it == "panes=2" })
+            evidence.put("tmuxTerm", answered.lines().firstOrNull { it.trim().startsWith("term=") }?.trim() ?: "")
+            // The client attached: tmux draws its two panes with a border and its status line on the last row, as the core's text holds them.
+            // tmux cuts the status line's left part ("[native-mux] ") to its default length of 10 characters, which is why the row starts "[native-mu".
+            typeIntoTheSurface("$mux attach -t native-mux")
+            val screen = awaitRow(id, "tmux's status line on the last row", { it.startsWith("[native-mu") && it.contains("0:check") })
+            evidence.put("tmuxStatusLine", screen.lines().last { it.startsWith("[native-mu") }.trim()).put("tmuxScreenRows", screen.lines().size)
+            assertEquals("the status line is the screen's last row", screen.lines().last { it.isNotBlank() }.trim(), screen.lines().last { it.startsWith("[native-mu") }.trim())
+            awaitRow(id, "the border between tmux's two panes", { it.contains("│") })
+        } finally {
+            runCatching { typeIntoTheSurface("$mux kill-server") }
+        }
     }
 
     @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() {
@@ -293,8 +398,16 @@ class NativeTerminalSessionTest {
             Evidence.recordPicture("native-session-surface-restarted", again)
             assertEquals("the new surface shows the session as the old one did", checksum(back), checksum(again))
 
+            // The keyboard is the terminal's when it asks and the page's when a page field takes it.
+            keyboardOwnership(id)
+            // Every toolbar key writes what the shell expects; the modifiers apply to the soft keyboard's next character.
+            toolbarKeys(id)
+
             // A multiplexer in the same session, drawn by the core on the surface that has just been given back.
             hostTmux(id)
+        } catch (error: Throwable) {
+            evidence.put("failure", (error.message ?: error.toString()).take(700))
+            throw error
         } finally {
             Evidence.record("native-session", evidence)
         }

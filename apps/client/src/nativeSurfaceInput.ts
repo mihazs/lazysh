@@ -13,6 +13,28 @@ import {nativeSurface} from './terminalSurfaceAnchor';
 export const RETRY_MS = 500;
 const noop = () => {};
 
+type FocusCall = {focused: (element: HTMLElement) => void; blurred: (element: HTMLElement) => void};
+const watchers = new Set<FocusCall>();
+let originals: {focus: HTMLElement['focus']; blur: HTMLElement['blur']} | undefined;
+
+/**
+ * The page's own `focus()` and `blur()` calls, as they are made. A document that is not the focused one (Android's view focus is on the
+ * keyboard editor) fires no focus events for them, so the composer, which the page focuses from script, would take no keyboard from the
+ * terminal if only the events were listened to. The calls are passed on unchanged.
+ */
+function watchFocusCalls(watcher: FocusCall) {
+  if (!originals) {
+    const {focus, blur} = originals = {focus: HTMLElement.prototype.focus, blur: HTMLElement.prototype.blur};
+    HTMLElement.prototype.focus = function (this: HTMLElement, ...args: Parameters<HTMLElement['focus']>) { focus.apply(this, args); watchers.forEach(w => w.focused(this)); };
+    HTMLElement.prototype.blur = function (this: HTMLElement) { blur.apply(this); watchers.forEach(w => w.blurred(this)); };
+  }
+  watchers.add(watcher);
+  return () => {
+    watchers.delete(watcher);
+    if (!watchers.size && originals) { HTMLElement.prototype.focus = originals.focus; HTMLElement.prototype.blur = originals.blur; originals = undefined; }
+  };
+}
+
 export class SurfaceInput implements Disposable {
   readonly element = undefined;
   private readonly mounted: ReturnType<typeof mountPreedit>;
@@ -25,14 +47,46 @@ export class SurfaceInput implements Disposable {
     private readonly preferences: () => TerminalPreferences | undefined, private readonly api = nativeSurface,
   ) {
     this.mounted = mountPreedit(anchor); this.preedit = this.mounted.preedit;
+    document.addEventListener('focusin', this.pageField);
+    document.addEventListener('focusout', this.pageLeft);
+    this.unwatch = watchFocusCalls({focused: element => this.takePage(element), blurred: element => this.leavePage(element)});
     void this.pump();
   }
+
+  /**
+   * A field of the page took the keyboard (the composer, a dialog, the search box): the editor lets go of Android's view focus, or the keyboard
+   * would keep typing into the terminal while the page's own field shows the cursor. The keyboard stays open for the field.
+   */
+  private unwatch: (() => void) | undefined;
+  private pageTarget: EventTarget | null = null;
+  /** The page's field let go of the keyboard: it is the terminal's again (the editor takes view focus back when the terminal asks). */
+  /** The field the editor was just released for: while the page settles after the WebView took focus, its losing focus is the page restoring an older one, not the field being left. */
+  private settling: EventTarget | null = null;
+  private leavePage(target: EventTarget | null) { if (target === this.pageTarget && target !== this.settling) this.pageTarget = null; }
+  private readonly pageLeft = (event: FocusEvent) => this.leavePage(event.target);
+
+  private takePage(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement) || this.anchor.contains(target) || !target.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+    if (this.pageTarget === target) return;
+    this.wantsFocus = false;
+    this.pageTarget = target;
+    // The WebView takes Android's focus and the page then restores the element it last focused (a toolbar button), over the field the script focused while the page was not: put the field back.
+    this.settling = target;
+    this.api.focus(this.session, false, false).catch(noop).then(() => {
+      for (const delay of [0, 60, 200, 500]) setTimeout(() => { if (!this.stopped && this.settling === target && target.isConnected && document.activeElement !== target) target.focus(); }, delay);
+      setTimeout(() => { if (this.settling === target) this.settling = null; }, 600);
+    });
+  }
+  private readonly pageField = (event: FocusEvent) => this.takePage(event.target);
 
   focus() { this.wantsFocus = true; this.api.focus(this.session, true).catch(noop); }
   blur() { this.wantsFocus = false; this.api.focus(this.session, false).catch(noop); }
 
   dispose() {
     this.stopped = true;
+    document.removeEventListener('focusin', this.pageField);
+    document.removeEventListener('focusout', this.pageLeft);
+    this.unwatch?.();
     this.mounted.restore();
   }
 

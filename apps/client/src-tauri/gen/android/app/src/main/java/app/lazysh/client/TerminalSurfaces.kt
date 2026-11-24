@@ -10,6 +10,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebView
 import android.widget.FrameLayout
 import androidx.lifecycle.Lifecycle
@@ -27,6 +28,7 @@ internal class SurfaceHost(activity: Activity, val web: View, private val frame:
     /** The keyboard's editor for this session (#1328): a one-pixel invisible view that takes focus and the `InputConnection`; the page never types into a DOM editor here. */
     val input = TerminalInputView(activity, relay, onComposing = relay::preedit).apply { alpha = 0f; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
     private var detached = false
+    private var pendingInputFocus: Runnable? = null
 
     init {
         // The page above owns every touch and the pane is not announced (#1329); the keyboard goes to [input], not to this view.
@@ -56,9 +58,36 @@ internal class SurfaceHost(activity: Activity, val web: View, private val frame:
         return FrameLayout.LayoutParams(at.width, at.height, Gravity.TOP or Gravity.LEFT).apply { leftMargin = at.left; topMargin = at.top }
     }
 
+    fun focusInput(focused: Boolean, keyboard: Boolean) {
+        cancelInputFocus()
+        val imm = input.context.getSystemService(InputMethodManager::class.java)
+        if (!focused) {
+            input.clearFocus()
+            web.requestFocus()
+            if (keyboard) imm?.hideSoftInputFromWindow(input.windowToken, 0)
+            return
+        }
+        // A WebView touch can restore its own focus while the event is still being dispatched.
+        // Transfer focus after the touch settles, and retry once when Android has updated its served view.
+        val request = Runnable {
+            if (!input.isAttachedToWindow || !input.hasWindowFocus()) return@Runnable
+            if (!input.hasFocus()) input.requestFocus()
+            if (input.hasFocus()) imm?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
+        pendingInputFocus = request
+        input.post(request)
+        input.postDelayed(request, 150)
+    }
+
+    private fun cancelInputFocus() {
+        pendingInputFocus?.let(input::removeCallbacks)
+        pendingInputFocus = null
+    }
+
     fun detach() {
         if (detached) return
         detached = true
+        cancelInputFocus()
         (view.parent as? ViewGroup)?.removeView(view)
         (input.parent as? ViewGroup)?.removeView(input)
         lifecycle.destroyed()
@@ -172,17 +201,14 @@ internal object TerminalSurfaces {
         (entries[id] ?: throw SurfaceUnavailable("native_surface_session")).relay.take(deliver)
     }
 
-    /** Gives the session's keyboard editor focus and opens the soft keyboard, or takes focus away and closes it. */
-    fun focus(id: String, focused: Boolean) {
-        val input = entries[id]?.host?.input ?: throw SurfaceUnavailable("native_surface_session")
-        val imm = input.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
-        if (focused) {
-            input.requestFocus()
-            imm?.showSoftInput(input, 0)
-        } else {
-            input.clearFocus()
-            imm?.hideSoftInputFromWindow(input.windowToken, 0)
-        }
+    /**
+     * Gives the session's keyboard editor focus and opens the soft keyboard, or takes focus away: the editor hands Android's view focus
+     * back to the WebView, so a field of the page (the composer, a dialog, the search box) is the one the keyboard types into, and the
+     * keyboard closes unless `keyboard` is false (the page took the keyboard itself).
+     */
+    fun focus(id: String, focused: Boolean, keyboard: Boolean = true) {
+        val host = entries[id]?.host ?: throw SurfaceUnavailable("native_surface_session")
+        host.focusInput(focused, keyboard)
     }
 
     fun state(id: String): SurfaceState {

@@ -1,6 +1,6 @@
 import {mkdir,readdir,readFile,rm,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
-import {OwnedProcess,SshFixture,androidSshCleanup,nativeReportCases,ownedDeviceCleanup,ownedEmulator} from './androidSsh';
+import {OwnedProcess,SshFixture,androidSshCleanup,nativeReportCases,ownedDeviceCleanup,ownedEmulator,ownedSoftwareKeyboard} from './androidSsh';
 
 const nativeClass='app.lazysh.client.NativeTerminalCoreTest';
 const compositionClass='app.lazysh.client.NativeTerminalCompositionTest';
@@ -32,7 +32,7 @@ function validateCases(text:string,expected:Cases) {
 }
 
 /** What one owned-device run of native-terminal instrumentation classes needs: the classes, the cases that must each pass once, and where the results go. */
-export type TerminalCaseRun={title:string;classes:readonly string[];cases:Cases;evidenceName:string;evidence:readonly string[];arguments?:readonly string[]};
+export type TerminalCaseRun={title:string;classes:readonly string[];cases:Cases;evidenceName:string;evidence:readonly string[];arguments?:readonly string[];keyboard?:Parameters<typeof ownedSoftwareKeyboard>[3]};
 
 /**
  * The real terminal core inside the packaged app (#2145): an owned OpenSSH on this host is the local process whose shell output the app's
@@ -41,11 +41,13 @@ export type TerminalCaseRun={title:string;classes:readonly string[];cases:Cases;
  * an owned emulator or the Waydroid guest.
  */
 export async function runTerminalCases(run:TerminalCaseRun,root=resolve(import.meta.dir,'../..')) {
-  const {device}=ownedEmulator(run.title,true);
+  const {device,adb,serial}=ownedEmulator(run.title,true);
   const fixture=await SshFixture.start();
   const reverses:number[]=[];
   let remote:string|undefined,primary=false;
+  let keyboard:Awaited<ReturnType<typeof ownedSoftwareKeyboard>>|undefined;
   try {
+    if(run.keyboard)keyboard=await ownedSoftwareKeyboard(adb,serial,5000,run.keyboard);
     await device(['reverse','--no-rebind',`tcp:${fixture.port}`,`tcp:${fixture.port}`]);reverses.push(fixture.port);
     remote=`/data/local/tmp/lazysh-ui-ssh-${fixture.nonce}`;
     await device(['shell','mkdir','-m','700',remote]);
@@ -80,7 +82,7 @@ export async function runTerminalCases(run:TerminalCaseRun,root=resolve(import.m
     const kept=await keepDeviceEvidence(device,evidenceTo);
     for(const name of run.evidence)if(!kept.includes(name))throw new Error(`The ${run.title} left no ${name}`);
   } catch(error){primary=true;throw error;}
-  finally {await androidSshCleanup(primary,[...ownedDeviceCleanup(device,{reverses,remote}),['SSH',()=>fixture.stop()]]);}
+  finally {await androidSshCleanup(primary,[...ownedDeviceCleanup(device,{reverses,remote,keyboard}),['SSH',()=>fixture.stop()]]);}
 }
 
 const coreCases=[[nativeClass,'theCoreInsideTheAppParsesTheOutputOfARealShellAndReadsItBack'],[nativeClass,'theProbeRefusesASoftwareRasterizerUnlessTheDebugSwitchAllowsOne'],
@@ -101,4 +103,4 @@ export const sessionCases=[[sessionClass,'aNativeSessionDrawsTheShellTakesTyping
 export const validateNativeSessionReport=(text:string)=>validateCases(text,sessionCases);
 /** The CI emulator has no GPU the shipping policy accepts, so its run asks for the debug software switch; Waydroid's does not need it. */
 export const androidNativeSessionAcceptance=(root?:string,softwareGpu=true)=>runTerminalCases({title:'native session',classes:[sessionClass],cases:sessionCases,
-  evidenceName:'native-session-evidence',evidence:['native-session.json'],arguments:softwareGpu?['lazyshSoftwareGpu=true']:[]},root);
+  evidenceName:'native-session-evidence',evidence:['native-session.json'],keyboard:softwareGpu?'aosp-latin':undefined,arguments:softwareGpu?['lazyshSoftwareGpu=true']:[]},root);
