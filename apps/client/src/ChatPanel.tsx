@@ -211,7 +211,8 @@ export function foldWork(activity: Message[]): (Message | Message[])[] {
     const said = message.role === 'assistant' && message.blocks.some(block => block.type === 'text' && !block.card && block.text?.trim())
       && message.blocks.every(block => (block.type === 'text' && !block.card) || block.type === 'thinking');
     const run = parts.at(-1);
-    if (said) parts.push(message); else if (Array.isArray(run)) run.push(message); else parts.push([message]);
+    const question = message.blocks.some(block => block.card?.kind === 'question');
+    if (said || question) parts.push(message); else if (Array.isArray(run)) run.push(message); else parts.push([message]);
   }
   return parts;
 }
@@ -726,6 +727,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         if (paired(block)) return null;
         if (timeline && block.id && block.type === 'tool_use' && !block.card) return <AgentToolCard key={index} use={block} result={toolResults.get(block.id)} live={liveCalls.has(block.id)} resultMessage={resultAnchors.get(block.id)} />;
         const card = block.card && <ChatCard card={block.card} body={block.text} answered={!!block.id && answered.has(block.id)} onOpenTerminal={onOpenTerminal} answerer={block.id && block.id===pendingQuestion && bound?.agent==='claude' ? answerer : undefined} />;
+        if (timeline && block.card?.kind === 'question') return <Fragment key={index}>{card}</Fragment>;
         // In the conversation timeline an admitted image is a visible control in the bubble, not a folded row.
         if (timeline && block.imagePreview && opened?.inlineImages) return <button key={index} type="button" className="agent-image" disabled={previewBusy || !access.current() || !sourceMatches} onClick={()=>setPreview({image:block.imagePreview!,messageId:message.id,blockIndex:index,source:previewSource,attempt:++previewAttempt.current})}>{t('agentImageView',{width:formatNumber(block.imagePreview.width),height:formatNumber(block.imagePreview.height)})}</button>;
         return block.type === "text" ? (
@@ -926,12 +928,9 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           {turn.prompt && renderMessage(turn.prompt)}
           <AgentThinking turn={turn} />
           {(()=>{
-            // Only the last turn can still wait for its question.
-            const pending = turn===turns.at(-1) ? turn.activity.filter(message => message.blocks.some(block => block.id && block.id===pendingQuestion)) : [];
-            const folded = turn.activity.filter(message => !pending.includes(message));
             // The turn's duration goes on its last folded run.
-            const parts = foldWork(folded), timed = parts.filter(Array.isArray).at(-1);
-            return <>{parts.map(part => Array.isArray(part) ? <details key={part[0].id} className="agent-turn-activity"><summary>{activitySummary(part === timed ? {...turn, activity: part} : {key: turn.key, activity: part})}</summary>{part.map(renderMessage)}</details> : renderMessage(part))}{pending.map(renderMessage)}</>;
+            const parts = foldWork(turn.activity), timed = parts.filter(Array.isArray).at(-1);
+            return parts.map(part => Array.isArray(part) ? <details key={part[0].id} className="agent-turn-activity"><summary>{activitySummary(part === timed ? {...turn, activity: part} : {key: turn.key, activity: part})}</summary>{part.map(renderMessage)}</details> : renderMessage(part));
           })()}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}
