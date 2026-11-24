@@ -210,32 +210,24 @@ class NativeTerminalSessionTest {
     }
 
     /**
-     * A multiplexer on the native surface (B10): tmux started from the owned shell draws its status line through the core, a split pane
-     * is drawn beside the first with tmux's border, and the shell inside the panes takes typing. The case reads the core's text, not the DOM.
-     * It needs a tmux on the shell's path, which the job installs, and fails without one.
+     * A multiplexer on the native surface (B10): tmux started from the session's shell draws its status line through the core, a split
+     * pane is drawn beside the first with tmux's border, and the shell inside takes typing. It reads the core's text, not the DOM. It needs
+     * a tmux on the shell's path, which the job installs, and fails without one. It runs at the end of the one case, in the same session,
+     * because a second case in this class would start from the page the first one left, which is not the start page.
      */
-    @Test fun aNativeSessionHostsTmuxWithItsStatusLineAndSplitPanes() {
-        try {
-            val id = startNativeSession()
-            val prompt = fixture.getString("prompt").trim()
-            awaitRow(id, "the prompt", { it == prompt || it.startsWith(prompt) })
-            typeIntoTheSurface("command -v tmux >/dev/null && echo HAVE-TMUX || echo NO-TMUX")
-            val probe = awaitRow(id, "the tmux probe", { it == "HAVE-TMUX" || it == "NO-TMUX" })
-            // A missing tmux fails the case: the job installs it, so its absence is a broken fixture, not a skipped arm.
-            assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
-
-            typeIntoTheSurface("tmux -f /dev/null new-session -s native-mux")
-            val status = awaitRow(id, "tmux's status line", { it.contains("[native-mux]") })
-            evidence.put("statusLine", status.lines().last { it.contains("[native-mux]") }.trim())
-
-            // A second pane: the first one is narrower and keeps working, so the count of panes tmux reports reaches the core as text.
-            typeIntoTheSurface("tmux split-window -h; echo panes=\$(tmux list-panes | wc -l)")
-            awaitRow(id, "two panes", { it.startsWith("panes=2") })
-            awaitRow(id, "tmux's pane border", { it.contains("│") })
-            typeIntoTheSurface("tmux kill-server")
-        } finally {
-            Evidence.record("native-session-tmux", evidence)
-        }
+    private fun hostTmux(id: String) {
+        typeIntoTheSurface("command -v tmux >/dev/null && echo HAVE-TMUX || echo NO-TMUX")
+        val probe = awaitRow(id, "the tmux probe", { it == "HAVE-TMUX" || it == "NO-TMUX" })
+        evidence.put("tmuxOnPath", probe.lines().any { it.trim() == "HAVE-TMUX" })
+        assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
+        typeIntoTheSurface("tmux -f /dev/null new-session -s native-mux")
+        val status = awaitRow(id, "tmux's status line", { it.contains("[native-mux]") })
+        evidence.put("tmuxStatusLine", status.lines().last { it.contains("[native-mux]") }.trim())
+        // A second pane: the first one is narrower and keeps working, so the count of panes tmux reports reaches the core as text.
+        typeIntoTheSurface("tmux split-window -h; echo panes=\$(tmux list-panes | wc -l)")
+        awaitRow(id, "two panes", { it.startsWith("panes=2") })
+        awaitRow(id, "tmux's pane border", { it.contains("│") })
+        typeIntoTheSurface("tmux kill-server")
     }
 
     @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() {
@@ -292,6 +284,9 @@ class NativeTerminalSessionTest {
             evidence.put("afterStopAndStartMs", elapsed()).put("sameChecksum", checksum(again) == checksum(back))
             Evidence.recordPicture("native-session-surface-restarted", again)
             assertEquals("the new surface shows the session as the old one did", checksum(back), checksum(again))
+
+            // A multiplexer in the same session, drawn by the core on the surface that has just been given back.
+            hostTmux(id)
         } finally {
             Evidence.record("native-session", evidence)
         }
