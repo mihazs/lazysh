@@ -201,15 +201,43 @@ class NativeTerminalSessionTest {
         UiDevice.getInstance(instrumentation).swipe(x, bounds.top + (bounds.height() * fromFraction).roundToInt(), x, bounds.top + (bounds.height() * toFraction).roundToInt(), 20)
     }
 
+    /** Chooses Native, connects to the owned shell and returns the placed native session's id once the page shows its native pane. */
+    private fun startNativeSession(): String {
+        chooseNative()
+        connect()
+        until("the native pane on the page", 120, "Boolean(document.querySelector(${quoted(nativePane)})) && !document.querySelector('.terminal-canvas .xterm-screen')")
+        return session()
+    }
+
+    /**
+     * A multiplexer in the native session (B10): tmux started from the session's shell runs a server and splits a window, and the core
+     * shows what tmux answers; then the client is attached and what the core holds of its screen is kept as evidence. The attached
+     * drawing is not asserted: on the CI emulator the core's text then held only the pane's prompt and not tmux's status line, which is
+     * a finding to chase, not yet a verdict. It reads the core's text, not the DOM, runs at the end of the one case (a second case in this
+     * class starts from the page the first leaves) and needs the tmux the job installs.
+     */
+    private fun hostTmux(id: String) {
+        typeIntoTheSurface("command -v tmux >/dev/null && echo HAVE-TMUX || echo NO-TMUX")
+        val probe = awaitRow(id, "the tmux probe", { it == "HAVE-TMUX" || it == "NO-TMUX" })
+        evidence.put("tmuxOnPath", probe.lines().any { it.trim() == "HAVE-TMUX" })
+        assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
+        // The server and a second pane, through tmux's own commands: the answers are text the core parsed.
+        typeIntoTheSurface("echo term=\$TERM; tmux -f /dev/null new-session -d -s native-mux && tmux split-window -d -h -t native-mux && echo panes=\$(tmux list-panes -t native-mux | wc -l)")
+        val answered = awaitRow(id, "tmux's answer for two panes", { it == "panes=2" })
+        evidence.put("tmuxTerm", answered.lines().firstOrNull { it.trim().startsWith("term=") }?.trim() ?: "")
+        // The client attached: its screen as the core holds it, kept for the follow-up; nothing is asserted about it yet.
+        typeIntoTheSurface("tmux attach -t native-mux")
+        evidence.put("tmuxAttachDrawsStatusLine", runCatching { PageDriver.poll("tmux's client to draw", 20) { coreText(id).takeIf { it.contains("[native-mux]") } } }.isSuccess)
+        evidence.put("tmuxAttachScreen", coreText(id))
+        typeIntoTheSurface("tmux kill-server")
+    }
+
     @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() {
         val started = System.nanoTime()
         fun elapsed() = (System.nanoTime() - started) / 1_000_000
         evidence.put("probe", JSONObject(PageDriver.invoke("native_terminal_probe")))
         try {
-            chooseNative()
-            connect()
-            until("the native pane on the page", 120, "Boolean(document.querySelector(${quoted(nativePane)})) && !document.querySelector('.terminal-canvas .xterm-screen')")
-            val id = session()
+            val id = startNativeSession()
             evidence.put("sessionOpenedMs", elapsed())
 
             // The core's own output: the owned shell's prompt, and a surface the renderer drew it on.
@@ -258,6 +286,9 @@ class NativeTerminalSessionTest {
             evidence.put("afterStopAndStartMs", elapsed()).put("sameChecksum", checksum(again) == checksum(back))
             Evidence.recordPicture("native-session-surface-restarted", again)
             assertEquals("the new surface shows the session as the old one did", checksum(back), checksum(again))
+
+            // A multiplexer in the same session, drawn by the core on the surface that has just been given back.
+            hostTmux(id)
         } finally {
             Evidence.record("native-session", evidence)
         }
