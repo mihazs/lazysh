@@ -745,6 +745,8 @@ class NativeTerminalSessionTest {
             // Every toolbar key writes what the shell expects; the modifiers apply to the soft keyboard's next character.
             toolbarKeys(id)
             verifySelectionCopy(id)
+            // The pane follows a rotation, the keyboard and a recreated Activity (#2502).
+            followsTheDevice(id)
 
             // A multiplexer in the same session, drawn by the core on the surface that has just been given back.
             hostTmux(id)
@@ -801,16 +803,13 @@ class NativeTerminalSessionTest {
     /**
      * The native pane follows the device (#2502): a rotation, the soft keyboard and a recreated Activity each leave the grid the core holds at the
      * whole cells of the surface, the remote pty the same size, the prompt drawn and the session taking input; the keyboard leaves the last row
-     * of the pane above itself.
+     * of the pane above itself. A step of the one session case (a second case would start from the page the first leaves).
      */
-    @Test fun aNativeSessionFollowsRotationTheKeyboardAndARecreatedActivityWithItsGridAndScreen() {
+    private fun followsTheDevice(id: String) {
         val device = UiDevice.getInstance(instrumentation)
         val imeSetting = "show_ime_with_hard_keyboard"
         val previousIme = shell("settings get secure $imeSetting").decodeToString().trim()
         try {
-            val id = startNativeSession()
-            val prompt = fixture.getString("prompt").trim()
-            awaitRow(id, "the prompt", { it == prompt || it.startsWith(prompt) })
             val portrait = assertThePaneHoldsItsGrid(id, "portrait", "pa")
 
             // A rotation: the window turns, the pane is placed again at its new size and the core is refitted to it.
@@ -865,7 +864,6 @@ class NativeTerminalSessionTest {
         } finally {
             runCatching { device.setOrientationNatural(); device.unfreezeRotation() }
             runCatching { shell("settings ${if (previousIme == "null") "delete secure $imeSetting" else "put secure $imeSetting $previousIme"}") }
-            Evidence.record("native-session-follows-device", evidence)
         }
     }
 }
