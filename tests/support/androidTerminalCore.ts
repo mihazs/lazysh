@@ -98,9 +98,11 @@ export const androidTerminalCoreAcceptance=(root?:string)=>runTerminalCases({tit
 /** The first native session through the real UI (`native-android-terminal-session`): its own cases, so its verdict is its own. */
 const sessionClass='app.lazysh.client.NativeTerminalSessionTest';
 const gesturesClass='app.lazysh.client.NativeTerminalGesturesTest';
+const tmuxPagesClass='app.lazysh.client.NativeTerminalTmuxPagesTest';
 export const sessionCases=[[sessionClass,'aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart'],
-  [gesturesClass,'aRealFingerSelectsCopiesAndTapsLinksOnTheNativeSurfaceAndAnOsc52WriteAsksConsent']] as const;
+  [gesturesClass,'aRealFingerSelectsCopiesAndTapsLinksOnTheNativeSurfaceAndAnOsc52WriteAsksConsent'],
+  [tmuxPagesClass,'tmuxPagesDiscoverAttachSwitchWindowsAndCopyWithConsentOnANativeSession']] as const;
 export const validateNativeSessionReport=(text:string)=>validateCases(text,sessionCases);
 /** The CI emulator has no GPU the shipping policy accepts, so its run asks for the debug software switch; Waydroid's does not need it. */
-export const androidNativeSessionAcceptance=(root?:string,softwareGpu=true)=>runTerminalCases({title:'native session',classes:[sessionClass,gesturesClass],cases:sessionCases,
-  evidenceName:'native-session-evidence',evidence:['native-session.json','native-gestures.json'],arguments:softwareGpu?['lazyshSoftwareGpu=true']:[]},root);
+export const androidNativeSessionAcceptance=(root?:string,softwareGpu=true)=>runTerminalCases({title:'native session',classes:[sessionClass,gesturesClass,tmuxPagesClass],cases:sessionCases,
+  evidenceName:'native-session-evidence',evidence:['native-session.json','native-gestures.json','native-tmux-pages.json'],arguments:softwareGpu?['lazyshSoftwareGpu=true']:[]},root);

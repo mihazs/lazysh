@@ -6,11 +6,8 @@ import android.content.IntentFilter
 import android.content.Intent
 import android.os.PatternMatcher
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import org.json.JSONObject
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -23,32 +20,13 @@ import org.junit.runner.RunWith
  * check: it runs in `native-android-terminal-session`.
  */
 @RunWith(AndroidJUnit4::class)
-class NativeTerminalGesturesTest {
-    private val driver = NativeSessionDriver()
-    private val steps = JSONObject()
-    private val failures = mutableListOf<String>()
-
-    @Before fun theUnlockedPage() {
-        // A class that ran before this one leaves the app on the page its own cleanup reached: show the hosts list before the start page is awaited.
-        runCatching { PageDriver.js(driver.pageScript); driver.revealHosts() }
-        driver.theUnlockedPage()
-    }
-
-    @After fun leaveTheAppAsFound() = driver.leaveTheAppAsFound()
-
-    private fun step(name: String, body: () -> Unit) {
-        try { body(); steps.put(name, "pass") } catch (error: Throwable) {
-            steps.put(name, "fail: ${error.message}")
-            failures.add("$name: ${error.message}")
-        }
-    }
+class NativeTerminalGesturesTest : NativePagesCase() {
 
     private fun hasRegion(label: String, text: String) =
         "Array.from(document.querySelectorAll('[role=region]')).some(x => x.getAttribute('aria-label') === ${driver.quoted(label)} && x.textContent.includes(${driver.quoted(text)}))"
 
     @Test fun aRealFingerSelectsCopiesAndTapsLinksOnTheNativeSurfaceAndAnOsc52WriteAsksConsent() {
-        driver.evidence.put("steps", steps)
-        try {
+        session("native-gestures") {
             val id = driver.startNativeSession()
             val prompt = driver.fixture.getString("prompt").trim()
             driver.awaitRow(id, "the prompt", { it == prompt || it.startsWith(prompt) })
@@ -120,9 +98,6 @@ class NativeTerminalGesturesTest {
                 touch.tapElement("button", "Allow this copy")
                 touch.awaitClipboard(copied)
             }
-        } finally {
-            Evidence.record("native-gestures", driver.evidence)
         }
-        assertTrue("steps failed: $failures", failures.isEmpty())
     }
 }

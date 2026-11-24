@@ -153,6 +153,9 @@ internal object TerminalSurfaces {
     /** The sessions the page has placed or that have a client: the ones an instrumentation case can look at. */
     fun ids(): Set<String> = entries.keys.toSet()
 
+    /** The host of one session's surface and keyboard editor, for an instrumentation case that types into or looks at that session and no other. */
+    fun host(id: String): SurfaceHost? = entries[id]?.host
+
     /** The session is over: its surface goes and its generation count with it. */
     fun remove(id: String) {
         val entry = entries.remove(id) ?: return
