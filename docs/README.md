@@ -14,6 +14,7 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | --- | --- |
 | Install or update a native app or companion | [Install and update](install-and-update.md) |
 | Run, inspect or add a build, check or test task | [Run tasks with moon](how-to/run-tasks-with-moon.md) |
+| Recreate the README screenshots and clips | [Capture the README media](how-to/capture-readme-media.md) |
 | Configure direct SSH, transports or saved workspace entry | [Connections](connections.md) |
 | Reach a private destination through one jump host | [Connect through a bastion](how-to/connect-through-bastion.md) |
 | Resume a host-side workspace | [Multiplexers](multiplexers.md) |
