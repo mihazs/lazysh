@@ -265,13 +265,13 @@ class NativeTerminalSessionTest {
         click("button", "Shift")
         click("button", "tab")
         click("button", "ctrl")
-        typeIntoTheSurface("a", enter = false)
-        click("button", "enter")
+        // The IME queues the letter and Enter together so Enter cannot consume the sticky Ctrl first.
+        typeIntoTheSurface("a")
         try { awaitRow(id, "cat -vT's caret notation of the toolbar's keys", { it == "^[^I^[[H^[[F^[[Z^A" }) }
         catch (error: AssertionError) { throw AssertionError("${error.message}; the screen held:\n${coreText(id)}", error) }
         click("button", "ctrl")
         click("button", "d")
-        awaitRow(id, "the prompt after cat ended", { it.startsWith(fixture.getString("prompt").trim()) && !it.contains("cat") })
+        awaitRow(id, "the prompt after cat ended", { it == fixture.getString("prompt").trim() })
         evidence.put("toolbarKeysThroughCatV", true)
     }
 
