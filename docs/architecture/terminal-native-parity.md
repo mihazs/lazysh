@@ -10,7 +10,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | Gap | Known not to work on native. |
 | N/A | No engine dependency, or xterm.js-only machinery. |
 
-**Summary: 54 features. Works 20, Partial 16, Unproven 9, Gap 6, N/A 3.**
+**Summary: 54 features. Works 25, Partial 13, Unproven 7, Gap 6, N/A 3.**
 
 
 ## Input
@@ -26,7 +26,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | 7 | Shift+PageUp and Shift+PageDown scroll the history | Works | `e2e/terminal-native-input.spec.ts`. |
 | 8 | Toolbar modifiers Ctrl, Alt, Shift, AltGr, sticky and locked | Gap | [#2493](https://github.com/mihazs/lazysh/issues/2493) (P0, owned by the Android input work). On main they are disabled on native (`modifier && !modifierInput`, no input observer); [PR #2495](https://github.com/mihazs/lazysh/pull/2495) adds the observer. |
 | 9 | Toolbar named keys (Esc, Tab, arrows, Home, End, Enter, Backspace), D-pad, key repeat, long-press alternates, custom chords, snippets | Unproven | [#2493](https://github.com/mihazs/lazysh/issues/2493). They go through `api.write` to the transport, not the core; no test drives them over a native pane. |
-| 10 | Toolbar Paste key and bracketed paste | Partial | Adapter: `nativeTerminalAdapter.test.ts` 'brackets a paste only while the program asked for it'; `e2e/terminal-native-input.spec.ts` (text sent once, bracketed when asked); `nativeSurfaceInput.test.ts` (paste after typed text). The pane's Paste key over a native pane: [#2499](https://github.com/mihazs/lazysh/issues/2499). |
+| 10 | Toolbar Paste key and bracketed paste | Works | `TerminalPane.test.tsx` 'page features over a native pane' (toolbar Paste, bracketed only when asked; [PR #2509](https://github.com/mihazs/lazysh/pull/2509)); `nativeTerminalAdapter.test.ts` 'brackets a paste only while the program asked for it'; `e2e/terminal-native-input.spec.ts`; `nativeSurfaceInput.test.ts`. |
 | 11 | Composer: Send, Insert, drafts, attachment tokens, share-to-terminal and dictation into the draft | Gap | [#2496](https://github.com/mihazs/lazysh/issues/2496): Send and Insert did not submit or clear on native; fix in review, [PR #2497](https://github.com/mihazs/lazysh/pull/2497) (test fails on the parent). |
 | 12 | Private keyboard preference (Android) | Works | `NativeTerminalInputTest.privateKeyboardAsksForAVisiblePasswordWithNoSuggestionsAndNoLearning`. |
 | 13 | Hide keyboard when scrolling; Herdr switch tap does not raise the keyboard | Gap | [#2503](https://github.com/mihazs/lazysh/issues/2503): both read `adapter.inputElement()`, which a native session does not have. |
@@ -48,8 +48,8 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | 24 | History lines (scrollback) setting | Partial | Applied when a session opens (`terminalBackends.ts`); an open session does not follow a change: [#2505](https://github.com/mihazs/lazysh/issues/2505). |
 | 25 | Scrolling by finger or wheel, history, follow live output | Works | `terminalAdapter.contract.ts` 'scrolls through history and follows live output again'; `nativeTerminalAdapter.test.ts` (wheel by lines); `e2e/terminal-native-surface.spec.ts` 'a finger drag on the container still scrolls the native terminal'. |
 | 26 | Mouse reporting to programs: click, drag, wheel | Works | `nativePointerSelection.test.ts` (press, motion and release in the cell under the pointer; none while the program does not track); `nativeTerminalAdapter.test.ts` (one wheel report per notch). The `mouseReporting` flag is false by definition (xterm.js' DOM dispatch). |
-| 27 | Pinch zoom | Unproven | The font-size to look to grid path is tested; the gesture over a native pane is not: [#2498](https://github.com/mihazs/lazysh/issues/2498). |
-| 28 | Tap, double tap, swipe, two-finger and pull gestures (configured actions) | Unproven | [#2498](https://github.com/mihazs/lazysh/issues/2498). |
+| 27 | Pinch zoom | Works | `TerminalPane.test.tsx` 'resizes the text with a pinch, up to the largest size, and sends the renderer the new look' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)); the grid refit: `nativeTerminalAdapter.fit.test.ts`. Real touch on an Android surface: [#2501](https://github.com/mihazs/lazysh/issues/2501). |
+| 28 | Tap, swipe and two-finger gestures (configured actions) | Works | `TerminalPane.test.tsx` 'runs a configured two-finger swipe, tap and swipe action, and nothing while text is selected' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)). Double tap, triple tap and pull share the same handlers and are not driven separately. |
 | 29 | Grid follows the pane: font change, display density, rotation, keyboard insets, remote PTY resize | Partial | `nativeTerminalAdapter.fit.test.ts`; `nativeTerminalAdapter.realCore.test.ts` 'sizes the real core to its pane'. Rotation and keyboard insets on Android: [#2502](https://github.com/mihazs/lazysh/issues/2502). |
 | 30 | Mosh canonical resize | Partial | `nativeTerminalAdapter.test.ts` (canonical resize cases); `App.nativeSession.test.tsx` (Mosh session on the core). The Android Mosh case runs xterm.js: [#2500](https://github.com/mihazs/lazysh/issues/2500); leaving native for a Mosh session: [#2414](https://github.com/mihazs/lazysh/issues/2414). |
 | 31 | Alternate screen, application cursor keys, mouse and bracketed-paste modes | Works | `terminalAdapter.contract.ts` 'reports modes from the stream'. |
@@ -68,8 +68,8 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | 39 | Selected text read from the core across wrapped lines and history | Works | `nativeTerminalAdapter.realCore.test.ts` 'gives the adapter the core's text where the window of rows has none'. |
 | 40 | Typing clears the selection; a terminal reply does not | Works | `nativeTerminalAdapter.test.ts`. |
 | 41 | Copy writes the Android clipboard | Unproven | jsdom `TerminalPane.test.tsx` only: [#2501](https://github.com/mihazs/lazysh/issues/2501). |
-| 42 | OSC 52 clipboard write offered for consent; a query never answered | Partial | Policy over the real core: `nativeTerminalAdapter.realCore.test.ts` (osc52.json). The consent sheet over a native pane: [#2499](https://github.com/mihazs/lazysh/issues/2499). |
-| 43 | Find in the terminal history (next, previous, wrap, scroll to hit) | Partial | `terminalAdapter.contract.ts` 'searches the whole buffer, wrapping, in both directions'; `nativeTerminalAdapter.test.ts` (whole-buffer search through the core). The Find bar over a native pane: [#2499](https://github.com/mihazs/lazysh/issues/2499). |
+| 42 | OSC 52 clipboard write offered for consent; a query never answered | Works | Policy over the real core: `nativeTerminalAdapter.realCore.test.ts` (osc52.json); the sheet over a native pane: `TerminalPane.test.tsx` 'offers a program's clipboard write for consent...' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)). |
+| 43 | Find in the terminal history (next, previous, wrap, scroll to hit) | Works | `TerminalPane.test.tsx` 'finds a word in the whole buffer, scrolls to it and selects its row, and wraps to the first match' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)); `terminalAdapter.contract.ts` 'searches the whole buffer, wrapping, in both directions'. |
 | 44 | Links: URL, OSC 8 hyperlink, host path with the consent flow | Partial | `nativeLinkTap.test.ts`; `nativeTerminalAdapter.realCore.test.ts` (links.json, first and last cell of every link). A tap on an Android surface: [#2388](https://github.com/mihazs/lazysh/issues/2388), [#2501](https://github.com/mihazs/lazysh/issues/2501). |
 
 ## Multiplexer pages and page features
@@ -103,7 +103,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 ## Ordered plan for the open gaps
 
 1. P0 daily input: [#2489](https://github.com/mihazs/lazysh/issues/2489), [#2490](https://github.com/mihazs/lazysh/issues/2490), [#2493](https://github.com/mihazs/lazysh/issues/2493) (Android input work), [#2496](https://github.com/mihazs/lazysh/issues/2496) ([PR #2497](https://github.com/mihazs/lazysh/pull/2497)).
-2. P0 proof of what the pane already does, over the native adapter in Vitest: [#2498](https://github.com/mihazs/lazysh/issues/2498) (zoom and gestures), [#2499](https://github.com/mihazs/lazysh/issues/2499) (Find, Paste, OSC 52 consent, attachments, Select all).
+2. P0 proof of what the pane already does, over the native adapter in Vitest: [#2499](https://github.com/mihazs/lazysh/issues/2499) (Select all, Copy screen and the attachment paste remain; Find, Paste, OSC 52 and the gestures of #2498 are covered by [PR #2509](https://github.com/mihazs/lazysh/pull/2509)).
 3. P0 on the CI emulator, once the first session case is stable: [#2501](https://github.com/mihazs/lazysh/issues/2501) (selection, Copy, links), [#2502](https://github.com/mihazs/lazysh/issues/2502) (rotation, keyboard insets, recreation), [#2500](https://github.com/mihazs/lazysh/issues/2500) (multiplexer pages).
 4. P1: [#2503](https://github.com/mihazs/lazysh/issues/2503) (keyboard behaviour from a DOM editor), [#2504](https://github.com/mihazs/lazysh/issues/2504) (desktop mouse), [#2505](https://github.com/mihazs/lazysh/issues/2505) (History lines), [#2507](https://github.com/mihazs/lazysh/issues/2507) (fonts on Android), [#2223](https://github.com/mihazs/lazysh/issues/2223), [#2218](https://github.com/mihazs/lazysh/issues/2218).
 5. P2: [#2506](https://github.com/mihazs/lazysh/issues/2506) (bold colour).
