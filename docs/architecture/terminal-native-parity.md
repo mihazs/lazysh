@@ -10,7 +10,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | Gap | Known not to work on native. |
 | N/A | No engine dependency, or xterm.js-only machinery. |
 
-**Summary: 54 features. Works 25, Partial 13, Unproven 7, Gap 6, N/A 3.**
+**Summary: 54 features. Works 27, Partial 13, Unproven 6, Gap 5, N/A 3.**
 
 
 ## Input
@@ -63,8 +63,8 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | --- | --- | --- | --- |
 | 35 | Touch: long-press selects the word, handles extend it, Copy | Works | `TerminalPane.test.tsx` 'selection on a native session' (jsdom, headless core). On an Android surface: [#2501](https://github.com/mihazs/lazysh/issues/2501). |
 | 36 | Mouse: drag, double click word, triple click line, Shift-click extends | Works | `nativePointerSelection.test.ts`. |
-| 37 | Shift-drag selects locally under mouse tracking; mouse drag scrolls at the edge | Gap | [#2504](https://github.com/mihazs/lazysh/issues/2504) (desktop). |
-| 38 | Select all and Copy screen | Partial | Adapter: `nativeTerminalAdapter.test.ts` and `nativeTerminalAdapter.realCore.test.ts` (select-all from the core). The tools' buttons over a native pane: [#2499](https://github.com/mihazs/lazysh/issues/2499). |
+| 37 | Shift-drag selects locally under mouse tracking; mouse drag scrolls at the edge | Works | `nativePointerSelection.test.ts` 'mouse selection the way xterm.js does it' (both cases fail on the parent commit; [PR #2510](https://github.com/mihazs/lazysh/pull/2510), closes [#2504](https://github.com/mihazs/lazysh/issues/2504)). |
+| 38 | Select all and Copy screen | Works | `TerminalPane.test.tsx` 'selects the whole buffer, history included, and copies the visible screen, from the selection actions' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)); `nativeTerminalAdapter.realCore.test.ts` (select-all from the core). |
 | 39 | Selected text read from the core across wrapped lines and history | Works | `nativeTerminalAdapter.realCore.test.ts` 'gives the adapter the core's text where the window of rows has none'. |
 | 40 | Typing clears the selection; a terminal reply does not | Works | `nativeTerminalAdapter.test.ts`. |
 | 41 | Copy writes the Android clipboard | Unproven | jsdom `TerminalPane.test.tsx` only: [#2501](https://github.com/mihazs/lazysh/issues/2501). |
@@ -79,7 +79,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | 45 | tmux, Zellij, Herdr, rmux: Jump To, window and pane controls, tab strip, copy mode, gestures | Unproven | The page code runs host commands and writes keys through the transport and does not depend on the engine; a native tmux session draws its status line and split panes (#2478), but no case drives the controls on native: [#2500](https://github.com/mihazs/lazysh/issues/2500). |
 | 46 | Herdr phone navigation cells | Works | `herdrNavigationCells.test.ts` runs the same cases over xterm.js and the native adapter on the stand-in core. |
 | 47 | Herdr history swipe over a native pane | Unproven | [#2500](https://github.com/mihazs/lazysh/issues/2500). |
-| 48 | Attachments: paste an uploaded file's path into the terminal | Unproven | Reads only `adapter.modes()`; not driven over a native pane: [#2499](https://github.com/mihazs/lazysh/issues/2499). |
+| 48 | Attachments: paste an uploaded file's path into the terminal | Partial | `attachmentPaste.test.tsx` covers the bytes; the page reads only `adapter.modes().bracketedPaste` (covered for native by the contract) and writes through the transport. Not driven end to end over a native session; the Android cases of #2500 do not include it. |
 | 49 | Agent view, agent board, hooks | N/A | Host-side hooks and transcripts; the app reads the terminal adapter only in `TerminalPane`, `TerminalSelectionTools`, the screen-reader mirror, the attachment paste and the session setup in `App.tsx` (grep of `apps/client/src`). |
 
 ## Accessibility and engine management
@@ -103,7 +103,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 ## Ordered plan for the open gaps
 
 1. P0 daily input: [#2489](https://github.com/mihazs/lazysh/issues/2489), [#2490](https://github.com/mihazs/lazysh/issues/2490), [#2493](https://github.com/mihazs/lazysh/issues/2493) (Android input work), [#2496](https://github.com/mihazs/lazysh/issues/2496) ([PR #2497](https://github.com/mihazs/lazysh/pull/2497)).
-2. P0 proof of what the pane already does, over the native adapter in Vitest: [#2499](https://github.com/mihazs/lazysh/issues/2499) (Select all, Copy screen and the attachment paste remain; Find, Paste, OSC 52 and the gestures of #2498 are covered by [PR #2509](https://github.com/mihazs/lazysh/pull/2509)).
+2. P0 proof of what the pane already does, over the native adapter in Vitest: Find, Paste, OSC 52, Select all, Copy screen and the gestures of #2498 are covered by [PR #2509](https://github.com/mihazs/lazysh/pull/2509) (closes [#2499](https://github.com/mihazs/lazysh/issues/2499)).
 3. P0 on the CI emulator, once the first session case is stable: [#2501](https://github.com/mihazs/lazysh/issues/2501) (selection, Copy, links), [#2502](https://github.com/mihazs/lazysh/issues/2502) (rotation, keyboard insets, recreation), [#2500](https://github.com/mihazs/lazysh/issues/2500) (multiplexer pages).
-4. P1: [#2503](https://github.com/mihazs/lazysh/issues/2503) (keyboard behaviour from a DOM editor), [#2504](https://github.com/mihazs/lazysh/issues/2504) (desktop mouse), [#2505](https://github.com/mihazs/lazysh/issues/2505) (History lines), [#2507](https://github.com/mihazs/lazysh/issues/2507) (fonts on Android), [#2223](https://github.com/mihazs/lazysh/issues/2223), [#2218](https://github.com/mihazs/lazysh/issues/2218).
+4. P1: [#2503](https://github.com/mihazs/lazysh/issues/2503) (keyboard behaviour from a DOM editor), [#2505](https://github.com/mihazs/lazysh/issues/2505) (History lines), [#2507](https://github.com/mihazs/lazysh/issues/2507) (fonts on Android), [#2223](https://github.com/mihazs/lazysh/issues/2223), [#2218](https://github.com/mihazs/lazysh/issues/2218).
 5. P2: [#2506](https://github.com/mihazs/lazysh/issues/2506) (bold colour).
