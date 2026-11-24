@@ -1037,7 +1037,19 @@ class NativeTerminalSessionTest {
             val (cjk, emo, cmb, zwj) = listOf("cjk:", "emo:", "cmb:", "zwj:").map(::rowOf)
             val cell = cellSize()
             evidence.put("cellWidthPx", cell.first).put("cellHeightPx", cell.second)
-            val bitmap = settled("the printed lines") { cellInk(it, cell, cjk, 10) > 0 && cellInk(it, cell, zwj, 6) > 0 }
+            val bitmap = try {
+                settled("the printed lines") { cellInk(it, cell, cjk, 10) > 0 && cellInk(it, cell, zwj, 6) > 0 }
+            } catch (error: AssertionError) {
+                runCatching {
+                    val latest = surfacePixels()
+                    Evidence.recordPicture("native-session-surface-unicode-timeout", latest)
+                    evidence.put("unicodeSurfacePx", "${latest.width}x${latest.height}")
+                    evidence.put("unicodeRows", JSONObject().put("cjk", cjk).put("emoji", emo).put("combining", cmb).put("zwj", zwj))
+                    evidence.put("unicodeBars", JSONObject().put("cjk", cellInk(latest, cell, cjk, 10)).put("zwj", cellInk(latest, cell, zwj, 6)))
+                    evidence.put("unicodeCoreText", coreText(id))
+                }.onFailure(error::addSuppressed)
+                throw error
+            }
             Evidence.recordPicture("native-session-surface-unicode", bitmap)
             fun inked(row: Int, from: Int, count: Int) = (from until from + count).map { cellInk(bitmap, cell, row, it) }
             fun assertCells(what: String, row: Int, from: Int, count: Int, barAt: Int) {
