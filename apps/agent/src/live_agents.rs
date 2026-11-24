@@ -31,6 +31,8 @@ mod linux {
         ("opencode", "OpenCode"),
         ("qwen", "Qwen Code"),
         ("grok", "Grok Build"),
+        ("agy", "Antigravity CLI"),
+        ("senpi", "Senpi"),
         ("crush", "Crush"),
         ("hermes", "Hermes Agent"),
         ("omp", "Oh My Pi"),
@@ -56,6 +58,8 @@ mod linux {
                 ("/@qwen-code/qwen-code/dist/index.js", "Qwen Code"),
                 ("/@earendil-works/pi-coding-agent/dist/bundle/cli.js", "Pi"),
                 ("/@mariozechner/pi-coding-agent/dist/cli.js", "Pi"),
+                ("/@code-yeongyu/senpi/dist/bundle/cli.js", "Senpi"),
+                ("/@oh-my-pi/pi-coding-agent/src/cli.ts", "Oh My Pi"),
             ] {
                 if script.ends_with(path) {
                     return Some(agent);
@@ -190,6 +194,17 @@ mod tests {
             (102, b"node\0/usr/bin/gemini\0secret\0", 'S'),
             (103, b"/bin/codex-helper\0", 'S'),
             (104, b"/bin/claude\0", 'Z'),
+            (
+                105,
+                b"node\0/opt/node_modules/@code-yeongyu/senpi/dist/bundle/cli.js\0",
+                'S',
+            ),
+            (
+                106,
+                b"bun\0/opt/node_modules/@oh-my-pi/pi-coding-agent/src/cli.ts\0",
+                'S',
+            ),
+            (107, b"/usr/bin/agy\0", 'S'),
         ] {
             let path = root.path().join(pid.to_string());
             fs::create_dir(&path).unwrap();
@@ -209,7 +224,13 @@ mod tests {
                 .iter()
                 .map(|p| (p.pid, p.agent.as_str(), p.start_time))
                 .collect::<Vec<_>>(),
-            vec![(101, "Codex", 987), (102, "Gemini CLI", 987)]
+            vec![
+                (101, "Codex", 987),
+                (102, "Gemini CLI", 987),
+                (105, "Senpi", 987),
+                (106, "Oh My Pi", 987),
+                (107, "Antigravity CLI", 987)
+            ]
         );
         assert!(!serde_json::to_string(&result).unwrap().contains("secret"));
         assert!(scan(root.path(), uid.wrapping_add(1)).processes.is_empty());
