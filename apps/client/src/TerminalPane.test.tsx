@@ -2173,6 +2173,7 @@ describe('page features over a native pane', () => {
     vi.stubGlobal('isTauri', true);
     vi.stubGlobal('matchMedia', (query: string) => ({matches: query === '(pointer: coarse)', addEventListener() {}, removeEventListener() {}}));
     const {adapter} = await nativePane('shell prompt');
+    vi.spyOn(adapter, 'inputElement').mockReturnValue(undefined);
     const focus = vi.spyOn(adapter, 'focus');
     const canvas = screen.getByLabelText('Terminal for Host');
     const touch = {pointerId: 1, pointerType: 'touch', clientX: 8, clientY: 8};
