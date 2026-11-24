@@ -264,7 +264,8 @@ class NativeTerminalSessionTest {
         click("button", "ctrl")
         typeIntoTheSurface("a", enter = false)
         click("button", "enter")
-        awaitRow(id, "cat -v's caret notation of the toolbar's keys", { it == "^[^I^[[H^[[F^[[Z^A" })
+        try { awaitRow(id, "cat -v's caret notation of the toolbar's keys", { it == "^[^I^[[H^[[F^[[Z^A" }) }
+        catch (error: AssertionError) { throw AssertionError("${error.message}; the screen held:\n${coreText(id)}", error) }
         click("button", "ctrl")
         click("button", "d")
         awaitRow(id, "the prompt after cat ended", { it.startsWith(fixture.getString("prompt").trim()) && !it.contains("cat") })
