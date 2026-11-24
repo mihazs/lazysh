@@ -89,3 +89,8 @@
 .agent-view .agent-pasted > h5 { display: flex; align-items: center; gap: 4px; margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .agent-view .agent-pasted > pre { margin: 0; max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .agent-view .agent-pasted > .agent-tool-actions { padding: 0; }
+
+.agent-goal { margin: 6px 12px; padding: 8px 12px; border-radius: 12px; background: var(--av-row); font-size: 13px; overflow-wrap: anywhere; }
+.agent-goal > summary { cursor: pointer; color: var(--theme-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-goal > p { margin: 6px 0; white-space: pre-wrap; }
+.agent-goal > time { color: var(--muted); }

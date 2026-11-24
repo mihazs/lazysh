@@ -229,6 +229,34 @@ impl Session {
                     .or_else(|| label(&payload["permission_profile"]["type"]));
                 self.set("sandbox", sandbox.map(|m| json!(m)));
             }
+            Some("event_msg") if payload["type"] == "thread_goal_updated" => {
+                let goal = &payload["goal"];
+                let objective = goal["objective"]
+                    .as_str()
+                    .filter(|text| !text.trim().is_empty() && text.len() <= 16_384);
+                let status = label(&goal["status"]);
+                if let (Some(objective), Some(status)) = (objective, status) {
+                    let mut value = json!({"objective":objective,"status":status});
+                    for (source, target) in [
+                        ("tokensUsed", "tokensUsed"),
+                        ("tokenBudget", "tokenBudget"),
+                        ("timeUsedSeconds", "timeUsedSeconds"),
+                    ] {
+                        if let Some(number) = goal[source].as_u64() {
+                            value[target] = json!(number);
+                        }
+                    }
+                    if let Some(timestamp) =
+                        record["timestamp"].as_str().filter(|text| text.len() <= 64)
+                    {
+                        value["updatedAt"] = json!(timestamp);
+                    }
+                    self.set("goal", Some(value));
+                } else if goal.is_null() {
+                    self.set("goal", None);
+                }
+            }
+            Some("event_msg") if payload["type"] == "thread_goal_cleared" => self.set("goal", None),
             Some("event_msg") if payload["type"] == "token_count" => {
                 let info = &payload["info"];
                 let used = info["last_token_usage"]["total_tokens"].as_u64();

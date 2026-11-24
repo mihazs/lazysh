@@ -36,6 +36,7 @@ import './AgentTokens.css';
 import './AgentView.css';
 import './AgentChrome.css';
 
+const goalStatuses = {active:'agentGoalActive', paused:'agentGoalPaused', complete:'agentGoalComplete', completed:'agentGoalComplete', blocked:'agentGoalBlocked', budget_limited:'agentGoalBudgetLimited', usage_limited:'agentGoalUsageLimited'} as const;
 const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', gemini: 'Gemini CLI', 'grok-acp': 'Grok Build'};
 /** What the view shows: a conversation, who it belongs to and, for a Herdr pick, how to enter its pane.
  * `linked` marks the agent of the focused pane; any other pick is the user's own choice and says so. */
@@ -354,6 +355,13 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
       {reader && kept && !kept.herdr && <label><input type="checkbox" checked={!!images[kept.agent]} onChange={event=>{const next={...images,[kept.agent]:event.target.checked};setImages(next);try {localStorage.setItem('lazysh.agentImages',JSON.stringify(next));} catch { /* A preference only. */ }}} />{t('agentImagesShow')}</label>}
       {reader && counts && <p>{t('agentViewUsage', {input: counts('inputTokens'), output: counts('outputTokens'), read: counts('cacheReadTokens'), write: counts('cacheWriteTokens')})}</p>}
     </div>}
+    {reader && info?.goal && <details className="agent-goal">
+      <summary>{t('agentGoal')} · {Object.hasOwn(goalStatuses, info.goal.status) ? t(goalStatuses[info.goal.status as keyof typeof goalStatuses]) : info.goal.status.replaceAll('_', ' ')} · {info.goal.objective}</summary>
+      <p>{info.goal.objective}</p>
+      {info.goal.tokensUsed !== undefined && <p>{info.goal.tokenBudget !== undefined ? t('agentGoalTokensBudget', {used: formatNumber(info.goal.tokensUsed), budget: formatNumber(info.goal.tokenBudget)}) : t('agentContextUsed', {tokens: formatNumber(info.goal.tokensUsed)})}</p>}
+      {info.goal.timeUsedSeconds !== undefined && <p>{t('agentGoalTime', {minutes: formatNumber(Math.floor(info.goal.timeUsedSeconds / 60))})}</p>}
+      {info.goal.updatedAt && <time dateTime={info.goal.updatedAt}>{formatRelativeTime(info.goal.updatedAt, now)}</time>}
+    </details>}
     {history && <AgentHistory sessionId={sessionId} folder={history} invoke={invoke} onClose={()=>setHistory(undefined)}
       onOpen={item=>{request.current++;setHistory(undefined);setPicked({history:true,cwd:history,focusKey:lastFocus.current,resume:/^[A-Za-z0-9-]{8,64}$/.test(item.sessionId)?`${item.agent==='claude'?'claude --resume':'codex resume'} ${item.sessionId}`:undefined,title:[agentNames[item.agent],item.title ?? item.sessionId.slice(0,8)].join(' · '),conversation:Object.freeze({agent:item.agent,path:item.path})});}}/>}
     {infoOpen && reader && info?.info && <AgentInfoSheet info={info.info} onClose={()=>setInfoOpen(false)} onShowTerminal={onShowTerminal}/>}

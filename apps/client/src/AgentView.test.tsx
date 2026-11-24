@@ -911,6 +911,27 @@ it('shows how long the agent has waited from the recorded start of the wait, not
   await advance(0);
   expect(screen.getByRole('region',{name:'Agent view'}).querySelector('header')!.textContent).toContain('Waiting for your answer · 12 min. ago');
 });
+it('shows the current Codex goal, follows changes, and removes it when cleared',async()=>{
+  host('codex',[row('Codex','%3')],'available',[turn('First','Done')]);
+  const base=vi.mocked(invoke).getMockImplementation()!;
+  let goal: unknown = {objective:'Ship the fix',status:'active',tokensUsed:12,tokenBudget:100,timeUsedSeconds:120};
+  vi.mocked(invoke).mockImplementation(async(command,args)=>{
+    const reply=await base(command,args);
+    return command==='agent_transcript'?{...(reply as object),session:goal?{goal}:undefined}:reply;
+  });
+  await mountTmux();
+  expect(screen.getByText('Goal · Active · Ship the fix')).toBeTruthy();
+  fireEvent.click(screen.getByText('Goal · Active · Ship the fix'));
+  expect(screen.getByText('12 / 100 tokens')).toBeTruthy();
+  expect(screen.getByText('2 min elapsed')).toBeTruthy();
+  goal={objective:'Release',status:'paused'};
+  await advance(3000);
+  expect(screen.getByText('Goal · Paused · Release')).toBeTruthy();
+  goal=undefined;
+  await advance(3000);
+  expect(screen.queryByText(/Goal ·/)).toBeNull();
+});
+
 describe('session info sheet',()=>{
   const withInfo=async(info:unknown,onShowTerminal=()=>{})=>{
     host('claude',[row('Claude Code','%3')],'available',[turn('Plan the work','Here is the plan.')]);
