@@ -37,7 +37,6 @@ class GotifyAndroidTest {
     private val gotify = "com.github.gotify"
     private var deadline = 0L
     private var begun = 0L
-    private var gotifyUid = 0
     // Seconds at which each closed phase was entered, so a failing hosted run shows where its time went (see gotifyNativeTimeline).
     private val timeline = StringBuilder()
     private var phase = "admission"
@@ -83,7 +82,6 @@ class GotifyAndroidTest {
             check(integer(input, "applicationId") > 0 && integer(input, "gotifyUid") > 0)
             // The host attests the exact APK/signature and installed UID before instrumentation.
             val uid = integer(input, "gotifyUid")
-            gotifyUid = uid
             check(uid / 100000 == android.os.Process.myUid() / 100000)
             phase = "fresh-permission"
             check(!permissionGranted()) { "Fresh Gotify permission state required" }
@@ -135,9 +133,9 @@ class GotifyAndroidTest {
                 }
             }
             stage(4, JSONObject().put("history", true))
-        } catch (failure: Throwable) {
+        } catch (_: Throwable) {
             // Never propagate upstream exceptions, credentials, shell output or UI trees to JUnit.
-            throw AssertionError("Owned Gotify acceptance failed: $phase\nOwned Gotify timeline: ${timeline.toString().trim()}${screenEvidence()}${causeEvidence(failure)}")
+            throw AssertionError("Owned Gotify acceptance failed: $phase\nOwned Gotify timeline: ${timeline.toString().trim()}")
         }
     }
 
@@ -299,40 +297,8 @@ class GotifyAndroidTest {
             unique("  mHidden==false") && unique("  mIntercept=false")
     }
 
-    // Which of a fixed set of packages own a window now, and (TEMPORARY diagnosis) the crash buffer and the app's process
-    // lifecycle events, as printable ASCII.
-    private fun screenEvidence(): String = try {
-        val shown = listOf(gotify, "app.lazysh.client", "com.android.systemui", "com.android.permissioncontroller", "com.android.settings", "android")
-            .filter { device.hasObject(By.pkg(it)) } + listOfNotNull("launcher".takeIf { runCatching { device.hasObject(By.pkg(launcher)) }.getOrDefault(false) })
-        fun log(command: String, keep: Int) = shell(command, bounded = false).lineSequence().filter { it.isNotBlank() }.toList()
-            .takeLast(keep).joinToString("|") { it.trim().take(160) }.replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|").takeLast(2000)
-        "\nOwned Gotify windows: ${shown.joinToString(" ")}\nOwned Gotify crash: ${log("logcat -d -b crash -t 30", 30).takeLast(900)}" +
-            "\nOwned Gotify boot: ${log("logcat -d -b all -e BOOT_COMPLETED -t 10", 10).takeLast(900)}" +
-            "\nOwned Gotify events: ${log("logcat -d -b events -e com.github.gotify -t 40", 40)}" +
-            "\nOwned Gotify record: ${record()}" +
-            "\nOwned Gotify texts: ${texts()}"
-    } catch (_: Throwable) { "" }
-
-    // TEMPORARY diagnosis: the exception class and its first stack frame inside this class, as printable ASCII.
-    private fun causeEvidence(failure: Throwable): String {
-        val frame = failure.stackTrace.firstOrNull { it.className.startsWith("app.lazysh.client") }
-        return "\nOwned Gotify cause: ${(failure.javaClass.simpleName + " " + failure.message.orEmpty().take(100) + " " + frame?.methodName + ":" + frame?.lineNumber)
-            .replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|")}"
-    }
-
-    // The texts the app's windows show (TEMPORARY diagnosis; the case's own messages and labels, no credential), as printable ASCII.
-    private fun texts(): String = runCatching {
-        device.findObjects(By.pkg(gotify)).mapNotNull { runCatching { it.text }.getOrNull() }.take(14).joinToString("|") { it.take(70) }
-            .replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|").takeLast(1000)
-    }.getOrDefault("unavailable")
-
-    // The app's foreground-service record as the failing "Connected" check saw it (TEMPORARY diagnosis).
-    private fun record(): String = shell("cmd notification get ${key(gotifyUid, -1)}", bounded = false).lineSequence()
-        .filter { "NotificationRecord(" in it || it.trim().startsWith("flags=") || "android.title" in it || "android.text" in it }
-        .joinToString("|") { it.trim().take(300) }.replace(Regex("[^A-Za-z0-9 .:_/-]+"), "|").takeLast(1500)
-
-    private fun shell(command: String, bounded: Boolean = true): String {
-        check(!bounded || SystemClock.elapsedRealtime() < deadline)
+    private fun shell(command: String): String {
+        check(SystemClock.elapsedRealtime() < deadline)
         return ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).use { stream ->
             val bytes = stream.readNBytes(131073)
             check(bytes.size <= 131072)

@@ -159,19 +159,6 @@ export function gotifyNativeFailure(xml:string):GotifyFixturePhase|undefined {
   }catch{return;}
 }
 /** The seconds at which the native case entered each closed phase, as `phase=seconds` pairs; anything else is dropped. */
-const gotifyNativeWindowNames=['com.github.gotify','app.lazysh.client','com.android.systemui','com.android.permissioncontroller','com.android.settings','android','launcher'] as const;
-/** The packages that owned a window when the native case failed (a fixed set), and sanitized log tails (temporary diagnosis). */
-export function gotifyNativeScreen(xml:string):string|undefined {
-  try {
-    const text=gotifyNativeFailureText(xml)??'';
-    const windows=/^Owned Gotify windows: ([a-z. ]{0,200})\r?$/m.exec(text)?.[1]??'';
-    const tail=(name:string)=>new RegExp(`^Owned Gotify ${name}: ?([A-Za-z0-9 .:_\\/|-]{0,2000})\\r?$`,'m').exec(text)?.[1];
-    const logs=['crash','boot','events','record','cause','texts'].map(name=>[name,tail(name)] as const);
-    const names=windows.split(' ').filter(Boolean);
-    return logs.every(([,value])=>value!==undefined)&&names.every(name=>gotifyNativeWindowNames.some(known=>known===name))?
-      `windows=[${names.join(' ')}] ${logs.map(([name,value])=>`${name}=[${value}]`).join(' ')}`:undefined;
-  }catch{return;}
-}
 export function gotifyNativeTimeline(xml:string):string|undefined {
   try {
     const line=/^Owned Gotify timeline: ([a-z0-9= -]{1,1200})\r?$/m.exec(gotifyNativeFailureText(xml)??'')?.[1];
@@ -554,9 +541,7 @@ async function runGotifyAndroid(root:string) {
     receipt={schemaVersion:1,scope:'official-gotify-awake-background',head,source,serverExecutableSha256:pins.server.executableSha256,caSha256:digest(ca),officialApkSha256:pins.android.sha256,initialInputApkSha256:nativeHash,installedAppApkSha256:executedApp.sha256,installedTestApkSha256:executedTest.sha256,installedApksStable:true,
       relayAccepted:3,serverMessages:ids.length,osRecords:3,visibleCards:3,history:true,native:result};
     phase='relay-shutdown';relay.child.stdin!.end();await relay.finish('relay worker shutdown',10000);
-  }catch(thrown){
-    // TEMPORARY diagnosis (removed once the lane is green): the closed phase and the first stack frames of a host rejection.
-    console.error('DIAG host rejection',phase,String((thrown as Error)?.stack).replace(/[^\x20-\x7e\n]/g,'?').slice(0,900));
+  }catch{
     primary=true;
     if(phase.startsWith('android-native-stage')&&native&&native.child.exitCode!==null) {
       phase='android-native-exit';
@@ -567,13 +552,9 @@ async function runGotifyAndroid(root:string) {
           phase=gotifyNativeFailure(report)??phase;
           const timeline=gotifyNativeTimeline(report);
           if(timeline)console.error('Gotify native phase entry seconds',timeline);
-          const screen=gotifyNativeScreen(report);
-          if(screen)console.error('Gotify native screen',screen);
         }
       }catch{/* Missing or malformed reports retain the closed host failure phase. */}
     }
-    // TEMPORARY diagnosis (removed once the lane is green): a printable-ASCII tail of the Gradle output, which holds no fixture secret.
-    if(phase==='android-native-exit'&&native)console.error('DIAG gradle tail',(native.stdout+native.stderr).replace(/[^\x20-\x7e\n]/g,'?').slice(-3000));
     if(native&&phase.startsWith('android-native-stage')&&hostOperation==='stage-wait')hostOperation=gotifyStageWaitOperation(native.stdout,native.stderr);
     const failedPhase=phase,failedOperation=hostOperation,originalAdbdProbe=failedAdbdProbe;
     let nativePhase='unavailable';
