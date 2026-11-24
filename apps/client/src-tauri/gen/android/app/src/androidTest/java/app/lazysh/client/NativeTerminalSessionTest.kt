@@ -1,5 +1,6 @@
 package app.lazysh.client
 
+import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.system.Os
@@ -313,6 +314,95 @@ class NativeTerminalSessionTest {
      * what tmux answers, and the attached client's two panes, border and status line (#2487) are in the core's text. It reads the core's text, not the DOM, runs at the end of the one case (a second case in this
      * class starts from the page the first leaves) and needs the tmux the job installs.
      */
+    private fun screenPoint(selector: String, label: String? = null): Pair<Int, Int> {
+        val point = PageDriver.poll("visible touch target $selector", 15) {
+            val result = js("""
+                (() => {
+                    const target = window.__lz.find(${quoted(selector)}${label?.let { ", ${quoted(it)}" } ?: ""});
+                    if (!target) return null;
+                    const rect = target.getBoundingClientRect(), x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+                    return target.contains(document.elementFromPoint(x,y)) ? [x,y,innerWidth] : null;
+                })()
+            """.trimIndent())
+            result.takeIf { it.startsWith("[") }?.let(::JSONArray)
+        }
+        return ui { activity ->
+            val web = checkNotNull(EdgeGestureExclusion.webView(activity.window.decorView))
+            val origin = IntArray(2).also(web::getLocationOnScreen)
+            val scale = web.width / point.getDouble(2)
+            (origin[0] + point.getDouble(0) * scale).roundToInt() to
+                (origin[1] + point.getDouble(1) * scale).roundToInt()
+        }
+    }
+
+    private fun verifySelectionCopy(id: String) {
+        val clipboard = instrumentation.targetContext.getSystemService(ClipboardManager::class.java)
+        val previous = ui { clipboard.primaryClip }
+        val marker = "lazysh${fixture.getString("nonce").take(8)}"
+        val line = "$marker next"
+        val device = UiDevice.getInstance(instrumentation)
+        fun tap(selector: String, label: String) {
+            val (x, y) = screenPoint(selector, label)
+            assertEquals("the screen received the $label tap", true, device.click(x, y))
+        }
+        fun clipboardText() = ui { clipboard.primaryClip?.getItemAt(0)?.text?.toString() }
+        fun expectCopy(expected: String) = PageDriver.poll("exact text on the Android clipboard", 15) {
+            clipboardText()?.takeIf { it == expected }
+        }
+        fun printAtTop(text: String): Triple<Int, Int, Double> {
+            typeIntoTheSurface("printf '\\033[2J\\033[H%s\\n' '$text'")
+            awaitRow(id, "the marker on the first row", { it == text })
+            val state = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
+            val bounds = surfaceBounds()
+            val width = bounds.width().toDouble() / state.getInt("columns")
+            return Triple((bounds.left + 2.5 * width).roundToInt(),
+                (bounds.top + 0.5 * bounds.height() / state.getInt("rows")).roundToInt(), width)
+        }
+        try {
+            val (x, y, width) = printAtTop(line)
+            fun selectWord() {
+                assertEquals("the long press reached the native pane", true, device.swipe(x, y, x, y, 150))
+                until("both native selection handles", 15, "document.querySelectorAll('[data-selection-handle]').length === 2")
+            }
+            selectWord()
+            tap(".terminal-selection-tools button", "Copy")
+            expectCopy(marker)
+            evidence.put("nativeWordCopy", true)
+            until("the copied selection to close", 15, "!document.querySelector('.terminal-selection-tools')")
+            selectWord()
+            val (handleX, handleY) = screenPoint("[data-selection-handle='end']")
+            assertEquals("the finger dragged the end selection handle", true,
+                device.swipe(handleX, handleY, handleX + ((line.length - marker.length) * width).roundToInt(), handleY, 20))
+            // Let WebView settle the drag before starting the next, separate tap.
+            device.waitForIdle()
+            tap(".terminal-selection-tools button", "Copy")
+            expectCopy(line)
+            evidence.put("nativeSelectionHandleCopy", true)
+
+            val url = "https://example.com/lazysh"
+            val (linkX, linkY) = printAtTop(url)
+            assertEquals("the screen received the terminal link tap", true, device.click(linkX, linkY))
+            val link = "[aria-label='Terminal link']"
+            until("the terminal link confirmation", 15, "document.querySelector(${quoted("$link p")})?.textContent === ${quoted(url)}")
+            tap("$link button", "Copy URL")
+            expectCopy(url)
+            evidence.put("nativeLinkCopy", true)
+            tap("$link button", "Dismiss link")
+
+            val remote = "lazyshclipboard"
+            val encoded = android.util.Base64.encodeToString(remote.toByteArray(), android.util.Base64.NO_WRAP)
+            typeIntoTheSurface("printf '\\033]52;c;$encoded\\007'")
+            val consent = "[aria-label='Remote clipboard request']"
+            until("the remote clipboard confirmation", 15, "document.querySelector(${quoted("$consent pre")})?.textContent === ${quoted(remote)}")
+            assertEquals("the clipboard stays unchanged before consent", url, clipboardText())
+            tap("$consent button", "Allow this copy")
+            expectCopy(remote)
+            evidence.put("nativeOsc52ConsentCopy", true)
+        } finally {
+            ui { if (previous == null) clipboard.clearPrimaryClip() else clipboard.setPrimaryClip(previous) }
+        }
+    }
+
     private fun hostTmux(id: String) {
         typeIntoTheSurface("command -v tmux >/dev/null && echo HAVE-TMUX || echo NO-TMUX")
         val probe = awaitRow(id, "the tmux probe", { it == "HAVE-TMUX" || it == "NO-TMUX" })
@@ -402,6 +492,7 @@ class NativeTerminalSessionTest {
             keyboardOwnership(id)
             // Every toolbar key writes what the shell expects; the modifiers apply to the soft keyboard's next character.
             toolbarKeys(id)
+            verifySelectionCopy(id)
 
             // A multiplexer in the same session, drawn by the core on the surface that has just been given back.
             hostTmux(id)
