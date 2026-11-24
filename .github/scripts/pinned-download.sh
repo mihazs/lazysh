@@ -13,7 +13,19 @@ if matches "$cache/$sha"; then
   printf 'pinned download cache hit %s\n' "$sha"
   exit 0
 fi
-curl "$@" -o "$output"
+if curl "$@" -o "$output"; then
+  :
+else
+  status=$?
+  case "$status" in
+    18|28|56)
+      if [ "${LAZYSH_RESUME_PINNED_DOWNLOAD:-0}" != 1 ] || [ ! -s "$output" ]; then exit "$status"; fi
+      printf 'resuming interrupted pinned download\n'
+      curl --continue-at - "$@" -o "$output"
+      ;;
+    *) exit "$status" ;;
+  esac
+fi
 if matches "$output"; then
   mkdir -p "$cache"
   cp "$output" "$cache/$sha"

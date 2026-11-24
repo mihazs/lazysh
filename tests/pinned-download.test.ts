@@ -66,12 +66,32 @@ test('a failed download fails the step', async () => {
   expect(result.cached).toBeUndefined();
 });
 
+test('a pinned archive can resume a partial transfer before it enters the cache', async () => {
+  const { root: directory } = await roots.create();
+  const output = join(directory, 'fixture.tar.gz'), cache = join(directory, 'cache');
+  await writeFile(join(directory, 'curl'), `#!/bin/sh
+resume=0
+if [ "$1" = --continue-at ] && [ "$2" = - ]; then resume=1; fi
+for target; do :; done
+if [ "$resume" = 1 ]; then printf 'fixture bytes' >> "$target"; exit 0; fi
+printf 'pinned ' > "$target"
+exit 28
+`, {mode: 0o700});
+  const child = Bun.spawn(['sh', script, sha, output, 'https://example.invalid/fixture.tar.gz'], {env:{
+    ...process.env, PATH:`${directory}:${process.env.PATH}`, LAZYSH_PINNED_DOWNLOADS:cache, LAZYSH_RESUME_PINNED_DOWNLOAD:'1',
+  }});
+  expect(await child.exited).toBe(0);
+  expect(await read(output)).toBe(pinned);
+  expect(await read(join(cache, sha))).toBe(pinned);
+});
+
 test('both Zig downloads allow slow progress and still verify the archive before extraction', async () => {
   const linux = (await document('.github/actions/ghostty-zig/action.yml')).runs.steps;
   const windows = (await document('.github/workflows/checks.yml')).jobs['terminal-windows'].steps;
   for (const steps of [linux, windows]) {
     const step = steps.find((step: any) => step.name === 'Provision checksum-verified Zig 0.16.0 outside the checkout');
     const [download, verify, extract] = step.run.trim().split('\n').slice(1, 4);
+    expect(download).toContain('LAZYSH_RESUME_PINNED_DOWNLOAD=1');
     expect(download).toContain("--proto '=https' --tlsv1.2 --connect-timeout 20");
     expect(download).toContain('--speed-limit 1024 --speed-time 30 --max-time 720');
     expect(verify).toContain('sha256sum --check --strict');

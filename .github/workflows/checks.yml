@@ -744,7 +744,7 @@ jobs:
         # Official receipt: https://ziglang.org/download/index.json [0.16.0][x86_64-windows].shasum
         run: |
           archive="$HERDR_CI_ROOT/zig-x86_64-windows-0.16.0.zip"
-          sh "$LAZYSH_CI_SCRIPTS/pinned-download.sh" 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e "$archive" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --speed-limit 1024 --speed-time 30 --max-time 720 https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip
+          LAZYSH_RESUME_PINNED_DOWNLOAD=1 sh "$LAZYSH_CI_SCRIPTS/pinned-download.sh" 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e "$archive" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --speed-limit 1024 --speed-time 30 --max-time 720 https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip
           printf '%s  %s\n' '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e' "$archive" | sha256sum --check --strict
           pwsh -NoProfile -Command "Expand-Archive -LiteralPath '$archive' -DestinationPath '$HERDR_CI_ROOT'"
           "$ZIG" version
