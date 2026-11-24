@@ -10,7 +10,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | Gap | Known not to work on native. |
 | N/A | No engine dependency, or xterm.js-only machinery. |
 
-**Summary: 54 features. Works 27, Partial 13, Unproven 6, Gap 5, N/A 3.**
+**Summary: 54 features. Works 28, Partial 13, Unproven 6, Gap 4, N/A 3.**
 
 
 ## Input
@@ -27,7 +27,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | 8 | Toolbar modifiers Ctrl, Alt, Shift, AltGr, sticky and locked | Gap | [#2493](https://github.com/mihazs/lazysh/issues/2493) (P0, owned by the Android input work). On main they are disabled on native (`modifier && !modifierInput`, no input observer); [PR #2495](https://github.com/mihazs/lazysh/pull/2495) adds the observer. |
 | 9 | Toolbar named keys (Esc, Tab, arrows, Home, End, Enter, Backspace), D-pad, key repeat, long-press alternates, custom chords, snippets | Unproven | [#2493](https://github.com/mihazs/lazysh/issues/2493). They go through `api.write` to the transport, not the core; no test drives them over a native pane. |
 | 10 | Toolbar Paste key and bracketed paste | Works | `TerminalPane.test.tsx` 'page features over a native pane' (toolbar Paste, bracketed only when asked; [PR #2509](https://github.com/mihazs/lazysh/pull/2509)); `nativeTerminalAdapter.test.ts` 'brackets a paste only while the program asked for it'; `e2e/terminal-native-input.spec.ts`; `nativeSurfaceInput.test.ts`. |
-| 11 | Composer: Send, Insert, drafts, attachment tokens, share-to-terminal and dictation into the draft | Gap | [#2496](https://github.com/mihazs/lazysh/issues/2496): Send and Insert did not submit or clear on native; fix in review, [PR #2497](https://github.com/mihazs/lazysh/pull/2497) (test fails on the parent). |
+| 11 | Composer: Send, Insert, drafts, attachment tokens, share-to-terminal and dictation into the draft | Works | `TerminalPane.test.tsx` 'the composer on a native session' (Send pastes then Enter and clears, Insert pastes and clears; fixed by [PR #2497](https://github.com/mihazs/lazysh/pull/2497), #2496, the test fails on the parent commit). Focus and typing in the composer on Android: [#2490](https://github.com/mihazs/lazysh/issues/2490). |
 | 12 | Private keyboard preference (Android) | Works | `NativeTerminalInputTest.privateKeyboardAsksForAVisiblePasswordWithNoSuggestionsAndNoLearning`. |
 | 13 | Hide keyboard when scrolling; Herdr switch tap does not raise the keyboard | Gap | [#2503](https://github.com/mihazs/lazysh/issues/2503): both read `adapter.inputElement()`, which a native session does not have. |
 | 14 | Keyboard show and hide toolbar key | Unproven | Part of [#2489](https://github.com/mihazs/lazysh/issues/2489); no test drives the key over a native pane. |
@@ -88,7 +88,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | --- | --- | --- | --- |
 | 50 | Screen reader: mirror of the rows, or refusal while touch exploration or the preference is on | Partial | `terminalBackends.test.ts`; `TerminalPane.test.tsx` 'mirrors a native session's rows'; `androidScreenReader.test.ts`; `NativeScreenReaderTest` (emulator, no reader). TalkBack itself is an accepted risk. |
 | 51 | Engine choice in Settings, kill switch, one-line reason | Works | `e2e/terminal-engine-setting.spec.ts`; `terminalBackendRegistry.test.ts`; `App.terminalEngine.test.tsx`. |
-| 52 | Status bar names the engine | Works | `App.nativeSession.test.tsx` (native, fallback, after Switch to xterm.js), in review: [PR #2494](https://github.com/mihazs/lazysh/pull/2494). |
+| 52 | Status bar names the engine | Works | `App.nativeSession.test.tsx` (native, fallback, after Switch to xterm.js), merged in [PR #2494](https://github.com/mihazs/lazysh/pull/2494). |
 | 53 | Fall back to xterm.js when native cannot start or place a surface; Switch this session to xterm.js | Works | `App.nativeSession.test.tsx`; `nativeHandback.test.ts`; `e2e/terminal-engine-diagnostic.spec.ts`. Android failure case: [#2379](https://github.com/mihazs/lazysh/issues/2379); Mosh: [#2414](https://github.com/mihazs/lazysh/issues/2414). |
 | 54 | Session lifecycle: stop and start, background, Activity recreation | Partial | `NativeTerminalSessionTest` stops and starts and draws again; the rest: [#2502](https://github.com/mihazs/lazysh/issues/2502). |
 
@@ -102,7 +102,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 
 ## Ordered plan for the open gaps
 
-1. P0 daily input: [#2489](https://github.com/mihazs/lazysh/issues/2489), [#2490](https://github.com/mihazs/lazysh/issues/2490), [#2493](https://github.com/mihazs/lazysh/issues/2493) (Android input work), [#2496](https://github.com/mihazs/lazysh/issues/2496) ([PR #2497](https://github.com/mihazs/lazysh/pull/2497)).
+1. P0 daily input: [#2489](https://github.com/mihazs/lazysh/issues/2489), [#2490](https://github.com/mihazs/lazysh/issues/2490), [#2493](https://github.com/mihazs/lazysh/issues/2493) (Android input work); the composer ([#2496](https://github.com/mihazs/lazysh/issues/2496)) is fixed in [PR #2497](https://github.com/mihazs/lazysh/pull/2497).
 2. P0 proof of what the pane already does, over the native adapter in Vitest: Find, Paste, OSC 52, Select all, Copy screen and the gestures of #2498 are covered by [PR #2509](https://github.com/mihazs/lazysh/pull/2509) (closes [#2499](https://github.com/mihazs/lazysh/issues/2499)).
 3. P0 on the CI emulator, once the first session case is stable: [#2501](https://github.com/mihazs/lazysh/issues/2501) (selection, Copy, links), [#2502](https://github.com/mihazs/lazysh/issues/2502) (rotation, keyboard insets, recreation), [#2500](https://github.com/mihazs/lazysh/issues/2500) (multiplexer pages).
 4. P1: [#2503](https://github.com/mihazs/lazysh/issues/2503) (keyboard behaviour from a DOM editor), [#2505](https://github.com/mihazs/lazysh/issues/2505) (History lines), [#2507](https://github.com/mihazs/lazysh/issues/2507) (fonts on Android), [#2223](https://github.com/mihazs/lazysh/issues/2223), [#2218](https://github.com/mihazs/lazysh/issues/2218).
