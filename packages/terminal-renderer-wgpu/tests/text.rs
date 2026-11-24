@@ -437,6 +437,48 @@ fn the_fonts_of_a_directory_are_found_by_family_and_style_and_drawn_like_registe
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A font file as a collection (`ttcf`) of one face: the file's own table directory follows the 16-byte header, so every table
+/// offset moves by 16. Android ships its CJK font this way (`NotoSansCJK-Regular.ttc`).
+fn collection(font: &[u8]) -> Vec<u8> {
+    let mut out = [b"ttcf".as_slice(), &[0, 1, 0, 0], &1u32.to_be_bytes(), &16u32.to_be_bytes()].concat();
+    out.extend_from_slice(font);
+    let tables = usize::from(u16::from_be_bytes([font[4], font[5]]));
+    for table in 0..tables {
+        let at = 16 + 12 + table * 16 + 8;
+        let offset = u32::from_be_bytes(out[at..at + 4].try_into().unwrap()) + 16;
+        out[at..at + 4].copy_from_slice(&offset.to_be_bytes());
+    }
+    out
+}
+
+#[test]
+fn the_fonts_of_an_android_system_directory_are_found_with_the_cjk_font_in_a_collection() {
+    // The names and shapes of /system/fonts: the monospace font, the CJK collection and the colour emoji font.
+    let dir = std::env::temp_dir().join(format!("lazysh-fonts-{}-android", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (file, bytes) in [
+        ("DroidSansMono.ttf", DEJAVU.to_vec()),
+        ("NotoSansCJK-Regular.ttc", collection(CJK)),
+        ("NotoColorEmoji.ttf", EMOJI.to_vec()),
+        ("Roboto-Regular.ttf", DEJAVU_BOLD.to_vec()),
+    ] {
+        std::fs::write(dir.join(file), bytes).unwrap();
+    }
+    let found = FontLibrary::discover(std::slice::from_ref(&dir), &families(&["monospace"]));
+    let names: Vec<_> = found.families().collect();
+    assert!(
+        names.contains(&"noto sans mono cjk jp") && names.contains(&"noto color emoji"),
+        "the collection's face and the emoji font are found: {names:?}"
+    );
+    let text = "Aa日😀";
+    assert_eq!(
+        shoot(text, 6, 1, &appearance(&["monospace", CJK_FAMILY, EMOJI_FAMILY]), found).rgb,
+        shoot(text, 6, 1, &stack(), library(ALL)).rgb,
+        "an ideograph from the collection and an emoji are drawn as from registered fonts"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn a_generic_family_is_the_machines_monospace_and_a_machine_without_fonts_draws_the_bundled_one() {
     let dir = font_dir("generic");
