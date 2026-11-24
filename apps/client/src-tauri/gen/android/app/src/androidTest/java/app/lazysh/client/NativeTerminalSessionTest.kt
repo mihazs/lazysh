@@ -418,15 +418,15 @@ class NativeTerminalSessionTest {
         val mux = "tmux -L lazysh-native-$nonce"
         try {
             // The server and a second pane, through tmux's own commands: the answers are text the core parsed.
-            typeIntoTheSurface("echo term=\$TERM; $mux -f /dev/null new-session -d -s native-mux -n check && $mux split-window -d -h -t native-mux && echo panes=\$($mux list-panes -t native-mux | wc -l)")
+            typeIntoTheSurface("echo term=\$TERM; $mux -f /dev/null new-session -d -s native-mux -n check && $mux set-option -t native-mux status-left '[mux] ' && $mux set-option -t native-mux status-right '' && $mux split-window -d -h -t native-mux && echo panes=\$($mux list-panes -t native-mux | wc -l)")
             val answered = awaitRow(id, "tmux's answer for two panes", { it == "panes=2" })
             evidence.put("tmuxTerm", answered.lines().firstOrNull { it.trim().startsWith("term=") }?.trim() ?: "")
             // The client attached: tmux draws its two panes with a border and its status line on the last row, as the core's text holds them.
-            // tmux cuts the status line's left part ("[native-mux] ") to its default length of 10 characters, which is why the row starts "[native-mu".
+            // The compact status keeps the window number visible on a narrow grid.
             typeIntoTheSurface("$mux attach -t native-mux")
-            val screen = awaitRow(id, "tmux's status line on the last row", { it.startsWith("[native-mu") && it.contains("0:check") })
-            evidence.put("tmuxStatusLine", screen.lines().last { it.startsWith("[native-mu") }.trim()).put("tmuxScreenRows", screen.lines().size)
-            assertEquals("the status line is the screen's last row", screen.lines().last { it.isNotBlank() }.trim(), screen.lines().last { it.startsWith("[native-mu") }.trim())
+            val screen = awaitRow(id, "tmux's status line on the last row", { it.startsWith("[mux]") && it.contains("0:check") })
+            evidence.put("tmuxStatusLine", screen.lines().last { it.startsWith("[mux]") }.trim()).put("tmuxScreenRows", screen.lines().size)
+            assertEquals("the status line is the screen's last row", screen.lines().last { it.isNotBlank() }.trim(), screen.lines().last { it.startsWith("[mux]") }.trim())
             awaitRow(id, "the border between tmux's two panes", { it.contains("│") })
         } finally {
             runCatching { typeIntoTheSurface("$mux kill-server") }
