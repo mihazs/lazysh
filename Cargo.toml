@@ -8,7 +8,7 @@ tauri-plugin-deep-link = { path = "packages/deep-link-vendor" }
 wry = { path = "packages/wry-vendor" }
 
 [workspace.package]
-version = "1.98.6"
+version = "1.99.0"
 license = "GPL-3.0-or-later"
 
 [profile.release]
