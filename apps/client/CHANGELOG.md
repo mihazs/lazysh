@@ -1,5 +1,11 @@
 # @lazysh/client
 
+## 1.98.5
+
+### Patch Changes
+
+- docs(readme): show real screenshots and demo clips of the app captured on Waydroid ([#2480](https://github.com/mihazs/lazysh/pull/2480))
+
 ## 1.98.4
 
 ### Patch Changes

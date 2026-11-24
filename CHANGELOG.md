@@ -10,6 +10,12 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.98.5] - 2026-11-24
+
+### Documentation
+
+- **readme:** show real screenshots and demo clips of the app captured on Waydroid ([#2480](https://github.com/mihazs/lazysh/pull/2480))
+
 ## [1.98.4] - 2026-11-24
 
 ### New
