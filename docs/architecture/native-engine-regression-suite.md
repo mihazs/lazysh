@@ -34,6 +34,7 @@ Layers and where they run:
 | The same contract over the real core | `nativeTerminalAdapter.realCore.test.ts` | Vitest over the real core | `herdr-native` |
 | Adapter semantics: window of rows, paste bracketing, wheel, search, canonical Mosh resize, input order | `nativeTerminalAdapter.test.ts` | Vitest | `client` |
 | Renderer look (theme, font, cursor, bold) sent once per change | `nativeTerminalAdapter.look.test.ts`; `panes.rs` host tests | Vitest; Rust | `client`; `native-terminal-bridge` |
+| Custom bold colour reaches the native surface and colours default-foreground bold glyphs | `terminalBackends.contract.test.ts`; `terminal-renderer-wgpu/tests/text.rs` | Vitest; wgpu pixel readback | `client`; renderer suite |
 | Grid follows the pane and the display density | `nativeTerminalAdapter.fit.test.ts`; `nativeTerminalAdapter.realCore.test.ts` 'sizes the real core to its pane' | Vitest | `client`; `herdr-native` |
 | History lines setting reaches an open session: the core keeps the new number of rows, a cut drops the oldest at once | `nativeTerminalAdapter.test.ts` 'native History lines setting'; `tauriNativeCoreBridge.test.ts`; `nativeTerminalAdapter.realCore.test.ts`; `packages/terminal-runtime/tests/scrollback.rs`; `local.rs` `the_real_core_keeps_the_history_lines_the_setting_changed_to` | Vitest; Vitest over the real core; Rust | `client`; `herdr-native`; `native-terminal-bridge` |
 | Imported fonts reach the app before the look | `nativeTerminalAdapter.fonts.test.ts` | Vitest | `client` |
