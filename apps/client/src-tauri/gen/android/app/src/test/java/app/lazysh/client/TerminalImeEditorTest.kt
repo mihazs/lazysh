@@ -307,7 +307,7 @@ class TerminalImeEditorTest {
         batch { commitText("wrld", 1); commitText(" ", 1) }
         assertEquals("hello wrld ", remote.line)
         // The autocorrect replaces the word it just committed: the keyboard marks it composing again and commits the correction.
-        batch { setComposingRegion(6, 10); commitText("world", 1) }
+        batch { setComposingRegion(6, 11); commitText("world ", 1) }
         assertEquals("hello world ", remote.line)
         batch { deleteSurroundingText(1, 0) }
         assertEquals("hello world", remote.line)

@@ -252,13 +252,13 @@ class NativeTerminalSessionTest {
     }
 
     /**
-     * The toolbar's keys on the native session (#2493): `cat -v` shows what the shell receives. Esc, Tab, Home, End and Shift+Tab are pressed on
+     * The toolbar's keys on the native session (#2493): `cat -vT` shows what the shell receives. Esc, Tab, Home, End and Shift+Tab are pressed on
      * the page's toolbar, then Ctrl and a letter the soft keyboard commits (the toolbar's modifier applies to the next character typed), then
      * Enter; Ctrl+D ends cat. The answer is the one row of caret notation the bytes make.
      */
     private fun toolbarKeys(id: String) {
         // The keys go to cat, not to the shell's line editor: wait until the shell has printed the marker and so started it.
-        typeIntoTheSurface("echo catv-started; cat -v")
+        typeIntoTheSurface("echo catv-started; cat -vT")
         awaitRow(id, "cat to have started", { it == "catv-started" })
         Thread.sleep(500)
         for (key in listOf("esc", "tab", "Home", "End")) click("button", key)
@@ -267,7 +267,7 @@ class NativeTerminalSessionTest {
         click("button", "ctrl")
         typeIntoTheSurface("a", enter = false)
         click("button", "enter")
-        try { awaitRow(id, "cat -v's caret notation of the toolbar's keys", { it == "^[^I^[[H^[[F^[[Z^A" }) }
+        try { awaitRow(id, "cat -vT's caret notation of the toolbar's keys", { it == "^[^I^[[H^[[F^[[Z^A" }) }
         catch (error: AssertionError) { throw AssertionError("${error.message}; the screen held:\n${coreText(id)}", error) }
         click("button", "ctrl")
         click("button", "d")
