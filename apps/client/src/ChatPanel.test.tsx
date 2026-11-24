@@ -75,6 +75,7 @@ it('admits Pi recorded tool errors only on tool result records, preserving raw o
     {type:'tool_result',id:'pi-unknown',text:'Unknown outcome'}];
   const response={...page,agent:'pi',view:'record_stream',messages:[{id:'pi-result',role:'tool',blocks}]};
   expect(parseTranscript(response)).toEqual(response);
+  expect(parseTranscript({...response,agent:'senpi'}).messages[0].blocks[0].isError).toBe(true);
   for(const agent of ['omp','omo','codex','qoder-ide'])expect(()=>parseTranscript({...response,agent})).toThrow('Invalid recorded tool error');
   for(const view of [undefined,'active_branch'])expect(()=>parseTranscript({...response,view})).toThrow('Invalid recorded tool error');
   for(const role of ['user','assistant'])expect(()=>parseTranscript({...response,messages:[{id:'bad',role,blocks}]})).toThrow('Invalid recorded tool error');

@@ -61,6 +61,9 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
                 TranscriptAgent::Jcode => (Some("JCODE_HOME"), ".jcode", "sessions"),
                 TranscriptAgent::Droid => (None, ".factory", "sessions"),
                 TranscriptAgent::Cursor => (None, ".cursor", "projects"),
+                TranscriptAgent::Senpi => {
+                    (Some("SENPI_CODING_AGENT_DIR"), ".senpi/agent", "sessions")
+                }
                 TranscriptAgent::Omo => (
                     [
                         "OMO_CODING_AGENT_DIR",
@@ -76,6 +79,7 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
             };
             variable
                 .and_then(std::env::var_os)
+                .filter(|value| !matches!(agent, TranscriptAgent::Senpi) || !value.is_empty())
                 .map(|value| {
                     if matches!(agent, TranscriptAgent::Omo) {
                         PathBuf::from(value.to_string_lossy().trim())
@@ -105,7 +109,10 @@ pub fn discover(agent: TranscriptAgent, root: Option<&Path>, limit: u8) -> Resul
     let maximum_depth = match agent {
         TranscriptAgent::Claude => 1,
         TranscriptAgent::Codex => 3,
-        TranscriptAgent::Pi | TranscriptAgent::Omp | TranscriptAgent::Omo => 1,
+        TranscriptAgent::Pi
+        | TranscriptAgent::Omp
+        | TranscriptAgent::Omo
+        | TranscriptAgent::Senpi => 1,
         TranscriptAgent::Copilot | TranscriptAgent::Droid => 1,
         TranscriptAgent::QoderIde | TranscriptAgent::Kimi | TranscriptAgent::GrokAcp => 2,
         TranscriptAgent::Cursor => 3,

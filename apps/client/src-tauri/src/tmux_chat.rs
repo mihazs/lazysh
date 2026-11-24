@@ -41,6 +41,7 @@ enum Agent {
     Gemini,
     Cursor,
     Omo,
+    Senpi,
     #[serde(rename = "devin-atif")]
     DevinAtif,
     #[serde(rename = "amp-json")]
@@ -989,6 +990,7 @@ pub(crate) const READER_FIXTURE_IDS: &[&str] = &[
     "gemini",
     "cursor",
     "omo",
+    "senpi",
     "devin-atif",
     "amp-json",
     "grok-acp",
