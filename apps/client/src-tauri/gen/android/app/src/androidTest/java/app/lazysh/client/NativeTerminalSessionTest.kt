@@ -801,6 +801,8 @@ class NativeTerminalSessionTest {
             // Every toolbar key writes what the shell expects; the modifiers apply to the soft keyboard's next character.
             toolbarKeys(id)
             verifySelectionCopy(id)
+            // Unicode text in its cells with the device's fonts (#2507).
+            unicodeInTheirCells(id)
             // The pane follows a rotation, the keyboard and a recreated Activity (#2502).
             val fresh = followsTheDevice(id)
 
@@ -1020,13 +1022,11 @@ class NativeTerminalSessionTest {
      * ZWJ family, each ended by a bar, and the surface's pixels are read cell by cell. Wide characters fill two cells, a combining mark and a ZWJ
      * sequence stay in their cells (the bar after them is where the core's widths put it, and nothing is drawn past it), and the CJK and emoji
      * glyphs are drawn with fallback fonts the device has (not a missing-glyph box, which is one picture for every character). The widths are the
-     * core's (emoji two cells, a documented difference from xterm.js 5.5.0: `fixtures/divergences.json`, `emoji-presentation`).
+     * core's (emoji two cells, a documented difference from xterm.js 5.5.0: `fixtures/divergences.json`, `emoji-presentation`). A step of the one
+     * session case (a second case would start from the page the first leaves).
      */
-    @Test fun aNativeSessionDrawsCjkEmojiCombiningMarksAndZwjSequencesInTheirCellsWithTheDevicesFonts() {
-        try {
-            val id = startNativeSession()
-            val prompt = fixture.getString("prompt").trim()
-            awaitRow(id, "the prompt", { it == prompt || it.startsWith(prompt) })
+    private fun unicodeInTheirCells(id: String) {
+        run {
             evidence.put("systemFonts", shell("ls /system/fonts").decodeToString().lines().filter { it.isNotBlank() }.take(200).joinToString(" "))
             typeIntoTheSurface(
                 "printf '\\ncjk:\\xe6\\x97\\xa5\\xe6\\x9c\\xac\\xe8\\xaa\\x9e|\\nemo:\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x9a\\x80|\\ncmb:e\\xcc\\x81a\\xcc\\x88|\\nzwj:\\xf0\\x9f\\x91\\xa8\\xe2\\x80\\x8d\\xf0\\x9f\\x91\\xa9|\\nend:|\\n'"
@@ -1060,8 +1060,6 @@ class NativeTerminalSessionTest {
             assertCells("combining", cmb, 4, 2, 6)
             // A ZWJ family is one glyph of two cells, not its members side by side.
             assertCells("ZWJ", zwj, 4, 2, 6)
-        } finally {
-            Evidence.record("native-session-unicode", evidence)
         }
     }
 }

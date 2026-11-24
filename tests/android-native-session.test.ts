@@ -7,11 +7,11 @@ import {androidNativeSessionAcceptance,sessionCases,validateNativeSessionReport}
 const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
 const row=([className,name]:readonly [string,string],body='')=>`<testcase name="${name}" classname="${className}" time="1">${body}</testcase>`;
 
-test('the native session report counts each of its cases passing exactly once',()=>{
-  const [only]=sessionCases,all=sessionCases.map(c=>row(c));
-  expect(()=>validateNativeSessionReport(report(all))).not.toThrow();
-  for(const rows of [[],[row(only)],[...all,row(only)],[row(only,'<skipped/>'),...all.slice(1)],[row(only,'<failure message="x"/>'),...all.slice(1)],[row(only,'<error message="x"/>'),...all.slice(1)],
-    [row([only[0],'otherCase']),...all.slice(1)],[row(['app.lazysh.client.NativeTerminalCoreTest',only[1]]),...all.slice(1)]])
+test('the native session report counts its one case passing exactly once',()=>{
+  const [only]=sessionCases;
+  expect(()=>validateNativeSessionReport(report([row(only)]))).not.toThrow();
+  for(const rows of [[],[row(only),row(only)],[row(only,'<skipped/>')],[row(only,'<failure message="x"/>')],[row(only,'<error message="x"/>')],
+    [row([only[0],'otherCase'])],[row(['app.lazysh.client.NativeTerminalCoreTest',only[1]])]])
     expect(()=>validateNativeSessionReport(report(rows))).toThrow('did not pass exactly once');
 });
 
@@ -27,6 +27,6 @@ test('the direct idle benchmark lets AndroidJUnitRunner report before Activity t
 });
 
 // The case needs the x86_64 debug APK built with the native-terminal feature and an explicitly selected emulator or Waydroid guest.
-test.skipIf(process.env.LAZYSH_ANDROID_UI_NATIVE_SESSION!=='1')('actual Android app opens a native session through its real UI, draws the shell on a surface and takes typing, and draws Unicode text in its cells',async()=>{
+test.skipIf(process.env.LAZYSH_ANDROID_UI_NATIVE_SESSION!=='1')('actual Android app opens a native session through its real UI, draws the shell on a surface and takes typing',async()=>{
   await androidNativeSessionAcceptance(undefined,process.env.LAZYSH_ANDROID_SOFTWARE_GPU!=='0');
 },1_000_000);
