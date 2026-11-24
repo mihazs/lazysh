@@ -954,6 +954,11 @@ test('the bound composer is one line with a visible Send control beside it and t
   expect(field!.height).toBeLessThanOrEqual(48);
   expect(send!.y).toBeLessThan(field!.y+field!.height);expect(send!.x).toBeGreaterThan(field!.x+field!.width-1);
   expect(composer!.height).toBeLessThanOrEqual(150);
+  const surface=agent.locator('.agent-composer');
+  await expect(surface).toHaveCSS('backdrop-filter', 'blur(16px) saturate(1.15)');
+  await page.emulateMedia({contrast:'more'});
+  await expect(surface).toHaveCSS('backdrop-filter', 'none');
+  await page.emulateMedia({contrast:null});
   // The composer grows with its text and stays within the screen.
   await draft.fill('one\ntwo\nthree');
   expect((await draft.boundingBox())!.height).toBeGreaterThan(field!.height+20);
