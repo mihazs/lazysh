@@ -728,6 +728,13 @@ impl TerminalRuntime {
         Ok(self.terminal.scrollback_rows()?)
     }
 
+    /// Change the scrollback byte budget of the running terminal (the History lines setting): a lower one drops the
+    /// oldest history at once, a higher one keeps more from now on. Through a hub session, use
+    /// [`crate::Session::set_scrollback_bytes`], which keeps the hub's accounting.
+    pub fn set_scrollback_bytes(&mut self, bytes: usize) -> Result<(), Error> {
+        Ok(self.terminal.set_max_scrollback(bytes)?)
+    }
+
     pub fn scroll_viewport(&mut self, delta: isize) {
         self.terminal.scroll_viewport_delta(delta);
     }

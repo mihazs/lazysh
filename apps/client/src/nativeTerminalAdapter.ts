@@ -90,10 +90,13 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   private mirrored = false;
   /** The theme the core reports, as JSON: preferences hand over a new object whenever anything changes. */
   private theme: string | undefined;
+  /** The History lines the core was last told to keep, so a preference change that leaves it alone sends nothing. */
+  private history: number;
 
   constructor(private readonly bridge: NativeCoreBridge, initial: NativeCoreSnapshot, private readonly options: NativeAdapterOptions = {}) {
     this.mirror = initial;
     this.theme = options.theme && JSON.stringify(options.theme);
+    this.history = initial.state.scrollbackLines;
     this.dataPath = bridge.feed ? 'renderer' : 'runtime';
     if (bridge.feed) this.write = (bytes, onApplied) => this.feed(bytes, onApplied);
     if (bridge.query) this.searchBuffer = async (query, direction, from) => {
@@ -315,10 +318,19 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.preferences = preferences;
     this.sendLook();
     this.measure();
+    this.followHistory(preferences);
     const next = JSON.stringify(preferences.theme);
     if (this.disposed || next === this.theme) return;
     this.theme = next;
     this.bridge.setTheme?.(preferences.theme);
+  }
+
+  /** The History lines setting reaches a session that is open; a refusal is tried again with the next preferences. */
+  private followHistory({scrollbackLines}: TerminalPreferences) {
+    const {setScrollback} = this.bridge, before = this.history;
+    if (!setScrollback || this.disposed || scrollbackLines === before) return;
+    this.history = scrollbackLines;
+    this.command(() => setScrollback.call(this.bridge, scrollbackLines)).then(snapshot => this.apply(snapshot), () => { if (this.history === scrollbackLines) this.history = before; });
   }
 
   scroll(action: TerminalScrollAction) {

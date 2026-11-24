@@ -111,6 +111,9 @@ pub(crate) trait Core: Send + Sync {
     fn set_active(&self, lease: &AccessLease, active: bool);
     /// The app's terminal theme changed: report these colours to the queries that arrive from now on.
     fn set_theme(&self, theme: &Json) -> Result<(), String>;
+    /// The History lines setting changed (already within [`HISTORY_LINES`]): keep that many rows of history from now
+    /// on, dropping the oldest at once when it is fewer than the core holds.
+    fn set_scrollback(&self, lines: u32) -> Result<(), String>;
     /// The session a renderer host draws and the inbox its `changed` calls ring, made again for each call
     /// (a surface that is placed again draws the same session). `None` for a core with nothing to draw.
     #[cfg(all(feature = "native-terminal", native_terminal_core))]
@@ -563,6 +566,17 @@ type AccessResult<T> = Result<Guarded<T>, GuardedError<String>>;
 /// The History lines setting's range (`scrollback` in `preferences.ts`).
 const HISTORY_LINES: std::ops::RangeInclusive<u32> = 100..=20_000;
 
+fn history_lines(lines: Option<u32>) -> Result<(), String> {
+    match lines {
+        Some(lines) if !HISTORY_LINES.contains(&lines) => Err(format!(
+            "scrollback lines must be {} to {}",
+            HISTORY_LINES.start(),
+            HISTORY_LINES.end()
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Like the terminal commands, the two that create or read a screen belong to the current renderer:
 /// a replaced renderer's lease is refused. `scrollback_lines` is the History lines setting; the core
 /// requests a budget for that many rows of ordinary output (see `scrollback_bytes_for_lines`);
@@ -580,13 +594,7 @@ pub async fn terminal_core_open(
     lease
         .run(async {
             crate::ssh::check_size(cols, rows).map_err(|error| error.message().to_owned())?;
-            if scrollback_lines.is_some_and(|lines| !HISTORY_LINES.contains(&lines)) {
-                return Err(format!(
-                    "scrollback lines must be {} to {}",
-                    HISTORY_LINES.start(),
-                    HISTORY_LINES.end()
-                ));
-            }
+            history_lines(scrollback_lines)?;
             offer(
                 &events,
                 native::factory(
@@ -821,6 +829,21 @@ pub async fn terminal_core_theme(
 ) -> AccessResult<()> {
     lease
         .run(async { live(&session_id)?.set_theme(&theme) })
+        .await
+}
+
+/// The History lines setting changed while the session is open: the core keeps that many rows of history from now on.
+#[tauri::command]
+pub async fn terminal_core_scrollback(
+    lease: AccessLease,
+    session_id: String,
+    lines: u32,
+) -> AccessResult<()> {
+    lease
+        .run(async {
+            history_lines(Some(lines))?;
+            live(&session_id)?.set_scrollback(lines)
+        })
         .await
 }
 
@@ -1340,6 +1363,18 @@ mod native {
             self.0
                 .with(|runtime| runtime.set_theme(&theme))
                 .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())
+        }
+
+        fn set_scrollback(&self, lines: u32) -> Result<(), String> {
+            // The budget counts rows at the width the grid has now, as it did when the core opened.
+            let cols = self
+                .0
+                .with(|runtime| runtime.size().cols)
+                .map_err(|error| error.to_string())?;
+            self.0
+                .set_scrollback_bytes(scrollback_bytes_for_lines(lines as usize, cols))
+                .map(|_| ())
                 .map_err(|error| error.to_string())
         }
 
@@ -2342,6 +2377,8 @@ pub(crate) mod fake {
         pub(crate) sizes: Mutex<Vec<(u32, u32)>>,
         /// The themes the bridge handed to `Core::set_theme`, in order.
         pub(crate) themes: Mutex<Vec<Json>>,
+        /// The History lines the bridge handed to `Core::set_scrollback`, in order.
+        pub(crate) history: Mutex<Vec<u32>>,
         /// The input events the bridge handed to `Core::input`, in order.
         pub(crate) inputs: Mutex<Vec<CoreInput>>,
         /// The questions about the buffer's text and the selections the commands handed over, in order.
@@ -2375,6 +2412,7 @@ pub(crate) mod fake {
                 feeds: Arc::default(),
                 sizes: Mutex::default(),
                 themes: Mutex::default(),
+                history: Mutex::default(),
                 inputs: Mutex::default(),
                 asked: Mutex::default(),
                 closed: Default::default(),
@@ -2505,6 +2543,11 @@ pub(crate) mod fake {
 
         fn set_theme(&self, theme: &Json) -> Result<(), String> {
             self.themes.lock().unwrap().push(theme.clone());
+            Ok(())
+        }
+
+        fn set_scrollback(&self, lines: u32) -> Result<(), String> {
+            self.history.lock().unwrap().push(lines);
             Ok(())
         }
 
@@ -2711,6 +2754,7 @@ mod tests {
             "terminal_core_resize",
             "terminal_core_set_active",
             "terminal_core_theme",
+            "terminal_core_scrollback",
             "terminal_core_selection_text",
             "terminal_core_search",
             "terminal_core_word_at",
@@ -2843,7 +2887,30 @@ mod tests {
                 .is_err(),
             "no session, no theme"
         );
+        terminal_core_scrollback(renderer.clone(), "control-gated".into(), 2_000)
+            .await
+            .unwrap();
+        assert_eq!(*core.history.lock().unwrap(), [2_000]);
+        for (session, lines) in [
+            ("control-gated", 99),
+            ("control-gated", 20_001),
+            ("nobody", 2_000),
+        ] {
+            assert!(
+                terminal_core_scrollback(renderer.clone(), session.into(), lines)
+                    .await
+                    .is_err(),
+                "{session} {lines}: outside the setting's range or no session"
+            );
+        }
+        assert_eq!(core.history.lock().unwrap().len(), 1);
         access.replace_renderer().unwrap();
+        assert!(
+            terminal_core_scrollback(renderer.clone(), "control-gated".into(), 3_000)
+                .await
+                .is_err(),
+            "a replaced renderer is refused"
+        );
         assert!(
             terminal_core_theme(renderer.clone(), "control-gated".into(), theme)
                 .await
@@ -2851,6 +2918,11 @@ mod tests {
             "a replaced renderer is refused"
         );
         assert_eq!(core.themes.lock().unwrap().len(), 1);
+        assert_eq!(
+            core.history.lock().unwrap().len(),
+            1,
+            "a replaced renderer changes no history"
+        );
         for result in [
             terminal_core_snapshot(renderer.clone(), "control-gated".into(), None).await,
             terminal_core_scroll(renderer.clone(), "control-gated".into(), scroll(), None).await,

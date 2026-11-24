@@ -121,6 +121,34 @@ describe('the native core over the Tauri commands', () => {
     await mosh.adapter.dispose();
   });
 
+  it('tells an open core to keep the new History lines once, then reports the state with that number, and tries again after a refusal', async () => {
+    const {adapter} = await open(undefined, {theme: forest});
+    invoke.mockClear();
+    adapter.applyPreferences(preferences(forest));
+    await flush();
+    expect(commands(), 'the number it opened with is no change').toEqual([]);
+    adapter.applyPreferences({...preferences(forest), scrollbackLines: 800});
+    adapter.applyPreferences({...preferences(forest), scrollbackLines: 800});
+    await flush();
+    expect(invoke.mock.calls.map(([command, args]) => [command, args])).toEqual([
+      ['terminal_core_scrollback', {sessionId: 'local:7', lines: 800}],
+      ['terminal_core_snapshot', {sessionId: 'local:7'}],
+    ]);
+    expect(adapter.metrics().scrollbackLines).toBe(800);
+
+    // A core that refuses (a locked app, a closed session) is asked again with the next preferences.
+    invoke.mockClear();
+    invoke.mockRejectedValueOnce('App access is locked or this operation belongs to an earlier unlock');
+    adapter.applyPreferences({...preferences(forest), scrollbackLines: 2000});
+    await flush();
+    expect(adapter.metrics().scrollbackLines).toBe(800);
+    adapter.applyPreferences({...preferences(forest), scrollbackLines: 2000});
+    await flush();
+    expect(commands().filter(command => command === 'terminal_core_scrollback')).toHaveLength(2);
+    expect(adapter.metrics().scrollbackLines).toBe(2000);
+    await adapter.dispose();
+  });
+
   it('tells the core about a theme change once, in order after the session starts, and not after the terminal is gone', async () => {
     const opening = await open(undefined, {theme: forest});
     opening.adapter.applyPreferences(preferences(paper));

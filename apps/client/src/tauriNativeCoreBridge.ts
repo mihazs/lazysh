@@ -72,7 +72,8 @@ export async function probeNativeCore(): Promise<BackendProbe> {
  * starts with `events`, so the session id arrives later, through `bind`; until then the adapter shows the blank screen the core opens with.
  */
 export async function createNativeTerminalAdapter(options: NativeTerminalOptions): Promise<NativeTerminalOpening> {
-  const {columns, rows, scrollbackLines, canonicalFrames, onTransportEvent, ...adapterOptions} = options;
+  const {columns, rows, scrollbackLines: opened, canonicalFrames, onTransportEvent, ...adapterOptions} = options;
+  let scrollbackLines = opened;
   let {theme} = adapterOptions;
   const events = new Channel<NativeCoreEvent | SshEvent>();
   const listeners = new Set<(event: NativeCoreEvent) => void>();
@@ -83,7 +84,7 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
   try {
     // The colours the core reports to the programs that ask for them, and the Mosh mode, are fixed before its first byte.
     const config = theme || canonicalFrames ? {theme, canonicalFrames} : undefined;
-    await protectedInvoke('terminal_core_open', {events, cols: columns, rows, scrollbackLines, config});
+    await protectedInvoke('terminal_core_open', {events, cols: columns, rows, scrollbackLines: opened, config});
   } catch (error) {
     deliver.dispose();
     throw asError(error);
@@ -131,6 +132,11 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
     setActive(value) {
       active = value;
       call('terminal_core_set_active', {active}).catch(noop);
+    },
+    async setScrollback(lines) {
+      await call('terminal_core_scrollback', {lines});
+      scrollbackLines = lines;
+      return snapshot('terminal_core_snapshot');
     },
     setTheme(next) {
       theme = next;

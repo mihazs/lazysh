@@ -34,7 +34,8 @@ export type HeadlessCore = NativeCoreBridge & {
   readonly mice: CoreMouseInput[];
 };
 
-export function createHeadlessCore({columns = 20, rows = 5, scrollbackLines = 200, window = 256, feed = true}: HeadlessCoreOptions = {}): HeadlessCore {
+export function createHeadlessCore({columns = 20, rows = 5, scrollbackLines: opened = 200, window = 256, feed = true}: HeadlessCoreOptions = {}): HeadlessCore {
+  let scrollbackLines = opened;
   const terminal = new Terminal({cols: columns, rows, scrollback: scrollbackLines, allowProposedApi: true});
   const listeners = new Set<(event: NativeCoreEvent) => void>();
   const send = (event: NativeCoreEvent) => listeners.forEach(listener => listener(event));
@@ -79,6 +80,7 @@ export function createHeadlessCore({columns = 20, rows = 5, scrollbackLines = 20
     async input(data, origin) { inputs.push({data, origin}); },
     async key(input) { keys.push(input); },
     async mouse(input) { mice.push(input); },
+    async setScrollback(lines) { calls.push('scrollback'); terminal.options.scrollback = scrollbackLines = lines; return snapshot(); },
     subscribe(listener) { listeners.add(listener); return {dispose: () => { listeners.delete(listener); }}; },
     async close() { closed = true; terminal.dispose(); },
     async output(bytes) { await parse(bytes); send({type: 'changed'}); },
