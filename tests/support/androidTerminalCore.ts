@@ -99,10 +99,14 @@ export const androidTerminalCoreAcceptance=(root?:string)=>runTerminalCases({tit
 const sessionClass='app.lazysh.client.NativeTerminalSessionTest';
 const gesturesClass='app.lazysh.client.NativeTerminalGesturesTest';
 const tmuxPagesClass='app.lazysh.client.NativeTerminalTmuxPagesTest';
+const zellijPagesClass='app.lazysh.client.NativeTerminalZellijPagesTest';
+const rmuxPagesClass='app.lazysh.client.NativeTerminalRmuxPagesTest';
 export const sessionCases=[[sessionClass,'aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart'],
   [gesturesClass,'aRealFingerSelectsCopiesAndTapsLinksOnTheNativeSurfaceAndAnOsc52WriteAsksConsent'],
-  [tmuxPagesClass,'tmuxPagesDiscoverAttachSwitchWindowsAndCopyWithConsentOnANativeSession']] as const;
+  [tmuxPagesClass,'tmuxPagesDiscoverAttachSwitchWindowsAndCopyWithConsentOnANativeSession'],
+  [zellijPagesClass,'zellijPagesDiscoverAttachAndSwitchTabsOnANativeSession'],
+  [rmuxPagesClass,'rmuxPagesBrowseAttachAndSwitchWindowsOnANativeSession']] as const;
 export const validateNativeSessionReport=(text:string)=>validateCases(text,sessionCases);
 /** The CI emulator has no GPU the shipping policy accepts, so its run asks for the debug software switch; Waydroid's does not need it. */
-export const androidNativeSessionAcceptance=(root?:string,softwareGpu=true)=>runTerminalCases({title:'native session',classes:[sessionClass,gesturesClass,tmuxPagesClass],cases:sessionCases,
-  evidenceName:'native-session-evidence',evidence:['native-session.json','native-gestures.json','native-tmux-pages.json'],arguments:softwareGpu?['lazyshSoftwareGpu=true']:[]},root);
+export const androidNativeSessionAcceptance=(root?:string,softwareGpu=true)=>runTerminalCases({title:'native session',classes:[sessionClass,gesturesClass,tmuxPagesClass,zellijPagesClass,rmuxPagesClass],cases:sessionCases,
+  evidenceName:'native-session-evidence',evidence:['native-session.json','native-gestures.json','native-tmux-pages.json','native-zellij-pages.json','native-rmux-pages.json'],arguments:softwareGpu?['lazyshSoftwareGpu=true']:[]},root);

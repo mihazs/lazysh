@@ -27,9 +27,7 @@ class NativeTerminalGesturesTest : NativePagesCase() {
 
     @Test fun aRealFingerSelectsCopiesAndTapsLinksOnTheNativeSurfaceAndAnOsc52WriteAsksConsent() {
         session("native-gestures") {
-            val id = driver.startNativeSession()
-            val prompt = driver.fixture.getString("prompt").trim()
-            driver.awaitRow(id, "the prompt", { it == prompt || it.startsWith(prompt) })
+            val id = startedShell()
             val touch = NativeSessionTouch(driver, id)
             val nonce = driver.fixture.getString("nonce").take(8)
             // Measured again before every touch: a tap may open the soft keyboard, which gives the pane another height and moves the rows.

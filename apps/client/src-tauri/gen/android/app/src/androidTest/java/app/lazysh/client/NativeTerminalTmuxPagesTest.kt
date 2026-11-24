@@ -1,6 +1,5 @@
 package app.lazysh.client
 
-import android.view.inputmethod.EditorInfo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -17,37 +16,11 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class NativeTerminalTmuxPagesTest : NativePagesCase() {
-    private val tools = "[role=dialog][aria-label='Workspace tools']"
-
-    private fun page(expression: String) = driver.js(expression) == "true"
-
-    /** What the page shows, for the step that failed: the text of the main regions and the labels of the buttons that are on screen. */
-    private fun seen() = driver.js("""(() => JSON.stringify({buttons: [...document.querySelectorAll('button')].filter(b => window.__lz.visible(b)).map(b => (b.getAttribute('aria-label') || b.textContent).trim()).slice(0, 60),
-        tabs: [...document.querySelectorAll('.session-tabs [role=tab]')].map(t => t.textContent.trim()), panels: [...document.querySelectorAll('section.multiplexer-panel')].map(p => p.innerText.slice(0, 500))}))()""")
-
-    private fun <T> described(what: String, body: () -> T): T = try { body() } catch (error: Throwable) { throw AssertionError("$what: ${error.message}; the page showed ${seen()}", error) }
-
-    /** One of the views a session has, chosen in the Workspace tools sheet as a finger does on a phone. */
-    private fun view(name: String) = described("the $name view") {
-        PageDriver.poll("the $name view", 60) {
-            if (page("window.__lz.click(${driver.quoted("$tools button")}, ${driver.quoted(name)})")) true
-            else { if (!page("Boolean(document.querySelector(${driver.quoted(tools)}))")) driver.js("window.__lz.click(\"button[aria-label='Workspace tools']\") || window.__lz.click('button.mobile-tools')"); null }
-        }
-    }
-
-    /** Text committed through the keyboard editor of that session, as the soft keyboard commits it; a line break is a carriage return. */
-    private fun type(session: String, text: String) {
-        val host = checkNotNull(driver.ui { TerminalSurfaces.host(session) }) { "the placed session $session" }
-        driver.ui { host.input.onCreateInputConnection(EditorInfo())?.commitText(text, 1) }
-    }
-
-    private fun run(session: String, command: String) = type(session, "$command\n")
+    private val pages = NativeMultiplexerPages(driver)
 
     @Test fun tmuxPagesDiscoverAttachSwitchWindowsAndCopyWithConsentOnANativeSession() {
         session("native-tmux-pages") {
-            val parent = driver.startNativeSession()
-            val prompt = driver.fixture.getString("prompt").trim()
-            driver.awaitRow(parent, "the prompt", { it == prompt || it.startsWith(prompt) })
+            val parent = startedShell()
             val nonce = driver.fixture.getString("nonce").take(8)
             val server = "natpages"
             var display = ""
@@ -55,13 +28,13 @@ class NativeTerminalTmuxPagesTest : NativePagesCase() {
 
             step("the-owned-shell-starts-a-tmux-server-with-two-windows") {
                 // vi keys and the OSC 52 write are the server's: `-f` is read once, when the server starts.
-                run(parent, "printf 'set -g mode-keys vi\\nset -g set-clipboard on\\n' > /tmp/lzp-$nonce.conf; tmux -f /tmp/lzp-$nonce.conf new-session -d -s $server -n alpha && tmux new-window -d -t $server -n beta && echo wins=\$(tmux list-windows -t $server | wc -l)")
+                pages.run(parent, "printf 'set -g mode-keys vi\\nset -g set-clipboard on\\n' > /tmp/lzp-$nonce.conf; tmux -f /tmp/lzp-$nonce.conf new-session -d -s $server -n alpha && tmux new-window -d -t $server -n beta && echo wins=\$(tmux list-windows -t $server | wc -l)")
                 driver.awaitRow(parent, "tmux's answer for two windows", { it == "wins=2" })
             }
 
             step("the-sessions-page-discovers-the-server-and-attaches-it-as-a-native-display") {
-                view("Sessions")
-                described("discovery of $server") {
+                pages.view("Sessions")
+                pages.described("discovery of $server") {
                     PageDriver.poll("the server in the Sessions panel", 60) {
                         driver.js("Array.from(document.querySelectorAll('section.multiplexer-panel summary')).some(x => x.textContent.trim().startsWith(${driver.quoted("$server · 2 windows")}))").takeIf { it == "true" }
                     }
@@ -71,17 +44,15 @@ class NativeTerminalTmuxPagesTest : NativePagesCase() {
                     }
                 }
                 // The display is a native session too: tmux's own status line is on the last row of its core.
-                display = PageDriver.poll("the placed display whose core holds tmux's status line", 90) {
-                    driver.ui { TerminalSurfaces.ids() }.firstOrNull { it != parent && driver.coreText(it).lines().any { row -> row.startsWith("[$server]") } }
-                }
-                assertTrue("the page's panes are the native adapter's", page("!document.querySelector('.terminal-canvas .xterm-screen')"))
+                display = pages.placedDisplayShowing(parent) { it.startsWith("[$server]") }
+                assertTrue("the page's panes are the native adapter's", pages.page("!document.querySelector('.terminal-canvas .xterm-screen')"))
                 val status = displayRow("tmux's status line with both windows") { it.startsWith("[$server]") && it.contains("0:alpha") && it.contains("1:beta") }
                 driver.evidence.put("tmuxStatusLine", status.lines().last { it.startsWith("[$server]") }.trim())
             }
 
             fun windowActive(index: String, name: String) = displayRow("window $index $name current") { it.startsWith("[$server]") && it.contains("$index:$name*") }
-            fun shortcut(label: String) = described("the $label shortcut") {
-                view("Sessions")
+            fun shortcut(label: String) = pages.described("the $label shortcut") {
+                pages.view("Sessions")
                 val region = "section[aria-label='tmux prefix shortcuts'] button"
                 PageDriver.poll("the $label shortcut enabled", 60) { driver.js("Array.from(document.querySelectorAll(${driver.quoted(region)})).some(x => x.textContent.trim() === ${driver.quoted(label)} && !x.disabled)").takeIf { it == "true" } }
                 driver.click(region, label)
@@ -95,8 +66,8 @@ class NativeTerminalTmuxPagesTest : NativePagesCase() {
             }
 
             step("jump-to-switches-the-displays-window") {
-                described("Jump To") {
-                    view("Workspaces")
+                pages.described("Jump To") {
+                    pages.view("Workspaces")
                     PageDriver.poll("the tmux Jump To panel", 60) { driver.js("Boolean(window.__lz.find(\"section[aria-label='tmux Jump To'] button\", '1: beta'))").takeIf { it == "true" } }
                     driver.click("section[aria-label='tmux Jump To'] button", "1: beta")
                 }
@@ -107,26 +78,26 @@ class NativeTerminalTmuxPagesTest : NativePagesCase() {
                 val touch = NativeSessionTouch(driver, display)
                 val marker = "CPY_$nonce"
                 // The pane of the display, printed from two arguments so the typed command never holds the marker as one word.
-                view("Terminal")
-                run(display, "printf '%s%s\\n' CPY_ $nonce")
+                pages.view("Terminal")
+                pages.run(display, "printf '%s%s\\n' CPY_ $nonce")
                 displayRow("the marker in the display's pane") { it == marker }
                 shortcut("Copy mode")
                 displayRow("tmux's copy mode position indicator") { it.contains("[0/") }
-                view("Terminal")
+                pages.view("Terminal")
                 // One key at a time with a pause, as a finger types: tmux 3.4 did not copy when the keys arrived in one write. The cursor starts below the marker.
-                for (key in listOf("k", "V", "\n")) { type(display, key); Thread.sleep(250) }
+                for (key in listOf("k", "V", "\n")) { pages.type(display, key); Thread.sleep(250) }
                 displayRow("tmux left copy mode") { !it.contains("[0/") && it.startsWith("[$server]") }
-                described("the consent sheet") {
+                pages.described("the consent sheet") {
                     PageDriver.poll("the clipboard request", 30) { driver.js("Array.from(document.querySelectorAll('[role=region]')).some(x => x.getAttribute('aria-label') === 'Remote clipboard request' && x.textContent.includes(${driver.quoted(marker)}))").takeIf { it == "true" } }
                 }
                 assertTrue("the copied line is not on the clipboard before Allow", touch.clipboardText()?.startsWith(marker) != true)
                 touch.tapElement("button", "Allow this copy")
                 PageDriver.poll("the clipboard to hold the copied line", 20) { touch.clipboardText()?.takeIf { it.trim() == marker } }
-                assertEquals("the sheet closed after Allow", true, page("!Array.from(document.querySelectorAll('[role=region]')).some(x => x.getAttribute('aria-label') === 'Remote clipboard request')"))
+                assertEquals("the sheet closed after Allow", true, pages.page("!Array.from(document.querySelectorAll('[role=region]')).some(x => x.getAttribute('aria-label') === 'Remote clipboard request')"))
             }
 
             // The server goes: the display ends with it, and the case's cleanup disconnects the host.
-            runCatching { run(parent, "tmux kill-server; rm -f /tmp/lzp-$nonce.conf") }
+            runCatching { pages.run(parent, "tmux kill-server; rm -f /tmp/lzp-$nonce.conf") }
         }
     }
 }

@@ -29,6 +29,14 @@ abstract class NativePagesCase {
         }
     }
 
+    /** Chooses Native, connects to the owned shell and returns the session's id once the core holds the shell's prompt. */
+    protected fun startedShell(): String {
+        val id = driver.startNativeSession()
+        val prompt = driver.fixture.getString("prompt").trim()
+        driver.awaitRow(id, "the prompt", { it == prompt || it.startsWith(prompt) })
+        return id
+    }
+
     /** Runs `body` (which starts the session and runs the steps), records the evidence under `evidence` and fails if a step did. */
     protected fun session(evidence: String, body: () -> Unit) {
         driver.evidence.put("steps", steps)
