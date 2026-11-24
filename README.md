@@ -13,11 +13,16 @@ lazysh is a **free, open-source SSH client and remote development workspace** fo
 
 Connect directly to servers you control, pick up a **tmux, rmux, Herdr, or Zellij** session, and inspect supported **Claude Code, Codex, and OpenCode** records. Your remote processes and agents run on your own host, not on a lazysh server.
 
+<p align="center">
+  <a href="docs/assets/readme/terminal-live.mp4"><img src="docs/assets/readme/terminal-live.gif" alt="lazysh on an Android phone: typing a build command in a live SSH terminal session, with the view zooming in on the prompt and then on the streamed build output" width="340"></a><br>
+  <sub>A live terminal session in the Android app. <a href="docs/assets/readme/terminal-live.mp4">Watch the MP4</a> for the sharper version, or <a href="#see-it">see more</a>.</sub>
+</p>
+
 [![Latest release](https://img.shields.io/github/v/release/mihazs/lazysh)](https://github.com/mihazs/lazysh/releases/latest) [![Downloads](https://img.shields.io/github/downloads/mihazs/lazysh/total)](https://github.com/mihazs/lazysh/releases) [![main](https://img.shields.io/github/actions/workflow/status/mihazs/lazysh/main-verdict.yml?branch=main&label=main)](https://github.com/mihazs/lazysh/actions/workflows/main-verdict.yml) [![License: GPL-3.0-or-later](https://img.shields.io/github/license/mihazs/lazysh)](LICENSE) ![Platforms: Android, Linux, Windows](https://img.shields.io/badge/platforms-Android%20%7C%20Linux%20%7C%20Windows-informational)
 
 > **Status.** lazysh ships regular releases with Android (Google and FOSS APKs), Linux (AppImage and Debian) and Windows (x64 installer) apps, plus a host companion for Linux, macOS and Windows. Real-device acceptance is still incomplete, macOS and iOS app packages are not published, and F-Droid inclusion is pending. See the [releases](https://github.com/mihazs/lazysh/releases), [changelog](CHANGELOG.md), [installation guide](docs/install-and-update.md) and [public roadmap](docs/roadmap.md).
 
-[**Download**](https://github.com/mihazs/lazysh/releases/latest) · [Install in 60 seconds](#install-in-60-seconds) · [What you can do](#what-you-can-do) · [Platforms](#platforms-and-availability) · [Trust and security](#trust-and-security) · [Documentation](#documentation) · [Contribute](#join-the-project)
+[**Download**](https://github.com/mihazs/lazysh/releases/latest) · [See it](#see-it) · [Install in 60 seconds](#install-in-60-seconds) · [What you can do](#what-you-can-do) · [Platforms](#platforms-and-availability) · [Trust and security](#trust-and-security) · [Documentation](#documentation) · [Contribute](#join-the-project)
 
 ## Why lazysh?
 
@@ -25,6 +30,23 @@ Connect directly to servers you control, pick up a **tmux, rmux, Herdr, or Zelli
 - **Let remote work keep running.** Reconnect to host-side tmux, rmux, Herdr, or Zellij sessions instead of relying on a phone or laptop to keep a shell alive.
 - **Keep an eye on AI coding work.** Read supported agent events and transcripts through an optional companion, without moving the agent runtime to a hosted lazysh service.
 - **Use your own infrastructure.** Ordinary SSH requires no lazysh account, subscription, or proprietary connection relay. Extra sync, sharing, voice, and notification services are optional and have their own setup requirements.
+
+## See it
+
+Real screen captures of the Android app, with the screens a phone shows. The host, files and agent transcript are demo data written for these captures; nothing here is mocked up or drawn.
+
+<table>
+  <tr>
+    <td align="center" width="50%"><a href="docs/assets/readme/agent-chat.mp4"><img src="docs/assets/readme/agent-chat.gif" alt="Opening an agent transcript from the host and reading the conversation, with the view zooming in on the path field and then on the messages" width="300"></a><br><sub><b>Read an agent's transcript.</b> Open a coding agent's recorded session from your host and follow the conversation. (<a href="docs/assets/readme/agent-chat.mp4">MP4</a>)</sub></td>
+    <td align="center" width="50%"><a href="docs/assets/readme/agent-approval.mp4"><img src="docs/assets/readme/agent-approval.gif" alt="A pending permission request from a coding agent, showing the command it wants to run, and tapping Allow this request" width="300"></a><br><sub><b>Approve from your phone.</b> A waiting agent asks before it runs a command; allow or deny it from the Activity list. (<a href="docs/assets/readme/agent-approval.mp4">MP4</a>)</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/assets/readme/files-browse.mp4"><img src="docs/assets/readme/files-browse.gif" alt="Browsing the host's files from the phone, opening a folder and previewing a Markdown note" width="300"></a><br><sub><b>Browse files.</b> Look inside folders on the host and preview a file. (<a href="docs/assets/readme/files-browse.mp4">MP4</a>)</sub></td>
+    <td align="center"><a href="docs/assets/readme/terminal-engine.mp4"><img src="docs/assets/readme/terminal-engine.gif" alt="Opening Settings, Terminal and accessibility, and choosing the xterm.js terminal engine, then back to Auto" width="300"></a><br><sub><b>Choose the terminal engine.</b> Auto, Native or xterm.js, per new session. (<a href="docs/assets/readme/terminal-engine.mp4">MP4</a>)</sub></td>
+  </tr>
+</table>
+
+<sub>Captured with lazysh 1.98.0 (the x86_64 debug build of `main` at `15b374c5`, because the published APKs are ARM64) on an Android guest ([Waydroid](docs/architecture/waydroid-lane.md)), not on a phone: the keyboard, fonts and system bars are the guest's. Reproduce them with [Capture the README media](docs/how-to/capture-readme-media.md).</sub>
 
 ## Install in 60 seconds
 
@@ -68,6 +90,21 @@ bun run dev
 **Use the native Tauri window for SSH.** The standalone Vite/browser development server previews the interface only; it cannot establish native SSH connections.
 
 ## What you can do
+
+<table>
+  <tr>
+    <td align="center" width="25%"><a href="docs/assets/readme/hosts.png"><img src="docs/assets/readme/hosts.png" alt="The Connections page listing a connected host, with the application options below" width="200"></a><br><sub>Your hosts</sub></td>
+    <td align="center" width="25%"><a href="docs/assets/readme/sessions.png"><img src="docs/assets/readme/sessions.png" alt="The session manager listing the tmux sessions of the host" width="200"></a><br><sub>Host-side sessions</sub></td>
+    <td align="center" width="25%"><a href="docs/assets/readme/agent-chat.png"><img src="docs/assets/readme/agent-chat.png" alt="An agent transcript opened as a chat with the user and assistant messages" width="200"></a><br><sub>Agent transcript</sub></td>
+    <td align="center" width="25%"><a href="docs/assets/readme/agent-approval.png"><img src="docs/assets/readme/agent-approval.png" alt="A pending approval request from a coding agent with Deny and Allow buttons" width="200"></a><br><sub>Approval request</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/assets/readme/terminal.png"><img src="docs/assets/readme/terminal.png" alt="A terminal session with build output and the on-screen keyboard and toolbar keys" width="200"></a><br><sub>Terminal and keys</sub></td>
+    <td align="center"><a href="docs/assets/readme/files.png"><img src="docs/assets/readme/files.png" alt="The Files view with a Markdown note previewed" width="200"></a><br><sub>Files</sub></td>
+    <td align="center"><a href="docs/assets/readme/terminal-engine.png"><img src="docs/assets/readme/terminal-engine.png" alt="Settings, Terminal engine: Auto, Native or xterm.js" width="200"></a><br><sub>Terminal engine</sub></td>
+    <td></td>
+  </tr>
+</table>
 
 ### Connect to your own servers
 
