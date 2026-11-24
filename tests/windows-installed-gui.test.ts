@@ -195,7 +195,12 @@ async function withInstalledGui(name: string, scenario: (gui: InstalledGui) => P
 
   // Ambient installations and application data are rejected, never adopted or removed.
   const before = await hostState();
-  expect(before.present).toEqual([]);
+  // Name what is there: an earlier step of the job that leaves application data behind shows up here, not in its own result.
+  if (before.present.length) {
+    const listing = await Promise.all(before.present.filter(name => name in before.paths).map(async name => `${name} ${before.paths[name]}\n` +
+      await powershell(`Get-ChildItem -Force -Recurse -Depth 3 -LiteralPath ${quote(before.paths[name])} -ErrorAction SilentlyContinue | Select-Object -First 60 | ForEach-Object { '{0} {1} {2:o}' -f $_.FullName, $_.Length, $_.LastWriteTimeUtc }`).catch(() => 'listing unavailable')));
+    throw new Error(`The Windows host holds state this case does not own: ${before.present.join(', ')}\n${listing.join('\n')}`);
+  }
   await pinnedTools(driverTool, edgeDriver, before.runtime);
 
   const directory = join(process.env.RUNNER_TEMP!, `lazysh-installed-gui-${crypto.randomUUID()}`);

@@ -1438,6 +1438,18 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 60
         uses: ./.github/actions/windows-parakeet
+      # An earlier native step of this job leaves %LOCALAPPDATA%\app.lazysh.client behind empty (the listing in the GUI case's own failure
+      # showed no entry, run 45315364166, #2484), and the GUI case refuses any application data it did not create. Only an empty directory is
+      # removed: one that holds anything stays and the case reports it.
+      - name: Remove the empty application data directory earlier steps left
+        if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
+        shell: pwsh
+        run: |
+          $directory = Join-Path $env:LOCALAPPDATA 'app.lazysh.client'
+          if (Test-Path -LiteralPath $directory) {
+            try { [System.IO.Directory]::Delete($directory, $false); "removed the empty $directory" }
+            catch { "kept $directory (not empty or in use): $($_.Exception.Message)" }
+          }
       # Last, and keyed on the installer step, so an unrelated native failure neither hides nor causes it.
       # Blocking since it passed in a `main` run (43790076928, #1632); a failure here fails the job.
       - name: Exercise the installed Windows application GUI
