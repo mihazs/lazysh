@@ -117,7 +117,8 @@ its existing bounded retries, but Gotify's API does not promise to deduplicate
 `Idempotency-Key`, so a lost response can produce duplicate notifications. Stop,
 revocation or reconfiguration cannot recall an already accepted message. Actual
 Gotify server/client, Android background and physical-device delivery acceptance
-remain separate checks.
+remain separate checks; the official Android app's own lane is described in
+[Official Gotify Android acceptance](gotify-acceptance.md).
 
 ### Receive Gotify events on the desktop app
 

@@ -12,7 +12,7 @@ import {reportOwnedSshPromptFailure,receiverProbeErrors,stopOwnedTree} from './s
 import type {HerdrFixture} from './support/androidHerdr';
 import {observeAndroidMoshBackground} from './support/androidMoshBackground';
 import {OwnedCaseCrashParser} from './support/androidCaseCrash';
-import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,instrumentationFailures,reportInstrumentationFailures,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,IME_TRANSACTION_WIRE,IME_CHAT_WIRE,imeExpectedWire,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
+import {SshFixture,OwnedProcess,identity,checkRawReceiverIdentity,packageExitInfo,androidSshCleanup,emulatorContinuity,adbdIdentityScript,compareEmulatorContinuity,hostAdbServerIdentity,compareHostAdbServer,gradleFailureClasses,instrumentationFailures,reportInstrumentationFailures,captureOwnedCaseCrashes,recoverOwnedCaseCrash,ownedAndroidPackagePresence,androidSshAcceptance,ownedSoftwareKeyboard,attachmentReceipt,attachmentIdentity,verifyImeReceiverBytes,IME_TRANSACTION_WIRE,IME_CHAT_WIRE,imeExpectedWire,readRawReceiverBytes,observeImeReceiverWire,dpadReceipt,verifyDpadReceiverBytes,validateSharedHerdrReport,validateRecordedConversationReport,sharedHerdrReportIdentity,verifySharedHerdrResult} from './support/androidSsh';
 
 test('Chat IME hit diagnostic uses bounded geometry and fixed categories without DOM text', async()=>{
   const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
@@ -246,6 +246,7 @@ case "$3 $4" in
   'shell pidof') if [ "$5" = adbd ]; then sed -n '6p' "$EXIT_INFO_FIXTURE"; else sed -n '2p' "$EXIT_INFO_FIXTURE"; fi ;;
   'reverse --list') sed -n '3p' "$EXIT_INFO_FIXTURE" ;;
   'transport-id ') sed -n '4p' "$EXIT_INFO_FIXTURE" ;;
+  'shell sh') sed -n '6,7p' "$EXIT_INFO_FIXTURE" ;;
   'shell cat') if [ "$5" = /proc/sys/kernel/random/boot_id ]; then sed -n '5p' "$EXIT_INFO_FIXTURE"; else sed -n '7p' "$EXIT_INFO_FIXTURE"; fi ;;
   *) cat "$EXIT_INFO_FIXTURE" ;;
 esac
@@ -329,10 +330,10 @@ test.each([
   await withDiagnosticAdb(body,code,async(adb,args)=>{
     const summary=await emulatorContinuity(adb,'emulator-5580','46867',45678);
     const state=code!==0?'unavailable':'unrecognized';
-    expect(summary).toEqual({...expected,transport:state,transportHash:null,boot:state,bootHash:null,adbd:state,adbdHash:null});
+    expect(summary).toEqual({...expected,transport:state,transportHash:null,boot:state,bootHash:null,adbd:state,adbdHash:null,adbdProbe:{outcome:code===0?'completed':'nonzero-exit',elapsed:'within-budget',exitCode:code}});
     expect((await readFile(args,'utf8')).trim().split('\n').sort()).toEqual([
       '-s emulator-5580 get-state','-s emulator-5580 shell pidof app.lazysh.client','-s emulator-5580 reverse --list',
-      '-s emulator-5580 transport-id','-s emulator-5580 shell cat /proc/sys/kernel/random/boot_id','-s emulator-5580 shell pidof adbd',
+      '-s emulator-5580 transport-id','-s emulator-5580 shell cat /proc/sys/kernel/random/boot_id',`-s emulator-5580 shell sh -c '${adbdIdentityScript}'`,
     ].sort());
     expect(JSON.stringify(summary)).not.toContain('private-');
   });
@@ -679,6 +680,10 @@ const daemonStat=(pid:string,start:string)=>`${pid} (adbd) S ${Array.from({lengt
 
 test.each([
   {pid:'123',stat:daemonStat('123','456'),state:'available'},
+  {pid:'',stat:daemonStat('123','456'),state:'unrecognized'},
+  {pid:'123',stat:'',state:'unrecognized'},
+  {pid:'0123',stat:daemonStat('0123','456'),state:'unrecognized'},
+  {pid:'123\n124',stat:daemonStat('123','456'),state:'unrecognized'},
   {pid:'123 124',stat:daemonStat('123','456'),state:'unrecognized'},
   {pid:'2147483648',stat:daemonStat('2147483648','456'),state:'unrecognized'},
   {pid:'123',stat:daemonStat('124','456'),state:'unrecognized'},
@@ -692,7 +697,102 @@ test.each([
     expect(result.adbd).toBe(state);
     expect(result.adbdHash).toBe(state==='available'?createHash('sha256').update('123:456').digest('hex'):null);
     expect(JSON.stringify(result)).not.toContain('private-secret');
-    if(state==='available')expect((await readFile(args,'utf8')).split('\n')).toContain('-s emulator-5580 shell cat /proc/123/stat');
+    if(state==='available')expect((await readFile(args,'utf8')).split('\n').filter(line=>line.startsWith('-s emulator-5580 shell sh -c '))).toHaveLength(1);
+  });
+});
+
+test.each([
+  {code:0,stat:daemonStat('123','456'),state:'available',outcome:'completed'},
+  {code:31,stat:daemonStat('123','456'),state:'unavailable',outcome:'nonzero-exit'},
+  {code:0,stat:'private-malformed',state:'unrecognized',outcome:'completed'},
+  {code:0,stat:'private-overflow'.repeat(500),state:'overflow',outcome:'completed'},
+])('daemon continuity retains the original bounded command outcome: $state/$outcome',async({code,stat,state,outcome})=>{
+  await withDiagnosticAdb(continuityBody('42',bootA)+`123\n${stat}\n`,code,async adb=>{
+    const result=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(result.adbd).toBe(state);
+    expect(result.adbdProbe).toEqual({outcome,elapsed:'within-budget',exitCode:code});
+    expect(JSON.stringify(result.adbdProbe)).not.toContain('private-');
+  });
+});
+
+test.each([
+  {action:'kill -TERM $$',outcome:'signaled',elapsed:'within-budget'},
+  {action:'exec sleep 120',outcome:'deadline',elapsed:'over-budget'},
+])('daemon original $outcome observation retires its owned fake process',async({action,outcome,elapsed})=>{
+  await withDiagnosticAdb(continuityBody('42',bootA),0,async(adb,args)=>{
+    const script=await readFile(adb,'utf8');
+    await writeFile(adb,script.replace('case "$3 $4" in',()=>`case "$3 $4" in
+  'shell sh') printf '%s' "$$" > "$EXIT_INFO_ARGS.pid"; ${action} ;;
+esac
+case "$3 $4" in`));
+    const result=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(result.adbd).toBe('unavailable');
+    expect(result.adbdProbe).toEqual({outcome,elapsed,exitCode:null});
+    const pid=Number(await readFile(args+'.pid','utf8'));
+    expect(pid).toBeGreaterThan(0);expect(()=>process.kill(pid,0)).toThrow();
+  });
+},5000);
+
+test('daemon original spawn failure and an exhausted budget remain distinct without querying a device',async()=>{
+  const missing=await emulatorContinuity('/nonexistent-owned-adb','emulator-5580',undefined,0);
+  expect(missing.adbdProbe).toEqual({outcome:'spawn-failed',elapsed:'within-budget',exitCode:null});
+  let tick=0;const clock=spyOn(performance,'now').mockImplementation(()=>++tick*1001);
+  try {
+    const expired=await emulatorContinuity('/nonexistent-owned-adb','emulator-5580',undefined,0);
+    expect(expired.adbdProbe).toEqual({outcome:'not-started',elapsed:'over-budget',exitCode:null});
+  } finally {clock.mockRestore();}
+});
+
+test('daemon zero exit after its original deadline is not mislabeled as a command timeout',async()=>{
+  await withDiagnosticAdb(continuityBody('42',bootA)+`123\n${daemonStat('123','456')}\n`,0,async adb=>{
+    let now=0;const clock=spyOn(performance,'now').mockImplementation(()=>now),finish=OwnedProcess.prototype.finish;
+    const observed=spyOn(OwnedProcess.prototype,'finish').mockImplementation(async function(this:OwnedProcess,stage,budget){
+      const result=await finish.call(this,stage,budget);
+      if(this.child.spawnargs.some(arg=>arg.includes('pidof adbd')))now=1001;
+      return result;
+    });
+    try {
+      const result=await emulatorContinuity(adb,'emulator-5580',undefined,0);
+      expect(result.adbd).toBe('unavailable');
+      expect(result.adbdProbe).toEqual({outcome:'completed',elapsed:'over-budget',exitCode:0});
+    } finally {observed.mockRestore();clock.mockRestore();}
+  });
+});
+
+test.skipIf(process.platform!=='linux')('daemon identity reads the lowest adbd process when ADB forks children that keep its name',async()=>{
+  const bin=await mkdtemp(join(tmpdir(),'lazysh-adbd-')),cleanup:(()=>void)[]=[];
+  try {
+    const run=async(pids:string)=>{
+      await writeFile(join(bin,'pidof'),`#!/bin/sh\n${pids==='none'?'exit 1':`echo "${pids}"`}\n`,{mode:0o755});
+      const child=Bun.spawn(['sh','-c',adbdIdentityScript],{env:{...process.env,PATH:`${bin}:${process.env.PATH}`},stdout:'pipe',stderr:'ignore'});
+      return {code:await child.exited,output:await new Response(child.stdout).text()};
+    };
+    const sleeper=Bun.spawn(['sleep','60']);cleanup.push(()=>sleeper.kill());
+    const own=sleeper.pid,read=async(pids:string)=>{const {code,output}=await run(pids);return {code,lines:output.trimEnd().split('\n')};};
+    // The sibling pid is never read: it is above the lowest, and no such process needs to exist.
+    for(const pids of [`${own+100000} ${own}`,`${own}`]) {
+      const {code,lines}=await read(pids);
+      expect(code).toBe(0);expect(lines).toHaveLength(2);expect(lines[0]).toBe(String(own));expect(lines[1].startsWith(`${own} (sleep) `)).toBe(true);
+    }
+    expect((await run('none')).code).toBe(1);
+  } finally {cleanup.forEach(stop=>stop());await rm(bin,{recursive:true,force:true});}
+});
+
+test('daemon identity fits one remote-shell launch without relaxing its sample',async()=>{
+  await withDiagnosticAdb(continuityBody('42',bootA)+`123\n${daemonStat('123','456')}\n`,0,async(adb,args)=>{
+    const script=await readFile(adb,'utf8');
+    await writeFile(adb,script.replace('case "$3 $4" in',`case "$3 $4 $5" in
+  'shell pidof adbd'|'shell cat /proc/123/stat'|'shell sh -c')
+    [ ! -e "$EXIT_INFO_ARGS.daemon" ] || exit 31
+    : > "$EXIT_INFO_ARGS.daemon" ;;
+esac
+case "$3 $4" in`));
+    const result=await emulatorContinuity(adb,'emulator-5580','46867',45678);
+    expect(result.adbd).toBe('available');
+    expect(result.adbdHash).toBe(createHash('sha256').update('123:456').digest('hex'));
+    const calls=(await readFile(args,'utf8')).trim().split('\n');
+    expect(calls.filter(line=>line.includes('shell sh -c'))).toHaveLength(1);
+    expect(calls.some(line=>line.includes('shell pidof adbd')||line.includes('shell cat /proc/123/stat'))).toBe(false);
   });
 });
 

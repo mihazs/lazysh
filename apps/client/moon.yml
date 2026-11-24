@@ -144,6 +144,11 @@ tasks:
     script: *ntfyScript
     env: {LAZYSH_NTFY_ANDROID_VARIANT: google}
     options: *local
+  # CI builds the current app APK before the emulator boots (checks.yml native-android-gotify), so the build is not a dependency.
+  test-android-gotify:
+    type: test
+    script: cargo build --locked --jobs 2 -p lazysh-notifications --example owned_gotify_android --features test-support && LAZYSH_ANDROID_GOTIFY=1 bun test ../../tests/android-gotify.test.ts
+    options: *local
   test-android:
     type: test
     script: |-

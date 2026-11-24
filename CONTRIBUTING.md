@@ -81,12 +81,13 @@ terminal performance gate (`terminal-perf`, report-only) is the exception: it al
 terminal runtime area, so a regression shows on the pull request that causes it. The
 table below lists what a change can affect, and a pull request runs only the required jobs of
 that list plus `terminal-perf`. The macOS surface probe (`terminal-macos-surface.yml`, report-only) is its own workflow rather than a job here: it runs on a pull request or a push that changes the probe or the workflow, and not otherwise.
+The exception is the official Gotify Android lane (`native-android-gotify`): it is not required to merge either, but it also runs on a pull request that changes its owner or the relay, so a change to the lane is qualified before it lands.
 
 | Changed paths | Native jobs on the pull request |
 | --- | --- |
 | Documentation only (`docs/**`, root `*.md`, `.changeset/*.md`, issue and PR templates) | none |
 | Client: `apps/client/**`, `apps/share-service/**`, client-only packages | Herdr, Linux GUI, Linux runtimes, desktop (macOS, Windows), Android build, Android runtime, Android terminal core, Android tmux, Appium suite |
-| Agent: `apps/agent/**`, `packages/{common,account-usage,companion-release,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary, Appium suite; the notification service and client also run Linux runtimes (real Apprise API) and both ntfy variants |
+| Agent: `apps/agent/**`, `packages/{common,account-usage,companion-release,notification-client}`, notification service | companion candidates (5), Herdr, Linux GUI, desktop, Android runtime, Herdr navigation, Android auxiliary, Appium suite; the notification service and client also run Linux runtimes (real Apprise API), both ntfy variants and the official Gotify Android lane |
 | Android: `gen/android/**`, plugin `android*/` source sets, Android tests | Herdr, Android build, runtime, terminal core, Herdr navigation, tmux, auxiliary, ntfy (Google), Appium suite |
 | Native terminal session: `gen/android/**`, `src-tauri/src/{native_*,terminal_core}.rs`, `src/{native*,terminal*,TerminalPane*,tauriNativeCoreBridge*}`, `packages/terminal-{runtime,renderer-wgpu}/**`, the harness `tests/support/androidTerminalCore.ts` | on top of the row each path belongs to, `native-android-terminal-session` (report-only, not a required check): the app built with the terminal core on the CI emulator, choosing Native in Settings, connecting to an owned OpenSSH through the page and checking the surface's pixels (`NativeTerminalSessionTest`) |
 | iOS: `src-tauri/apple/**`, plugin `ios/` source sets, Apple packages, client configuration shared with iOS | iOS simulator (plus the client set when client code changes) |
@@ -97,6 +98,7 @@ that list plus `terminal-perf`. The macOS surface probe (`terminal-macos-surface
 | The probe's harness: `packages/terminal-runtime/prototypes/linux-surface/scripts/**` | Linux composition probe, and the native-terminal bridge (`native-terminal-bridge` runs the harness against the real app's surface host) |
 | Mosh transport, push registration | the client set plus iOS, and Android Mosh or Android auxiliary and both ntfy variants respectively |
 | Release APK build configuration: `.github/workflows/release-artifacts.yml`, `.github/actions/ghostty-zig/**`, `.changeset/release-artifacts.ts` | everything the next row selects, plus `native-android-release-core` (a pull request only, never a push): the Google release APK built with `native-terminal`, once with the kill switch on and once with it off, held to the size ceiling of `release-artifacts.ts` and to carrying the engine only with the switch on (`apk-engine.ts`) |
+| Gotify owner (`tests/android-gotify.test.ts`, `tests/support/androidGotify.ts`, `GotifyAndroidTest.kt`, `gotify-provenance.json`) and the ntfy and SSH helpers it reuses | the Gotify lane (`native-android-gotify`), plus the jobs the helper itself selects |
 | Workflows, `.github/scripts` or `.github/actions`, manifests, lockfiles, release tooling, any unlisted path | every required job and `terminal-perf`, with both ntfy variants |
 
 The Appium suite (`native-android-appium`, `apps/client/mobile-e2e`) is **report-only**: it runs on the paths above, on `main` (plus its

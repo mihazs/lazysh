@@ -38,7 +38,7 @@ package() {
     */android | */android-*) add android ;;
     common/*) add client agent herdr ;; # herdr-native compiles copied common sources.
     account-usage/* | ai-usagebar-vendor/* | companion-release/*) add client agent ;;
-    notification-client/*) add agent push relay ;; # native-linux-runtimes runs the real Apprise API relay case.
+    notification-client/*) add agent push relay gotify ;; # native-linux-runtimes runs the real Apprise API relay case.
     push-registration/*) add client android ios push ;;
     mosh-transport/*) add client ios mosh ;;
     credential-vault/* | display-idle/* | apple-speech/* | apple-status/*) add client ios ;;
@@ -60,9 +60,12 @@ classify() {
     # The release APK's build configuration: only a pull request touching it builds a release APK with the native engine.
     .github/workflows/release-artifacts.yml | .github/actions/ghostty-zig/* | .changeset/release-artifacts.ts | .github/scripts/apk-budget.ts | .github/scripts/apk-engine.ts | tests/apk-budget.test.ts | .github/scripts/software-gpu-switch.sh | tests/software-gpu-switch.test.ts) add all android_release ;;
     .github/ios-workspace-metadata.jq | tests/ios-*) add ios ;;
+    # The sole native Gotify case; every other Android test source set only selects the Android jobs.
+    apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/GotifyAndroidTest.kt) add android gotify ;;
     # The native session job (native-android-terminal-session) builds the app with the terminal core and drives its real UI: the Android project and the native terminal's own sources select it.
     apps/client/src-tauri/gen/android/*) add android android_native_session ;;
     apps/client/src-tauri/apple/*) add ios ;;
+    apps/client/src-tauri/fixtures/gotify-provenance.json) add client gotify ;;
     apps/client/package.json | apps/client/moon.yml | apps/client/src-tauri/Cargo.toml | \
       apps/client/src-tauri/build.rs | apps/client/src-tauri/tauri.conf.json | \
       apps/client/src-tauri/icons/* | apps/client/src-tauri/capabilities/* | \
@@ -73,12 +76,17 @@ classify() {
     tests/android-native-session.test.ts | tests/android-terminal-core.test.ts | tests/support/androidTerminalCore.ts) add android android_native_session ;;
     apps/client/* | apps/share-service/*) add client ;;
     apps/agent/*) add agent ;;
-    apps/notification-service/*) add agent push relay ;;
+    apps/notification-service/*) add agent push relay gotify ;;
     tests/herdr-source.test.ts | tests/herdr-notices.test.ts | .github/herdr-notices/*) add herdr ;;
     tests/android-herdr-navigation.test.ts | tests/support/androidHerdr.ts) add android herdr ;;
-    tests/android-ntfy.test.ts | tests/android-push-artifact.test.ts | tests/support/androidNtfy.ts) add android push ;;
+    tests/android-ntfy.test.ts | tests/android-push-artifact.test.ts) add android push ;;
+    # The Gotify owner reuses the ntfy clock/private-input helpers, the owned SSH continuity probes and the QR emulator ownership check.
+    tests/support/androidNtfy.ts) add android push gotify ;;
+    tests/android-gotify.test.ts | tests/support/androidGotify.ts) add gotify ;;
+    tests/support/androidQrOwnership.ts) add android gotify ;;
     # native-linux also runs the namespaced SSH host case.
-    tests/android-ssh-host.test.ts | tests/support/androidSsh.ts | tests/support/sshFixture.ts) add client android ;;
+    tests/support/androidSsh.ts) add client android gotify ;;
+    tests/android-ssh-host.test.ts | tests/support/sshFixture.ts) add client android ;;
     tests/android-*.test.ts | tests/support/android*.ts) add android ;;
     # native-desktop runs release consistency, the Windows installer cases and the installed GUI.
     tests/release-consistency.test.ts | tests/release-artifacts.test.ts | \
@@ -175,6 +183,7 @@ for output in \
   "android_appium_quarantine=$quarantine" \
   "android_auxiliary=$(flag any android agent push)" \
   "android_ntfy=$(flag any android push)" \
+  "android_gotify=$(flag has gotify)" \
   "ios=$(flag has ios)" \
   "terminal_perf=$(flag has terminal_runtime)" \
   "terminal_macos=$(flag any terminal_runtime terminal_apple)" \

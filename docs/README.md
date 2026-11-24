@@ -113,7 +113,7 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Evidence or delivery boundary | Record |
 | --- | --- |
 | Apple extension/watch integration and outstanding gates | [Apple status](apple-status.md) |
-| Exact notification and relay acceptance procedures/limits | [UnifiedPush acceptance](unifiedpush-acceptance.md) · [Whisper relay acceptance](whisper-relay-acceptance.md) |
+| Exact notification and relay acceptance procedures/limits | [UnifiedPush acceptance](unifiedpush-acceptance.md) · [Official Gotify Android acceptance](gotify-acceptance.md) · [Whisper relay acceptance](whisper-relay-acceptance.md) |
 | F-Droid metadata, inclusion and distribution status | [F-Droid listing](fdroid-listing.md) |
 | ET interoperability research | [ET research](et-research.md) |
 | Remaining agent-format investigation | [Agent format research](remaining-agent-format-research.md) |
