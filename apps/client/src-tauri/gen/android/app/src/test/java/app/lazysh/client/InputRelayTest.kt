@@ -51,6 +51,16 @@ class InputRelayTest {
         assertTrue(got.isEmpty())
     }
 
+    @Test fun removingTheSurfaceCompletesItsPendingInputPollExactlyOnce() {
+        val relay = InputRelay()
+        val completions = ArrayList<List<SurfaceInput>>()
+        relay.take { completions += it }
+        relay.clear()
+        relay.clear()
+        relay.text("late")
+        assertEquals(listOf(emptyList<SurfaceInput>()), completions)
+    }
+
     @Test fun aPasteKeepsItsPlaceBetweenTypedText() {
         val relay = InputRelay()
         relay.text("a"); relay.paste("b\nc"); relay.text("d")

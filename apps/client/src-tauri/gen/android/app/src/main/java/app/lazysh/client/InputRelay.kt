@@ -39,8 +39,14 @@ class InputRelay : TerminalInputSink {
         if (queue.isEmpty()) waiter = deliver else flush(deliver)
     }
 
-    /** The surface is gone: a late key must not reach a later page. */
-    fun clear() { queue.clear(); preedit = null }
+    /** End the old poll so the page can request input from its next surface. */
+    fun clear() {
+        queue.clear()
+        preedit = null
+        val pending = waiter
+        waiter = null
+        pending?.invoke(emptyList())
+    }
 
     private fun push(event: SurfaceInput) {
         queue += event
