@@ -281,7 +281,7 @@ for(const kind of ['tmux','rmux'] as const) {
       await wait(()=>client!.stdout.includes(beta.marker));
       await client.stop();
       await owned.verifyDetachedAndReattached();
-      expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],defaultHistory:[],views:['alpha','beta'],windows:2,server:{state:'running',exit:null,signal:'none'}});
+      expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],defaultHistory:[],modes:[0],views:['alpha','beta'],windows:2,server:{state:'running',exit:null,signal:'none'}});
       if(kind==='tmux') {
         // A still-attached control-mode client, like the app's Jump binding, whose reader no
         // longer drains its output must not break teardown: retiring SSH ends it first.
