@@ -96,6 +96,8 @@ Upstream starts the background checks only without debug assertions, so a debug 
 Limits. This is Linux release-profile evidence. The Windows installer branch of the stock updater is not reachable from the managed build, but no Windows build has run. Two other network paths are out of scope and unchanged: the agent-detection refresh fetches detection data, never an executable, and `herdr --remote` installs a stock Herdr release on a remote host, which a managed installation does not use and the explicit install over the connected session ([#1760](https://github.com/mihazs/lazysh/issues/1760)) replaces.
 
 
+The local Ghostty Rust binding also exposes the existing default cursor style and blink setters for lazysh's terminal runtime (#2218). The Zig vendor sources and source manifest are unchanged. The modified Rust binding is included in the duplicate scan.
+
 ## Optional build and verification
 
 This nested workspace is explicitly excluded from lazysh's root Cargo workspace and has no Bun package. Default lazysh builds/tests do not build or install it. Use a private target; never point it at another active worktree's mutable target.

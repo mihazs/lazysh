@@ -136,7 +136,7 @@ describe('the native backend as the app registers it', () => {
     localStorage.setItem('lazysh.terminal.backend', 'native');
     const {selection, adapter} = await createTerminalAdapter({preference: 'xterm'}, registry);
     expect([selection, adapter.backend]).toEqual([{id: 'native', reason: 'developer override', fallbacks: []}, 'native']);
-    expect(openCore).toHaveBeenCalledWith({columns: 80, rows: 24, scrollbackLines: defaults.scrollback});
+    expect(openCore).toHaveBeenCalledWith(expect.objectContaining({columns: 80, rows: 24, scrollbackLines: defaults.scrollback, cursorStyle: defaults.cursorStyle, cursorBlink: defaults.cursorBlink}));
   });
 
   it('cannot be forced on by the override or the setting when its probe fails, and the session says why', async () => {

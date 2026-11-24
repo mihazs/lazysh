@@ -28,6 +28,8 @@ export type NativeTerminalOptions = NativeAdapterOptions & {
   scrollbackLines: number;
   /** The session's transport is Mosh: its frames decide the grid's size, so the core follows them and takes the renderer's sizes as intent. */
   canonicalFrames?: boolean;
+  cursorStyle?: "bar" | "block" | "underline";
+  cursorBlink?: boolean;
   /** Everything on `events` that is not the core's: the transport's `closed` notice and auth hints. */
   onTransportEvent?: (event: SshEvent) => void;
 };
@@ -72,7 +74,7 @@ export async function probeNativeCore(): Promise<BackendProbe> {
  * starts with `events`, so the session id arrives later, through `bind`; until then the adapter shows the blank screen the core opens with.
  */
 export async function createNativeTerminalAdapter(options: NativeTerminalOptions): Promise<NativeTerminalOpening> {
-  const {columns, rows, scrollbackLines: opened, canonicalFrames, onTransportEvent, ...adapterOptions} = options;
+  const {columns, rows, scrollbackLines: opened, canonicalFrames, cursorStyle, cursorBlink, onTransportEvent, ...adapterOptions} = options;
   let scrollbackLines = opened;
   let {theme} = adapterOptions;
   const events = new Channel<NativeCoreEvent | SshEvent>();
@@ -83,7 +85,7 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
   events.onmessage = deliver;
   try {
     // The colours the core reports to the programs that ask for them, and the Mosh mode, are fixed before its first byte.
-    const config = theme || canonicalFrames ? {theme, canonicalFrames} : undefined;
+    const config = theme || canonicalFrames || cursorStyle ? {theme, canonicalFrames, ...cursorStyle && {cursorStyle, cursorBlink}} : undefined;
     await protectedInvoke('terminal_core_open', {events, cols: columns, rows, scrollbackLines: opened, config});
   } catch (error) {
     deliver.dispose();

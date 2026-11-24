@@ -3,13 +3,11 @@
 //! and start; the session and its screen live on). Platform-neutral, so the bookkeeping is tested on every host
 //! with offscreen targets; the Android entry points in [`super::android`] only turn a `Surface` into a [`Target`].
 #![cfg_attr(not(any(target_os = "android", target_os = "linux")), allow(dead_code))]
-use super::{CursorStyle, SurfaceLook};
+use super::SurfaceLook;
 use crate::native_renderer::{Host, Inbox, Look};
 use crate::terminal_core::{css_color, theme_of};
 use lazysh_terminal_renderer_wgpu::Target;
-use lazysh_terminal_runtime::{
-    BoldText, CursorDefault, CursorVisualStyle, RgbColor, Session, Theme,
-};
+use lazysh_terminal_runtime::{BoldText, RgbColor, Session, Theme};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -87,11 +85,6 @@ fn look_of(wanted: &SurfaceLook) -> Result<Look, String> {
             Some(text) => Some(css_color(text).ok_or("The bold colour is not a hex colour")?),
         },
     };
-    let style = match wanted.cursor_style {
-        CursorStyle::Block => CursorVisualStyle::Block,
-        CursorStyle::Underline => CursorVisualStyle::Underline,
-        CursorStyle::Bar => CursorVisualStyle::Bar,
-    };
     Ok(Look {
         theme,
         font_family: wanted.font_family.clone(),
@@ -103,10 +96,7 @@ fn look_of(wanted: &SurfaceLook) -> Result<Look, String> {
             &wanted.font_family,
         )),
         bold,
-        cursor: Some(CursorDefault {
-            style,
-            blink: wanted.cursor_blink,
-        }),
+        cursor: Some(wanted.cursor_style.with_blink(wanted.cursor_blink)),
     })
 }
 
@@ -335,8 +325,8 @@ mod tests {
         );
         assert_eq!(
             after.cursor,
-            Some(CursorDefault {
-                style: CursorVisualStyle::Underline,
+            Some(lazysh_terminal_runtime::CursorDefault {
+                style: lazysh_terminal_runtime::CursorVisualStyle::Underline,
                 blink: false
             })
         );

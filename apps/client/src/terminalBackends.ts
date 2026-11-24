@@ -41,7 +41,10 @@ export function registerNativeBackend(backends: Pick<typeof registry, 'register'
     autoEligible: false,
     probe,
     // The session start reads `adapter.transport` to start its transport on this core.
-    create: async ({mosh} = {}) => (await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: getPreferences().scrollback, canonicalFrames: mosh})).adapter,
+    create: async ({mosh} = {}) => {
+      const {scrollback, cursorStyle, cursorBlink} = getPreferences();
+      return (await createNativeTerminalAdapter({columns: 80, rows: 24, scrollbackLines: scrollback, canonicalFrames: mosh, cursorStyle, cursorBlink})).adapter;
+    },
   });
 }
 registerNativeBackend(registry);

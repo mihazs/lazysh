@@ -1,8 +1,11 @@
-//! Host-owned immutable file snapshots retained by the native image lifetime.
+//! Local VT extensions, including host-owned file snapshots retained by the native image lifetime.
 //
 // Modified by lazysh: `Terminal::set_max_scrollback` below (libghostty-vt takes the
 // scrollback byte limit at any time; the binding only set it when the terminal was
 // created); upstream license retained. See ../../PROVENANCE.md.
+#[path = "cursor_defaults.rs"]
+mod cursor_defaults;
+
 use super::{ffi, Error, GhosttyResultExt};
 use crate::pane_graphics_files::{FileStore, OwnedExport};
 use std::ffi::c_void;

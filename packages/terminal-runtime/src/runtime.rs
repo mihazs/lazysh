@@ -1,5 +1,4 @@
 use crate::colors::ColorQueries;
-use crate::cursor::CursorChoice;
 use crate::frame::{CursorDefault, Frame, Renderer};
 use crate::ingress::{IngressHandle, Offer};
 use crate::input::{self, Encoders, KeyInput, MouseInput};
@@ -126,6 +125,8 @@ pub struct Config {
     /// renderer draws with, so a program that probes it to pick a light or dark scheme sees what is
     /// on screen. The theme the session opens with; [`TerminalRuntime::set_theme`] changes it later.
     pub theme: Theme,
+    /// Cursor preference applied before the first byte.
+    pub cursor_default: Option<CursorDefault>,
 }
 
 impl Default for Config {
@@ -136,6 +137,7 @@ impl Default for Config {
             ingress_bytes: DEFAULT_INGRESS_BYTES,
             canonical_frames: false,
             theme: Theme::default(),
+            cursor_default: None,
         }
     }
 }
@@ -214,7 +216,6 @@ pub struct TerminalRuntime {
     ingress: IngressHandle,
     replies: Arc<Mutex<Replies>>,
     colors: ColorQueries,
-    cursor: CursorChoice,
     titles: Titles,
     events: Events,
     size: Size,
@@ -244,14 +245,13 @@ impl TerminalRuntime {
                 .push(bytes);
         })?;
         terminal.set_default_palette(&config.theme.palette)?;
-        Ok(Self {
+        let mut runtime = Self {
             terminal,
             renderer: Renderer::new()?,
             encoders: Encoders::new()?,
             ingress: IngressHandle::new(config.ingress_bytes),
             replies,
             colors: ColorQueries::new(&config.theme),
-            cursor: CursorChoice::new(),
             titles: Titles::default(),
             events: Events::default(),
             size,
@@ -264,7 +264,11 @@ impl TerminalRuntime {
             display: config.canonical_frames.then(Display::new),
             failure_told: false,
             processed: 0,
-        })
+        };
+        if config.cursor_default.is_some() {
+            runtime.set_cursor_default(config.cursor_default)?;
+        }
+        Ok(runtime)
     }
 
     /// Report `theme`'s colours to the queries that arrive from now on, for a user who changed the app's theme while the
@@ -276,12 +280,14 @@ impl TerminalRuntime {
         Ok(())
     }
 
-    /// The cursor the frames show for a program that never chose one (`DECSCUSR` 1 to 6) or gave it back (0), as a
-    /// host's preferences name it; `None`, the start, leaves what the VT draws. A program's own choice is kept, which
-    /// the VT alone cannot tell from the default (the `cursor` module reads the bytes for it). Take a [`TerminalRuntime::snapshot`] for it to
-    /// reach a renderer that already holds the screen.
-    pub fn set_cursor_default(&mut self, default: Option<CursorDefault>) {
-        self.renderer.set_cursor_default(default);
+    /// Set the VT cursor defaults. A program-selected cursor stays active until it is reset.
+    pub fn set_cursor_default(&mut self, default: Option<CursorDefault>) -> Result<(), Error> {
+        let CursorDefault { style, blink } = default.unwrap_or(CursorDefault {
+            style: ghostty_vt::CursorVisualStyle::Block,
+            blink: false,
+        });
+        self.terminal.set_default_cursor(style, blink)?;
+        Ok(())
     }
 
     /// Queue transport bytes. Rejected chunks come back untouched; nothing is dropped or reordered.
@@ -320,8 +326,6 @@ impl TerminalRuntime {
         if let Some(title) = self.titles.scan(chunk) {
             self.events.title = Some(title);
         }
-        self.cursor.scan(chunk);
-        self.renderer.set_cursor_chosen(self.cursor.chosen());
         let mut at = 0;
         while let Some((end, reply)) = self.colors.find(chunk, at) {
             self.write_segment(&chunk[at..end - 1]);

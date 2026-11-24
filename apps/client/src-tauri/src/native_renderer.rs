@@ -431,9 +431,10 @@ impl Loop {
         })?;
         // The core draws the default cursor into its frames, so a new one needs the screen again from a snapshot.
         if look.cursor != self.look.cursor {
-            let _ = self
-                .session
-                .with(|runtime| runtime.set_cursor_default(look.cursor));
+            self.session
+                .with(|runtime| runtime.set_cursor_default(look.cursor))
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
             self.stale = true;
         }
         self.look = look;
@@ -511,7 +512,12 @@ impl Host {
     ) -> Result<Self, String> {
         let Inbox(from, wake) = inbox;
         // A closed session fails the first surface just below, so there is nothing to tell.
-        let _ = session.with(|runtime| runtime.set_cursor_default(look.cursor));
+        if look.cursor.is_some() {
+            session
+                .with(|runtime| runtime.set_cursor_default(look.cursor))
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+        }
         let state = Loop {
             session,
             wake: wake.clone(),
