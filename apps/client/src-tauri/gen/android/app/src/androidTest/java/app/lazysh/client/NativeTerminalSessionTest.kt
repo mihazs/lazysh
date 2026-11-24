@@ -755,4 +755,117 @@ class NativeTerminalSessionTest {
             Evidence.record("native-session", evidence)
         }
     }
+
+    /** The grid the core holds, as the pane told it (columns, rows). */
+    private fun coreGrid(session: String) = JSONObject(invoke("terminal_core_snapshot", session)).getJSONObject("state").let { it.getInt("columns") to it.getInt("rows") }
+
+    /** What the remote pty answers to `stty size` (rows, columns), read from the core's text under a tag that nothing else prints. */
+    private fun ptyGrid(session: String, tag: String): Pair<Int, Int> {
+        typeIntoTheSurface("echo $tag=\$(stty size)")
+        val row = awaitRow(session, "the pty's size for $tag", { Regex("$tag=\\d+ \\d+").matches(it) }).lines().last { Regex("$tag=\\d+ \\d+").matches(it.trim()) }.trim()
+        val (rows, columns) = row.substringAfter("=").split(" ").map(String::toInt)
+        return columns to rows
+    }
+
+    /** The cell the renderer draws for the page's default 14 px font, in device pixels (`native_terminal_surface_cell`). */
+    private fun cellOfTheSession(): Pair<Int, Int> {
+        val dpr = JSONTokener(js("window.devicePixelRatio")).nextValue().toString().toDouble()
+        return JSONObject(PageDriver.invoke("native_terminal_surface_cell", "{fontSize:14,dpr:$dpr}")).let { it.getInt("width") to it.getInt("height") }
+    }
+
+    /**
+     * The pane holds the grid the session has (#2502): the core's grid is the whole cells of the surface, the remote pty has the same size, the
+     * prompt is drawn (no blank frame) and the session still answers. `name` labels the evidence of the step.
+     */
+    private fun assertThePaneHoldsItsGrid(session: String, name: String, tag: String): Pair<Int, Int> {
+        val cell = cellOfTheSession()
+        val bitmap = settled("$name: a drawn surface") { ink(it) > 40 }
+        val (columns, rows) = coreGrid(session)
+        val fits = columns to rows
+        evidence.put("$name-surface", "${bitmap.width}x${bitmap.height}").put("$name-cell", "${cell.first}x${cell.second}").put("$name-grid", "$columns x $rows")
+        Evidence.recordPicture("native-session-$name", bitmap)
+        assertTrue("$name: the grid is whole cells of the surface: $columns columns of ${cell.first}px in ${bitmap.width}px", columns >= bitmap.width / cell.first - 1 && columns <= bitmap.width / cell.first)
+        assertTrue("$name: the grid is whole rows of the surface: $rows rows of ${cell.second}px in ${bitmap.height}px", rows >= bitmap.height / cell.second - 1 && rows <= bitmap.height / cell.second)
+        assertEquals("$name: the remote pty has the grid the pane holds", fits, ptyGrid(session, tag))
+        return fits
+    }
+
+    /** Waits until the surface is `landscape` and the core's grid is not `previous`: the pane followed the window and the core was refitted. */
+    private fun awaitTheGridToFollow(session: String, landscape: Boolean, previous: Pair<Int, Int>) =
+        PageDriver.poll("the pane to be ${if (landscape) "landscape" else "portrait"} with a new grid", 90) {
+            val view = surfaceView()
+            val sideways = view != null && view.width > view.height
+            if (sideways == landscape && coreGrid(session) != previous) true else null
+        }
+
+    /**
+     * The native pane follows the device (#2502): a rotation, the soft keyboard and a recreated Activity each leave the grid the core holds at the
+     * whole cells of the surface, the remote pty the same size, the prompt drawn and the session taking input; the keyboard leaves the last row
+     * of the pane above itself.
+     */
+    @Test fun aNativeSessionFollowsRotationTheKeyboardAndARecreatedActivityWithItsGridAndScreen() {
+        val device = UiDevice.getInstance(instrumentation)
+        val imeSetting = "show_ime_with_hard_keyboard"
+        val previousIme = shell("settings get secure $imeSetting").decodeToString().trim()
+        try {
+            val id = startNativeSession()
+            val prompt = fixture.getString("prompt").trim()
+            awaitRow(id, "the prompt", { it == prompt || it.startsWith(prompt) })
+            val portrait = assertThePaneHoldsItsGrid(id, "portrait", "pa")
+
+            // A rotation: the window turns, the pane is placed again at its new size and the core is refitted to it.
+            device.setOrientationLeft()
+            awaitTheGridToFollow(id, true, portrait)
+            val landscape = assertThePaneHoldsItsGrid(id, "landscape", "pb")
+            assertTrue("landscape is wider than portrait ($landscape, $portrait)", landscape.first > portrait.first && landscape.second < portrait.second)
+            device.setOrientationNatural()
+            awaitTheGridToFollow(id, false, landscape)
+            assertEquals("turned back, the pane holds the grid it held", portrait, assertThePaneHoldsItsGrid(id, "portrait-again", "pc"))
+
+            // The soft keyboard shows over the lower part of the window: the pane gives way, and its last row stays above the keyboard.
+            shell("settings put secure $imeSetting 1")
+            typeIntoTheSurface("seq 1 200")
+            awaitRow(id, "the numbers", { it == "200" })
+            val input = checkNotNull(ui { activity ->
+                (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<TerminalInputView>().firstOrNull() }
+            }) { "the session's keyboard editor" }
+            ui { activity -> input.requestFocus(); SoftKeyboard.set(activity.window, true) }
+            PageDriver.poll("the soft keyboard to show", 60) { ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { it } }
+            awaitTheGridToFollow(id, false, portrait)
+            val withKeyboard = assertThePaneHoldsItsGrid(id, "keyboard", "pd")
+            assertTrue("the keyboard took rows from the pane ($withKeyboard, $portrait)", withKeyboard.second < portrait.second)
+            val paneView = checkNotNull(surfaceView())
+            val above = ui { activity ->
+                val view = paneView
+                val bottom = IntArray(2).also(view::getLocationOnScreen).let { it[1] + view.height }
+                val keyboardTop = activity.window.decorView.height - (androidx.core.view.ViewCompat.getRootWindowInsets(activity.window.decorView)?.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime())?.bottom ?: 0)
+                bottom to keyboardTop
+            }
+            evidence.put("keyboardPaneBottomAndTop", "${above.first} ${above.second}")
+            assertTrue("the pane ends above the keyboard (${above.first} <= ${above.second})", above.first <= above.second)
+            val last = settled("the last row with the keyboard up") { true }
+            val cell = cellOfTheSession()
+            assertTrue("the last row of the pane is drawn", ink(last, (withKeyboard.second - 1) * cell.second until withKeyboard.second * cell.second) > 0)
+            ui { activity -> SoftKeyboard.set(activity.window, false) }
+            PageDriver.poll("the soft keyboard to hide", 60) { ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { !it } }
+            awaitTheGridToFollow(id, false, withKeyboard)
+            assertEquals("the keyboard away, the pane holds its grid again", portrait, assertThePaneHoldsItsGrid(id, "keyboard-away", "pe"))
+
+            // The Activity is recreated: the window and its surface are new, the session and what it showed are not.
+            typeIntoTheSurface("echo before-recreate")
+            awaitRow(id, "the marker", { it == "before-recreate" })
+            scenario.recreate()
+            PageDriver.poll("the recreated window", 120) { if (NativeActivityFixture.readiness(scenario).ready && js("Boolean(window.__TAURI_INTERNALS__?.invoke)") == "true") true else null }
+            PageDriver.poll("the surface again", 90) { JSONObject(PageDriver.invoke("native_terminal_surface_state", "{session:${quoted(id)}}")).takeIf { it.getBoolean("ready") && it.getBoolean("placed") } }
+            val after = coreText(id)
+            assertTrue("the screen shows what it showed before the recreation", after.lines().any { it.trim() == "before-recreate" })
+            assertEquals("the recreated pane holds the grid it held", portrait, assertThePaneHoldsItsGrid(id, "recreated", "pf"))
+            typeIntoTheSurface("echo after-recreate")
+            awaitRow(id, "the session taking input", { it == "after-recreate" })
+        } finally {
+            runCatching { device.setOrientationNatural(); device.unfreezeRotation() }
+            runCatching { shell("settings ${if (previousIme == "null") "delete secure $imeSetting" else "put secure $imeSetting $previousIme"}") }
+            Evidence.record("native-session-follows-device", evidence)
+        }
+    }
 }
