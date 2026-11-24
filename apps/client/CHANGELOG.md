@@ -1,5 +1,27 @@
 # @lazysh/client
 
+## 1.99.0
+
+### Minor Changes
+
+- feat(terminal): the status bar names the terminal engine in use next to xterm-256color ([#2494](https://github.com/mihazs/lazysh/pull/2494))
+
+  <details><summary>Details</summary>
+
+  The bar under the terminal now reads, for example, "Native · xterm-256color" or "xterm.js · xterm-256color", and follows the session when it falls back to xterm.js or you choose "Switch this session to xterm.js". English, Portuguese and Spanish.
+
+  </details>
+
+### Patch Changes
+
+- fix(terminal): the composer's Send and Insert submit and clear the draft on the native engine ([#2497](https://github.com/mihazs/lazysh/pull/2497))
+
+  <details><summary>Details</summary>
+
+  On the native terminal engine, Send pasted the text but never pressed Enter and left the draft in the composer. Send now pastes and presses Enter, Insert pastes, and both clear the draft, as on xterm.js.
+
+  </details>
+
 ## 1.98.6
 
 ### Patch Changes
