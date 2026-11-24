@@ -114,6 +114,23 @@ describe('selection on a native session',()=>{
     vi.useRealTimers();
   });
 
+  it('selects the whole buffer, history included, and copies the visible screen, from the selection actions',async()=>{
+    vi.useFakeTimers({shouldAdvanceTime:true});
+    const {adapter,canvas}=await nativePane(Array.from({length:8},(_,i)=>`line ${i}`).join('\r\n'));
+    // The first row of the live screen is row 4; its word "line" is under the finger.
+    touch(canvas,'touchstart',15,5);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(700);});
+    touch(canvas,'touchend',15,5);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(20);});
+    const actions=within(screen.getByRole('toolbar',{name:'Selection actions'}));
+    fireEvent.click(actions.getByRole('button',{name:'Select all'}));
+    await act(async()=>{await vi.advanceTimersByTimeAsync(20);});
+    expect(adapter.selectedText().split('\n').filter(Boolean)).toEqual(Array.from({length:8},(_,i)=>`line ${i}`));
+    fireEvent.click(actions.getByRole('button',{name:'Copy screen'}));
+    await waitFor(()=>expect(navigator.clipboard.writeText).toHaveBeenCalledWith(['line 4','line 5','line 6','line 7'].join('\n')));
+    vi.useRealTimers();
+  });
+
   it('extends the selection through the core when a handle is dragged', async()=>{
     vi.useFakeTimers({shouldAdvanceTime:true});
     const {adapter,canvas}=await nativePane('hello world');
