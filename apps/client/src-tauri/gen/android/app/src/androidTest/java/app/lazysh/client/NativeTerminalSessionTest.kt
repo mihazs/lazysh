@@ -221,6 +221,11 @@ class NativeTerminalSessionTest {
         val probe = awaitRow(id, "the tmux probe", { it == "HAVE-TMUX" || it == "NO-TMUX" })
         evidence.put("tmuxOnPath", probe.lines().any { it.trim() == "HAVE-TMUX" })
         assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
+        // The size the remote pty has and the size the core has: a tmux client draws for the first and the core clips to the second.
+        typeIntoTheSurface("echo ptysize=\$(stty size)")
+        val pty = awaitRow(id, "the pty's size", { it.startsWith("ptysize=") && it.length > "ptysize=".length })
+        evidence.put("ptySize", pty.lines().first { it.trim().startsWith("ptysize=") && it.trim().length > "ptysize=".length }.trim())
+        evidence.put("coreSnapshot", runCatching { JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state").let { "${it.getInt("rows")} ${it.getInt("columns")}" } }.getOrElse { "unreadable: ${invoke("terminal_core_snapshot", id).take(200)}" })
         // The server and a second pane, through tmux's own commands: the answers are text the core parsed.
         typeIntoTheSurface("echo term=\$TERM; tmux -f /dev/null new-session -d -s native-mux && tmux split-window -d -h -t native-mux && echo panes=\$(tmux list-panes -t native-mux | wc -l)")
         val answered = awaitRow(id, "tmux's answer for two panes", { it == "panes=2" })
