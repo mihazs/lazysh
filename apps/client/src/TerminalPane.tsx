@@ -393,7 +393,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     return()=>element.removeEventListener('touchstart',start);
   },[active,session.id,session.adapter,session.connected,dpadEnabled,preferences.screenReader]);
   const multiplexer = session.local ? undefined : session.attached?.kind;
-  const customTouch = !preferences.screenReader && (preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || bodyGestureSlots.some(slot => preferences.bodyGestures[slot] !== "none") || (!!multiplexer && preferences.bodyGestures.pinch !== "none"));
+  const nativeTapFocus = native && softKeyboard.open !== null;
+  const customTouch = !preferences.screenReader && (nativeTapFocus || preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || bodyGestureSlots.some(slot => preferences.bodyGestures[slot] !== "none") || (!!multiplexer && preferences.bodyGestures.pinch !== "none"));
   const multiTap = customTouch && (preferences.bodyGestures.doubleTap !== "none" || preferences.bodyGestures.tripleTap !== "none");
 
   useEffect(() => {
@@ -1080,14 +1081,22 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     taps.current = null;
   }
   function tap(x: number, y: number) {
-    if (preferences.bodyGestures.tap === "none" && preferences.bodyGestures.doubleTap === "none" && preferences.bodyGestures.tripleTap === "none") return;
+    const tapAction = nativeTapFocus && preferences.bodyGestures.tap === "none" ? "keyboard" : preferences.bodyGestures.tap;
+    if (tapAction === "none" && preferences.bodyGestures.doubleTap === "none" && preferences.bodyGestures.tripleTap === "none") return;
     const previous = taps.current;
     const count = previous && Date.now() - previous.when <= 350 && Math.hypot(x - previous.x, y - previous.y) < 24 ? previous.count + 1 : 1;
     cancelTaps();
     const slot = count >= 3 ? "tripleTap" : count === 2 ? "doubleTap" : "tap";
     const perform = () => {
       taps.current = null;
-      if (activeRef.current && !composingIme() && !session.adapter.hasSelection()) runGesture(preferences.bodyGestures[slot], slot);
+      const adapter = session.adapter;
+      if (!activeRef.current || composingIme() || adapter.hasSelection()) return;
+      const action = slot === "tap" ? tapAction : preferences.bodyGestures[slot];
+      if (nativeTapFocus && action === "keyboard") {
+        const cell = adapter.cellAt(x, y);
+        if (cell && herdrNavigationCell(adapter, cell.x, cell.y - adapter.viewport().top)) return;
+      }
+      runGesture(action, slot);
     };
     if (count >= 3 || (count === 2 && preferences.bodyGestures.tripleTap === "none") || (count === 1 && preferences.bodyGestures.doubleTap === "none" && preferences.bodyGestures.tripleTap === "none")) perform();
     else taps.current = {count, x, y, when: Date.now(), timer: setTimeout(perform, 350)};

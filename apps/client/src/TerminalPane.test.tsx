@@ -2169,6 +2169,17 @@ describe('page features over a native pane', () => {
     return {adapter, core};
   }
 
+  it('focuses the native editor on a plain touch with default tap settings', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({matches: query === '(pointer: coarse)', addEventListener() {}, removeEventListener() {}}));
+    const {adapter} = await nativePane('shell prompt');
+    const focus = vi.spyOn(adapter, 'focus');
+    const canvas = screen.getByLabelText('Terminal for Host');
+    const touch = {pointerId: 1, pointerType: 'touch', clientX: 8, clientY: 8};
+    fireEvent.pointerDown(canvas, touch);
+    fireEvent.pointerUp(canvas, touch);
+    expect(focus).toHaveBeenCalledOnce();
+  });
+
   it('finds a word in the whole buffer, scrolls to it and selects its row, and wraps to the first match', async () => {
     const {adapter} = await nativePane(`${Array.from({length: 30}, (_, i) => i === 3 || i === 20 ? `row ${i} needle` : `row ${i}`).join('\r\n')}`);
     pressMore('Find');
