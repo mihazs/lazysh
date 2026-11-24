@@ -1,5 +1,44 @@
 # @lazysh/client
 
+## 1.101.0
+
+### Minor Changes
+
+- feat(settings): consolidate workspace settings shortcuts under Preferences
+
+  <details><summary>Details</summary>
+
+  Open the default multiplexer and remote push settings from Preferences.
+
+  </details>
+- feat(agents): soften the Agent View composer with frosted glass ([#2548](https://github.com/mihazs/lazysh/pull/2548))
+
+  <details><summary>Details</summary>
+
+  The message box uses a translucent surface and a quieter border. Higher contrast and reduced transparency use a solid surface.
+
+  </details>
+- feat(agents): read Senpi session records
+
+  <details><summary>Details</summary>
+
+  Discover Senpi histories from its agent directory and read their messages and tool results in recorded Chat and Usage.
+
+  </details>
+
+### Patch Changes
+
+- feat(terminal): report custom bold colour support on the native engine
+- fix(android): keep native terminal typing working after switching workspace views
+- fix(agents): keep agent questions in the conversation flow ([#2572](https://github.com/mihazs/lazysh/pull/2572))
+
+  <details><summary>Details</summary>
+
+  Questions appear in order as a single item in the Agent view, with answer controls and the terminal option together.
+
+  </details>
+- fix(terminal): render color emoji from the Android system font in native terminals
+
 ## 1.100.3
 
 ### Patch Changes

@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.101.0
+
+### Minor Changes
+
+- feat(agents): read Senpi session records
+
+  <details><summary>Details</summary>
+
+  Discover Senpi histories from its agent directory and read their messages and tool results in recorded Chat and Usage.
+
+  </details>
+
 ## 1.100.3
 
 No changes in this release.

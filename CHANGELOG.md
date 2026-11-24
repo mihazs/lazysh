@@ -10,6 +10,21 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.101.0] - 2026-11-24
+
+### New
+
+- **settings:** consolidate workspace settings shortcuts under Preferences
+- **agents:** soften the Agent View composer with frosted glass ([#2548](https://github.com/mihazs/lazysh/pull/2548))
+- **agents:** read Senpi session records
+- **terminal:** report custom bold colour support on the native engine
+
+### Fixed
+
+- **android:** keep native terminal typing working after switching workspace views
+- **agents:** keep agent questions in the conversation flow ([#2572](https://github.com/mihazs/lazysh/pull/2572))
+- **terminal:** render color emoji from the Android system font in native terminals
+
 ## [1.100.3] - 2026-11-24
 
 ### Fixed
