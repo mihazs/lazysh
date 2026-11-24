@@ -155,6 +155,22 @@ test('a missing companion is downloaded by the host over verified HTTPS and inst
   expect(r.err).toBe('');
 });
 
+test('managed setup provisions background collection from the admitted binary without blocking install on timer failure', async () => {
+  const item = release('1.54.1', companion('1.54.1', `
+if [ "$*" = 'usage-collector ensure' ]; then
+  printf '%s\n' "$0" >> "$HOME/collector-setup"
+  exit 41
+fi
+`));
+  publish(item);
+  const h = await host();
+  mode = 'ok';
+  const installAgent = () => install(h, item.version, item.digest, item.body.length);
+  expect((await installAgent()).result.outcome).toBe('updated');
+  expect((await installAgent()).result.outcome).toBe('upToDate');
+  expect((await readFile(join(h.home, 'collector-setup'), 'utf8')).trim().split('\n')).toEqual([h.agent, h.agent]);
+});
+
 test.each(['1.28.0', '1.33.4'])('a host with companion %s is upgraded in place and keeps it as the previous version', async (old) => {
   const item = release('1.54.1');
   publish(item);

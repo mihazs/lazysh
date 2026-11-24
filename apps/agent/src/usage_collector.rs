@@ -1,4 +1,4 @@
-//! Opt-in background usage collection ([ADR 0005](../../../docs/architecture/adr-0005-background-usage-collection.md)).
+//! Scheduled background usage collection ([ADR 0005](../../../docs/architecture/adr-0005-background-usage-collection.md)).
 //! A one-shot command that an OS timer wakes every five minutes: it records one bounded sample of the account
 //! quota report when the user's interval has elapsed, and does nothing at all while the collector is off.
 mod samples;
@@ -23,7 +23,7 @@ const SLACK: Duration = Duration::minutes(1);
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Install the timer and start recording account quota samples (off until you run this).
+    /// Install the timer and start recording account quota samples.
     Enable {
         /// Minutes between samples; a sample is recorded at the first five-minute tick after it.
         #[arg(long, value_parser = clap::value_parser!(u32).range(5..=1440))]
@@ -31,6 +31,8 @@ pub enum Command {
     },
     /// Stop recording and remove the timer; recorded samples stay until the file is deleted.
     Disable,
+    /// Provision the default timer when enabled and absent.
+    Ensure,
     /// Show the collector, its timer, the last run and the age of the samples.
     Status {
         /// Also list this many of the newest samples.
@@ -189,6 +191,23 @@ fn execute(command: Command) -> std::result::Result<Value, Failure> {
         Command::Run => {
             let outcome = run_once(&directory, now, || crate::account_usage::run(false))?;
             Ok(json!({"schemaVersion": 1, "outcome": outcome.name()}))
+        }
+        Command::Ensure => {
+            let policy = usage_collection::read(&directory)?;
+            if policy.collector_enabled && policy.account_quota_enabled {
+                let (backend, exe) = (Backend::host(), timer::executable()?);
+                if timer::state(backend, &exe) == timer::State::Absent {
+                    let _held = lifecycle(&directory)?;
+                    let policy = usage_collection::read(&directory)?;
+                    if policy.collector_enabled
+                        && policy.account_quota_enabled
+                        && timer::state(backend, &exe) == timer::State::Absent
+                    {
+                        timer::install(backend, &exe, &mut || Ok(()))?;
+                    }
+                }
+            }
+            Ok(status(&directory, now, 0)?)
         }
         Command::Enable { interval_minutes } => {
             let (backend, exe) = (Backend::host(), timer::executable()?);

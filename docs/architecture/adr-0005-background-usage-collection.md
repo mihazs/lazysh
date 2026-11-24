@@ -4,6 +4,10 @@
 - Decision makers: repository maintainer. Tracking: [#1588](https://github.com/mihazs/lazysh/issues/1588), slice 4 of [#18](https://github.com/mihazs/lazysh/issues/18).
 - Related: [recorded token usage](../usage.md) · [AI account usage](../ai-account-usage.md) · [host companion settings](../companion-settings.md) · [settings reference](../reference/companion-settings.md) · [ADR 0003](adr-0003-host-side-companion-update.md) (the same timer and state-file conventions).
 
+## Default policy amendment
+
+[#2532](https://github.com/mihazs/lazysh/issues/2532) changes the absent-file default to `collectorEnabled: true`. Managed companion setup provisions a missing user timer when both collection and quota reads are enabled. Saved policy values still apply. A manual installation can provision the timer with `lazysh-agent usage-collector ensure`. The decisions below record the original rollout.
+
 ## Context
 
 What the code does today (read at `origin/main` 6529320b):

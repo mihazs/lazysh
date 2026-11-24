@@ -133,10 +133,10 @@ fn exit(output: &Output) -> i32 {
 }
 
 #[test]
-fn status_of_a_fresh_host_reports_everything_off_and_creates_nothing() {
+fn status_of_a_fresh_host_reports_enabled_without_a_timer_and_creates_nothing() {
     let timer = Timer::new("systemd");
     let status = json(&timer.collector(&["status"]));
-    assert_eq!(status["collector"]["enabled"], false);
+    assert_eq!(status["collector"]["enabled"], true);
     assert_eq!(status["collector"]["timer"]["state"], "absent");
     assert_eq!(status["collector"]["timer"]["linger"], false);
     assert_eq!(status["lastRun"], Value::Null);
@@ -144,6 +144,48 @@ fn status_of_a_fresh_host_reports_everything_off_and_creates_nothing() {
     assert_eq!(status["samples"]["state"], "ok");
     assert!(!timer.state.exists());
     assert!(!timer.home.join(".config").exists());
+}
+
+#[test]
+fn ensure_installs_the_default_timer_and_respects_disable() {
+    let timer = Timer::new("systemd");
+    let ensured = json(&timer.collector(&["ensure"]));
+    assert_eq!(ensured["collector"]["enabled"], true);
+    assert_eq!(ensured["collector"]["timer"]["state"], "installed");
+    assert!(!timer.state.join("usage-collection.json").exists());
+    assert_eq!(
+        json(&timer.collector(&["ensure"]))["collector"]["timer"]["state"],
+        "installed"
+    );
+    assert_eq!(
+        timer
+            .calls()
+            .iter()
+            .filter(|call| call.contains("enable --now"))
+            .count(),
+        1
+    );
+
+    assert_eq!(
+        json(&timer.collector(&["disable"]))["collector"]["enabled"],
+        false
+    );
+    let disabled = json(&timer.collector(&["ensure"]));
+    assert_eq!(disabled["collector"]["enabled"], false);
+    assert_eq!(disabled["collector"]["timer"]["state"], "absent");
+}
+
+#[test]
+fn ensure_preserves_the_host_quota_gate() {
+    let timer = Timer::new("systemd");
+    json(&quota_host::set_quota(&timer.state, "0", "false"));
+    let ensured = json(&timer.collector(&["ensure"]));
+    assert_eq!(ensured["accountQuotaEnabled"], false);
+    assert_eq!(ensured["collector"]["timer"]["state"], "absent");
+    assert!(timer
+        .calls()
+        .iter()
+        .all(|call| !call.contains("enable --now")));
 }
 
 #[test]
@@ -241,7 +283,7 @@ fn an_account_without_a_user_manager_exits_41_and_changes_nothing() {
 }
 
 #[test]
-fn a_refused_timer_exits_42_puts_back_the_files_and_leaves_the_collector_off() {
+fn a_refused_timer_exits_42_puts_back_the_files_without_saving_policy() {
     let timer = Timer::new("systemd");
     let output = timer.command(&["usage-collector", "enable"], Some("enable --now"));
     assert_eq!(exit(&output), 42);
@@ -251,7 +293,7 @@ fn a_refused_timer_exits_42_puts_back_the_files_and_leaves_the_collector_off() {
         .units()
         .join("lazysh-usage-collector.service")
         .exists());
-    assert_eq!(timer.policy()["collectorEnabled"], false);
+    assert!(!timer.state.join("usage-collection.json").exists());
 }
 
 #[test]
@@ -269,7 +311,7 @@ fn a_file_that_is_not_ours_is_never_replaced_or_removed() {
         .units()
         .join("lazysh-usage-collector.service")
         .exists());
-    assert_eq!(timer.policy()["collectorEnabled"], false);
+    assert!(!timer.state.join("usage-collection.json").exists());
     assert_eq!(exit(&timer.collector(&["disable"])), 42);
     assert!(foreign.exists());
 }
@@ -385,15 +427,6 @@ fn the_scheduled_task_is_a_utf16_document_registered_and_deleted_by_name() {
 #[test]
 fn run_reads_the_quota_for_real_once_per_interval_and_records_it() {
     let host = quota_host::host();
-    // Not enabled: the tick starts nothing and writes nothing.
-    let off = json(&host.command(&["usage-collector", "run"]).output().unwrap());
-    assert_eq!(off, value!({"schemaVersion":1,"outcome":"off"}));
-    assert!(!host.started.exists() && !host.state.exists());
-
-    lazysh_agent::usage_collection::update(&host.state, None, |policy| {
-        policy.collector_enabled = true;
-    })
-    .unwrap();
     let first = json(&host.command(&["usage-collector", "run"]).output().unwrap());
     assert_eq!(first, value!({"schemaVersion":1,"outcome":"recorded"}));
     assert!(host.started.exists());
