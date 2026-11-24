@@ -5,7 +5,9 @@
 # error with its own exit code, and an instrumentation class that runs no test or skips one fails the lane. Runbook: docs/architecture/waydroid-lane.md.
 #
 # Usage: waydroid-lane.sh --out <evidence.json> [--label <text>] [--package <id>]
-#          [--owned-ssh-fixture] [--build <build.sh>]... [--apk <file>]... [--instrument <runner> <class>]... [--bench <name> <command>]...
+#          [--owned-ssh-fixture] [--build <build.sh>]... [--uninstall <package>]... [--apk <file>]... [--instrument <runner> <class>]... [--bench <name> <command>]...
+# --uninstall <package> removes a package (and its data) from the guest before the installs that follow it: a debug APK of another CI run has another signature and does not update in place.
+# Every instrumentation step is also given -e lazyshRunId <the run id>, which the evidence a class writes carries.
 # --owned-ssh-fixture starts the owned OpenSSH server of tests/support/sshFixture.ts on this host (loopback), reaches it from the guest with
 # "adb reverse", pushes its fixture to /data/local/tmp/lazysh-ui-ssh-<nonce>/ and passes -e lazyshSshFixture to every instrumentation step.
 # Exit: 0 passed, 1 a step failed (evidence written with status "failed"), 2 usage, 3 missing tool, 4 container not active,
@@ -73,12 +75,12 @@ trap 'exit 130' INT TERM HUP
 # --- arguments: the plan is a file of tab-separated steps, run in the order given -----------------------------------------------------
 work=$(mktemp -d) || die 2 'cannot create a work directory'
 plan="$work/plan"; : > "$plan"; : > "$work/results.jsonl"
-usage() { die 2 "$*; usage: waydroid-lane.sh --out <evidence.json> [--label <text>] [--package <id>] [--owned-ssh-fixture] [--build <build.sh>]... [--apk <file>]... [--instrument <runner> <class>]... [--bench <name> <command>]..."; }
+usage() { die 2 "$*; usage: waydroid-lane.sh --out <evidence.json> [--label <text>] [--package <id>] [--owned-ssh-fixture] [--build <build.sh>]... [--uninstall <package>]... [--apk <file>]... [--instrument <runner> <class>]... [--bench <name> <command>]..."; }
 step() { printf '%s\t%s\t%s\n' "$1" "$2" "${3:-}" >> "$plan"; }
 while [ $# -gt 0 ]; do
   flag=$1
   case $flag in
-    --out | --label | --package | --build | --apk) [ $# -ge 2 ] || usage "$flag needs a value"; value=$2; shift 2 ;;
+    --out | --label | --package | --build | --apk | --uninstall) [ $# -ge 2 ] || usage "$flag needs a value"; value=$2; shift 2 ;;
     --owned-ssh-fixture) owned_ssh=1; shift; continue ;;
     --instrument | --bench) [ $# -ge 3 ] || usage "$flag needs two values"; value=$2; second=$3; shift 3 ;;
     *) usage "unknown argument $1" ;;
@@ -89,6 +91,9 @@ while [ $# -gt 0 ]; do
     --package) package=$value ;;
     --build) step build "$value" ;;
     --apk) step install "$value" ;;
+    --uninstall)
+      case $value in '' | *[!A-Za-z0-9_.]*) usage "bad package: $value" ;; esac
+      step uninstall "$value" ;;
     --instrument)
       # Both values are quoted into a remote shell command line: only class and runner characters.
       case $value$second in *[!A-Za-z0-9_.\$#,/]*) usage "bad runner or class: $value $second" ;; esac
@@ -206,6 +211,13 @@ install_apk() { # install_apk <apk>: returns non-zero on a failed install
   record --arg apk "$1" --arg sha256 "$(sha "$1")" --arg output "$output" --argjson ok "$ok" '{kind: "install", apk: $apk, sha256: $sha256, ok: $ok, output: $output}'
   [ "$ok" = true ] || { fail "install: $1 was not installed: $output"; return 1; }
 }
+run_uninstall() { # run_uninstall <package>: a package that is not installed is not an error
+  say "uninstalling $1"
+  output=$(adb_s uninstall "$1" 2>&1); ok=false
+  case $output in *Success* | *'Unknown package'* | *'not installed'*) ok=true ;; esac
+  record --arg package "$1" --arg output "$output" --argjson ok "$ok" '{kind: "uninstall", package: $package, ok: $ok, output: $output}'
+  [ "$ok" = true ] || { fail "uninstall: $1 was not removed: $output"; return 1; }
+}
 run_build() { # run_build <build.sh>: builds with the existing android-apk.sh entry points, then installs
   [ -n "${ANDROID_HOME:-}" ] && [ -n "${JAVA_HOME:-}" ] || { fail "build: $1 needs ANDROID_HOME (the SDK) and JAVA_HOME"; return 1; }
   apk="$work/build-$(basename "$(dirname "$1")").apk"
@@ -216,7 +228,9 @@ run_build() { # run_build <build.sh>: builds with the existing android-apk.sh en
 run_instrument() { # run_instrument <runner> <class>: counts the raw status codes of am instrument; zero tests or a skipped one fail
   say "instrumenting $2 with $1"
   thaw
-  extra=''; [ -z "$fixture_remote" ] || extra=" -e lazyshSshFixture '$fixture_remote/fixture.json'"
+  # The evidence a class leaves on the guest (app.lazysh.client.Evidence: JSON and pictures) is kept beside the lane's own: start from none.
+  adb_s shell rm -rf /data/local/tmp/lazysh-evidence >/dev/null 2>&1
+  extra=" -e lazyshRunId '$run_id'"; [ -z "$fixture_remote" ] || extra="$extra -e lazyshSshFixture '$fixture_remote/fixture.json'"
   raw=$(adb_s shell "am instrument -w -r -e class '$2'$extra '$1'" 2>&1 | tr -d '\r')
   count() { printf '%s\n' "$raw" | grep -c "^INSTRUMENTATION_STATUS_CODE: $1\$"; }
   passed=$(count 0); failed=$(($(count -1) + $(count -2))); skipped=$(($(count -3) + $(count -4)))
@@ -236,9 +250,17 @@ run_instrument() { # run_instrument <runner> <class>: counts the raw status code
   [ "$skipped" -eq 0 ] || reason="$skipped test(s) skipped: the lane does not skip"
   [ "$passed" -gt 0 ] || [ -n "$reason" ] || reason='no test ran for this class'
   ok=true; [ -z "$reason" ] || { ok=false; fail "instrument $2: $reason"; }
-  record --arg runner "$1" --arg class "$2" --argjson passed "$passed" --argjson failed "$failed" --argjson skipped "$skipped" --arg reason "$reason" --argjson ok "$ok" --argjson details "$details" \
+  kept='[]'; stem=$(basename "$out" .json); short=${2##*.}; pulled="$work/evidence-$short"; mkdir -p "$pulled"
+  if adb_s pull /data/local/tmp/lazysh-evidence/. "$pulled" >/dev/null 2>&1; then
+    for file in "$pulled"/*; do
+      [ -f "$file" ] || continue
+      name="$stem-$short-$(basename "$file")"; cp "$file" "$(dirname "$out")/$name"
+      kept=$(printf '%s' "$kept" | jq -c --arg path "$name" --arg sha256 "$(sha "$file")" '. + [{path: $path, sha256: $sha256}]')
+    done
+  fi
+  record --argjson files "$kept" --arg runner "$1" --arg class "$2" --argjson passed "$passed" --argjson failed "$failed" --argjson skipped "$skipped" --arg reason "$reason" --argjson ok "$ok" --argjson details "$details" \
     '{kind: "instrumentation", runner: $runner, class: $class, passed: $passed, failed: $failed, skipped: $skipped, ok: $ok, reason: ($reason | if . == "" then null else . end)}
-     + (if ($details | length) > 0 then {failedTests: $details} else {} end)'
+     + (if ($details | length) > 0 then {failedTests: $details} else {} end) + (if ($files | length) > 0 then {files: $files} else {} end)'
 }
 run_bench() { # run_bench <name> <command>: the command writes its result files into $LAZYSH_LANE_OUT; they are kept beside the evidence
   say "benchmark $1: $2"
@@ -287,6 +309,7 @@ while IFS=$tab read -r kind a b <&3; do
   [ "$setup_ok" = true ] || break
   case $kind in
     build) run_build "$a" || setup_ok=false ;;
+    uninstall) run_uninstall "$a" || setup_ok=false ;;
     install) install_apk "$a" || setup_ok=false ;;
     instrument) run_instrument "$a" "$b" ;;
     bench) run_bench "$a" "$b" ;;

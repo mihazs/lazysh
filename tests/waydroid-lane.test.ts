@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { project } from './support/gitFixture';
 
 // The lane script is driven against stub waydroid, adb and systemctl executables on a PATH of its own, so the real Waydroid of the machine
@@ -31,6 +31,8 @@ case "$1" in
   connect) touch "$STUB/listed"; echo "connected to $2" ;;
   disconnect) rm -f "$STUB/listed" ;;
   install) if [ -f "$STUB/install-fails" ]; then echo 'Failure [INSTALL_FAILED_OLDER_SDK]'; exit 1; fi; echo 'Performing Streamed Install'; echo 'Success' ;;
+  uninstall) if [ -f "$STUB/not-installed" ]; then echo 'Failure [DELETE_FAILED_INTERNAL_ERROR] Unknown package'; exit 1; fi; echo Success ;;
+  pull) cp -R "$STUB/device-evidence/." "$3" 2>/dev/null || exit 1 ;;
   shell) shift; case "$*" in
     'getprop sys.boot_completed') [ -f "$STUB/not-booted" ] || echo 1 ;;
     'getprop '*) cat "$STUB/props/$2" 2>/dev/null ;;
@@ -78,7 +80,7 @@ async function lane(args: string[], options: Options = {}) {
   for (const name of utilities) await symlink(Bun.which(name)!, join(bin, name));
   for (const [name, body] of Object.entries(stubs)) if (!options.without?.includes(name)) { await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`); await chmod(join(bin, name), 0o755); }
   const files: Record<string, string> = { session: `${options.session ?? 'STOPPED'}\n`, packages: 'package:app.lazysh.client\npackage:com.touchtype.swiftkey\n', gles: 'GLES: AMD, AMD Radeon Graphics (radeonsi, navi14, ACO), OpenGL ES 3.2 Mesa 26.0.8\n', ...options.files };
-  for (const [name, text] of Object.entries(files)) await writeFile(join(stub, name), text);
+  for (const [name, text] of Object.entries(files)) { await mkdir(dirname(join(stub, name)), { recursive: true }); await writeFile(join(stub, name), text); }
   for (const [name, text] of Object.entries({ ...props, ...options.props })) await writeFile(join(stub, 'props', name), `${text}\n`);
   for (const [name, text] of Object.entries(options.instrumentation ?? {})) await writeFile(join(stub, 'instrument', name), text);
   if (options.listed) await writeFile(join(stub, 'listed'), '');
@@ -158,7 +160,7 @@ describe('a run that passes', () => {
     expect(result.code).toBe(0);
     expect(result.calls).toContain('waydroid session start');
     expect(result.calls).not.toContain('waydroid show-full-ui');
-    expect(result.calls.filter(call => call.includes('am instrument'))).toEqual([`adb -s ${SERIAL} shell am instrument -w -r -e class '${CLASS}' '${RUNNER}'`]);
+    expect(result.calls.filter(call => call.includes('am instrument'))).toEqual([`adb -s ${SERIAL} shell am instrument -w -r -e class '${CLASS}' -e lazyshRunId '${result.evidence.runId}' '${RUNNER}'`]);
     // Torn down in the order the lane needs: the app stopped, the connection it opened closed, the session it started stopped.
     expect(result.calls.slice(-3)).toEqual([`adb -s ${SERIAL} shell am force-stop app.lazysh.client`, `adb disconnect ${SERIAL}`, 'waydroid session stop']);
     expect({ session: result.session, lockReleased: !existsSync(result.lock) }).toEqual({ session: 'STOPPED', lockReleased: true });
@@ -191,6 +193,22 @@ describe('a run that passes', () => {
     const id = result.evidence.runId;
     expect(id).toMatch(/^engine-xterm-\d{8}T\d{6}Z$/);
     for (const name of ['one', 'two']) expect(await readFile(join(result.dir, 'evidence', `lane-${name}-id.txt`), 'utf8')).toBe(id);
+  });
+
+  test('removes a package before the install that follows, and a package that is not there is no error', async () => {
+    const file = await apk();
+    const result = await lane(['--uninstall', 'app.lazysh.client', '--uninstall', 'app.lazysh.client.test', '--apk', file], { files: { 'not-installed': '' } });
+    expect(result.code).toBe(0);
+    expect(result.evidence.results.map((entry: { kind: string }) => entry.kind)).toEqual(['uninstall', 'uninstall', 'install']);
+    expect(result.calls.filter(call => /uninstall|install -r/.test(call))).toEqual([`adb -s ${SERIAL} uninstall app.lazysh.client`, `adb -s ${SERIAL} uninstall app.lazysh.client.test`, `adb -s ${SERIAL} install -r -t ${file}`]);
+    expect((await lane(['--uninstall', 'x; reboot', '--apk', file])).code).toBe(2);
+  });
+
+  test('keeps the evidence a class leaves on the guest beside its own, listed with a hash', async () => {
+    const result = await lane(['--apk', await apk(), '--instrument', RUNNER, CLASS], { instrumentation: { [CLASS]: instrumentation([0]) }, files: { 'device-evidence/native-acceptance.json': '{"cases":[]}' } });
+    expect(result.evidence.results.at(-1).files).toEqual([{ path: `lane-${CLASS.split('.').pop()}-native-acceptance.json`, sha256: sha('{"cases":[]}') }]);
+    expect(await readFile(join(result.dir, 'evidence', `lane-${CLASS.split('.').pop()}-native-acceptance.json`), 'utf8')).toBe('{"cases":[]}');
+    expect(result.calls).toContain(`adb -s ${SERIAL} shell rm -rf /data/local/tmp/lazysh-evidence`);
   });
 
   test('attaches to a running session without a compositor, and leaves the session and an existing connection as it found them', async () => {
@@ -290,7 +308,7 @@ describe('the owned SSH fixture', () => {
     const adb = result.calls.filter(call => /^adb -s \S+ (reverse|push|shell (mkdir|chmod|rm|am instrument))/.test(call)).map(call => call.replace(`adb -s ${SERIAL} `, ''));
     expect(adb).toEqual([
       'reverse --no-rebind tcp:4242 tcp:4242', `shell mkdir -m 700 ${remote}`, expect.stringMatching(new RegExp(`^push \\S+/fixture/fixture.json ${remote}/fixture.json$`)),
-      `shell chmod 600 ${remote}/fixture.json`, `shell am instrument -w -r -e class '${CLASS}' -e lazyshSshFixture '${remote}/fixture.json' '${RUNNER}'`,
+      `shell chmod 600 ${remote}/fixture.json`, 'shell rm -rf /data/local/tmp/lazysh-evidence', `shell am instrument -w -r -e class '${CLASS}' -e lazyshRunId '${result.evidence.runId}' -e lazyshSshFixture '${remote}/fixture.json' '${RUNNER}'`,
       'reverse --remove tcp:4242', `shell rm -rf ${remote}`,
     ]);
     expect(await readFile(join(result.dir, 'stub', 'fixture-stopped'), 'utf8')).toBe('stopped\n');
