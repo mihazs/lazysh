@@ -62,7 +62,9 @@ export class SurfaceInput implements Disposable {
   private unwatch: (() => void) | undefined;
   private pageTarget: EventTarget | null = null;
   /** The page's field let go of the keyboard: it is the terminal's again (the editor takes view focus back when the terminal asks). */
-  private leavePage(target: EventTarget | null) { if (target === this.pageTarget) { this.pageHasKeyboard = false; this.pageTarget = null; } }
+  /** The field the editor was just released for: while the page settles after the WebView took focus, its losing focus is the page restoring an older one, not the field being left. */
+  private settling: EventTarget | null = null;
+  private leavePage(target: EventTarget | null) { if (target === this.pageTarget && target !== this.settling) { this.pageHasKeyboard = false; this.pageTarget = null; } }
   private readonly pageLeft = (event: FocusEvent) => this.leavePage(event.target);
 
   private takePage(target: EventTarget | null) {
@@ -71,7 +73,12 @@ export class SurfaceInput implements Disposable {
     this.wantsFocus = false;
     this.pageHasKeyboard = true;
     this.pageTarget = target;
-    this.api.focus(this.session, false, false).catch(noop);
+    // The WebView takes Android's focus and the page then restores the element it last focused (a toolbar button), over the field the script focused while the page was not: put the field back.
+    this.settling = target;
+    this.api.focus(this.session, false, false).catch(noop).then(() => {
+      for (const delay of [0, 60, 200, 500]) setTimeout(() => { if (!this.stopped && this.settling === target && target.isConnected && document.activeElement !== target) target.focus(); }, delay);
+      setTimeout(() => { if (this.settling === target) this.settling = null; }, 600);
+    });
   }
   private readonly pageField = (event: FocusEvent) => this.takePage(event.target);
 
