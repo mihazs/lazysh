@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.100.1
+
+### Patch Changes
+
+- docs(terminal): add the feature parity matrix between the native engine and xterm.js ([#2508](https://github.com/mihazs/lazysh/pull/2508))
+
+  <details><summary>Details</summary>
+
+  Every terminal feature of the app is listed with the test that proves it on the native engine or the issue that closes the gap.
+
+  </details>
+
 ## 1.100.0
 
 ### Minor Changes
