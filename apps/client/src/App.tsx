@@ -104,6 +104,7 @@ import {reportOfSession} from "./terminalFeedback";
 import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTourModel";
 import { useClientAppearance } from "./appearance";
 import { getPreferences, usePreferences } from "./preferences";
+import {agentNames, saveAgentImages, storedImages} from "./agentImagePreferences";
 import { usePrivateKeyboard } from "./privateKeyboard";
 import CredentialsPanel from "./CredentialsPanel";
 import { readWorkspace, saveWorkspace, sessionIntent, type SessionIntent } from "./workspace";
@@ -1273,6 +1274,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   usePaletteShortcut(() => setPalette(true));
   const [pushSettings, setPushSettings] = useState(false);
   const [preferences, setPreferences] = useState(false);
+  const [agentImages, setAgentImages] = useState(storedImages);
   const [terminalControlsTarget,setTerminalControlsTarget] = useState<HTMLDivElement|null>(null);
   const [themeLinkTarget,setThemeLinkTarget] = useState<HTMLDivElement|null>(null);
   const [sync, setSync] = useState(false);
@@ -2628,7 +2630,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 ))}
                 {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
                   <Suspense key={session.id} fallback={null}>
-                  <AgentView sessionId={session.id} full={fullAgent} onToggleFull={toggleAgentFull} shown={activeId === session.id && view === "terminal" && (sessionViewOf(session) !== "terminal" || swipeFrom!==null)}
+                  <AgentView images={agentImages} sessionId={session.id} full={fullAgent} onToggleFull={toggleAgentFull} shown={activeId === session.id && view === "terminal" && (sessionViewOf(session) !== "terminal" || swipeFrom!==null)}
                     tmux={native && session.attached?.kind==='tmux'} zellijSession={native && session.attached?.kind==='zellij' ? session.attached.name : undefined} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id],true)} terminal={session.adapter} onShowTerminal={()=>chooseSessionView(session,'terminal')}
                     onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} onOpenCompanion={()=>showAgentSetup(session)} />
                   </Suspense>
@@ -2799,6 +2801,16 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </section>}]:[]),
             {id:'notifications',section:'agents',title:t('preferencesCategoryNotifications'),value:t('appRemotePushSettings'),onSelect:()=>{setPreferences(false);setPushSettings(true);}},
             {id:'inbox',section:'agents',title:t('appNotificationInbox'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setInbox(true);}},
+            {id:'agent-images',section:'agents',title:t('agentImagesShow'),content:<fieldset>
+              <legend>{t('agentImagesShow')}</legend>
+              {(Object.keys(agentNames) as (keyof typeof agentNames)[]).map(agent=><label key={agent}>
+                <input type="checkbox" checked={agentImages[agent]} onChange={event=>{
+                  const next={...agentImages,[agent]:event.target.checked};
+                  setAgentImages(next);
+                  saveAgentImages(next);
+                }}/>{agentNames[agent]}
+              </label>)}
+            </fieldset>},
             {id:'agents',section:'agents',title:t('appAgents'),disabled:!companionActive||pendingMuxRequest,value:companionActive?active?.name:t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);showNavigation('agents');}},
             {id:'voice',section:'agents',title:t('appDictate'),disabled:!voiceReady,value:voiceReady?active?.name:active?t('settingsVoiceUnavailable'):t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);visitView('voice');}},
             {id:'security',section:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},

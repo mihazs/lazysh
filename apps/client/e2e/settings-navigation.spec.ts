@@ -22,7 +22,7 @@ test('Preferences opens a grouped list whose rows preview values and lead into s
   const rows=async(title:string)=>Promise.all((await section(title).getByRole('button').all()).map(name));
   expect(await rows('Terminal')).toEqual(['Appearance and fonts','Terminal and accessibility']);
   expect(await rows('Input')).toEqual(['Keyboard and gestures']);
-  expect(await rows('Agents and notifications')).toEqual(['AI account usage','Notifications','Notification inbox','Agents','Dictate']);
+  expect(await rows('Agents and notifications')).toEqual(['AI account usage','Notifications','Notification inbox','Show image previews','Agents','Dictate']);
   expect(await rows('Security and sync')).toEqual(['Security and app lock','Encrypted sync']);
   expect(await rows('General')).toEqual(['Language and region','Shareable uploads']);
   // The gesture help page exists where the gestures do: on phones.
@@ -195,4 +195,19 @@ test('language choices are touchable and search focuses the selected radio',asyn
   await results.getByRole('button',{name:'App language',exact:true}).click();
   await expect(group.getByRole('radio',{name:'English',exact:true})).toBeFocused();
   expect(await dialog.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+});
+
+
+test('Agent image previews are configured centrally and retain each agent choice',async({page})=>{
+  await page.goto('/');
+  await (await workspaceControl(page,'Preferences')).click();
+  const dialog=page.getByRole('dialog',{name:'Preferences',exact:true});
+  await dialog.getByRole('button',{name:'Show image previews',exact:true}).click();
+  await expect(dialog.getByRole('checkbox',{name:'Claude Code',exact:true})).toBeChecked();
+  await expect(dialog.getByRole('checkbox',{name:'Codex',exact:true})).not.toBeChecked();
+  await dialog.getByRole('checkbox',{name:'Codex',exact:true}).check();
+  await page.reload();
+  await (await workspaceControl(page,'Preferences')).click();
+  await dialog.getByRole('button',{name:'Show image previews',exact:true}).click();
+  await expect(dialog.getByRole('checkbox',{name:'Codex',exact:true})).toBeChecked();
 });
