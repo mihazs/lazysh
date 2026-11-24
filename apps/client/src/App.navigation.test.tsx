@@ -213,7 +213,7 @@ it('opens remote push settings through Preferences',async()=>{
   const tools=within(screen.getByRole('dialog',{name:'Workspace tools'}));
   expect(tools.queryByRole('button',{name:'Remote push settings'})).toBeNull();
   await user.click(tools.getByRole('button',{name:'Preferences'}));
-  await user.click(screen.getByRole('button',{name:'Notifications',exact:true}));
+  await user.click(screen.getByRole('button',{name:'Notifications'}));
   expect(await screen.findByText('Native push registration controls')).toBeTruthy();
 });
 
