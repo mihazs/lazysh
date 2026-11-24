@@ -220,7 +220,11 @@ class NativeTerminalSessionTest {
         val probe = awaitRow(id, "the tmux probe", { it == "HAVE-TMUX" || it == "NO-TMUX" })
         evidence.put("tmuxOnPath", probe.lines().any { it.trim() == "HAVE-TMUX" })
         assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
-        typeIntoTheSurface("tmux -f /dev/null new-session -s native-mux")
+        // The server first, detached: its answer says whether tmux runs here at all, apart from drawing it.
+        typeIntoTheSurface("echo term=\$TERM; tmux -f /dev/null new-session -d -s native-mux && tmux list-sessions")
+        val server = awaitRow(id, "the detached tmux session", { it.startsWith("native-mux:") })
+        evidence.put("tmuxTerm", server.lines().firstOrNull { it.trim().startsWith("term=") }?.trim() ?: "")
+        typeIntoTheSurface("tmux attach -t native-mux")
         val status = try { awaitRow(id, "tmux's status line", { it.contains("[native-mux]") }) }
         catch (error: AssertionError) { throw AssertionError("${error.message}; the screen held:\n${coreText(id)}", error) }
         evidence.put("tmuxStatusLine", status.lines().last { it.contains("[native-mux]") }.trim())
