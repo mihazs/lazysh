@@ -4,8 +4,8 @@ import {resolve} from 'node:path';
 import {describe, expect, it, vi} from 'vitest';
 import {nativeCapabilities, openNativeTerminalAdapter} from './nativeTerminalAdapter';
 import {defaults, terminalPreferences} from './preferences';
-import {runTerminalAdapterContract} from './terminalAdapter.contract';
-import {passedCases, untestedCapabilities} from './terminalCapabilityTests';
+import {runTerminalAdapterContract, type ContractHarness} from './terminalAdapter.contract';
+import {passedCases, runTerminalCapabilityContract, untestedCapabilities} from './terminalCapabilityTests';
 import {openStdioCore} from './test/stdioNativeCore';
 
 // The harness is built from the runtime crate with Zig (`cargo build --example control_stdio`), which only the herdr-native
@@ -31,7 +31,7 @@ type ClipboardCase = {id: string; data: string; text: string | null; core?: {tex
 const cell = ([x, y]: Cell) => ({x, y});
 
 describe.skipIf(!binary)('NativeTerminalAdapter over the real core', () => {
-  runTerminalAdapterContract('native (control plane over libghostty-vt)', {
+  const harness: ContractHarness = {
     create: async () => openNativeTerminalAdapter(await openStdioCore(binary!)),
     target: () => {
       const element = document.createElement('div');
@@ -39,7 +39,10 @@ describe.skipIf(!binary)('NativeTerminalAdapter over the real core', () => {
       document.body.append(element);
       return {kind: 'native', anchorId: element.id};
     },
-  });
+  };
+  const name = 'native (control plane over libghostty-vt)';
+  runTerminalAdapterContract(name, harness);
+  runTerminalCapabilityContract(name, harness);
 
   it('answers the selection, word, search, select-all and copy-screen questions of selection.json as xterm.js does', async () => {
     for (const c of fixture<SelectionCase>('selection')) {
