@@ -39,8 +39,8 @@ it('binds to the proven pane without a confirmation step and delivers a message 
   fireEvent.click(sendButton());
   await waitFor(()=>expect(box().value).toBe(''));
   expect(inputs()).toEqual([{kind:'input',receipt:tmuxChatReceipt,source:{agent:'claude',path:conversation.path,view:'conversation',inlineImages:false},operation:1,input:{kind:'send',text:'Add a test\nfor the parser'}}]);
-  // The receipt says Sending until the conversation holds the message, then Sent.
-  expect(screen.getByText(t('agentReceiptSending'))).toBeTruthy();
+  // Terminal acknowledgment arrives before the transcript echoes the message.
+  expect(screen.getByText(t('agentReceiptSubmitted'))).toBeTruthy();
 });
 
 it('sends a Grok Build prompt through the same guarded input and offers no key beyond it',async()=>{
@@ -358,11 +358,11 @@ async function bound(props:Partial<Parameters<typeof AgentComposer>[0]>={}) {
 }
 const props=()=>({sessionId:'ssh',conversation,access:captureAccess(),invoke:bindProtectedInvoke(captureAccess()),shown:true,labels:tmuxLabels,proof:{kind:'tmux' as const,paneId:'%3'},stage:true});
 
-it('settles the receipt from the conversation: Sending, then Sent once the message appears, and an older identical prompt does not count',async()=>{
+it('settles the receipt from the conversation: Submitted, then Sent once the message appears, and an older identical prompt does not count',async()=>{
   const {view,access}=await bound({prompts:['Run it']});
   type('Run it');await waitFor(()=>expect(sendButton().disabled).toBe(false));fireEvent.click(sendButton());
   await waitFor(()=>expect(inputs()).toHaveLength(1));
-  expect(screen.getByText(t('agentReceiptSending'))).toBeTruthy();
+  expect(screen.getByText(t('agentReceiptSubmitted'))).toBeTruthy();
   const rerender=(prompts:string[])=>view.rerender(<AgentComposer {...props()} access={access} invoke={bindProtectedInvoke(access)} prompts={prompts}/>);
   rerender(['Run it']);expect(screen.queryByText(t('agentReceiptSent'))).toBeNull();
   rerender(['Run it','Run it']);expect(screen.getByText(t('agentReceiptSent'))).toBeTruthy();

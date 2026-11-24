@@ -81,7 +81,12 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
   const menuId = useId();
   const [usage,setUsage] = useState<Record<string,number|string>>();
   const [prompts,setPrompts] = useState<string[]>([]);
-  const trackPrompts = useCallback((next:string[])=>setPrompts(previous=>JSON.stringify(previous)===JSON.stringify(next)?previous:next),[]);
+  const [queuedPrompts,setQueuedPrompts] = useState<string[]>([]);
+  const [submission,setSubmission] = useState(0);
+  const trackPrompts = useCallback((next:string[],queued:string[])=>{
+    setPrompts(previous=>JSON.stringify(previous)===JSON.stringify(next)?previous:next);
+    setQueuedPrompts(previous=>JSON.stringify(previous)===JSON.stringify(queued)?previous:queued);
+  },[]);
   const trackUsage = useCallback((next?:Record<string,number|string>)=>setUsage(previous=>JSON.stringify(previous)===JSON.stringify(next)?previous:next),[]);
   // Under Herdr the focused pane of the attached server decides which agent this view belongs to; a 3 s read follows it.
   const navigation=useHerdrNavigation({sessionId,herdrSession,visible:shown && !!herdrSession,intervalMs:3000});
@@ -397,10 +402,10 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
     {zellijAgent && row && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && row.state !== 'working'} terminal={zellijView} agent={row.agent} answerable={hasDialogProfile(row.agent)} guard={zellijHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {reader && !selected && !zellijAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} agent={row?.agent} answerable={tmux && hasDialogProfile(row?.agent) && !!row?.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}
-      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} onSession={setInfo} liveState={liveState} reading={reading} onReading={changeReading} />}
+      bound={kept} onOpenCompanion={onOpenCompanion} allowStage={false} onBoundInvalid={!selected?()=>setBinding(previous=>previous.kind==='bound' && previous.conversation===kept?{kind:'partial',row:previous.row}:previous):undefined} timeline onOpenTerminal={onShowTerminal} onUsage={trackUsage} onPrompts={trackPrompts} submission={submission} onSession={setInfo} liveState={liveState} reading={reading} onReading={changeReading} />}
     {records && <ChatPanel key={JSON.stringify(records)} sessionId={sessionId} shown={shown && fresh} bound={records} onOpenCompanion={onOpenCompanion} allowStage={false} timeline onOpenTerminal={onShowTerminal} liveState={liveState}
       onBoundInvalid={()=>setBinding(previous=>previous.kind==='partial' && previous.records===records?{kind:'partial',row:previous.row}:previous)} />}
     {modelAsked && <p role="status" className="agent-composer-note">{t('agentModelAsked')}</p>}
-    {kept && reader && !selected?.history && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} holdSend={!!waiting && waiting!=='unknown'} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} onOpenTerminal={onShowTerminal} />}
+    {kept && reader && !selected?.history && <AgentComposer key={`composer:${held ? JSON.stringify(held.conversation) : retained.current?.id}`} sessionId={sessionId} conversation={kept} access={access} invoke={invoke} shown={shown && fresh} labels={composerLabels} proof={proof} stage={!selected || isLinked} prompts={prompts} queuedPrompts={queuedPrompts} onSubmitted={()=>setSubmission(value=>value+1)} holdSend={!!waiting && waiting!=='unknown'} cwd={selected ? selected.cwd ?? selected.row?.project : row?.project} onOpenTerminal={onShowTerminal} />}
   </section>;
 }

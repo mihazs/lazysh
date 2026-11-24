@@ -2513,6 +2513,7 @@ const translations = {
   agentModeNow: ["Modo de permissão: {{mode}}", "Modo de permisos: {{mode}}"],
   agentModeUnconfirmed: ["Trocou uma vez, mas a linha de modo do terminal não foi reconhecida. Confira o terminal.", "Cambió una vez, pero no se reconoció la línea de modo del terminal. Revisa el terminal."],
   agentReceiptSending: ["Enviando…", "Enviando…"],
+  agentReceiptSubmitted: ["Enviada ao terminal. Aguardando o agente…", "Enviado al terminal. Esperando al agente…"],
   agentReceiptSent: ["Enviada", "Enviado"],
   agentReceiptQueued: ["Enviada, aguardando na fila do agente", "Enviado, esperando en la cola del agente"],
   agentReceiptUnconfirmed: ["Ainda não está na conversa. Confira o terminal.", "Aún no está en la conversación. Revisa el terminal."],
