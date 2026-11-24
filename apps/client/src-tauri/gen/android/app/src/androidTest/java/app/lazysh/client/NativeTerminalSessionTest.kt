@@ -231,6 +231,8 @@ class NativeTerminalSessionTest {
         // A field of the page takes DOM focus, as the composer, a dialog or the search box does.
         js("(() => { const f = document.createElement('input'); f.id = 'lz-probe'; document.body.appendChild(f); f.focus(); return true; })()")
         PageDriver.poll("the editor to let go of the focus", 30) { ui { !input.hasFocus() }.takeIf { it } }
+        // The WebView takes Android's focus and the page then reports itself focused; keys sent before that have no document to reach.
+        PageDriver.poll("the page to be the focused document", 30) { js("document.hasFocus() && document.activeElement && document.activeElement.id === 'lz-probe'").takeIf { it == "true" } }
         shell("input text zz")
         PageDriver.poll("the keys to reach the page's field", 30) { js("document.getElementById('lz-probe').value").takeIf { it == "\"zz\"" } }
         assertEquals("the terminal got none of the page field's keys", false, coreText(id).lines().any { it.trim().endsWith("abzz") || it.trim().endsWith("zz") })
