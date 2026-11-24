@@ -224,7 +224,8 @@ class NativeTerminalSessionTest {
         typeIntoTheSurface("echo term=\$TERM; tmux -f /dev/null new-session -d -s native-mux && tmux list-sessions")
         val server = awaitRow(id, "the detached tmux session", { it.startsWith("native-mux:") })
         evidence.put("tmuxTerm", server.lines().firstOrNull { it.trim().startsWith("term=") }?.trim() ?: "")
-        typeIntoTheSurface("tmux attach -t native-mux")
+        // The client's own error and exit status, printed after it returns: a failure shows them on the screen it leaves behind.
+        typeIntoTheSurface("tmux attach -t native-mux 2>/tmp/native-mux-attach.err; echo attach-rc=\$?; cat /tmp/native-mux-attach.err")
         val status = try { awaitRow(id, "tmux's status line", { it.contains("[native-mux]") }) }
         catch (error: AssertionError) { throw AssertionError("${error.message}; the screen held:\n${coreText(id)}", error) }
         evidence.put("tmuxStatusLine", status.lines().last { it.contains("[native-mux]") }.trim())
