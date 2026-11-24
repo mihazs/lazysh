@@ -4,7 +4,7 @@ import {createHeadlessCore} from './xterm/nativeCoreHeadless';
 import {openNativeTerminalAdapter} from './nativeTerminalAdapter';
 import {TOUCH_SELECTION_DELAY} from './terminalTouchSelection';
 
-afterEach(() => { vi.useRealTimers(); document.body.replaceChildren(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); document.body.replaceChildren(); });
 
 /** A 20x5 core over a 200x50 anchor: one cell is 10x10 pixels. The core has no queries, so the window of rows answers. */
 async function mounted(output = 'hello world\r\nsecond line here') {
@@ -122,5 +122,36 @@ describe('mouse reports to a program that tracks the mouse', () => {
     fire('pointerdown', ...at(1, 0)); fire('pointerup', ...at(1, 0));
     await settle();
     expect(core.mice).toEqual([]);
+  });
+});
+
+describe('mouse selection the way xterm.js does it', () => {
+  const settle = () => new Promise(resolve => setTimeout(resolve, 5));
+
+  it('selects with Shift held while a program tracks the mouse, and sends that program no report', async () => {
+    const {adapter, fire, core} = await mounted('hello world\r\n\x1b[?1000h');
+    fire('pointerdown', ...at(2, 0), {shiftKey: true}); fire('pointermove', ...at(7, 0), {shiftKey: true}); fire('pointerup', ...at(7, 0), {shiftKey: true});
+    await settle();
+    expect(adapter.selectedText()).toBe('llo wo');
+    expect(core.mice).toEqual([]);
+    // Without Shift the program keeps its mouse.
+    fire('pointerdown', ...at(1, 1)); fire('pointerup', ...at(1, 1));
+    await settle();
+    expect(core.mice.map(report => report.action)).toEqual(['press', 'release']);
+  });
+
+  it('keeps scrolling and extending the selection while a drag is held past the bottom edge, and stops on release', async () => {
+    vi.stubGlobal('requestAnimationFrame', (callback: (now: number) => void) => setTimeout(() => callback(performance.now()), 16) as unknown as number);
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id));
+    const {adapter, fire} = await mounted(Array.from({length: 40}, (_, i) => `line ${i}`).join('\r\n'));
+    adapter.scroll({kind: 'toTop'});
+    await settle();
+    fire('pointerdown', ...at(0, 1)); fire('pointermove', 5, 80);
+    await vi.waitFor(() => expect(adapter.viewport().top).toBeGreaterThan(5));
+    expect(adapter.selectionRange()!.end.y).toBeGreaterThan(adapter.viewport().top);
+    fire('pointerup', 5, 80);
+    const top = adapter.viewport().top;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(adapter.viewport().top).toBe(top);
   });
 });

@@ -6,7 +6,7 @@
  */
 import type {NativeTerminalAdapter} from './nativeTerminalAdapter';
 import type {Disposable, TerminalCell} from './terminalAdapter';
-import {nextTouchSelection, rangeBetween, TOUCH_SELECTION_DELAY, type TouchSelection} from './terminalTouchSelection';
+import {edgeOverflow, edgeScrollRate, edgeScrollStep, nextTouchSelection, rangeBetween, TOUCH_SELECTION_DELAY, type TouchSelection} from './terminalTouchSelection';
 
 /** Pixels a held finger may drift before it is a scroll, not a long press. */
 const TOUCH_SLOP = 10;
@@ -18,6 +18,21 @@ const same = (a: TerminalCell, b: TerminalCell) => a.x === b.x && a.y === b.y;
 export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: HTMLElement): Disposable {
   let drag: TerminalCell | undefined, hold: {x: number; y: number; ready: boolean; timer: ReturnType<typeof setTimeout>} | undefined;
   let touched: TouchSelection | null = null;
+  // A mouse drag held past the top or bottom edge keeps scrolling and extending, as xterm.js' own selection does.
+  let edge: {y: number; frame: number; last: number; carry: number} | undefined;
+  const stopEdge = () => { if (edge) cancelAnimationFrame(edge.frame); edge = undefined; };
+  const edgeFrame = (now: number) => {
+    const rect = adapter.screenBounds();
+    if (!edge || !drag || !rect) return stopEdge();
+    const rate = edgeScrollRate(edgeOverflow(edge.y, rect.top, rect.top + rect.height), rect.height / adapter.size().rows);
+    if (!rate) return stopEdge();
+    const step = edgeScrollStep(rate, edge.last ? now - edge.last : 16, edge.carry);
+    edge.carry = step.carry; edge.last = now;
+    if (step.rows) adapter.scroll({kind: 'lines', delta: step.rows});
+    const cell = adapter.cellAt(rect.left, edge.y);
+    if (cell) adapter.select(rangeBetween(drag, cell));
+    edge.frame = requestAnimationFrame(edgeFrame);
+  };
   const cancelHold = () => { if (hold) clearTimeout(hold.timer); hold = undefined; };
   // A program that tracks the mouse owns it.
   const free = () => adapter.modes().mouseTracking === 'none';
@@ -50,8 +65,10 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
   };
 
   const down = (event: PointerEvent) => {
-    if (!free()) { report.down(event); return; }
-    if (event.pointerType === 'mouse' || !event.pointerType) {
+    const mouse = event.pointerType === 'mouse' || !event.pointerType;
+    // Shift takes a mouse back from a program that tracks it, so text can still be selected, and the program sees no report.
+    if (!free() && !(mouse && event.shiftKey)) { report.down(event); return; }
+    if (mouse) {
       if (event.button !== 0) return;
       const cell = adapter.cellAt(event.clientX, event.clientY);
       if (!cell) return;
@@ -80,11 +97,16 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
     if (!drag) return;
     const cell = adapter.cellAt(event.clientX, event.clientY);
     if (cell && !(same(cell, drag) && !adapter.hasSelection())) adapter.select(rangeBetween(drag, cell));
+    const rect = adapter.screenBounds();
+    if (!rect) return;
+    if (!edge) edge = {y: event.clientY, frame: 0, last: 0, carry: 0};
+    edge.y = event.clientY;
+    if (!edge.frame && edgeOverflow(edge.y, rect.top, rect.top + rect.height)) edge.frame = requestAnimationFrame(edgeFrame);
   };
 
   const up = (event: PointerEvent) => {
     if (reported) { report.up(event); return; }
-    drag = undefined;
+    drag = undefined; stopEdge();
     if (!hold) return;
     const {ready, x, y} = hold, cell = ready && free() ? adapter.cellAt(x, y) : undefined;
     cancelHold();
@@ -98,5 +120,5 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
   const menu = (event: Event) => { if (hold) event.preventDefault(); };
   const listeners: [string, (event: never) => void][] = [['pointerdown', down], ['pointermove', move], ['pointerup', up], ['pointercancel', up], ['contextmenu', menu]];
   for (const [type, listener] of listeners) anchor.addEventListener(type, listener as EventListener);
-  return {dispose: () => { cancelHold(); for (const [type, listener] of listeners) anchor.removeEventListener(type, listener as EventListener); }};
+  return {dispose: () => { cancelHold(); stopEdge(); for (const [type, listener] of listeners) anchor.removeEventListener(type, listener as EventListener); }};
 }
