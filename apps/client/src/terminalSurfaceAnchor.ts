@@ -1,4 +1,5 @@
 import {invoke} from '@tauri-apps/api/core';
+import {captureAccess, protectedInvoke} from './access';
 import type {TerminalPreferences} from './terminalAdapter';
 
 /** What the shell knows about a session's native surface (Android, developer-only: docs/architecture/android-native-surface-host.md). */
@@ -22,17 +23,18 @@ export type SurfaceInputEvent =
 
 /** The app commands; the renderer never reaches the Kotlin plugin directly. */
 export const nativeSurface = {
-  place: (session: string, anchor: SurfaceAnchor, background: number) => invoke<SurfaceState>('native_terminal_surface_place', {session, anchor, background}),
+  // Keep the native completion so removal cannot overtake an admitted placement.
+  place: (session: string, anchor: SurfaceAnchor, background: number) => invoke<SurfaceState>('native_terminal_surface_place', {session, anchor, background}, {headers: captureAccess().headers}),
   /** How the session is drawn, from its next surface on and at once on one that is drawing; the shell keeps it, so it may come before the surface. */
-  look: (session: string, look: SurfaceLook) => invoke<void>('native_terminal_surface_look', {session, look}),
+  look: (session: string, look: SurfaceLook) => protectedInvoke<void>('native_terminal_surface_look', {session, look}),
   /** The cell the renderer draws for a font size in CSS pixels on a display of `dpr` device pixels per CSS pixel: the grid a pane holds is made of these. */
-  cell: (fontSize: number, dpr: number) => invoke<CellSize>('native_terminal_surface_cell', {fontSize, dpr}),
+  cell: (fontSize: number, dpr: number) => protectedInvoke<CellSize>('native_terminal_surface_cell', {fontSize, dpr}),
   remove: (session: string) => invoke<void>('native_terminal_surface_remove', {session}),
   /** Waits for what the keyboard typed since the last call; each event comes once. */
-  takeInput: (session: string) => invoke<{events: SurfaceInputEvent[]}>('native_terminal_surface_input', {session}),
+  takeInput: (session: string) => protectedInvoke<{events: SurfaceInputEvent[]}>('native_terminal_surface_input', {session}),
   /** `keyboard: false` on a release leaves the keyboard open: a field of the page took it. */
-  focus: (session: string, focused: boolean, keyboard = true) => invoke<void>('native_terminal_surface_focus', {session, focused, keyboard}),
-  state: (session: string) => invoke<SurfaceState>('native_terminal_surface_state', {session}),
+  focus: (session: string, focused: boolean, keyboard = true) => protectedInvoke<void>('native_terminal_surface_focus', {session, focused, keyboard}),
+  state: (session: string) => protectedInvoke<SurfaceState>('native_terminal_surface_state', {session}),
 };
 
 /** `#rgb`, `#rrggbb`, `rgb(r, g, b)` or `rgba(r, g, b, a)` as the `0xRRGGBB` number the shell takes; `undefined` for anything else (a named colour, a gradient). */
