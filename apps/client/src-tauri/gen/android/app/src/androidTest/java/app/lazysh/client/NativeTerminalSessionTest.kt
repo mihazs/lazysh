@@ -871,7 +871,21 @@ class NativeTerminalSessionTest {
             awaitRow(id, "the marker", { it == "before-recreate" })
             scenario.recreate()
             PageDriver.poll("the recreated window", 120) { if (NativeActivityFixture.readiness(scenario).ready && js("Boolean(window.__TAURI_INTERNALS__?.invoke)") == "true") true else null }
-            PageDriver.poll("the surface again", 90) { JSONObject(PageDriver.invoke("native_terminal_surface_state", "{session:${quoted(id)}}")).takeIf { it.getBoolean("ready") && it.getBoolean("placed") } }
+            try {
+                PageDriver.poll("the surface again", 90) {
+                    JSONObject(PageDriver.invoke("native_terminal_surface_state", "{session:${quoted(id)}}"))
+                        .takeIf { it.getBoolean("ready") && it.getBoolean("placed") }
+                }
+            } catch (error: AssertionError) {
+                val state = runCatching { PageDriver.invoke("native_terminal_surface_state", "{session:${quoted(id)}}") }
+                val coreHasMarker = runCatching { coreText(id).lines().any { it.trim() == "before-recreate" } }
+                val hasPane = runCatching { js("Boolean(document.querySelector(${quoted(nativePane)}))") }
+                evidence.put("afterRecreate", JSONObject()
+                    .put("surfaceState", state.toString())
+                    .put("coreHasMarker", coreHasMarker.toString())
+                    .put("pageHasNativePane", hasPane.toString()))
+                throw AssertionError("${error.message}; surface=$state, core retained marker=$coreHasMarker, page pane=$hasPane", error)
+            }
             val after = coreText(id)
             assertTrue("the screen shows what it showed before the recreation", after.lines().any { it.trim() == "before-recreate" })
             assertEquals("the recreated pane holds the grid it held", portrait, assertThePaneHoldsItsGrid(id, "recreated", "pf"))
