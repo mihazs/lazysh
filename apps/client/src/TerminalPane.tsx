@@ -107,6 +107,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   useEffect(() => {activeRef.current = active; return () => {activeRef.current = false;};}, [active]);
   const preferences = usePreferences();
   const softKeyboard = useSoftKeyboard();
+  const keyboardOpen = useRef(softKeyboard.open);
+  keyboardOpen.current = softKeyboard.open;
   const fonts = useDeviceFonts();
   const [ctrl, setCtrl] = useState(false);
   const [ctrlLocked, setCtrlLocked] = useState(false);
@@ -479,7 +481,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       const adapter=session.adapter,area=adapter.inputElement(),modes=adapter.modes(),view=pasteView.current;
       const editorReady=area
         ? document.hasFocus()&&area===document.activeElement&&!area.readOnly&&area.value===''&&imeInput.current?.idle===true
-        : softKeyboard.open===true&&!!adapter.dismissKeyboardIfIdle;
+        : keyboardOpen.current===true&&!!adapter.dismissKeyboardIfIdle;
       return !!owner&&inputOwner.current===owner&&!owner.disposed&&owner.session.id===session.id&&owner.session.adapter===adapter
         &&view.id===session.id&&view.adapter===adapter&&view.connected&&activeRef.current&&mounted.current&&access.current()
         &&!document.hidden&&!composingIme()&&!adapter.hasSelection()&&editorReady
@@ -628,7 +630,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       element.removeEventListener('touchend', end, {capture: true});
       element.removeEventListener('touchcancel', cancel, {capture: true});
     };
-  }, [active, customTouch, softKeyboard.open, preferences.screenReader, preferences.dismissKeyboardOnOverscroll, session.id, session.adapter, session.connected, preferences.bodyGestures, multiplexer, invoke, access, reportError]);
+  }, [active, customTouch, preferences.screenReader, preferences.dismissKeyboardOnOverscroll, session.id, session.adapter, session.connected, preferences.bodyGestures, multiplexer, invoke, access, reportError]);
 
   // Pulling the session header down runs the short or long pull action on release.
   const [pull, setPull] = useState<PullDepth | null>(null);
