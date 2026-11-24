@@ -46,3 +46,23 @@ test('pasted content is one compact Pasted text block that expands and copies, n
   await expect(block.getByRole('button',{name:'Copied'})).toBeVisible();
   expect(await page.evaluate(()=>navigator.clipboard.readText())).toBe(pasted);
 });
+
+test('an agent question stays in its turn as one scrollable item on a narrow screen',async({page})=>{
+  await page.setViewportSize({width:360,height:620});
+  await openAgentWork(page,[...messages,{id:'q',role:'assistant',blocks:[{
+    type:'tool_use',id:'question',name:'AskUserQuestion',text:'{}',
+    card:{kind:'question',questions:[{question:'Which layout should I use?',multiple:false,options:[{label:'Compact'},{label:'Spacious'}]}]},
+  }]},{id:'later',role:'assistant',blocks:[{type:'text',text:'Waiting for your choice.'}]},
+    {id:'tool',role:'assistant',blocks:[{type:'tool_use',id:'tool',name:'Read',text:'{}'}]}],{activity:'waiting'});
+  const list=page.locator('.chat-messages');
+  const question=list.locator('article[data-message-id="q"]').getByRole('region',{name:'Question',exact:true});
+  await expect(question.getByText('Which layout should I use?')).toBeAttached();
+  await expect(list.getByText('AskUserQuestion',{exact:true})).toHaveCount(0);
+  await question.scrollIntoViewIfNeeded();
+  expect(await question.evaluate(element=>{
+    const card=element.getBoundingClientRect(), scroller=element.closest('.chat-messages')!.getBoundingClientRect();
+    const later=document.querySelector('[data-message-id="later"]')!;
+    return getComputedStyle(element).position==='static' && card.left>=scroller.left && card.right<=scroller.right
+      && card.bottom<=later.getBoundingClientRect().top;
+  })).toBe(true);
+});
