@@ -13,6 +13,28 @@ import {nativeSurface} from './terminalSurfaceAnchor';
 export const RETRY_MS = 500;
 const noop = () => {};
 
+type FocusCall = {focused: (element: HTMLElement) => void; blurred: (element: HTMLElement) => void};
+const watchers = new Set<FocusCall>();
+let originals: {focus: HTMLElement['focus']; blur: HTMLElement['blur']} | undefined;
+
+/**
+ * The page's own `focus()` and `blur()` calls, as they are made. A document that is not the focused one (Android's view focus is on the
+ * keyboard editor) fires no focus events for them, so the composer, which the page focuses from script, would take no keyboard from the
+ * terminal if only the events were listened to. The calls are passed on unchanged.
+ */
+function watchFocusCalls(watcher: FocusCall) {
+  if (!originals) {
+    const {focus, blur} = originals = {focus: HTMLElement.prototype.focus, blur: HTMLElement.prototype.blur};
+    HTMLElement.prototype.focus = function (this: HTMLElement, ...args: Parameters<HTMLElement['focus']>) { focus.apply(this, args); watchers.forEach(w => w.focused(this)); };
+    HTMLElement.prototype.blur = function (this: HTMLElement) { blur.apply(this); watchers.forEach(w => w.blurred(this)); };
+  }
+  watchers.add(watcher);
+  return () => {
+    watchers.delete(watcher);
+    if (!watchers.size && originals) { HTMLElement.prototype.focus = originals.focus; HTMLElement.prototype.blur = originals.blur; originals = undefined; }
+  };
+}
+
 export class SurfaceInput implements Disposable {
   readonly element = undefined;
   private readonly mounted: ReturnType<typeof mountPreedit>;
@@ -29,6 +51,7 @@ export class SurfaceInput implements Disposable {
     this.mounted = mountPreedit(anchor); this.preedit = this.mounted.preedit;
     document.addEventListener('focusin', this.pageField);
     document.addEventListener('focusout', this.pageLeft);
+    this.unwatch = watchFocusCalls({focused: element => this.takePage(element), blurred: element => this.leavePage(element)});
     void this.pump();
   }
 
@@ -36,18 +59,21 @@ export class SurfaceInput implements Disposable {
    * A field of the page took the keyboard (the composer, a dialog, the search box): the editor lets go of Android's view focus, or the keyboard
    * would keep typing into the terminal while the page's own field shows the cursor. The keyboard stays open for the field.
    */
+  private unwatch: (() => void) | undefined;
   private pageTarget: EventTarget | null = null;
   /** The page's field let go of the keyboard: it is the terminal's again (the editor takes view focus back when the terminal asks). */
-  private readonly pageLeft = (event: FocusEvent) => { if (event.target === this.pageTarget) { this.pageHasKeyboard = false; this.pageTarget = null; } };
+  private leavePage(target: EventTarget | null) { if (target === this.pageTarget) { this.pageHasKeyboard = false; this.pageTarget = null; } }
+  private readonly pageLeft = (event: FocusEvent) => this.leavePage(event.target);
 
-  private readonly pageField = (event: FocusEvent) => {
-    const target = event.target;
+  private takePage(target: EventTarget | null) {
     if (!(target instanceof HTMLElement) || this.anchor.contains(target) || !target.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+    if (this.pageTarget === target) return;
     this.wantsFocus = false;
     this.pageHasKeyboard = true;
     this.pageTarget = target;
     this.api.focus(this.session, false, false).catch(noop);
-  };
+  }
+  private readonly pageField = (event: FocusEvent) => this.takePage(event.target);
 
   /** The terminal holds the keyboard: the editor only receives keys while it has Android's focus, so unless a field of the page took the keyboard, what it delivers is the terminal's. */
   focused() { return !this.pageHasKeyboard; }
@@ -59,6 +85,7 @@ export class SurfaceInput implements Disposable {
     this.stopped = true;
     document.removeEventListener('focusin', this.pageField);
     document.removeEventListener('focusout', this.pageLeft);
+    this.unwatch?.();
     this.mounted.restore();
   }
 
