@@ -3,6 +3,8 @@
 // Modified by lazysh: `Terminal::set_max_scrollback` below (libghostty-vt takes the
 // scrollback byte limit at any time; the binding only set it when the terminal was
 // created); upstream license retained. See ../../PROVENANCE.md.
+//
+// Modified by lazysh: load the default cursor style and blink bindings (#2218).
 #[path = "cursor_defaults.rs"]
 mod cursor_defaults;
 
