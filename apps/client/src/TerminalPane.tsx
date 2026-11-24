@@ -164,6 +164,13 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   /** The accepted paste bytes (bracketed when the program asked for it) leave as one write; with submit, a separate Enter follows in one paced sequence. Resolves true only once the write was accepted, so a caller keeps its text otherwise. */
   async function pasteLiteral(text: string, submit = false): Promise<boolean> {
     imeInput.current?.flush();
+    // A backend without an input observer (native) delivers its paste itself, so nothing is captured to write: Enter follows through the same path, in order.
+    if (!session.adapter.observeInput) {
+      if (!session.connected) return false;
+      session.adapter.paste(text);
+      if (submit) session.adapter.sendInput("\r", "keyboard");
+      return true;
+    }
     const accepted: string[] = [];
     literalPaste.current = true; literalCapture.current = accepted;
     try {session.adapter.paste(text);} finally {literalPaste.current = false; literalCapture.current = null;}
