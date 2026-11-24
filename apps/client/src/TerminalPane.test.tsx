@@ -114,6 +114,23 @@ describe('selection on a native session',()=>{
     vi.useRealTimers();
   });
 
+  it('selects the whole buffer, history included, and copies the visible screen, from the selection actions',async()=>{
+    vi.useFakeTimers({shouldAdvanceTime:true});
+    const {adapter,canvas}=await nativePane(Array.from({length:8},(_,i)=>`line ${i}`).join('\r\n'));
+    // The first row of the live screen is row 4; its word "line" is under the finger.
+    touch(canvas,'touchstart',15,5);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(700);});
+    touch(canvas,'touchend',15,5);
+    await act(async()=>{await vi.advanceTimersByTimeAsync(20);});
+    const actions=within(screen.getByRole('toolbar',{name:'Selection actions'}));
+    fireEvent.click(actions.getByRole('button',{name:'Select all'}));
+    await act(async()=>{await vi.advanceTimersByTimeAsync(20);});
+    expect(adapter.selectedText().split('\n').filter(Boolean)).toEqual(Array.from({length:8},(_,i)=>`line ${i}`));
+    fireEvent.click(actions.getByRole('button',{name:'Copy screen'}));
+    await waitFor(()=>expect(navigator.clipboard.writeText).toHaveBeenCalledWith(['line 4','line 5','line 6','line 7'].join('\n')));
+    vi.useRealTimers();
+  });
+
   it('extends the selection through the core when a handle is dragged', async()=>{
     vi.useFakeTimers({shouldAdvanceTime:true});
     const {adapter,canvas}=await nativePane('hello world');
@@ -2061,5 +2078,94 @@ describe('the Herdr switch in the session header', () => {
       // Opening Spaces is navigation: it writes nothing to the terminal.
       expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
     } finally {window.removeEventListener('lazysh-terminal-action', action);}
+  });
+});
+
+describe('page features over a native pane', () => {
+  /** A pane on a native session over the stand-in core, after the program printed `output`. */
+  async function nativePane(output: string, options?: Parameters<typeof openNativeTerminalAdapter>[1]) {
+    mocks.invoke.mockResolvedValue({});
+    const core = createHeadlessCore({rows: 4, columns: 20, feed: true});
+    const adapter = await openNativeTerminalAdapter(core, options);
+    await adapter.write!(new TextEncoder().encode(output));
+    render(<TerminalPane session={{id: 'native', name: 'Host', connected: true, adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+    return {adapter, core};
+  }
+
+  it('finds a word in the whole buffer, scrolls to it and selects its row, and wraps to the first match', async () => {
+    const {adapter} = await nativePane(`${Array.from({length: 30}, (_, i) => i === 3 || i === 20 ? `row ${i} needle` : `row ${i}`).join('\r\n')}`);
+    pressMore('Find');
+    fireEvent.change(screen.getByLabelText('Search terminal history'), {target: {value: 'needle'}});
+    const status = () => within(screen.getByLabelText('Search terminal history').closest('form')!).getByRole('status').textContent;
+    fireEvent.click(screen.getByRole('button', {name: 'Next'}));
+    await waitFor(() => expect(status()).toBe('Match on line 4'));
+    expect(adapter.selectionRange()?.start.y).toBe(3);
+    expect(adapter.viewport().top).toBe(3);
+    fireEvent.click(screen.getByRole('button', {name: 'Next'}));
+    await waitFor(() => expect(status()).toBe('Match on line 21'));
+    fireEvent.click(screen.getByRole('button', {name: 'Next'}));
+    await waitFor(() => expect(status()).toBe('Match on line 4'));
+  });
+
+  it('pastes the clipboard with the toolbar key, bracketed only while the program asked for it', async () => {
+    const {core} = await nativePane('');
+    fireEvent.click(screen.getByRole('button', {name: 'paste'}));
+    await waitFor(() => expect(core.inputs).toEqual([{data: 'paste me', origin: 'paste'}]));
+    cleanup();
+    const bracketed = await nativePane('\x1b[?2004h');
+    fireEvent.click(screen.getByRole('button', {name: 'paste'}));
+    await waitFor(() => expect(bracketed.core.inputs).toEqual([{data: '\x1b[200~paste me\x1b[201~', origin: 'paste'}]));
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+
+  it('offers a program\'s clipboard write for consent, copies it only on Allow, and ignores a read request', async () => {
+    const {adapter} = await nativePane('');
+    await adapter.write!(new TextEncoder().encode('\x1b]52;c;?\x07'));
+    expect(screen.queryByRole('region', {name: 'Remote clipboard request'})).toBeNull();
+    await act(async () => { await adapter.write!(new TextEncoder().encode('\x1b]52;c;aGVsbG8=\x07')); });
+    expect(screen.getByText('hello')).toBeTruthy();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', {name: 'Allow this copy'}));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('hello');
+    await act(async () => { await adapter.write!(new TextEncoder().encode('\x1b]52;c;c2Vjb25k\x07')); });
+    fireEvent.click(screen.getByRole('button', {name: 'Deny'}));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
+  });
+
+  it('resizes the text with a pinch, up to the largest size, and sends the renderer the new look', async () => {
+    const look = vi.fn().mockResolvedValue(undefined);
+    await nativePane('', {look, cell: async (fontSize, dpr) => ({width: fontSize * 0.6 * dpr, height: fontSize * 1.2 * dpr})});
+    const canvas = screen.getByLabelText('Terminal for Host');
+    fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 100});
+    fireEvent.pointerDown(canvas, {pointerId: 2, pointerType: 'touch', clientX: 120, clientY: 100});
+    fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: 'touch', clientX: 90, clientY: 100});
+    fireEvent.pointerMove(canvas, {pointerId: 2, pointerType: 'touch', clientX: 130, clientY: 100});
+    expect(getPreferences().fontSize).toBe(28);
+    fireEvent.pointerMove(canvas, {pointerId: 1, pointerType: 'touch', clientX: 0, clientY: 100});
+    fireEvent.pointerMove(canvas, {pointerId: 2, pointerType: 'touch', clientX: 300, clientY: 100});
+    expect(getPreferences().fontSize).toBe(32);
+    await waitFor(() => expect(look).toHaveBeenLastCalledWith('native', expect.objectContaining({fontSize: 32})));
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+
+  it('runs a configured two-finger swipe, tap and swipe action, and nothing while text is selected', async () => {
+    savePreferences({...defaults, pinchZoom: false, gestures: {...defaults.gestures, left: 'tab'}, bodyGestures: {...defaults.bodyGestures, tap: 'escape', swipeLeft: 'tab'}});
+    const {adapter} = await nativePane('hello world');
+    const canvas = screen.getByLabelText('Terminal for Host');
+    swipeTwoLeft(canvas);
+    await waitFor(() => expect(mocks.write).toHaveBeenLastCalledWith('native', '\t'));
+    fireEvent.pointerDown(canvas, {pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 100});
+    fireEvent.pointerUp(canvas, {pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 100});
+    await waitFor(() => expect(mocks.write).toHaveBeenCalledTimes(2));
+    vi.useFakeTimers({shouldAdvanceTime: true});
+    fireEvent.pointerDown(canvas, {pointerId: 3, pointerType: 'touch', clientX: 50, clientY: 50});
+    fireEvent.pointerUp(canvas, {pointerId: 3, pointerType: 'touch', clientX: 50, clientY: 50});
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    expect(mocks.write).toHaveBeenLastCalledWith('native', '\x1b');
+    vi.useRealTimers();
+    adapter.select({start: {x: 0, y: 0}, end: {x: 4, y: 0}});
+    const before = mocks.write.mock.calls.length;
+    swipeTwoLeft(canvas);
+    expect(mocks.write).toHaveBeenCalledTimes(before);
   });
 });
