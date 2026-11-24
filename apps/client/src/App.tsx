@@ -98,7 +98,7 @@ import {herdrFocusAction} from "./multiplexerTabs";
 import AgentPanel, {type ReportedHistorySource} from "./AgentPanel";
 import PreferencesPanel from "./PreferencesPanel";
 import TerminalEngineNotice from "./TerminalEngineNotice";
-import {describeTerminalEngine} from "./terminalEngineReason";
+import {describeTerminalEngine, terminalEngineName} from "./terminalEngineReason";
 import TerminalFeedbackLink from "./TerminalFeedbackLink";
 import {reportOfSession} from "./terminalFeedback";
 import {gestureTourNotes, gestureTourUseful, useGestureTour} from "./gestureTourModel";
@@ -2703,7 +2703,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
               </span>
               <span>
                 {active.connected ? active.local ? t("appLocalPTY") : active.mosh ? "Mosh" : active.et ? "ET" : "SSH" : t("appDisconnected")}
-                <i />{t("appUTF8")}<i />{t("appXterm256color")}</span>
+                <i />{t("appUTF8")}<i />{terminalEngineName(active.selection.id)}<i />{t("appXterm256color")}</span>
             </footer>
           </>
         ) : (

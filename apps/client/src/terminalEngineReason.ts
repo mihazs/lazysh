@@ -10,9 +10,12 @@ export const describeRefusal = (reason: string) =>
     : reason.startsWith(LACKS_PREFIX) ? t('terminalEngineLacks', {capabilities: reason.slice(LACKS_PREFIX.length)})
     : t('terminalEngineProbeFailed', {detail: reason});
 
+/** The translated name of an engine, as the settings and the status bar show it. */
+export const terminalEngineName = (id: BackendSelection['id']) => t(id === 'native' ? 'terminalEngineNative' : 'terminalEngineXterm');
+
 /** One line for the diagnostics: the engine a session uses and why, as the registry recorded it. */
 export function describeTerminalEngine({id, reason, fallbacks}: BackendSelection): string {
   const why = fallbacks.length ? fallbacks.map(fallback => describeRefusal(fallback.reason)).join('; ')
     : t(reason === 'automatic' ? 'terminalEngineAutomatic' : reason === 'developer override' ? 'terminalEngineOverride' : reason === SWITCHED ? 'terminalEngineSwitched' : 'terminalEnginePreference');
-  return t('terminalEngineUsed', {engine: t(id === 'native' ? 'terminalEngineNative' : 'terminalEngineXterm'), reason: why});
+  return t('terminalEngineUsed', {engine: terminalEngineName(id), reason: why});
 }
