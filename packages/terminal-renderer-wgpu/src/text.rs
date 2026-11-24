@@ -295,7 +295,28 @@ impl Rasterizer {
             // `render_into` resizes the buffer but leaves what it held: a stale glyph would show.
             image.clear();
             if !render.render_into(&mut scaler, glyph.id, image) {
-                continue;
+                if !color {
+                    continue;
+                }
+                let Some((bitmap, placement)) = term_font::color::rasterize(
+                    font.data,
+                    pick.face.index,
+                    u32::from(glyph.id),
+                    size,
+                    &[],
+                ) else {
+                    continue;
+                };
+                image.placement = placement;
+                image.content = Content::Color;
+                image.data = bitmap.rgba;
+                // The atlas compositor expects straight RGBA.
+                for pixel in image.data.as_chunks_mut::<4>().0 {
+                    let alpha = u32::from(pixel[3]).max(1);
+                    for channel in &mut pixel[..3] {
+                        *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+                    }
+                }
             }
             let p = image.placement;
             let (ox, oy) = (ix as i64 + i64::from(p.left), iy as i64 - i64::from(p.top));
