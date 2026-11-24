@@ -40,6 +40,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.Espresso.onData
+import org.hamcrest.Matchers.anyOf
 import org.hamcrest.Matchers.anything
 import android.widget.ListView
 import androidx.test.espresso.Espresso.closeSoftKeyboard
@@ -56,6 +57,7 @@ import androidx.test.espresso.action.EspressoKey
 import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
 import androidx.test.espresso.matcher.RootMatchers.isDialog
+import androidx.test.espresso.matcher.RootMatchers.isPlatformPopup
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
 import androidx.test.espresso.web.sugar.Web.onWebView
@@ -4752,8 +4754,9 @@ class NativeWorkspaceTest {
             // view yet. Scroll its row on screen by the select's option index before matching it.
             val position = evaluate(scenario, "Array.from(document.querySelector(${JSONObject.quote(selector)}).options).findIndex(x=>x.value===${JSONObject.quote(value)})").toInt()
             require(position >= 0) { "Owned select option must exist" }
-            onData(anything()).inAdapterView(isAssignableFrom(ListView::class.java)).inRoot(isDialog()).atPosition(position).check(matches(isDisplayed()))
-            val option = onView(withText(transportLabel)).inRoot(isDialog())
+            val chooser = anyOf(isDialog(), isPlatformPopup())
+            onData(anything()).inAdapterView(isAssignableFrom(ListView::class.java)).inRoot(chooser).atPosition(position).check(matches(isDisplayed()))
+            val option = onView(withText(transportLabel)).inRoot(chooser)
             option.check(matches(isDisplayed()))
             println("lazysh SSH UI: native transport chooser ready")
             option.perform(click())
