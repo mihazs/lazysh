@@ -234,7 +234,7 @@ class NativeTerminalSessionTest {
         shell("input text zz")
         PageDriver.poll("the keys to reach the page's field", 30) { js("document.getElementById('lz-probe').value").takeIf { it == "\"zz\"" } }
         assertEquals("the terminal got none of the page field's keys", false, coreText(id).lines().any { it.trim().endsWith("abzz") || it.trim().endsWith("zz") })
-        js("document.getElementById('lz-probe').remove(); true")
+        js("(() => { const f = document.getElementById('lz-probe'); f.blur(); f.remove(); return true; })()")
 
         // The terminal asks again and the keys come back to it.
         PageDriver.invoke("native_terminal_surface_focus", "{session:${quoted(id)},focused:true}")

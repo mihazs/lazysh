@@ -128,4 +128,19 @@ describe('Android surface input', () => {
     field.focus(); button.focus();
     expect(releases).toEqual([false]);
   });
+
+  it('is the terminal\'s keyboard unless a page field holds it, and again once that field lets go', async () => {
+    const {adapter, input} = await setup();
+    const field = document.body.appendChild(document.createElement('input'));
+    expect(input.focused()).toBe(true);
+    field.focus();
+    expect(input.focused()).toBe(false);
+    field.blur();
+    expect(input.focused()).toBe(true);
+    field.focus();
+    input.focus();
+    expect(input.focused()).toBe(true);
+    void adapter;
+    input.dispose();
+  });
 });

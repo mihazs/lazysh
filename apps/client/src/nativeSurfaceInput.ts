@@ -19,6 +19,8 @@ export class SurfaceInput implements Disposable {
   private readonly preedit: HTMLElement;
   private stopped = false;
   private wantsFocus = false;
+  /** A field of the page has the keyboard: what the editor receives is not for the terminal. */
+  private pageHasKeyboard = false;
 
   constructor(
     private readonly adapter: NativeTerminalAdapter, private readonly session: string, private readonly anchor: HTMLElement,
@@ -26,6 +28,7 @@ export class SurfaceInput implements Disposable {
   ) {
     this.mounted = mountPreedit(anchor); this.preedit = this.mounted.preedit;
     document.addEventListener('focusin', this.pageField);
+    document.addEventListener('focusout', this.pageLeft);
     void this.pump();
   }
 
@@ -33,22 +36,29 @@ export class SurfaceInput implements Disposable {
    * A field of the page took the keyboard (the composer, a dialog, the search box): the editor lets go of Android's view focus, or the keyboard
    * would keep typing into the terminal while the page's own field shows the cursor. The keyboard stays open for the field.
    */
+  private pageTarget: EventTarget | null = null;
+  /** The page's field let go of the keyboard: it is the terminal's again (the editor takes view focus back when the terminal asks). */
+  private readonly pageLeft = (event: FocusEvent) => { if (event.target === this.pageTarget) { this.pageHasKeyboard = false; this.pageTarget = null; } };
+
   private readonly pageField = (event: FocusEvent) => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || this.anchor.contains(target) || !target.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
     this.wantsFocus = false;
+    this.pageHasKeyboard = true;
+    this.pageTarget = target;
     this.api.focus(this.session, false, false).catch(noop);
   };
 
-  /** The terminal holds the keyboard: it asked for it and no field of the page has taken it since. */
-  focused() { return this.wantsFocus; }
+  /** The terminal holds the keyboard: the editor only receives keys while it has Android's focus, so unless a field of the page took the keyboard, what it delivers is the terminal's. */
+  focused() { return !this.pageHasKeyboard; }
 
-  focus() { this.wantsFocus = true; this.api.focus(this.session, true).catch(noop); }
+  focus() { this.pageHasKeyboard = false; this.wantsFocus = true; this.api.focus(this.session, true).catch(noop); }
   blur() { this.wantsFocus = false; this.api.focus(this.session, false).catch(noop); }
 
   dispose() {
     this.stopped = true;
     document.removeEventListener('focusin', this.pageField);
+    document.removeEventListener('focusout', this.pageLeft);
     this.mounted.restore();
   }
 
