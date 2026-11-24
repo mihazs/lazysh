@@ -171,6 +171,33 @@ fn notifications_distinguish_attention_from_information() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn snapshot_includes_and_removes_a_live_agent_process() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("codex");
+    symlink("/bin/sleep", &executable).unwrap();
+    let mut child = Command::new(executable).arg("60").spawn().unwrap();
+    let pid = child.id();
+    let before = snapshot(directory.path(), "50");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let after = snapshot(directory.path(), "50");
+
+    let has_process = |value: &Value| {
+        value["liveAgents"]["processes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["pid"] == pid && item["agent"] == "Codex")
+    };
+    assert_eq!(before["liveAgents"]["status"], "available");
+    assert!(has_process(&before));
+    assert!(!has_process(&after));
+}
+
 #[test]
 fn snapshot_caps_rows_and_uses_private_local_storage() {
     let dir = tempfile::tempdir().unwrap();
