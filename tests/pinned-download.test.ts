@@ -66,6 +66,19 @@ test('a failed download fails the step', async () => {
   expect(result.cached).toBeUndefined();
 });
 
+test('both Zig downloads allow slow progress and still verify the archive before extraction', async () => {
+  const linux = (await document('.github/actions/ghostty-zig/action.yml')).runs.steps;
+  const windows = (await document('.github/workflows/checks.yml')).jobs['terminal-windows'].steps;
+  for (const steps of [linux, windows]) {
+    const step = steps.find((step: any) => step.name === 'Provision checksum-verified Zig 0.16.0 outside the checkout');
+    const [download, verify, extract] = step.run.trim().split('\n').slice(1, 4);
+    expect(download).toContain("--proto '=https' --tlsv1.2 --connect-timeout 20");
+    expect(download).toContain('--speed-limit 1024 --speed-time 30 --max-time 720');
+    expect(verify).toContain('sha256sum --check --strict');
+    expect(extract).toMatch(/tar -xJf|Expand-Archive/);
+  }
+});
+
 // The Parakeet build script otherwise downloads the pinned Linux x64 ORT archive from GitHub.
 const ortAction = './.github/actions/parakeet-onnxruntime';
 const ortStep = (await document(`${ortAction.slice(2)}/action.yml`)).runs.steps.find((step: any) => step.run);
