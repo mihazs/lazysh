@@ -1507,6 +1507,32 @@ fn history_command_lists_one_folder_and_honors_the_discovery_setting() {
 }
 
 #[test]
+fn claude_goal_status_follows_its_active_conversation_branch() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let goal = |id: &str, parent: &str, objective: &str, met: bool| {
+        json!({"type":"attachment","uuid":id,"parentUuid":parent,
+        "timestamp":"2026-11-11T10:12:00Z", "attachment":{"type":"goal_status","condition":objective,"met":met}})
+    };
+    for met in [false, true] {
+        write(
+            &path,
+            &[
+                message("root", None, "user", "hello"),
+                goal("one", "root", "Old goal", false),
+                goal("two", "one", "New goal", met),
+                message("answer", Some("two"), "assistant", "done"),
+            ],
+        );
+        let page = conversation(&path, TranscriptAgent::Claude, 1).unwrap();
+        let state = &page.session.as_ref().unwrap()["goal"];
+        assert_eq!(state["objective"], "New goal");
+        assert_eq!(state["status"], if met { "complete" } else { "active" });
+        assert_eq!(state["updatedAt"], "2026-11-11T10:12:00Z");
+    }
+}
+
+#[test]
 fn claude_page_lists_what_the_session_loaded_without_copying_any_text() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("session.jsonl");

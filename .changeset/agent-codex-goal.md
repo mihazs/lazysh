@@ -3,6 +3,6 @@
 "@lazysh/client": minor
 ---
 
-feat(agents): show the current Codex goal in Agent View
+feat(agents): show the current Claude Code and Codex goals in Agent View
 
-The goal, status, recorded budget and elapsed time follow the live session while reading its conversation.
+The goal and status follow the live session while reading its conversation. Codex also reports its recorded budget and elapsed time.

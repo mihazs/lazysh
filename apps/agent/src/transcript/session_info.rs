@@ -89,6 +89,23 @@ impl Session {
         worktree: Option<&Value>,
     ) -> Self {
         let mut session = Self::default();
+        let goal = newest_first.iter().find_map(|record| {
+            let attachment = &record["attachment"];
+            if record["type"] != "attachment" || attachment["type"] != "goal_status" {
+                return None;
+            }
+            let objective = attachment["condition"]
+                .as_str()
+                .filter(|text| !text.trim().is_empty() && text.len() <= 16_384)?;
+            let met = attachment["met"].as_bool()?;
+            let mut goal =
+                json!({"objective": objective, "status": if met {"complete"} else {"active"}});
+            if let Some(timestamp) = record["timestamp"].as_str().filter(|text| text.len() <= 64) {
+                goal["updatedAt"] = json!(timestamp);
+            }
+            Some(goal)
+        });
+        session.set("goal", goal);
         let assistants = newest_first
             .iter()
             .filter(|record| record["type"] == "assistant");
