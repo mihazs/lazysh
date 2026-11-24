@@ -786,19 +786,20 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       && pasteView.current.id === session.id && pasteView.current.adapter === adapter;
     const owner: InputOwner = {session, disposed: false};
     inputOwner.current = owner;
-    // A native terminal has no DOM editor to observe: its keyboard is the platform's own input view (#1328).
-    const output = adapter.observeInput?.((data, userInput) => {
+    const output = adapter.observeInput?.((data, userInput, origin) => {
       let value = data;
       const pointerInput = !!pointerInputEvent.current?.eventPhase && !keyboardInputEvent.current?.eventPhase;
       if (userInput && (!acceptsInput() || document.hidden || !document.hasFocus()
-        || ((document.activeElement !== adapter.inputElement() || adapter.inputElement()?.readOnly) && !literalPaste.current && !pointerInput))) {
+        || (((adapter.inputFocused ? !adapter.inputFocused() : document.activeElement !== adapter.inputElement()) || adapter.inputElement()?.readOnly) && !literalPaste.current && !pointerInput))) {
         output?.reset(); return;
       }
       if (userInput) {
         // DOM dispatch can checkpoint microtasks between capture and xterm's
         // listener. eventPhase identifies the real active source without timing
         // guesses, while retaining the lane for asynchronously committed IME.
-        if (!pointerInput && !literalPaste.current && inputLane.current === "keyboard") {
+        // A platform keyboard (Android's editor) has no DOM events to mark its lane: what it types as text is the keyboard lane.
+        const platformKeyboard = adapter.inputFocused !== undefined && (origin === "ime" || origin === "keyboard");
+        if (!pointerInput && !literalPaste.current && (inputLane.current === "keyboard" || platformKeyboard)) {
           const state = modifierState.current;
           value = state.shift && !state.ctrl && !state.meta && (data === "\r" || data === "\n")
             ? parseChord("Shift+Enter")

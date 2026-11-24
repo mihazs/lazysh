@@ -40,6 +40,9 @@ export class SurfaceInput implements Disposable {
     this.api.focus(this.session, false, false).catch(noop);
   };
 
+  /** The terminal holds the keyboard: it asked for it and no field of the page has taken it since. */
+  focused() { return this.wantsFocus; }
+
   focus() { this.wantsFocus = true; this.api.focus(this.session, true).catch(noop); }
   blur() { this.wantsFocus = false; this.api.focus(this.session, false).catch(noop); }
 

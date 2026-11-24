@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {prepareClipboardPlatform} from "./deviceClipboard";
 import TerminalPane, { terminalWebUrl } from "./TerminalPane";
-import { defaults, getPreferences, savePreferences } from "./preferences";
+import { defaults, getPreferences, savePreferences, toolbarKeyLabel } from "./preferences";
 import type { LiveSession } from "./terminal";
 import type {TerminalAdapter} from "./terminalAdapter";
 import {XtermTerminalAdapter} from "./xtermTerminalAdapter";
@@ -78,6 +78,55 @@ it('mirrors a native session\'s rows for a screen reader while that preference i
   expect(adapter.capabilities.accessibility).toBe(false);
   view.unmount();
   await adapter.dispose();
+});
+describe('toolbar keys on a native session (#2493)',()=>{
+  const keys = ['esc','tab','enter','backspace','left','up','down','right','Home','End','PageUp','PageDown','Insert','Delete','F1','F5','F12','c','|'] as const;
+  const modifiers = [undefined,'ctrl','meta','shift'] as const;
+  const arrows = {left: uiI18n.t('terminalArrowLeft'), up: uiI18n.t('terminalArrowUp'), down: uiI18n.t('terminalArrowDown'), right: uiI18n.t('terminalArrowRight')};
+  const buttonName = (modifier: string) => modifier === 'meta' ? 'Alt' : modifier === 'shift' ? 'Shift' : modifier;
+
+  /** What each toolbar key writes to the transport, alone and under each virtual modifier, for the engine the pane is mounted over. */
+  async function written(engine: 'xterm' | 'native') {
+    mocks.invoke.mockResolvedValue({});
+    savePreferences({...defaults, toolbar: ['ctrl','meta','shift', ...keys]});
+    const adapter = engine === 'native' ? await openNativeTerminalAdapter(createHeadlessCore({rows: 4, columns: 20, feed: true})) : adapterOf(terminal);
+    const view = render(<TerminalPane session={{id: 'ssh', name: 'Host', connected: true, terminal, adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+    const out: Record<string, string[]> = {};
+    for (const modifier of modifiers) for (const key of keys) {
+      mocks.write.mockClear();
+      if (modifier) {
+        const button = screen.getByRole('button', {name: buttonName(modifier)}) as HTMLButtonElement;
+        expect(button.disabled, `${modifier} is usable on ${engine}`).toBe(false);
+        fireEvent.click(button);
+      }
+      fireEvent.click(screen.getByRole('button', {name: arrows[key as keyof typeof arrows] ?? toolbarKeyLabel(key)}));
+      out[`${modifier ?? 'plain'}+${key}`] = mocks.write.mock.calls.map(call => call[1] as string);
+    }
+    view.unmount();
+    return out;
+  }
+
+  it('writes the same bytes for every toolbar key alone and under Ctrl, Alt and Shift as the xterm.js pane does', async () => {
+    const reference = await written('xterm');
+    cleanup(); terminal = createMockTerminal();
+    const native = await written('native');
+    expect(native).toEqual(reference);
+    expect(Object.values(reference).filter(bytes => bytes.length === 0).length, 'every key writes something').toBe(0);
+  }, 60_000);
+
+  it('applies a sticky Ctrl to the next character the soft keyboard types, once', async () => {
+    mocks.invoke.mockResolvedValue({});
+    savePreferences({...defaults, toolbar: ['ctrl']});
+    const adapter = await openNativeTerminalAdapter(createHeadlessCore({rows: 4, columns: 20, feed: true}));
+    render(<TerminalPane session={{id: 'ssh', name: 'Host', connected: true, terminal, adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+    await act(async () => {});
+    // The Android editor is the keyboard: it holds it until a page field takes it.
+    adapter.inputFocused = () => true;
+    fireEvent.click(screen.getByRole('button', {name: 'ctrl'}));
+    adapter.sendInput('c', 'ime');
+    adapter.sendInput('c', 'ime');
+    await waitFor(() => expect(mocks.write.mock.calls.map(call => call[1])).toEqual(['\x03', 'c']));
+  });
 });
 describe('selection on a native session',()=>{
   async function nativePane(output:string) {

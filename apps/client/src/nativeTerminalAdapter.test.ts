@@ -63,7 +63,7 @@ describe('native backend specifics', () => {
   it('reports what it is: native, no renderer, and a data path that follows the core', async () => {
     const fed = await open();
     expect(fed.adapter).toMatchObject({backend: 'native', dataPath: 'renderer'});
-    expect(fed.adapter.capabilities).toMatchObject({nativeRendering: false, ime: false, canonicalMoshResize: true, screenInspection: true});
+    expect(fed.adapter.capabilities).toMatchObject({nativeRendering: false, ime: true, canonicalMoshResize: true, screenInspection: true});
     const owned = await open({feed: false});
     expect(owned.adapter.dataPath).toBe('runtime');
     expect(owned.adapter.write).toBeUndefined();

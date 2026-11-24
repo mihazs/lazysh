@@ -8,7 +8,7 @@ import {attachPointerSelection} from './nativePointerSelection';
 import {cellsOf, sliceColumns} from './nativeRowText';
 import type {
   CanonicalResize, Disposable, RuntimeTransport, TerminalAdapter, TerminalBounds, TerminalCapabilities, TerminalCell, TerminalEvent, TerminalInputOrigin,
-  TerminalMountTarget, TerminalPreferences, TerminalRange, TerminalScrollAction, TerminalSearchHit, TerminalSelection, TerminalSize, TerminalTheme,
+  TerminalMountTarget, TerminalPreferences, TerminalRange, TerminalInputObserver, TerminalScrollAction, TerminalSearchHit, TerminalSelection, TerminalSize, TerminalTheme,
   TerminalViewport,
 } from './terminalAdapter';
 import {TerminalEvents} from './terminalEvents';
@@ -17,9 +17,9 @@ import {shareImportedFonts} from './nativeFonts';
 import {nativeSurface, type CellSize, type SurfaceLook} from './terminalSurfaceAnchor';
 import {searchRows} from './terminalText';
 
-/** Honest for a core without a renderer (`ime` is xterm.js' input observation and `mouseReporting` is its DOM wheel dispatch, which this backend does not have: its keyboards are the capture and the Android input view, and its wheel reports go to the core): it parses, scrolls and answers questions about the screen, and draws nothing. `canonicalMoshResize` holds for a core that follows Mosh's frames (`NativeCoreBridge.canonicalFrames`); `enableCanonicalResize` refuses one that cannot. */
+/** Honest for a core without a renderer (`mouseReporting` is its DOM wheel dispatch, which this backend does not have: its keyboards are the capture and the Android input view, and its wheel reports go to the core): it parses, scrolls and answers questions about the screen, and draws nothing. `canonicalMoshResize` holds for a core that follows Mosh's frames (`NativeCoreBridge.canonicalFrames`); `enableCanonicalResize` refuses one that cannot. */
 export const nativeCapabilities: TerminalCapabilities = {
-  nativeRendering: false, selection: true, scrollback: true, mouseReporting: false, ime: false, accessibility: false,
+  nativeRendering: false, selection: true, scrollback: true, mouseReporting: false, ime: true, accessibility: false,
   screenInspection: true, canonicalMoshResize: true, customBoldColor: false,
 };
 
@@ -119,10 +119,12 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.tapLinks();
     // Android types through a native input connection (#1328), not a DOM editor.
     const preferences = () => this.preferences;
-    this.capture = isAndroidApp() ? (target.kind === 'native' && target.surface ? new SurfaceInput(this, target.surface, anchor, preferences) : undefined) : new NativeInputCapture(this, anchor, {intercepts: event => this.interceptor?.(event) === false, preferences});
+    const editor = isAndroidApp() && target.kind === 'native' && target.surface ? new SurfaceInput(this, target.surface, anchor, preferences) : undefined;
+    this.inputFocused = editor && (() => editor.focused());
+    this.capture = isAndroidApp() ? editor : new NativeInputCapture(this, anchor, {intercepts: event => this.interceptor?.(event) === false, preferences});
   }
 
-  async detach() { this.capture?.dispose(); this.pointer?.dispose(); this.taps?.dispose(); this.pointer = this.capture = this.taps = this.anchor = undefined; }
+  async detach() { this.capture?.dispose(); this.pointer?.dispose(); this.taps?.dispose(); this.pointer = this.capture = this.taps = this.anchor = this.inputFocused = undefined; }
 
   screenReaderMirrored(): Disposable {
     this.mirrored = true;
@@ -138,7 +140,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
 
   dispose() {
     if (this.disposed) return this.disposed;
-    this.source.dispose(); this.capture?.dispose(); this.pointer?.dispose(); this.canonical?.dispose(); this.taps?.dispose(); this.events.clear(); this.anchor = this.capture = this.pointer = this.taps = this.links = undefined;
+    this.source.dispose(); this.capture?.dispose(); this.pointer?.dispose(); this.canonical?.dispose(); this.taps?.dispose(); this.events.clear(); this.anchor = this.capture = this.pointer = this.taps = this.links = this.inputFocused = undefined;
     const error = new Error('This terminal was disposed before the bytes were applied.');
     this.pending.forEach(reject => reject(error)); this.pending.clear();
     // Queued commands finish first: closing the core under one would turn its answer into an error.
@@ -222,8 +224,24 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) {
     // Typing clears the selection, as xterm.js' selection service does on user input; a terminal's reply is not typing.
     if (origin !== 'terminal-reply') this.clearSelection();
+    // With an observer the pane decides what leaves (the toolbar's Ctrl and Alt apply to the next typed character, a composer takes a paste), as it does over xterm.js.
+    if (this.observer) { this.observer(typeof data === 'string' ? data : new TextDecoder('utf-8', {fatal: true}).decode(data), origin !== 'terminal-reply', origin); return; }
     this.send(() => this.bridge.input(data, origin));
   }
+
+  private observer: ((data: string, userInput: boolean, origin?: TerminalInputOrigin) => void) | undefined;
+
+  observeInput(listener: (data: string, userInput: boolean, origin?: TerminalInputOrigin) => void): TerminalInputObserver {
+    this.observer = listener;
+    const noop = () => {};
+    return {
+      available: true, idle: true, composing: () => false, reset: noop, clear: noop, resume: noop, flush: noop, settle: noop, dismiss: noop,
+      dispose: () => { if (this.observer === listener) this.observer = undefined; },
+    };
+  }
+
+  /** Set while the Android editor is the keyboard: whether the terminal holds it (it asked for it and no field of the page has taken it). */
+  inputFocused?: () => boolean;
 
   /** A key as the DOM reports it, for the core to encode for the modes the program set; `sendInput` carries text. */
   sendKey(input: CoreKeyInput) {

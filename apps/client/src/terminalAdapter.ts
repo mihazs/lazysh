@@ -171,8 +171,10 @@ export interface TerminalAdapter {
   write?(bytes: Uint8Array, onApplied?: () => void): Promise<void>;
   /** Inject input as if it were typed; it reaches the observer like keyboard input. */
   sendInput(data: string | Uint8Array, origin: TerminalInputOrigin): void;
+  /** Present when the keyboard is the platform's own (a native Android surface), not a DOM element: whether the terminal holds it now. `inputElement()` is then no way to tell. */
+  inputFocused?(): boolean;
   /** Present with the `ime` capability. */
-  observeInput?(listener: (data: string, userInput: boolean) => void, acceptsInput?: () => boolean, onUnappliedEdit?: (edit: UnappliedTerminalEdit | null) => void): TerminalInputObserver;
+  observeInput?(listener: (data: string, userInput: boolean, origin?: TerminalInputOrigin) => void, acceptsInput?: () => boolean, onUnappliedEdit?: (edit: UnappliedTerminalEdit | null) => void): TerminalInputObserver;
   /** Present with the `canonicalMoshResize` capability; call before the first output of a Mosh transport. */
   enableCanonicalResize?(): CanonicalResize;
   /** Bracketed-paste aware. */
