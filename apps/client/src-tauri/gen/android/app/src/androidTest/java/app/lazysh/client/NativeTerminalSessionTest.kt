@@ -257,7 +257,10 @@ class NativeTerminalSessionTest {
      * Enter; Ctrl+D ends cat. The answer is the one row of caret notation the bytes make.
      */
     private fun toolbarKeys(id: String) {
-        typeIntoTheSurface("cat -v")
+        // The keys go to cat, not to the shell's line editor: wait until the shell has printed the marker and so started it.
+        typeIntoTheSurface("echo catv-started; cat -v")
+        awaitRow(id, "cat to have started", { it == "catv-started" })
+        Thread.sleep(500)
         for (key in listOf("esc", "tab", "Home", "End")) click("button", key)
         click("button", "Shift")
         click("button", "tab")
