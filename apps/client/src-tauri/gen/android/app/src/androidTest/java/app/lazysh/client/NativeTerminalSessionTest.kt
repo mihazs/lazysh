@@ -430,9 +430,12 @@ class NativeTerminalSessionTest {
         assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
         // The size the remote pty has and the size the core has: a tmux client draws for the first and the core clips to the second.
         typeIntoTheSurface("echo ptysize=\$(stty size)")
-        val pty = awaitRow(id, "the pty's size", { it.startsWith("ptysize=") && it.length > "ptysize=".length })
-        evidence.put("ptySize", pty.lines().first { it.trim().startsWith("ptysize=") && it.trim().length > "ptysize=".length }.trim())
-        evidence.put("coreSnapshot", runCatching { JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state").let { "${it.getInt("rows")} ${it.getInt("columns")}" } }.getOrElse { "unreadable: ${invoke("terminal_core_snapshot", id).take(200)}" })
+        val ptyPattern = Regex("ptysize=[0-9]+ [0-9]+")
+        val pty = awaitRow(id, "the pty's size", ptyPattern::matches).lineSequence().map(String::trim).first(ptyPattern::matches)
+        val snapshot = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
+        val grid = "${snapshot.getInt("rows")} ${snapshot.getInt("columns")}"
+        assertEquals("the reconnected host PTY and the native grid agree", "ptysize=$grid", pty)
+        evidence.put("ptySize", pty).put("coreSnapshot", grid)
         val nonce = fixture.getString("nonce")
         require(nonce.matches(Regex("[a-f0-9]{32}"))) { "Invalid owned tmux socket nonce" }
         val mux = "tmux -L lazysh-native-$nonce"
