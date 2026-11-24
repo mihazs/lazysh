@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.100.2
+
+### Patch Changes
+
+- feat(terminal): the History lines setting reaches a native session that is already open
+
+  <details><summary>Details</summary>
+
+  Changing History lines in Settings now changes how many rows an open native terminal keeps, as it already did for xterm.js. A smaller number drops the oldest rows at once.
+
+  </details>
+
 ## 1.100.1
 
 ### Patch Changes
