@@ -102,3 +102,26 @@ it('moves a live native session to xterm.js: the snapshot first, then the new Ch
   expect(mocks.terminal.write).toHaveBeenLastCalledWith(new Uint8Array([104, 105]), expect.any(Function));
   expect(mocks.terminal.write).toHaveBeenCalledTimes(2);
 });
+
+/** The status bar's right-hand text, where the terminal type is shown. */
+const statusBar = () => document.querySelector('.workspace-footer')!.textContent;
+
+it('names the engine of the session in the status bar next to the terminal type, and follows the session when it moves to xterm.js', async () => {
+  withCore(command => command === 'terminal_core_release' ? 'SNAPSHOT' : undefined);
+  Object.assign(mocks.terminal, {resize: vi.fn()});
+  mocks.terminal.write.mockImplementation((_bytes: Uint8Array, applied?: () => void) => applied?.());
+  const {session, onEvent} = await connectNative('bar-session');
+  onEvent.link!.bind(Promise.resolve('bar-session'));
+  expect(statusBar()).toContain('Native');
+  expect(statusBar()).toContain('xterm-256color');
+  await act(async () => { await session.leaveNative!(); });
+  expect(statusBar()).toContain('xterm.js');
+  expect(statusBar()).not.toContain('Native');
+});
+
+it('names xterm.js in the status bar when the native engine could not be opened', async () => {
+  withCore(command => command === 'terminal_core_open' ? Promise.reject('no surface host') : undefined);
+  await connectNative('bar-fallback');
+  expect(statusBar()).toContain('xterm.js');
+  expect(statusBar()).not.toContain('Native');
+});
