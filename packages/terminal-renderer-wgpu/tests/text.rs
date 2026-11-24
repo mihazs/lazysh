@@ -440,7 +440,13 @@ fn the_fonts_of_a_directory_are_found_by_family_and_style_and_drawn_like_registe
 /// A font file as a collection (`ttcf`) of one face: the file's own table directory follows the 16-byte header, so every table
 /// offset moves by 16. Android ships its CJK font this way (`NotoSansCJK-Regular.ttc`).
 fn collection(font: &[u8]) -> Vec<u8> {
-    let mut out = [b"ttcf".as_slice(), &[0, 1, 0, 0], &1u32.to_be_bytes(), &16u32.to_be_bytes()].concat();
+    let mut out = [
+        b"ttcf".as_slice(),
+        &[0, 1, 0, 0],
+        &1u32.to_be_bytes(),
+        &16u32.to_be_bytes(),
+    ]
+    .concat();
     out.extend_from_slice(font);
     let tables = usize::from(u16::from_be_bytes([font[4], font[5]]));
     for table in 0..tables {
@@ -472,7 +478,14 @@ fn the_fonts_of_an_android_system_directory_are_found_with_the_cjk_font_in_a_col
     );
     let text = "Aa日😀";
     assert_eq!(
-        shoot(text, 6, 1, &appearance(&["monospace", CJK_FAMILY, EMOJI_FAMILY]), found).rgb,
+        shoot(
+            text,
+            6,
+            1,
+            &appearance(&["monospace", CJK_FAMILY, EMOJI_FAMILY]),
+            found
+        )
+        .rgb,
         shoot(text, 6, 1, &stack(), library(ALL)).rgb,
         "an ideograph from the collection and an emoji are drawn as from registered fonts"
     );
