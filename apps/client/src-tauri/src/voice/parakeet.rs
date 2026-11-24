@@ -8,6 +8,33 @@ use std::{
 };
 use tauri::{ipc::Channel, State};
 
+// ONNX Runtime probes CPU topology in a loader constructor. Google's ARM translation
+// can crash on that probe, so let ORT use its existing unavailable-CPU-info path there.
+#[cfg(all(
+    target_os = "android",
+    target_arch = "aarch64",
+    feature = "parakeet-android"
+))]
+#[no_mangle]
+pub extern "C" fn __wrap_cpuinfo_initialize() -> bool {
+    extern "C" {
+        fn __real_cpuinfo_initialize() -> bool;
+    }
+    fn property_is(name: &std::ffi::CStr, expected: &[u8]) -> bool {
+        let mut value = [0; libc::PROP_VALUE_MAX as usize];
+        // The Android API bounds its write by PROP_VALUE_MAX and returns the value length.
+        let len = unsafe { libc::__system_property_get(name.as_ptr(), value.as_mut_ptr()) };
+        len > 0 && unsafe { std::ffi::CStr::from_ptr(value.as_ptr()) }.to_bytes() == expected
+    }
+    if property_is(c"ro.dalvik.vm.native.bridge", b"libndk_translation.so")
+        && property_is(c"ro.dalvik.vm.isa.arm64", b"x86_64")
+    {
+        return false;
+    }
+    // Preserve normal CPU capability detection for physical ARM64.
+    unsafe { __real_cpuinfo_initialize() }
+}
+
 pub const ARCHIVE_BYTES: u64 = 487_211_443;
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
