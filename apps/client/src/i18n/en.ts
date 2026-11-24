@@ -16,6 +16,12 @@ export const english = {
   agentsSections: "Agent sections",
   agentsJumpLive: "Live agents",
   agentsJumpActivity: "Activity",
+  agentsHostProcesses: "Running agent processes",
+  agentsHostProcessesIdentity: "Identified by the executable name. A process may also have a reported session.",
+  agentsHostProcessesUnavailable: "Process discovery is unavailable on this host.",
+  agentsHostProcessesTruncated: "Showing the first 100 processes.",
+  agentsHostProcessesEmpty: "No supported agent processes found.",
+  agentsHostProcessId: "Process {{pid}}",
   agentsReportedActivity: "Reported agent activity",
 
   terminalEditAnnouncement: 'Keyboard edit skipped',
