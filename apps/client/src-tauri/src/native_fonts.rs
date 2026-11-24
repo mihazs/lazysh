@@ -119,6 +119,31 @@ fn valid_family(family: &str) -> bool {
             .any(|c| c.is_control() || matches!(c, ',' | '\'' | '"' | ';' | '\\'))
 }
 
+#[cfg(any(native_terminal_core, test))]
+fn font_bytes(body: &tauri::ipc::InvokeBody) -> Result<Arc<[u8]>, String> {
+    use tauri::ipc::InvokeBody;
+
+    let byte_count = match body {
+        InvokeBody::Raw(bytes) => bytes.len(),
+        InvokeBody::Json(serde_json::Value::Array(bytes)) => bytes.len(),
+        _ => return Err("The font must be sent as bytes".into()),
+    };
+    if !(12..=MAX_FONT_BYTES).contains(&byte_count) {
+        return Err("A font file is 12 bytes to 24 MiB".into());
+    }
+    // Android's Tauri postMessage transport serializes Uint8Array as a JSON array.
+    match body {
+        InvokeBody::Raw(bytes) => Ok(bytes.as_slice().into()),
+        InvokeBody::Json(serde_json::Value::Array(bytes)) => bytes
+            .iter()
+            .map(|byte| byte.as_u64().and_then(|value| u8::try_from(value).ok()))
+            .collect::<Option<Vec<_>>>()
+            .map(Arc::from)
+            .ok_or_else(|| "The font must be sent as bytes".into()),
+        _ => unreachable!("the body type was checked above"),
+    }
+}
+
 /// Takes a font from the page: the family in `x-lazysh-font-family`, `x-lazysh-font-role` (`primary` or `cjk`) and the
 /// font file as the body. Refused unless the bytes read as a font.
 #[cfg(native_terminal_core)]
@@ -138,16 +163,10 @@ fn import(request: &tauri::ipc::Request<'_>) -> Result<(), String> {
     if !valid_family(family) {
         return Err("The font's family name is not one CSS family".into());
     }
-    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
-        return Err("The font must be sent as bytes".into());
-    };
-    if data.len() < 12 || data.len() > MAX_FONT_BYTES {
-        return Err("A font file is 12 bytes to 24 MiB".into());
-    }
     let font = ImportedFont {
         family: family.into(),
         cjk,
-        bytes: data.as_slice().into(),
+        bytes: font_bytes(request.body())?,
     };
     // The bytes are the user's: refuse what the renderer cannot read, so no host meets it.
     font.register(&mut lazysh_terminal_renderer_wgpu::FontLibrary::new())
@@ -213,6 +232,24 @@ mod tests {
             family: family.into(),
             cjk,
             bytes: Arc::from(vec![0; 16]),
+        }
+    }
+
+    #[test]
+    fn android_json_font_bytes_match_the_raw_body_and_reject_invalid_values() {
+        use tauri::ipc::InvokeBody;
+
+        let bytes = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 128, 255];
+        let raw = font_bytes(&InvokeBody::Raw(bytes.clone())).unwrap();
+        let json = font_bytes(&InvokeBody::Json(serde_json::json!(bytes))).unwrap();
+        assert_eq!(raw, json);
+
+        for invalid in [
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 128, 256]),
+        ] {
+            assert!(font_bytes(&InvokeBody::Json(invalid)).is_err());
         }
     }
 
