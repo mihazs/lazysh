@@ -64,3 +64,57 @@ fn omo_cli_discovery_honors_documented_agent_directory_precedence_with_fixture_h
             .unwrap()
     );
 }
+
+#[test]
+fn senpi_discovers_its_own_sessions_and_normalizes_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_dir = directory.path().join("sessions/--project--");
+    fs::create_dir_all(&session_dir).unwrap();
+    let path = session_dir.join("2026-01-01_session.jsonl");
+    fs::write(&path, concat!(
+        "{\"type\":\"session\",\"version\":3,\"id\":\"session\",\"cwd\":\"/project\"}\n",
+        "{\"type\":\"message\",\"id\":\"u\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
+        "{\"type\":\"message\",\"id\":\"a\",\"parentId\":\"u\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ready\"}]}}\n",
+        "{\"type\":\"message\",\"id\":\"r\",\"parentId\":\"a\",\"message\":{\"role\":\"toolResult\",\"toolCallId\":\"c\",\"toolName\":\"bash\",\"content\":[{\"type\":\"text\",\"text\":\"failed\"}],\"isError\":true}}\n"
+    )).unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"))
+        .env("LAZYSH_STATE_DIR", directory.path().join("state"))
+        .env("SENPI_CODING_AGENT_DIR", directory.path())
+        .args(["discover", "--agent", "senpi"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let found: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(found["agent"], "senpi");
+    assert_eq!(found["sessions"][0]["path"], path.to_str().unwrap());
+    let page = read_page(&path, TranscriptAgent::Senpi, 0, 50).unwrap();
+    assert_eq!(page.messages.len(), 3);
+    assert_eq!(page.messages[0]["blocks"][0]["text"], "hello");
+    assert_eq!(page.messages[1]["blocks"][0]["text"], "ready");
+    assert_eq!(page.messages[2]["blocks"][0]["isError"], true);
+}
+
+#[test]
+fn senpi_discovery_uses_the_default_home_and_allows_an_explicit_root() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join(".senpi/agent/sessions");
+    fs::create_dir_all(sessions.join("--project--")).unwrap();
+    let path = sessions.join("--project--/session.jsonl");
+    fs::write(&path, "{}").unwrap();
+    for root in [None, Some(sessions.as_path())] {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
+        command
+            .env("HOME", home.path())
+            .env_remove("SENPI_CODING_AGENT_DIR")
+            .env("LAZYSH_STATE_DIR", home.path().join("state"))
+            .current_dir(home.path())
+            .args(["discover", "--agent", "senpi"]);
+        if let Some(root) = root {
+            command.arg("--root").arg(root);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let found: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(found["sessions"][0]["path"], path.to_str().unwrap());
+    }
+}

@@ -150,6 +150,7 @@ pub enum TranscriptAgent {
     Gemini,
     Cursor,
     Omo,
+    Senpi,
     #[value(name = "devin-atif")]
     #[serde(rename = "devin-atif")]
     DevinAtif,
@@ -601,7 +602,10 @@ fn normalize_options(
         _ => {}
     }
     let (role, mut blocks, id, usage) = match agent {
-        TranscriptAgent::Pi | TranscriptAgent::Omp | TranscriptAgent::Omo => {
+        TranscriptAgent::Pi
+        | TranscriptAgent::Omp
+        | TranscriptAgent::Omo
+        | TranscriptAgent::Senpi => {
             if record["type"] != "message" {
                 return None;
             }
@@ -622,9 +626,10 @@ fn normalize_options(
                     string(message, "toolCallId"),
                     string(message, "toolName"),
                 )];
-                if let (TranscriptAgent::Pi, Some(is_error)) = (agent, message["isError"].as_bool())
-                {
-                    blocks[0]["isError"] = json!(is_error);
+                if matches!(agent, TranscriptAgent::Pi | TranscriptAgent::Senpi) {
+                    if let Some(is_error) = message["isError"].as_bool() {
+                        blocks[0]["isError"] = json!(is_error);
+                    }
                 }
             }
             let mut usage = serde_json::Map::new();

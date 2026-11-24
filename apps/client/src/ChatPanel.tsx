@@ -165,7 +165,7 @@ export function parseTranscript(value: unknown): Page {
         || typeof block.id !== 'string' || !block.id || block.id.length > 256 || new TextEncoder().encode(block.id).length > 256))
         throw new LocalUiError('chatInvalidToolStatus');
       if (block.isError !== undefined && ((page.agent !== 'claude' && page.agent !== 'opencode' && page.agent !== 'gemini' && !(page.agent==='codex' && page.view==='active_branch')
-        && !(page.agent === 'pi' && page.view === 'record_stream' && message.role === 'tool'))
+        && !(['pi','senpi'].includes(page.agent) && page.view === 'record_stream' && message.role === 'tool'))
         || block.type !== 'tool_result' || typeof block.isError !== 'boolean'))
         throw new LocalUiError('chatInvalidToolError');
     }

@@ -12,6 +12,7 @@ export const usageAgents = {
   droid: "Factory Droid",
   cursor: "Cursor IDE",
   omo: "OmO Native",
+  senpi: "Senpi",
   "devin-atif": "Devin ATIF export",
   "amp-json": "Amp JSON export",
 } as const;
