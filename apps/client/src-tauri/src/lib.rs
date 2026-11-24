@@ -37,6 +37,7 @@ mod media;
 mod mosh;
 mod multiplexer;
 mod multiplexer_history;
+mod native_fonts;
 #[cfg(desktop)]
 mod native_program;
 #[cfg(native_terminal_core)]
@@ -230,6 +231,8 @@ pub fn run() {
                 terminal_core::terminal_core_search,
                 terminal_core::terminal_core_word_at,
                 terminal_core::terminal_core_link_at,
+                native_fonts::native_terminal_font_import,
+                native_fonts::native_terminal_font_forget,
                 terminal_core::terminal_core_line_at,
                 terminal_core::terminal_core_buffer_range,
                 terminal_core::terminal_core_copy_screen,

@@ -46,6 +46,7 @@ pub(crate) fn look(session: &str, scale: f32, background: u32) -> Look {
         system_fonts: true,
         bold: BoldText::default(),
         cursor: None,
+        imported: Vec::new(),
     }
 }
 
@@ -97,6 +98,10 @@ fn look_of(wanted: &SurfaceLook) -> Result<Look, String> {
         font_px: wanted.font_size as f32,
         scale: 1.0,
         system_fonts: true,
+        // The page handed over the fonts its family list names before it sent the look.
+        imported: crate::native_fonts::named(&crate::native_renderer::families(
+            &wanted.font_family,
+        )),
         bold,
         cursor: Some(CursorDefault {
             style,
@@ -337,6 +342,38 @@ mod tests {
         );
         // Another session has its own.
         assert_eq!(look("look-b", 1.0, 0).font_px, 14.0);
+    }
+
+    #[test]
+    fn the_look_carries_the_imported_fonts_its_family_list_names_and_no_others() {
+        let family = "lazysh-font-test-look-primary";
+        crate::native_fonts::hold(crate::native_fonts::ImportedFont {
+            family: family.into(),
+            cjk: false,
+            bytes: std::sync::Arc::from(vec![0u8; 16]),
+        });
+        let named = |list: String| {
+            remember(
+                "look-fonts",
+                &page_look(serde_json::json!({"fontFamily": list})),
+            )
+            .unwrap();
+            look("look-fonts", 1.0, 0).imported
+        };
+        let carried = named(format!("\"{family}\", 'Fira Code', monospace"));
+        assert_eq!(
+            carried
+                .iter()
+                .map(|font| font.family.as_str())
+                .collect::<Vec<_>>(),
+            [family]
+        );
+        assert!(named("'Fira Code', monospace".into()).is_empty());
+        crate::native_fonts::forget(family);
+        assert!(
+            named(format!("\"{family}\", monospace")).is_empty(),
+            "a font the app let go of is not carried"
+        );
     }
 
     #[test]
