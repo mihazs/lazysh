@@ -163,3 +163,20 @@ write scope, exact checkout source, uploaded targets and restore-only caches.
 Official API reference: [Git references](https://docs.github.com/en/rest/git/refs),
 [least-privilege workflow tokens](https://docs.github.com/en/actions/reference/security/secure-use),
 and [F-Droid metadata](https://f-droid.org/docs/Build_Metadata_Reference/).
+
+## Release cadence
+
+`bun .github/scripts/release-cadence.ts [--limit N] [--json]` (an authenticated `gh`; `GH_REPO` selects another repository) prints one row per recent
+`Verified stable tag` run, joined to the Changesets version PR it published, in minutes:
+
+| Column | Meaning |
+|---|---|
+| `PR open` | the version PR's creation to its merge (holds, stale regeneration and loop latency show here) |
+| `publish` | the publish run's creation to its last update (reruns of failed jobs extend it) |
+| `PR->rel` | the version PR's creation to the published release |
+| `queue` | the first job's wait for a runner |
+| `gap` | this release's finish to the previous release's finish |
+| `critical job` | the job that finished last before `publish`, with its duration: the publish critical path |
+
+The footer gives medians over the successful releases. The command only reads (`gh pr list`, `gh run list`, `gh run view`); `tests/release-cadence.test.ts`
+drives it against a fake `gh` and fixed JSON. Use it before and after a change to the release path: a cadence change is a number from this table, not an impression.
