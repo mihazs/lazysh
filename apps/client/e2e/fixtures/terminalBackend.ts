@@ -1,6 +1,6 @@
 import {test as base, type Page} from '@playwright/test';
 import type {TerminalBackendId} from '../../src/terminalAdapter';
-import {BACKEND_ENV, requestedBackend} from '../../src/e2eTerminalBackend';
+import {assertNativeBackendObserved, BACKEND_ENV, requestedBackend} from '../../src/e2eTerminalBackend';
 
 // The key of `developerBackendOverride` in src/terminalBackends.ts, not imported because that module loads the xterm adapter.
 const OVERRIDE_KEY = 'lazysh.terminal.backend';
@@ -38,12 +38,13 @@ export const test = base.extend<{requestedBackendApplied: void}, {backendAvailab
       return await use(availability);
     } finally { await page.close(); }
   }, {scope: 'worker'}],
-  requestedBackendApplied: [async ({context, backendAvailability}, use, testInfo) => {
+  requestedBackendApplied: [async ({context, page, backendAvailability}, use, testInfo) => {
     const requested = requestedBackend();
     if (requested) {
       testInfo.skip(!backendAvailability.ok, `${requested} backend: ${backendAvailability.ok ? '' : backendAvailability.reason}`);
       await context.addInitScript(([key, backend]) => { try { localStorage.setItem(key, backend); } catch { /* No storage, no override. */ } }, [OVERRIDE_KEY, requested]);
     }
     await use();
+    if (requested === 'native' && testInfo.status === 'passed') assertNativeBackendObserved(page);
   }, {auto: true}],
 });
