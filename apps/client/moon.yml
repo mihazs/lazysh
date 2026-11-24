@@ -176,7 +176,7 @@ tasks:
   test-android-tmux:
     type: test
     command: bun test ../../tests/android-tmux.test.ts ../../tests/android-ssh-host.test.ts --test-name-pattern
-    args: ['^(owned namespaced tmux survives a real SSH detach and reattaches the original panes|owned tmux teardown detaches a running control-mode client through the server before retiring SSH|owned tmux teardown retires a stalled owned client outside the SSH tree so the server still exits cleanly|actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes|actual Android app shows the lost-connection banner, retries a cut route, reattaches the same tmux pane and closes without reconnecting|actual Android app restores the same tmux pane only on click after a force-stop and relaunch)$']
+    args: ['^(owned namespaced (tmux|rmux) survives a real SSH detach and reattaches the original panes|owned (tmux|rmux) teardown detaches a running control-mode client through the server before retiring SSH|owned (tmux|rmux) teardown retires a stalled owned client outside the SSH tree so the server still exits cleanly|actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes|actual Android app shows the lost-connection banner, retries a cut route, reattaches the same tmux pane and closes without reconnecting|actual Android app restores the same tmux pane only on click after a force-stop and relaunch)$']
     env: {LAZYSH_ANDROID_UI_TMUX: '1'}
     deps: [~:build-android-emulator]
     options: *envLocal
