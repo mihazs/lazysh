@@ -806,12 +806,12 @@ class NativeTerminalSessionTest {
         return "$screen anchor(x y w h innerHeight dpr)=$anchor grid=${coreGrid(session)}"
     }
 
-    /** Waits until the surface is `landscape` and the core's grid is not `previous`: the pane followed the window and the core was refitted. */
+    /** Waits for the window orientation and a new grid. The keyboard can make a portrait surface wider than it is tall. */
     private fun awaitTheGridToFollow(session: String, landscape: Boolean, previous: Pair<Int, Int>) =
         PageDriver.poll("the pane to be ${if (landscape) "landscape" else "portrait"} with a new grid", 90) {
             val view = surfaceView()
-            val sideways = view != null && view.width > view.height
-            if (sideways == landscape && coreGrid(session) != previous) true else null
+            val sideways = ui { activity -> activity.window.decorView.let { it.width > it.height } }
+            if (view != null && sideways == landscape && coreGrid(session) != previous) true else null
         }
 
     /**
