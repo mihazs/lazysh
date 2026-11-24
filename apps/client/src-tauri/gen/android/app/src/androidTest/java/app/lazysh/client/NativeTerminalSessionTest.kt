@@ -221,7 +221,8 @@ class NativeTerminalSessionTest {
         evidence.put("tmuxOnPath", probe.lines().any { it.trim() == "HAVE-TMUX" })
         assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
         typeIntoTheSurface("tmux -f /dev/null new-session -s native-mux")
-        val status = awaitRow(id, "tmux's status line", { it.contains("[native-mux]") })
+        val status = try { awaitRow(id, "tmux's status line", { it.contains("[native-mux]") }) }
+        catch (error: AssertionError) { throw AssertionError("${error.message}; the screen held:\n${coreText(id)}", error) }
         evidence.put("tmuxStatusLine", status.lines().last { it.contains("[native-mux]") }.trim())
         // A second pane: the first one is narrower and keeps working, so the count of panes tmux reports reaches the core as text.
         typeIntoTheSurface("tmux split-window -h; echo panes=\$(tmux list-panes | wc -l)")
