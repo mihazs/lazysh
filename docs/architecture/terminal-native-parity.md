@@ -10,7 +10,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | Gap | Known not to work on native. |
 | N/A | No engine dependency, or xterm.js-only machinery. |
 
-**Summary: 54 features. Works 29, Partial 12, Unproven 6, Gap 4, N/A 3.**
+**Summary: 54 features. Works 30, Partial 11, Unproven 6, Gap 4, N/A 3.**
 
 
 ## Input
