@@ -782,6 +782,18 @@ test('mobile terminal keeps one compact header and reaches every session control
     await expect(page.locator('.session-tabs [role=tab]')).toHaveCount(1);
     await expect(tabs).toBeHidden();await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   }
+  if(!phone) {
+    await restore.getByRole('button',{name:'Dismiss',exact:true}).click();
+    await page.setViewportSize({width:640,height:272});
+    const header=page.locator('.workspace-header');
+    const switcher=header.getByRole('button',{name:'Switch terminal session'});
+    await expect(switcher).toHaveAttribute('title','Focus workstation with a long host name');
+    const headerBox=(await header.boundingBox())!;
+    const switcherBox=(await switcher.boundingBox())!;
+    expect(switcherBox.y).toBeGreaterThanOrEqual(headerBox.y);
+    expect(switcherBox.y+switcherBox.height).toBeLessThanOrEqual(headerBox.y+headerBox.height);
+    expect((await page.locator('.terminal-canvas:visible').boundingBox())!.height).toBeGreaterThanOrEqual(96);
+  }
 });
 
 for(const action of ['dom','playwright'] as const)test(`live Herdr navigation stays touchable in a short drawer with ${action} actions`,async({page},testInfo)=>{
