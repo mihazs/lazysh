@@ -22,7 +22,7 @@ import {endTextComposition, isTextEditingActive, markTyping, registerTextInterac
 import { api as nativeApi } from "./bridge";
 import { bodyGestureSlots, getPreferences, terminalPreferences, toolbarKeyHeights, gestureLabelKeys, parseChord, parseChordSteps, savePreferences, toolbarKeyHasAlternate, toolbarKeyLabel, toolbarNavigationActions, toolbarRows, usePreferences, type GestureAction, type GestureSlot, type ToolbarAlternate, type ToolbarKey } from "./preferences";
 import { isMultiplexerAction, multiplexerSteps, resolveGesture, storedPrefix, validPrefix, type MultiplexerAction } from "./multiplexerGestures";
-import type {UnappliedTerminalEdit} from "./terminalAdapter";
+import type {TerminalAdapter, UnappliedTerminalEdit} from "./terminalAdapter";
 import { modifiedTerminalText, type LiveSession } from "./terminal";
 import { nextTouchSelection, TOUCH_SELECTION_DELAY, type TouchSelection } from "./terminalTouchSelection";
 import { fontFamilyFor, fontWarningKey, fontWarningText, useDeviceFonts } from "./fonts";
@@ -37,6 +37,11 @@ import {webUrl as terminalWebUrl} from "./webPage";
 import {rgbOf, trackSurfaceAnchor} from "./terminalSurfaceAnchor";
 import {mountScreenReaderMirror, needsScreenReaderMirror} from "./terminalScreenReader";
 import "./TerminalNativeSurface.css";
+
+function herdrNavigationAt(adapter: TerminalAdapter, x: number, y: number) {
+  const cell = adapter.cellAt(x, y);
+  return !!cell && herdrNavigationCell(adapter, cell.x, cell.y - adapter.viewport().top);
+}
 
 const sequences: Partial<Record<ToolbarKey, string>> = {esc: "\x1b", tab: "\t", c: "c", d: "d", enter: "\r", backspace: "\x7f", left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C"};
 const arrowLabelKeys = {left:"terminalArrowLeft",up:"terminalArrowUp",down:"terminalArrowDown",right:"terminalArrowRight"} as const;
@@ -716,10 +721,10 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const element = container.current, adapter = session.adapter;
     if (!element) return;
     const press = (event: MouseEvent) => {
-      const input = adapter.inputElement(), cell = adapter.cellAt(event.clientX, event.clientY);
-      if (!input || !cell || document.activeElement === input || !touchScreen()) return;
+      const input = adapter.inputElement();
+      if (!input || document.activeElement === input || !touchScreen()) return;
       // The press still reaches Herdr as a click; only the focus xterm gives its input on a press is refused.
-      if (herdrNavigationCell(adapter, cell.x, cell.y - adapter.viewport().top)) {input.disabled = true; setTimeout(() => {input.disabled = false;});}
+      if (herdrNavigationAt(adapter, event.clientX, event.clientY)) {input.disabled = true; setTimeout(() => {input.disabled = false;});}
     };
     element.addEventListener('mousedown', press, true);
     return () => element.removeEventListener('mousedown', press, true);
@@ -1117,16 +1122,11 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const count = previous && Date.now() - previous.when <= 350 && Math.hypot(x - previous.x, y - previous.y) < 24 ? previous.count + 1 : 1;
     cancelTaps();
     const slot = count >= 3 ? "tripleTap" : count === 2 ? "doubleTap" : "tap";
+    const action = slot === "tap" ? tapAction : preferences.bodyGestures[slot];
+    const navigationTap = action === "keyboard" && herdrNavigationAt(session.adapter, x, y);
     const perform = () => {
       taps.current = null;
-      const adapter = session.adapter;
-      if (!activeRef.current || composingIme() || adapter.hasSelection()) return;
-      const action = slot === "tap" ? tapAction : preferences.bodyGestures[slot];
-      if (nativeTapFocus && action === "keyboard") {
-        const cell = adapter.cellAt(x, y);
-        if (cell && herdrNavigationCell(adapter, cell.x, cell.y - adapter.viewport().top)) return;
-      }
-      runGesture(action, slot);
+      if (!navigationTap && activeRef.current && !composingIme() && !session.adapter.hasSelection()) runGesture(action, slot);
     };
     if (count >= 3 || (count === 2 && preferences.bodyGestures.tripleTap === "none") || (count === 1 && preferences.bodyGestures.doubleTap === "none" && preferences.bodyGestures.tripleTap === "none")) perform();
     else taps.current = {count, x, y, when: Date.now(), timer: setTimeout(perform, 350)};

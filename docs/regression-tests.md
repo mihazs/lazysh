@@ -101,6 +101,7 @@ or `n/a` with a reason. Rows below were read from the fixing commits; a test not
 | [#2381](https://github.com/mihazs/lazysh/issues/2381) | The Android debug GPU probe refused SwiftShader under ARM64 translation even after instrumentation opted in, because Java and translated native code saw separate environments | this change | `NativeTerminalCoreTest.theProbeRefusesASoftwareRasterizerUnlessTheDebugSwitchAllowsOne` on an owned Android 15 Google emulator running the ARM64 APK. The parent detects SwiftShader but refuses it in both probes. | n/a |
 | [#2585](https://github.com/mihazs/lazysh/issues/2585) | Android benchmark reports included CPU, idle and frame counters from a window where a counted process disappeared | this change | `apps/client/bench/androidEvidence.test.ts` excludes interrupted guest windows without dropping independent throughput and latency | n/a |
 | [#2606](https://github.com/mihazs/lazysh/issues/2606) | The Android flood benchmark could dispatch a key before the owned PTY started writing output | this change | `apps/client/bench/nativePtyFlood.test.ts` waits for the first-chunk receipt before sending a key, then verifies the marked output and exact echo offset | n/a |
+| [#2503](https://github.com/mihazs/lazysh/issues/2503) | A touch bound to opening the keyboard also opened it over Herdr navigation in a native pane | this change | unit `apps/client/src/TerminalPane.test.tsx`, `keeps Herdr navigation taps from opening the keyboard on a native pane` | n/a, the pane gesture reproduces in Vitest |
 
 ## Adding a row
 

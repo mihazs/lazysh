@@ -2292,6 +2292,25 @@ describe('page features over a native pane', () => {
     expect(mocks.write).not.toHaveBeenCalled();
   });
 
+  it('keeps Herdr navigation taps from opening the keyboard on a native pane', async () => {
+    savePreferences({...defaults, bodyGestures: {...defaults.bodyGestures, tap: 'keyboard'}});
+    const {adapter} = await nativePane('\x1b[2;11H│ switch  ');
+    const focus = vi.spyOn(adapter, 'focus');
+    const hit = vi.spyOn(adapter, 'cellAt').mockReturnValue({x: 17, y: 1});
+    const canvas = screen.getByLabelText('Terminal for Host');
+    const tap = () => {
+      const touch = {pointerId: 1, pointerType: 'touch', clientX: 60, clientY: 40};
+      fireEvent.pointerDown(canvas, touch);
+      fireEvent.pointerUp(canvas, touch);
+    };
+    tap();
+    expect(focus).not.toHaveBeenCalled();
+
+    hit.mockReturnValue({x: 3, y: 2});
+    tap();
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
   it('runs a configured two-finger swipe, tap and swipe action, and nothing while text is selected', async () => {
     savePreferences({...defaults, pinchZoom: false, gestures: {...defaults.gestures, left: 'tab'}, bodyGestures: {...defaults.bodyGestures, tap: 'escape', swipeLeft: 'tab'}});
     const {adapter} = await nativePane('hello world');
