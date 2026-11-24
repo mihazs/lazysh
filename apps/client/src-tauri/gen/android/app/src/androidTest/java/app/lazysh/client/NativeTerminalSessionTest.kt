@@ -792,6 +792,20 @@ class NativeTerminalSessionTest {
         return fits
     }
 
+    /** What decides the pane's size right now, for the evidence and for a failure: the keyboard's inset, the surface on screen and the page's anchor. */
+    private fun paneState(session: String): String {
+        val view = surfaceView()
+        val screen = ui { activity ->
+            val decor = activity.window.decorView
+            val insets = androidx.core.view.ViewCompat.getRootWindowInsets(decor)
+            val ime = androidx.core.view.WindowInsetsCompat.Type.ime()
+            "imeVisible=${insets?.isVisible(ime)} imeBottom=${insets?.getInsets(ime)?.bottom} decor=${decor.width}x${decor.height}" +
+                (view?.let { v -> IntArray(2).also(v::getLocationOnScreen).let { " surface@${it[0]},${it[1]} ${v.width}x${v.height}" } } ?: " no surface")
+        }
+        val anchor = js("(() => { const r = document.querySelector(${quoted(nativePane)})?.getBoundingClientRect(); return r ? [r.x, r.y, r.width, r.height, window.innerHeight, window.devicePixelRatio].join(' ') : 'no anchor'; })()")
+        return "$screen anchor(x y w h innerHeight dpr)=$anchor grid=${coreGrid(session)}"
+    }
+
     /** Waits until the surface is `landscape` and the core's grid is not `previous`: the pane followed the window and the core was refitted. */
     private fun awaitTheGridToFollow(session: String, landscape: Boolean, previous: Pair<Int, Int>) =
         PageDriver.poll("the pane to be ${if (landscape) "landscape" else "portrait"} with a new grid", 90) {
@@ -830,7 +844,9 @@ class NativeTerminalSessionTest {
             }) { "the session's keyboard editor" }
             ui { activity -> input.requestFocus(); SoftKeyboard.set(activity.window, true) }
             PageDriver.poll("the soft keyboard to show", 60) { ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { it } }
-            awaitTheGridToFollow(id, false, portrait)
+            evidence.put("keyboardShown", paneState(id))
+            try { awaitTheGridToFollow(id, false, portrait) }
+            catch (error: AssertionError) { throw AssertionError("${error.message}; ${paneState(id)}", error) }
             val withKeyboard = assertThePaneHoldsItsGrid(id, "keyboard", "pd")
             assertTrue("the keyboard took rows from the pane ($withKeyboard, $portrait)", withKeyboard.second < portrait.second)
             val paneView = checkNotNull(surfaceView())
