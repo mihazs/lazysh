@@ -181,7 +181,7 @@ class NativeTerminalSessionTest {
     /** The settled surface once it differs from `other`, the one it showed before what the case just did. */
     private fun settledAfter(what: String, other: Bitmap) = settled(what) { checksum(it) != checksum(other) }
 
-    private fun typeIntoTheSurface(command: String) {
+    private fun typeIntoTheSurface(command: String, enter: Boolean = true) {
         val input = checkNotNull(ui { activity ->
             (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<TerminalInputView>().firstOrNull() }
         }) { "the session's keyboard editor" }
@@ -189,7 +189,7 @@ class NativeTerminalSessionTest {
             val connection = checkNotNull(input.onCreateInputConnection(EditorInfo()))
             connection.commitText(command, 1)
             // A line break the keyboard commits as text is a carriage return, as in NativeTerminalInputTest.
-            connection.commitText("\n", 1)
+            if (enter) connection.commitText("\n", 1)
         }
     }
 
@@ -243,6 +243,26 @@ class NativeTerminalSessionTest {
         awaitRow(id, "the keys typed after the page's field", { it.startsWith(prompt) && it.endsWith("abcd") })
         typeIntoTheSurface("")
         evidence.put("keyboardHandedBackAndForth", true)
+    }
+
+    /**
+     * The toolbar's keys on the native session (#2493): `cat -v` shows what the shell receives. Esc, Tab, Home, End and Shift+Tab are pressed on
+     * the page's toolbar, then Ctrl and a letter the soft keyboard commits (the toolbar's modifier applies to the next character typed), then
+     * Enter; Ctrl+D ends cat. The answer is the one row of caret notation the bytes make.
+     */
+    private fun toolbarKeys(id: String) {
+        typeIntoTheSurface("cat -v")
+        for (key in listOf("esc", "tab", "Home", "End")) click("button", key)
+        click("button", "Shift")
+        click("button", "tab")
+        click("button", "ctrl")
+        typeIntoTheSurface("a", enter = false)
+        click("button", "enter")
+        awaitRow(id, "cat -v's caret notation of the toolbar's keys", { it == "^[^I^[[H^[[F^[[Z^A" })
+        click("button", "ctrl")
+        click("button", "d")
+        awaitRow(id, "the prompt after cat ended", { it.startsWith(fixture.getString("prompt").trim()) && !it.contains("cat") })
+        evidence.put("toolbarKeysThroughCatV", true)
     }
 
     /**
@@ -331,6 +351,8 @@ class NativeTerminalSessionTest {
 
             // The keyboard is the terminal's when it asks and the page's when a page field takes it.
             keyboardOwnership(id)
+            // Every toolbar key writes what the shell expects; the modifiers apply to the soft keyboard's next character.
+            toolbarKeys(id)
 
             // A multiplexer in the same session, drawn by the core on the surface that has just been given back.
             hostTmux(id)
