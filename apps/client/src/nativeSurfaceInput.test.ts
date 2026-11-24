@@ -12,6 +12,7 @@ const key = (code: string, k: string, release = false): SurfaceInputEvent =>
 function shell() {
   const batches: (SurfaceInputEvent[] | Error)[] = [];
   const focus: boolean[] = [];
+  const releases: boolean[] = [];
   let wake: (() => void) | undefined;
   const api = {
     takeInput: vi.fn(async () => {
@@ -20,9 +21,9 @@ function shell() {
       if (next instanceof Error) throw next;
       return {events: next};
     }),
-    focus: vi.fn(async (_session: string, focused: boolean) => { focus.push(focused); }),
+    focus: vi.fn(async (_session: string, focused: boolean, keyboard = true) => { focus.push(focused); if (!focused) releases.push(keyboard); }),
   };
-  return {api, focus, push: (batch: SurfaceInputEvent[] | Error) => { batches.push(batch); wake?.(); }};
+  return {api, focus, releases, push: (batch: SurfaceInputEvent[] | Error) => { batches.push(batch); wake?.(); }};
 }
 
 async function setup() {
@@ -106,5 +107,25 @@ describe('Android surface input', () => {
     await settle();
     expect(core.inputs).toEqual([{data: 'echo ', origin: 'ime'}, {data: 'a\rb', origin: 'paste'}, {data: '\x1b[200~c\x1b[201~', origin: 'paste'}]);
     input.dispose();
+  });
+
+  it('lets go of the keyboard editor, keeping the keyboard open, when a field of the page takes focus, and not for the terminal or a non-field', async () => {
+    const {anchor, releases, push, input} = await setup();
+    input.focus();
+    const field = document.body.appendChild(document.createElement('input'));
+    const button = document.body.appendChild(document.createElement('button'));
+    const inside = anchor.appendChild(document.createElement('input'));
+    button.focus(); inside.focus();
+    await settle();
+    expect(releases).toEqual([]);
+    field.focus();
+    await settle();
+    expect(releases).toEqual([false]);
+    // The page's field no longer wants the editor back when the surface appears later.
+    push([]);
+    await settle();
+    input.dispose();
+    field.focus(); button.focus();
+    expect(releases).toEqual([false]);
   });
 });

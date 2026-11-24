@@ -25,14 +25,27 @@ export class SurfaceInput implements Disposable {
     private readonly preferences: () => TerminalPreferences | undefined, private readonly api = nativeSurface,
   ) {
     this.mounted = mountPreedit(anchor); this.preedit = this.mounted.preedit;
+    document.addEventListener('focusin', this.pageField);
     void this.pump();
   }
+
+  /**
+   * A field of the page took the keyboard (the composer, a dialog, the search box): the editor lets go of Android's view focus, or the keyboard
+   * would keep typing into the terminal while the page's own field shows the cursor. The keyboard stays open for the field.
+   */
+  private readonly pageField = (event: FocusEvent) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || this.anchor.contains(target) || !target.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+    this.wantsFocus = false;
+    this.api.focus(this.session, false, false).catch(noop);
+  };
 
   focus() { this.wantsFocus = true; this.api.focus(this.session, true).catch(noop); }
   blur() { this.wantsFocus = false; this.api.focus(this.session, false).catch(noop); }
 
   dispose() {
     this.stopped = true;
+    document.removeEventListener('focusin', this.pageField);
     this.mounted.restore();
   }
 

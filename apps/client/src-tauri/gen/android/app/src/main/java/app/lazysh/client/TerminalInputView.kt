@@ -8,6 +8,8 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedText
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.SurroundingText
@@ -49,6 +51,8 @@ class TerminalInputView(
         editor.connectionOpened()
         outAttrs.initialSelStart = editor.selectionStart
         outAttrs.initialSelEnd = editor.selectionEnd
+        // What the editor holds, up front: SwiftKey reads the text around the caret from here and from getExtractedText before it composes, and works from nothing without them.
+        EditorInfoCompat.setInitialSurroundingText(outAttrs, editor.text)
         return Connection()
     }
 
@@ -119,6 +123,15 @@ class TerminalInputView(
         override fun getTextAfterCursor(n: Int, flags: Int): CharSequence = editor.textAfterCursor(n)
         override fun getSelectedText(flags: Int): CharSequence? = editor.selectedText()
         override fun getCursorCapsMode(reqModes: Int) = 0
+
+        // The whole editor as one extracted text, which keyboards that track the field (SwiftKey) ask for; the editor has no extract UI.
+        override fun getExtractedText(request: ExtractedTextRequest?, flags: Int) = ExtractedText().also {
+            it.text = editor.text
+            it.startOffset = 0
+            it.partialStartOffset = -1
+            it.selectionStart = editor.selectionStart
+            it.selectionEnd = editor.selectionEnd
+        }
 
         @RequiresApi(Build.VERSION_CODES.S)
         override fun getSurroundingText(beforeLength: Int, afterLength: Int, flags: Int): SurroundingText {

@@ -210,6 +210,42 @@ class NativeTerminalSessionTest {
     }
 
     /**
+     * Who owns the keyboard (#2489, #2490): the terminal's editor takes Android's view focus when the page asks for it and the keyboard
+     * is served to it, a field of the page that takes DOM focus gets the keys instead (the editor lets go), and the terminal gets them
+     * back when it asks again. The oracle is the keys themselves, injected by the shell as a keyboard would: where they land says who
+     * holds the focus.
+     */
+    private fun keyboardOwnership(id: String) {
+        val prompt = fixture.getString("prompt").trim()
+        val input = checkNotNull(ui { activity ->
+            (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<TerminalInputView>().firstOrNull() }
+        }) { "the session's keyboard editor" }
+        val imm = instrumentation.targetContext.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+
+        PageDriver.invoke("native_terminal_surface_focus", "{session:${quoted(id)},focused:true}")
+        PageDriver.poll("the editor to hold the focus and be served the keyboard", 30) { ui { input.hasFocus() && imm.isActive(input) }.takeIf { it } }
+        evidence.put("keyboardEditorServed", true)
+        shell("input text ab")
+        awaitRow(id, "the keys typed at the focused editor", { it.startsWith(prompt) && it.endsWith("ab") })
+
+        // A field of the page takes DOM focus, as the composer, a dialog or the search box does.
+        js("(() => { const f = document.createElement('input'); f.id = 'lz-probe'; document.body.appendChild(f); f.focus(); return true; })()")
+        PageDriver.poll("the editor to let go of the focus", 30) { ui { !input.hasFocus() }.takeIf { it } }
+        shell("input text zz")
+        PageDriver.poll("the keys to reach the page's field", 30) { js("document.getElementById('lz-probe').value").takeIf { it == "\"zz\"" } }
+        assertEquals("the terminal got none of the page field's keys", false, coreText(id).lines().any { it.trim().endsWith("abzz") || it.trim().endsWith("zz") })
+        js("document.getElementById('lz-probe').remove(); true")
+
+        // The terminal asks again and the keys come back to it.
+        PageDriver.invoke("native_terminal_surface_focus", "{session:${quoted(id)},focused:true}")
+        PageDriver.poll("the editor to hold the focus again", 30) { ui { input.hasFocus() }.takeIf { it } }
+        shell("input text cd")
+        awaitRow(id, "the keys typed after the page's field", { it.startsWith(prompt) && it.endsWith("abcd") })
+        typeIntoTheSurface("")
+        evidence.put("keyboardHandedBackAndForth", true)
+    }
+
+    /**
      * A multiplexer in the native session (B10): tmux started from the session's shell runs a server and splits a window, the core shows
      * what tmux answers, and the attached client's two panes, border and status line (#2487) are in the core's text. It reads the core's text, not the DOM, runs at the end of the one case (a second case in this
      * class starts from the page the first leaves) and needs the tmux the job installs.
@@ -292,6 +328,9 @@ class NativeTerminalSessionTest {
             evidence.put("afterStopAndStartMs", elapsed()).put("sameChecksum", checksum(again) == checksum(back))
             Evidence.recordPicture("native-session-surface-restarted", again)
             assertEquals("the new surface shows the session as the old one did", checksum(back), checksum(again))
+
+            // The keyboard is the terminal's when it asks and the page's when a page field takes it.
+            keyboardOwnership(id)
 
             // A multiplexer in the same session, drawn by the core on the surface that has just been given back.
             hostTmux(id)

@@ -172,16 +172,25 @@ internal object TerminalSurfaces {
         (entries[id] ?: throw SurfaceUnavailable("native_surface_session")).relay.take(deliver)
     }
 
-    /** Gives the session's keyboard editor focus and opens the soft keyboard, or takes focus away and closes it. */
-    fun focus(id: String, focused: Boolean) {
-        val input = entries[id]?.host?.input ?: throw SurfaceUnavailable("native_surface_session")
+    /**
+     * Gives the session's keyboard editor focus and opens the soft keyboard, or takes focus away: the editor hands Android's view focus
+     * back to the WebView, so a field of the page (the composer, a dialog, the search box) is the one the keyboard types into, and the
+     * keyboard closes unless `keyboard` is false (the page took the keyboard itself).
+     */
+    fun focus(id: String, focused: Boolean, keyboard: Boolean = true) {
+        val host = entries[id]?.host ?: throw SurfaceUnavailable("native_surface_session")
+        val input = host.input
         val imm = input.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
         if (focused) {
             input.requestFocus()
-            imm?.showSoftInput(input, 0)
+            // The keyboard serves the view only after the focus change has been through the window, so asking in the same turn is ignored: ask once the change is in, and again shortly after in case the window was not focused yet.
+            val show = Runnable { if (input.hasFocus()) imm?.showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
+            input.post(show)
+            input.postDelayed(show, 150)
         } else {
             input.clearFocus()
-            imm?.hideSoftInputFromWindow(input.windowToken, 0)
+            host.web.requestFocus()
+            if (keyboard) imm?.hideSoftInputFromWindow(input.windowToken, 0)
         }
     }
 

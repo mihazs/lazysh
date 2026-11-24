@@ -349,6 +349,7 @@ pub async fn native_terminal_surface_focus(
     app: AppHandle,
     session: String,
     focused: bool,
+    keyboard: Option<bool>,
 ) -> Result<(), String> {
     validate_session(&session)?;
     #[cfg(target_os = "android")]
@@ -356,13 +357,13 @@ pub async fn native_terminal_surface_focus(
         call::<()>(
             &app,
             "focus",
-            serde_json::json!({ "session": session, "focused": focused }),
+            serde_json::json!({ "session": session, "focused": focused, "keyboard": keyboard.unwrap_or(true) }),
         )
         .await
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (app, focused);
+        let _ = (app, focused, keyboard);
         Err("This build has no native terminal input.".into())
     }
 }
