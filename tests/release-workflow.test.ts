@@ -211,3 +211,16 @@ test('tracked paths and module specifiers stay distinct on case-insensitive rele
   expect(listed.code).toBe(0);
   expect(caseCollisions(listed.stdout.split('\0').filter(Boolean))).toEqual([]);
 });
+
+test('the version editor is compiled once on main and restored everywhere else', async () => {
+  const outcomes = async (ref: string, cacheHit: string) => {
+    const context = { github: { event_name: ref === 'refs/heads/main' ? 'push' : 'pull_request', ref }, inputs: {}, steps: { editor: { outputs: { 'cache-hit': cacheHit } } },
+      runner: { os: 'Linux', arch: 'X64', temp: '/tmp' } };
+    const run = await executedSteps([{ uses: './.github/actions/setup-release' }], context);
+    return run.flatMap(({ step }) => step.uses?.startsWith('actions/cache/') ? [step.uses.split('/')[2].split('@')[0]] : /cargo install cargo-edit/.test(step.run ?? '') ? ['compile'] : []);
+  };
+  expect(await outcomes('refs/heads/main', '')).toEqual(['restore', 'compile', 'save']);
+  expect(await outcomes('refs/heads/main', 'true')).toEqual(['restore']);
+  expect(await outcomes('refs/pull/9/merge', '')).toEqual(['restore', 'compile']);
+  expect(await outcomes('refs/pull/9/merge', 'true')).toEqual(['restore']);
+});
