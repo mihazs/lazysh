@@ -2063,3 +2063,55 @@ describe('the Herdr switch in the session header', () => {
     } finally {window.removeEventListener('lazysh-terminal-action', action);}
   });
 });
+
+describe('page features over a native pane', () => {
+  /** A pane on a native session over the stand-in core, after the program printed `output`. */
+  async function nativePane(output: string) {
+    mocks.invoke.mockResolvedValue({});
+    const core = createHeadlessCore({rows: 4, columns: 20, feed: true});
+    const adapter = await openNativeTerminalAdapter(core);
+    await adapter.write!(new TextEncoder().encode(output));
+    render(<TerminalPane session={{id: 'native', name: 'Host', connected: true, adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+    return {adapter, core};
+  }
+
+  it('finds a word in the whole buffer, scrolls to it and selects its row, and wraps to the first match', async () => {
+    const {adapter} = await nativePane(`${Array.from({length: 30}, (_, i) => i === 3 || i === 20 ? `row ${i} needle` : `row ${i}`).join('\r\n')}`);
+    pressMore('Find');
+    fireEvent.change(screen.getByLabelText('Search terminal history'), {target: {value: 'needle'}});
+    const status = () => within(screen.getByLabelText('Search terminal history').closest('form')!).getByRole('status').textContent;
+    fireEvent.click(screen.getByRole('button', {name: 'Next'}));
+    await waitFor(() => expect(status()).toBe('Match on line 4'));
+    expect(adapter.selectionRange()?.start.y).toBe(3);
+    expect(adapter.viewport().top).toBe(3);
+    fireEvent.click(screen.getByRole('button', {name: 'Next'}));
+    await waitFor(() => expect(status()).toBe('Match on line 21'));
+    fireEvent.click(screen.getByRole('button', {name: 'Next'}));
+    await waitFor(() => expect(status()).toBe('Match on line 4'));
+  });
+
+  it('pastes the clipboard with the toolbar key, bracketed only while the program asked for it', async () => {
+    const {core} = await nativePane('');
+    fireEvent.click(screen.getByRole('button', {name: 'paste'}));
+    await waitFor(() => expect(core.inputs).toEqual([{data: 'paste me', origin: 'paste'}]));
+    cleanup();
+    const bracketed = await nativePane('\x1b[?2004h');
+    fireEvent.click(screen.getByRole('button', {name: 'paste'}));
+    await waitFor(() => expect(bracketed.core.inputs).toEqual([{data: '\x1b[200~paste me\x1b[201~', origin: 'paste'}]));
+    expect(mocks.write).not.toHaveBeenCalled();
+  });
+
+  it('offers a program\'s clipboard write for consent, copies it only on Allow, and ignores a read request', async () => {
+    const {adapter} = await nativePane('');
+    await adapter.write!(new TextEncoder().encode('\x1b]52;c;?\x07'));
+    expect(screen.queryByRole('region', {name: 'Remote clipboard request'})).toBeNull();
+    await act(async () => { await adapter.write!(new TextEncoder().encode('\x1b]52;c;aGVsbG8=\x07')); });
+    expect(screen.getByText('hello')).toBeTruthy();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', {name: 'Allow this copy'}));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('hello');
+    await act(async () => { await adapter.write!(new TextEncoder().encode('\x1b]52;c;c2Vjb25k\x07')); });
+    fireEvent.click(screen.getByRole('button', {name: 'Deny'}));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
+  });
+});
