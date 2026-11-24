@@ -95,7 +95,7 @@ describe.skipIf(!tools)('readme-capture.sh', () => {
   test('check passes for files inside budget and names every violation', async () => {
     expect(run(['check']).code).toBe(0);
     await writeFile(join(root, 'out', 'Bad_Name.png'), 'x');
-    await writeFile(join(root, 'out', 'huge.gif'), Buffer.alloc(5 * 1024 * 1024));
+    await writeFile(join(root, 'out', 'huge.gif'), Buffer.alloc(6 * 1024 * 1024));
     await writeFile(join(root, 'out', 'clip.webm'), 'x');
     await writeFile(join(root, 'out', 'long-demo.mp4'), Buffer.alloc(6 * 1024 * 1024));
     const result = run(['check']);
