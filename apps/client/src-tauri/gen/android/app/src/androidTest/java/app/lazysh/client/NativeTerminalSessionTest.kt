@@ -210,10 +210,8 @@ class NativeTerminalSessionTest {
     }
 
     /**
-     * A multiplexer in the native session (B10): tmux started from the session's shell runs a server and splits a window, and the core
-     * shows what tmux answers; then the client is attached and what the core holds of its screen is kept as evidence. The attached
-     * drawing is not asserted: on the CI emulator the core's text then held only the pane's prompt and not tmux's status line, which is
-     * a finding to chase, not yet a verdict. It reads the core's text, not the DOM, runs at the end of the one case (a second case in this
+     * A multiplexer in the native session (B10): tmux started from the session's shell runs a server and splits a window, the core shows
+     * what tmux answers, and the attached client's two panes, border and status line (#2487) are in the core's text. It reads the core's text, not the DOM, runs at the end of the one case (a second case in this
      * class starts from the page the first leaves) and needs the tmux the job installs.
      */
     private fun hostTmux(id: String) {
@@ -221,14 +219,22 @@ class NativeTerminalSessionTest {
         val probe = awaitRow(id, "the tmux probe", { it == "HAVE-TMUX" || it == "NO-TMUX" })
         evidence.put("tmuxOnPath", probe.lines().any { it.trim() == "HAVE-TMUX" })
         assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
+        // The size the remote pty has and the size the core has: a tmux client draws for the first and the core clips to the second.
+        typeIntoTheSurface("echo ptysize=\$(stty size)")
+        val pty = awaitRow(id, "the pty's size", { it.startsWith("ptysize=") && it.length > "ptysize=".length })
+        evidence.put("ptySize", pty.lines().first { it.trim().startsWith("ptysize=") && it.trim().length > "ptysize=".length }.trim())
+        evidence.put("coreSnapshot", runCatching { JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state").let { "${it.getInt("rows")} ${it.getInt("columns")}" } }.getOrElse { "unreadable: ${invoke("terminal_core_snapshot", id).take(200)}" })
         // The server and a second pane, through tmux's own commands: the answers are text the core parsed.
         typeIntoTheSurface("echo term=\$TERM; tmux -f /dev/null new-session -d -s native-mux && tmux split-window -d -h -t native-mux && echo panes=\$(tmux list-panes -t native-mux | wc -l)")
         val answered = awaitRow(id, "tmux's answer for two panes", { it == "panes=2" })
         evidence.put("tmuxTerm", answered.lines().firstOrNull { it.trim().startsWith("term=") }?.trim() ?: "")
-        // The client attached: its screen as the core holds it, kept for the follow-up; nothing is asserted about it yet.
+        // The client attached: tmux draws its two panes with a border and its status line on the last row, as the core's text holds them.
+        // tmux cuts the status line's left part ("[native-mux] ") to its default length of 10 characters, which is why the row starts "[native-mu".
         typeIntoTheSurface("tmux attach -t native-mux")
-        evidence.put("tmuxAttachDrawsStatusLine", runCatching { PageDriver.poll("tmux's client to draw", 20) { coreText(id).takeIf { it.contains("[native-mux]") } } }.isSuccess)
-        evidence.put("tmuxAttachScreen", coreText(id))
+        val screen = awaitRow(id, "tmux's status line on the last row", { it.startsWith("[native-mu") && it.contains("0:bash") })
+        evidence.put("tmuxStatusLine", screen.lines().last { it.startsWith("[native-mu") }.trim()).put("tmuxScreenRows", screen.lines().size)
+        assertEquals("the status line is the screen's last row", screen.lines().last { it.isNotBlank() }.trim(), screen.lines().last { it.startsWith("[native-mu") }.trim())
+        awaitRow(id, "the border between tmux's two panes", { it.contains("│") })
         typeIntoTheSurface("tmux kill-server")
     }
 
