@@ -41,8 +41,6 @@ export class SurfaceInput implements Disposable {
   private readonly preedit: HTMLElement;
   private stopped = false;
   private wantsFocus = false;
-  /** A field of the page has the keyboard: what the editor receives is not for the terminal. */
-  private pageHasKeyboard = false;
 
   constructor(
     private readonly adapter: NativeTerminalAdapter, private readonly session: string, private readonly anchor: HTMLElement,
@@ -64,14 +62,13 @@ export class SurfaceInput implements Disposable {
   /** The page's field let go of the keyboard: it is the terminal's again (the editor takes view focus back when the terminal asks). */
   /** The field the editor was just released for: while the page settles after the WebView took focus, its losing focus is the page restoring an older one, not the field being left. */
   private settling: EventTarget | null = null;
-  private leavePage(target: EventTarget | null) { if (target === this.pageTarget && target !== this.settling) { this.pageHasKeyboard = false; this.pageTarget = null; } }
+  private leavePage(target: EventTarget | null) { if (target === this.pageTarget && target !== this.settling) this.pageTarget = null; }
   private readonly pageLeft = (event: FocusEvent) => this.leavePage(event.target);
 
   private takePage(target: EventTarget | null) {
     if (!(target instanceof HTMLElement) || this.anchor.contains(target) || !target.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
     if (this.pageTarget === target) return;
     this.wantsFocus = false;
-    this.pageHasKeyboard = true;
     this.pageTarget = target;
     // The WebView takes Android's focus and the page then restores the element it last focused (a toolbar button), over the field the script focused while the page was not: put the field back.
     this.settling = target;
@@ -82,10 +79,7 @@ export class SurfaceInput implements Disposable {
   }
   private readonly pageField = (event: FocusEvent) => this.takePage(event.target);
 
-  /** The terminal holds the keyboard: the editor only receives keys while it has Android's focus, so unless a field of the page took the keyboard, what it delivers is the terminal's. */
-  focused() { return !this.pageHasKeyboard; }
-
-  focus() { this.pageHasKeyboard = false; this.wantsFocus = true; this.api.focus(this.session, true).catch(noop); }
+  focus() { this.wantsFocus = true; this.api.focus(this.session, true).catch(noop); }
   blur() { this.wantsFocus = false; this.api.focus(this.session, false).catch(noop); }
 
   dispose() {

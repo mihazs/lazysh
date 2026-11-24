@@ -117,17 +117,15 @@ describe('toolbar keys on a native session (#2493)',()=>{
   it('applies a sticky Ctrl to the next character the soft keyboard types, once', async () => {
     mocks.invoke.mockResolvedValue({});
     savePreferences({...defaults, toolbar: ['ctrl']});
-    const adapter = await openNativeTerminalAdapter(createHeadlessCore({rows: 4, columns: 20, feed: true}));
+    const core = createHeadlessCore({rows: 4, columns: 20, feed: true});
+    const adapter = await openNativeTerminalAdapter(core);
     render(<TerminalPane session={{id: 'ssh', name: 'Host', connected: true, terminal, adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
     await act(async () => {});
-    // The Android editor is the keyboard: it holds it until a page field takes it.
-    adapter.inputFocused = () => true;
-    // The editor holds Android's focus, not the WebView's: the page is not the focused document while the terminal is typed into.
-    vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     fireEvent.click(screen.getByRole('button', {name: 'ctrl'}));
     adapter.sendInput('c', 'ime');
     adapter.sendInput('c', 'ime');
-    await waitFor(() => expect(mocks.write.mock.calls.map(call => call[1])).toEqual(['\x03', 'c']));
+    adapter.paste('c');
+    await waitFor(() => expect(core.inputs.map(({data}) => data)).toEqual(['\x03', 'c', 'c']));
   });
 });
 describe('selection on a native session',()=>{

@@ -129,23 +129,6 @@ describe('Android surface input', () => {
     expect(releases).toEqual([false]);
   });
 
-  it('is the terminal\'s keyboard unless a page field holds it, and again once that field lets go', async () => {
-    const {adapter, input} = await setup();
-    const field = document.body.appendChild(document.createElement('input'));
-    expect(input.focused()).toBe(true);
-    field.focus();
-    expect(input.focused()).toBe(false);
-    // Just after the release the page may restore an older focus; once it has settled, a blur is the field being left.
-    await new Promise(resolve => setTimeout(resolve, 650));
-    field.blur();
-    expect(input.focused()).toBe(true);
-    field.focus();
-    input.focus();
-    expect(input.focused()).toBe(true);
-    void adapter;
-    input.dispose();
-  });
-
   it('puts the page field back in focus when the WebView regaining focus restores the element focused before', async () => {
     const {input} = await setup();
     const field = document.body.appendChild(document.createElement('input'));

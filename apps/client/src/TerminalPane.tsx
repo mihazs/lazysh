@@ -786,21 +786,19 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       && pasteView.current.id === session.id && pasteView.current.adapter === adapter;
     const owner: InputOwner = {session, disposed: false};
     inputOwner.current = owner;
-    const output = adapter.observeInput?.((data, userInput, origin) => {
+    // A native terminal has no DOM editor to observe: its keyboard is the platform's own input view (#1328).
+    const output = adapter.observeInput?.((data, userInput) => {
       let value = data;
       const pointerInput = !!pointerInputEvent.current?.eventPhase && !keyboardInputEvent.current?.eventPhase;
-      // The Android editor holds Android's focus, not the WebView's, so the page reports no focus while the terminal is typed into.
-      if (userInput && (!acceptsInput() || document.hidden || (adapter.inputFocused === undefined && !document.hasFocus())
-        || (((adapter.inputFocused ? !adapter.inputFocused() : document.activeElement !== adapter.inputElement()) || adapter.inputElement()?.readOnly) && !literalPaste.current && !pointerInput))) {
+      if (userInput && (!acceptsInput() || document.hidden || !document.hasFocus()
+        || ((document.activeElement !== adapter.inputElement() || adapter.inputElement()?.readOnly) && !literalPaste.current && !pointerInput))) {
         output?.reset(); return;
       }
       if (userInput) {
         // DOM dispatch can checkpoint microtasks between capture and xterm's
         // listener. eventPhase identifies the real active source without timing
         // guesses, while retaining the lane for asynchronously committed IME.
-        // A platform keyboard (Android's editor) has no DOM events to mark its lane: what it types as text is the keyboard lane.
-        const platformKeyboard = adapter.inputFocused !== undefined && (origin === "ime" || origin === "keyboard");
-        if (!pointerInput && !literalPaste.current && (inputLane.current === "keyboard" || platformKeyboard)) {
+        if (!pointerInput && !literalPaste.current && inputLane.current === "keyboard") {
           const state = modifierState.current;
           value = state.shift && !state.ctrl && !state.meta && (data === "\r" || data === "\n")
             ? parseChord("Shift+Enter")
@@ -814,7 +812,14 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       if (session.connected) void writeInput(userInput ? 'terminal-user' : 'terminal-nonuser', value, owner).catch(error => reportError(captureUiError(error)));
     }, acceptsInput, setUnappliedEdit);
     imeInput.current = output ?? null;
-    setModifierInput(output?.available ?? false);
+    // A native adapter delivers the keyboard's text itself: the toolbar's modifiers apply to what it types, through this hook, once.
+    adapter.setInputModifier?.(typed => {
+      const state = modifierState.current;
+      const value = state.shift && !state.ctrl && !state.meta && (typed === "\r" || typed === "\n") ? parseChord("Shift+Enter") : modifiedTerminalText(typed, state.ctrl, state.meta);
+      consumeModifiers();
+      return value;
+    });
+    setModifierInput((output?.available ?? false) || !!adapter.setInputModifier);
     const resizeRemote = ({cols, rows}: {cols: number; rows: number}) => {
       if (session.connected && !owner.disposed && inputOwner.current === owner && mounted.current && access.current())
         void api.resize(session.id, cols, rows).catch(error => reportError(captureUiError(error)));
@@ -856,7 +861,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       lanes.forEach(name => element.removeEventListener(name, keyboardLane, true));
       element.removeEventListener("paste", literalLane, true);
       pointerEvents.forEach(name => document.removeEventListener(name, pointerLane, true));
-      resize.disconnect(); imeInput.current = null; output?.dispose(); size.dispose(); reports.dispose(); links.dispose(); keys.dispose();
+      resize.disconnect(); imeInput.current = null; adapter.setInputModifier?.(undefined); output?.dispose(); size.dispose(); reports.dispose(); links.dispose(); keys.dispose();
       void adapter.detach();
       fit.current = null;
     };
