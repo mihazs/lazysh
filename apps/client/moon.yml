@@ -180,6 +180,13 @@ tasks:
     env: {LAZYSH_ANDROID_UI_TMUX: '1'}
     deps: [~:build-android-emulator]
     options: *envLocal
+  test-android-native-tmux:
+    type: test
+    command: bun test ../../tests/android-ssh-host.test.ts --test-name-pattern
+    args: ['^actual Android native terminal runs the owned tmux window controls and clipboard consent$']
+    env: {LAZYSH_ANDROID_UI_NATIVE_TMUX: '1'}
+    deps: [~:build-android-emulator-terminal-core]
+    options: *envLocal
   test-android-zellij:
     type: test
     command: bun test ../../tests/android-zellij.test.ts ../../tests/android-ssh-host.test.ts --test-name-pattern

@@ -343,7 +343,7 @@ export class TmuxFixture {
     return count;
   }
   /** Closed numeric evidence only; never pane text, paths or process IDs. */
-  diagnostic() {return {schemaVersion:1,history:[...this.history],defaultHistory:[...this.defaultHistory],views:this.views.map(view=>`${view.window}${view.zoomed?'+zoom':''}`),windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
+  diagnostic() {return {schemaVersion:1,history:[...this.history],defaultHistory:[...this.defaultHistory],modes:[...this.modes],views:this.views.map(view=>`${view.window}${view.zoomed?'+zoom':''}`),windows:this.windows.length,server:tmuxServerStatus(this.server?.child)};}
   /** Whether window `index`'s original pane still shows `text` on the host, so bytes the app typed reached that pane's own tty. */
   async paneHolds(index:number,text:string) {
     const window=this.windows.find(value=>value.index===index);
@@ -422,6 +422,15 @@ export class TmuxFixture {
     if(!tmuxCopyModeVerified(this.modes))throw new Error('Owned tmux copy mode was not entered and left');
     // A selected line carries its newline.
     if(await this.run(['show-buffer'])!==`${this.windows[0].marker}\n`)throw new Error('Owned tmux copied line differs');
+  }
+  /** The native controls arm attaches once, verifies the original window order, and leaves the server intact. */
+  async verifyNativeControls() {
+    await this.verifyCopied();
+    const deadline=performance.now()+5000;
+    while(await this.observe()!==0 && performance.now()<deadline)await delay(25);
+    if(this.history.join(',')!=='0,1,0' || this.lifecycle || this.defaultSession ||
+      this.views.some(view=>view.zoomed) || this.views.map(view=>view.window).join(',')!=='alpha,beta,alpha,beta')
+      throw new Error('Owned tmux native controls did not preserve the original display and windows');
   }
   /** After the split, the app pinched the zoom on and off and swiped to the next window and back: the monitor saw those states last, in that order. */
   async verifyGestures() {

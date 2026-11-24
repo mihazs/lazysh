@@ -552,6 +552,7 @@ export function verifyDpadReceiverBytes(bytes:Uint8Array,nonce:string,counts:num
 
 // Test data only: these records are independently authored, not official CLI captures.
 export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..'),herdr?:HerdrFixture,companion=false,moshBackground=false,herdrMosh=false,sharedHerdr=false,attachments=false,ime=false,dpad=false,recorded=false,tmux?:TmuxFixture,deniedNotification=false,zellij?:ZellijFixture) {
+  const nativeTmux=!!tmux && process.env.LAZYSH_ANDROID_UI_NATIVE_TMUX==='1';
   if(process.platform!=='linux')throw new Error('Owned Android SSH UI acceptance requires Linux');
   if(tmux && (herdr || companion || moshBackground || herdrMosh || sharedHerdr || attachments || ime || dpad || recorded))throw new Error('Owned tmux mode must be isolated');
   if(zellij && (tmux || herdr || companion || moshBackground || herdrMosh || sharedHerdr || attachments || ime || dpad || recorded))throw new Error('Owned Zellij mode must be isolated');
@@ -666,7 +667,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug',
       recorded?'-PlazyshRecordedConversationAcceptance=true':tmux?'-PlazyshTmuxAcceptance=true':zellij?'-PlazyshZellijAcceptance=true':herdr?(herdrMosh?'-PlazyshHerdrMoshAcceptance=true':'-PlazyshHerdrAcceptance=true'):dpad?'-PlazyshSshDpadAcceptance=true':ime?'-PlazyshSshImeAcceptance=true':companion?'-PlazyshCompanionAcceptance=true':attachments?'-PlazyshAttachmentAcceptance=true':moshBackground?'-PlazyshMoshBackgroundAcceptance=true':deniedNotification?'-PlazyshDeniedNotificationAcceptance=true':'-PlazyshSshAcceptance=true',
       ...((herdr || attachments || dpad)?['-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true']:[]),
-      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(recorded?'ownedRecordedConversationsThroughRealUi':tmux?'ownedTmuxThroughRealUi':zellij?'ownedZellijThroughRealUi':herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):dpad?'ownedSshDpadPanThroughRealUi':ime?'ownedSshImeTransactionsThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':deniedNotification?'ownedSshSurvivesDeniedNotificationPermission':'ownedOpenSshConnectsThroughRealUi'),
+      '-Pandroid.testInstrumentationRunnerArguments.class=app.lazysh.client.NativeWorkspaceTest#'+(recorded?'ownedRecordedConversationsThroughRealUi':tmux?(nativeTmux?'ownedTmuxControlsWithNativeEngine':'ownedTmuxThroughRealUi'):zellij?'ownedZellijThroughRealUi':herdr?(sharedHerdr?'ownedSharedHerdrNavigationThroughRealUi':herdrMosh?'ownedMoshDefaultHerdrChatThroughRealUi':'ownedGuardedHerdrChatThroughRealUi'):dpad?'ownedSshDpadPanThroughRealUi':ime?'ownedSshImeTransactionsThroughRealUi':companion?'ownedCompanionInstallsThroughRealUi':attachments?'ownedMoshUploadsLargeClipboardImageThroughRealUi':moshBackground?'ownedMoshSurvivesBusyBackgroundThroughRealUi':deniedNotification?'ownedSshSurvivesDeniedNotificationPermission':'ownedOpenSshConnectsThroughRealUi'),
       `-Pandroid.testInstrumentationRunnerArguments.lazyshSshFixture=${remote}/fixture.json`],root);
     retainedPackages=!!herdr || attachments || dpad;
     let monitoring=sharedHerdr || rawInput || !!tmux || !!zellij,byteFailure:unknown;
@@ -744,7 +745,10 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       if(JSON.stringify(attachmentFiles)!==JSON.stringify(Object.values(attachmentNames).sort()))throw new Error('Unexpected owned attachment destination created');
       console.log('Owned manual Mosh attachment: valid PNG size/hash exact; pre-existing collision inode/size/mtime/hash unchanged');
     }
-    if(tmux) {
+    if (nativeTmux) {
+      await tmux!.verifyNativeControls();
+      console.log('Owned Android native tmux: copy mode, clipboard consent, numbered windows and Jump To verified');
+    } else if(tmux) {
       await tmux.verifyWindowLifecycle();
       await tmux.verifySplitAndZoom();
       await tmux.verifyCopied();

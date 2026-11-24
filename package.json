@@ -54,6 +54,7 @@
     "test:android-ssh": "moon run client:test-android-ssh",
     "test:android-herdr-navigation": "moon run client:test-android-herdr-navigation",
     "test:android-tmux": "moon run client:test-android-tmux",
+    "test:android-native-tmux": "moon run client:test-android-native-tmux",
     "test:android-zellij": "moon run client:test-android-zellij",
     "test:android-ssh-parity": "moon run client:test-android-ssh-parity",
     "build:android:fdroid": "moon run client:build-android-fdroid",

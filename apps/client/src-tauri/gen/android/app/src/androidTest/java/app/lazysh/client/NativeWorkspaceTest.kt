@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
 import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.PatternMatcher
@@ -3330,7 +3331,13 @@ class NativeWorkspaceTest {
      * consent, so the line reaches the system clipboard only after a real tap on Allow. The host proves the pane's copy mode
      * and the buffer tmux copied.
      */
-    private fun verifyTmuxCopyMode(scenario: ActivityScenario<MainActivity>, marker: String) {
+    private fun nativeTmuxText(): String? {
+        val session = PageDriver.onActivity { TerminalSurfaces.ids().singleOrNull() } ?: return null
+        val result = PageDriver.invoke("terminal_core_text", "{sessionId:${JSONObject.quote(session)}}")
+        return JSONTokener(result).nextValue() as? String
+    }
+
+    private fun verifyTmuxCopyMode(scenario: ActivityScenario<MainActivity>, marker: String, native: Boolean) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val clipboard = instrumentation.targetContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         fun copied(): String? {
@@ -3340,7 +3347,15 @@ class NativeWorkspaceTest {
         }
         // A selected line carries its newline.
         val line = "$marker\n"
-        val screenHasIndicator = terminalScreenContains("[0/0]")
+        fun awaitCopyMode(shown: Boolean) {
+            val stage = if (shown) "tmux copy mode shows its position indicator" else "tmux copy leaves copy mode"
+            if (native) PageDriver.poll(stage, 45) {
+                nativeTmuxText()?.takeIf { it.isNotBlank() && it.contains("[0/0]") == shown }
+            } else {
+                val indicator = terminalScreenContains("[0/0]")
+                awaitDocument(scenario, stage, if (shown) indicator else "!($indicator)")
+            }
+        }
         /** A real finger tap at the middle of the one matching element, hit-tested so a covering view cannot take it. */
         fun tap(elements: String) {
             val css = JSONArray(evaluate(scenario, """
@@ -3349,11 +3364,18 @@ class NativeWorkspaceTest {
                   if(!matches[0].contains(document.elementFromPoint(x,y)))throw Error('Owned tap hit target required');
                   return [x,y,innerWidth];})()
             """))
-            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
-                val origin = IntArray(2); view.getLocationOnScreen(origin)
+            fun coordinates(view: View): FloatArray {
+                val origin = IntArray(2)
+                view.getLocationOnScreen(origin)
                 val scale = view.width / css.getDouble(2)
-                floatArrayOf((origin[0] + css.getDouble(0) * scale).toFloat(), (origin[1] + css.getDouble(1) * scale).toFloat())
-            }, Press.FINGER))
+                return floatArrayOf((origin[0] + css.getDouble(0) * scale).toFloat(), (origin[1] + css.getDouble(1) * scale).toFloat())
+            }
+            if (native) {
+                val point = PageDriver.onActivity { activity -> coordinates(checkNotNull(EdgeGestureExclusion.webView(activity.window.decorView))) }
+                assertTrue("the device tapped the owned target", UiDevice.getInstance(instrumentation).click(point[0].roundToInt(), point[1].roundToInt()))
+            } else {
+                onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, ::coordinates, Press.FINGER))
+            }
         }
         sessionView(scenario, "Sessions")
         val region = "section[aria-label='tmux prefix shortcuts']"
@@ -3363,21 +3385,35 @@ class NativeWorkspaceTest {
             .perform(webScrollIntoView()).perform(webClick())
         awaitDocument(scenario, "tmux Copy mode shortcut sent", "$ready && !document.querySelector(${JSONObject.quote("$region [role=alert]")})")
         sessionView(scenario, "Terminal")
-        awaitDocument(scenario, "tmux copy mode shows its position indicator", screenHasIndicator)
-        // The attached display is the visible pane; the SSH tab's terminal below it stays mounted. A finger taps it to focus
-        // its input; the hidden input itself is not manipulable.
-        tap("Array.from(document.querySelectorAll('.terminal-pane')).filter(p=>p.style.display!=='none').map(p=>p.querySelector('.xterm-screen'))")
-        awaitDocument(scenario, "tmux terminal input focused", "document.activeElement===Array.from(document.querySelectorAll('.terminal-pane')).find(p=>p.style.display!=='none')?.querySelector('.xterm-helper-textarea')")
+        awaitCopyMode(true)
+        val screen = if (native) ".terminal-canvas[data-terminal-surface='native']" else ".xterm-screen"
+        tap("Array.from(document.querySelectorAll('.terminal-pane')).filter(p=>p.style.display!=='none').map(p=>p.querySelector(${JSONObject.quote(screen)}))")
+        val connection = if (native) {
+            val editor = PageDriver.poll("the native terminal input owns focus", 30) {
+                PageDriver.onActivity { activity ->
+                    val frame = EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup
+                    frame?.let { (0 until it.childCount).map(it::getChildAt).filterIsInstance<TerminalInputView>().singleOrNull(View::hasFocus) }
+                }
+            }
+            PageDriver.onActivity { checkNotNull(editor.onCreateInputConnection(EditorInfo())) }
+        } else {
+            awaitDocument(scenario, "tmux terminal input focused", "document.activeElement===Array.from(document.querySelectorAll('.terminal-pane')).find(p=>p.style.display!=='none')?.querySelector('.xterm-helper-textarea')")
+            null
+        }
         // The cursor starts below the marker: k moves onto it, V selects the line and Enter copies it and leaves copy mode.
-        // One key at a time with a pause, as a finger types: the host check showed tmux 3.4 not copying when the three keys arrived in one write.
-        fun press(key: EspressoKey) {
-            onView(isAssignableFrom(WebView::class.java)).perform(pressKey(key))
+        // One key at a time: tmux 3.4 did not copy when those three keys arrived in a single write.
+        fun press(text: String, code: Int, shift: Boolean = false) {
+            if (connection != null) {
+                PageDriver.onActivity { assertTrue("the native editor accepted its input", connection.commitText(text, 1)) }
+            } else {
+                onView(isAssignableFrom(WebView::class.java)).perform(pressKey(EspressoKey.Builder().withKeyCode(code).withShiftPressed(shift).build()))
+            }
             Thread.sleep(150)
         }
-        press(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_K).build())
-        press(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_V).withShiftPressed(true).build())
-        press(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_ENTER).build())
-        awaitDocument(scenario, "tmux copy leaves copy mode", "!($screenHasIndicator)")
+        press("k", KeyEvent.KEYCODE_K)
+        press("V", KeyEvent.KEYCODE_V, shift = true)
+        press("\n", KeyEvent.KEYCODE_ENTER)
+        awaitCopyMode(false)
         awaitDocument(scenario, "tmux copy reaches the remote clipboard request",
             "Array.from(document.querySelectorAll('[role=region]')).some(x=>x.getAttribute('aria-label')==='Remote clipboard request' && x.textContent.includes(${JSONObject.quote(marker)}))")
         assertTrue("The copied line must not reach the clipboard before Allow", copied() != line)
@@ -3402,7 +3438,7 @@ class NativeWorkspaceTest {
     // window state, the Chat draft in the original pane, that the split left the original pane untouched
     // and the zoom returned, that the gestures changed the zoom flag and active window in order,
     // and that the original server and panes survived.
-    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, label: String) {
+    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, label: String, native: Boolean) {
         val server = tmux.getString("name")
         require(server == "owned-tmux") { "Owned tmux fixture required" }
         val windows = tmux.getJSONArray("windows")
@@ -3426,8 +3462,20 @@ class NativeWorkspaceTest {
             "marked:marked.length,onPane:!!row?.classList.contains('mux-pane-row'),owner:owner?.textContent.trim()};})"
         fun visible(target: JSONObject, other: JSONObject, stage: String) {
             sessionView(scenario, "Terminal")
-            val forbidden = JSONArray(listOf(other.getString("marker")))
-            awaitDocument(scenario, stage, "(()=>{$observer;return ownedVisibleHerdr(document,$labels,1,${JSONObject.quote(target.getString("marker"))},$forbidden);})()")
+            if (native) {
+                awaitDocument(scenario, "the owned attached display uses the native terminal", """
+                    (() => {
+                      const pane = Array.from(document.querySelectorAll('.terminal-pane')).find(p => p.getClientRects().length && p.getBoundingClientRect().width > 0);
+                      return Boolean(pane?.querySelector(".terminal-canvas[data-terminal-surface='native']")) && !pane.querySelector('.xterm-screen');
+                    })()
+                """)
+                PageDriver.poll(stage, 45) {
+                    nativeTmuxText()?.takeIf { it.contains(target.getString("marker")) && !it.contains(other.getString("marker")) }
+                }
+            } else {
+                val forbidden = JSONArray(listOf(other.getString("marker")))
+                awaitDocument(scenario, stage, "(()=>{$observer;return ownedVisibleHerdr(document,$labels,1,${JSONObject.quote(target.getString("marker"))},$forbidden);})()")
+            }
         }
         // The Workspaces panel lists exactly these windows (title and active mark) in the one session, as read back from the host; `also` adds checks on its `panel`.
         fun panelWindows(expected: List<String>, also: String = "true") = """
@@ -3632,20 +3680,28 @@ class NativeWorkspaceTest {
         try {
             attach(alpha, "before detach")
             visible(alpha, beta, "attached tmux shows its current window")
-            agentViewBack()
-            visible(alpha, beta, "Android back from the Agent view keeps the tmux window")
+            if (!native) {
+                agentViewBack()
+                visible(alpha, beta, "Android back from the Agent view keeps the tmux window")
+            }
             // Copy mode first: it needs the marker line right above the cursor, before Chat input adds lines to this pane.
-            verifyTmuxCopyMode(scenario, alpha.getString("marker"))
+            verifyTmuxCopyMode(scenario, alpha.getString("marker"), native)
             visible(alpha, beta, "tmux copy mode leaves the displayed window in place")
             // Chat input returns to the pane this display shows (alpha), and the host reads that pane back by id.
-            tmux.optJSONObject("chat")?.let { verifyOwnedTmuxChat(scenario, it, alpha, server, label) }
-            visible(alpha, beta, "Chat input leaves the displayed tmux window in place")
+            if (!native) {
+                tmux.optJSONObject("chat")?.let { verifyOwnedTmuxChat(scenario, it, alpha, server, label) }
+                visible(alpha, beta, "Chat input leaves the displayed tmux window in place")
+            }
             jump(beta, alpha)
             visible(beta, alpha, "tmux Jump To shows the selected window")
             numbered(alpha)
             visible(alpha, beta, "tmux numbered window control shows its window")
             jump(beta, alpha)
             visible(beta, alpha, "tmux Jump To returns to the selected window")
+            if (native) {
+                detach("after native controls")
+                return
+            }
             val added = splitBeta()
             zoomPane(added, zoomed = true)
             detach("by closing its tab")
@@ -3892,6 +3948,10 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
     @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
     @Test fun ownedTmuxThroughRealUi() = ownedSshUi(false, requireTmux = true)
+    @Test fun ownedTmuxControlsWithNativeEngine() {
+        Os.setenv("LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU", "1", true)
+        ownedSshUi(false, requireTmux = true, nativeTmux = true)
+    }
     @Test fun ownedZellijThroughRealUi() = ownedSshUi(false, requireZellij = true)
 
     /**
@@ -4948,7 +5008,7 @@ class NativeWorkspaceTest {
         closeSoftKeyboard()
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireZellij: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireZellij: Boolean = false, nativeTmux: Boolean = false) {
         require(!requireZellij || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded && !requireTmux)) { "Owned Zellij mode must be isolated" }
         require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
         require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
@@ -5383,8 +5443,25 @@ class NativeWorkspaceTest {
                     "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).every(x=>!/(MOSH CONNECT |LAZYSH_ATTACH_|LAZYSH-GUARD-1:)/.test(x.textContent))"))
                 println("lazysh Mosh default Herdr: one saved-name display and original guarded input verified")
             } else if (requireTmux) {
-                verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label)
-                verifyOwnedTmuxDefault(scenario, fixture, name, label)
+                val key = "lazysh.preferences.v1"
+                val previous = if (nativeTmux) evaluate(scenario, "localStorage.getItem('$key')") else null
+                try {
+                    if (nativeTmux) evaluate(scenario, """(() => {
+                        const prefs = JSON.parse(localStorage.getItem('$key') || '{}');
+                        localStorage.setItem('$key', JSON.stringify({...prefs, terminalEngine: 'native'}));
+                        window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
+                        return true;
+                    })()""")
+                    verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label, nativeTmux)
+                    if (!nativeTmux) verifyOwnedTmuxDefault(scenario, fixture, name, label)
+                } finally {
+                    if (nativeTmux) evaluate(scenario, """(() => {
+                        if ($previous === null) localStorage.removeItem('$key');
+                        else localStorage.setItem('$key', $previous);
+                        window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
+                        return true;
+                    })()""")
+                }
             } else if (requireZellij) {
                 verifyOwnedZellij(scenario, fixture.getJSONObject("zellij"), name)
             } else if (requireDpad) {
