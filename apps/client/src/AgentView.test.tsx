@@ -1229,6 +1229,29 @@ describe('answering the open question of the agent',()=>{
     await open([...question([single]),{id:'r',role:'tool',blocks:[{type:'tool_result',id:'q1',text:'answered'}]}]);await bind();await advance(400);
     expect(within(card()).queryByRole('button',{name:'Red'})).toBeNull();
   });
+  it.each([['claude','Claude Code'],['codex','Codex']] as const)('shows successive and batched %s questions in order without guessing the active request',async(agent,label)=>{
+    const first={question:'Explain your preference',multiple:false,options:[]};
+    const second={...single,question:'Pick a color'};
+    const next={...single,question:'Pick a size',options:[{label:'Small'},{label:'Large'}]};
+    const messages=[...question([first,second],'q1'),
+      {id:'b',role:'assistant',blocks:[{type:'tool_use',id:'q2',name:agent==='claude'?'AskUserQuestion':'request_user_input',text:'{}',card:{kind:'question',questions:[next]}}]}];
+    await open(messages,'needs_attention',agent,label);await bind();await advance(400);
+    const cards=screen.getAllByRole('region',{name:'Question'});
+    expect(cards).toHaveLength(2);
+    expect(within(cards[0]).getAllByRole('group').map(group=>group.querySelector('legend')?.textContent)).toEqual(['Explain your preference','Color: Pick a color']);
+    expect(within(cards[1]).getByRole('group',{name:'Color: Pick a size'})).toBeTruthy();
+    expect(within(cards[1]).queryByRole('button',{name:'Small'})).toBeNull();
+    expect(sent()).toEqual([]);
+  });
+  it('offers the next Claude question once the earlier call has a recorded result',async()=>{
+    const messages=[...question([single],'q1'),{id:'r',role:'tool',blocks:[{type:'tool_result',id:'q1',text:'answered'}]},
+      {id:'b',role:'assistant',blocks:[{type:'tool_use',id:'q2',name:'AskUserQuestion',text:'{}',card:{kind:'question',questions:[{...single,question:'Pick a size',options:[{label:'Small'},{label:'Large'}]}]}}]}];
+    await open(messages);await bind();await advance(400);
+    const cards=screen.getAllByRole('region',{name:'Question'});
+    expect(within(cards[0]).queryByRole('button',{name:'Red'})).toBeNull();
+    expect((within(cards[1]).getByRole('button',{name:'Small'}) as HTMLButtonElement).disabled).toBe(false);
+    expect(sent()).toEqual([]);
+  });
 });
 
 describe('image previews in the user bubble',()=>{
