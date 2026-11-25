@@ -4,6 +4,9 @@
     "client": [
       "client"
     ],
+    "wry-vendor": [
+      "all"
+    ],
     "client-native": [
       "client"
     ],

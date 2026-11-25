@@ -237,7 +237,7 @@ test.each([
   ['Mosh transport', ['packages/mosh-transport/src/lib.rs'], { ...clientRun, ...iosRun, 'native-android-mosh': 1 }],
   ['push registration', ['packages/push-registration/src/lib.rs'], { ...clientRun, ...iosRun,
     'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2 }],
-  ['shared common code', ['packages/common/src/hex_digest.rs'], { ...clientRun, ...agentRun }],
+  ['shared common code', ['packages/common/src/hex_digest.rs'], { ...clientRun, ...agentRun, 'native-android-gotify': 1 }],
   ['the shared companion release crate', ['packages/companion-release/src/lib.rs'], { ...clientRun, ...agentRun }],
   ...(['apps/notification-service/src/lib.rs', 'packages/notification-client/src/lib.rs'] as const).map(path => [
     `the notification relay (${path})`, [path], { ...(path.startsWith('packages/') ? clientRun : {}), ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2, 'native-android-gotify': 1 }] as const),
