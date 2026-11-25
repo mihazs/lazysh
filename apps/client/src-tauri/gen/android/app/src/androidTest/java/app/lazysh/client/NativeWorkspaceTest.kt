@@ -779,14 +779,15 @@ class NativeWorkspaceTest {
             // into the focused WebView, preserving normal browser input events.
             timing.phase = TypingPhase.NATIVE_INJECTION
             timing.injectionStarted = System.nanoTime()
-            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-            // Queue key events in order without Espresso waiting for idle between key events.
-            for (event in keyEvents) {
-                assertTrue("Test device rejected a native typing event", automation.injectInputEvent(event, false))
+            // Deliver native Android keys to Chromium in one UI-thread operation.
+            scenario.onActivity { activity ->
+                val target = requireNotNull(webView(activity.window.decorView))
+                assertTrue("Native WebView focus changed before typing", target.hasFocus())
+                for (event in keyEvents) target.dispatchKeyEvent(event)
             }
             timing.injectionReturned = System.nanoTime()
             timing.phase = TypingPhase.SETTLING
-            // Queuing keys does not acknowledge WebView renderer delivery.
+            // Android key dispatch does not acknowledge WebView renderer delivery.
             // Wait only for the exact result; never retype or assign the input value.
             val typed = "document.querySelector(${JSONObject.quote(selector)})?.value === ${JSONObject.quote(text)}"
             while (true) {
