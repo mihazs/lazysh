@@ -75,6 +75,35 @@ def windows_window(pid, observed):
     return matches[0] if len(matches) == 1 else None
 
 
+def windows_client_box(window, position=False):
+    import ctypes
+    from ctypes import wintypes
+
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    if position:
+        user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                      ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        # Keep the owned test window above the hosted desktop and within its visible screen.
+        if not user.SetWindowPos(window, wintypes.HWND(-1), 32, 32, 800, 560, 0x40):
+            raise ctypes.WinError(ctypes.get_last_error())
+    user.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+    bounds, origin = wintypes.RECT(), wintypes.POINT()
+    if not user.GetClientRect(window, ctypes.byref(bounds)) or not user.ClientToScreen(window, ctypes.byref(origin)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return origin.x, origin.y, origin.x + bounds.right, origin.y + bounds.bottom
+
+
+def overlay_origin(image, scale):
+    x, y, width, height = (round(value * scale) for value in DOM_OVERLAY)
+    # Exclude the title bar, which can show a red close button.
+    bounds = box_of(image.crop((0, y, image.width, image.height)), red)
+    if bounds is None or (bounds[2] - bounds[0], bounds[3] - bounds[1]) != (width, height):
+        return None
+    # The crop already subtracts the overlay's expected y coordinate.
+    return bounds[0] - x, bounds[1]
+
+
 def run(app_path, out):
     out.mkdir(parents=True, exist_ok=True)
     home = out / "home"
@@ -100,7 +129,7 @@ def run(app_path, out):
     def capture(window, step):
         png = out / f"{step}.png"
         if windows:
-            image = ImageGrab.grab(window=window).convert("RGB")
+            image = ImageGrab.grab(bbox=windows_client_box(window), all_screens=True).convert("RGB")
             image.save(png)
             return image
         subprocess.run(["screencapture", "-x", "-o", "-l", window, str(png)], check=True, timeout=15)
@@ -131,6 +160,8 @@ def run(app_path, out):
                 if windows:
                     (out / "owned-windows.json").write_text(json.dumps(observed), encoding="utf-8")
                 raise
+            if windows:
+                windows_client_box(window, position=True)
             command("core 17 5")
             results = []
 
@@ -144,14 +175,10 @@ def run(app_path, out):
             scale = place(FIRST_ANCHOR)
             cell = json.loads(command("cell"))
             expected_width, expected_height = 4 * cell["width"], cell["height"]
-            overlay_x, overlay_y, overlay_w, overlay_h = DOM_OVERLAY
-            overlay_expected = (round(overlay_w * scale), round(overlay_h * scale))
-            # Restrict the overlay match to WebView content. The close button in the title bar is also red.
-            image = capture(window, "overlay-control")
-            red_box = box_of(image.crop((0, round(overlay_y * scale), image.width, image.height)), red)
-            if red_box is None or (red_box[2] - red_box[0], red_box[3] - red_box[1]) != overlay_expected:
-                raise RuntimeError("The app window capture does not show the complete DOM overlay")
-            origin = (red_box[0] - round(overlay_x * scale), red_box[1])
+            origin = wait_for(
+                lambda: overlay_origin(capture(window, "overlay-control"), scale),
+                "The app window capture does not show the complete DOM overlay",
+            )
 
             def page(x, y):
                 return (origin[0] + round(x * scale), origin[1] + round(y * scale))
