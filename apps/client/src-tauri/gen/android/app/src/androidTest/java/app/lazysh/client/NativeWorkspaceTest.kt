@@ -779,11 +779,17 @@ class NativeWorkspaceTest {
             // into the focused WebView, preserving normal browser input events.
             timing.phase = TypingPhase.NATIVE_INJECTION
             timing.injectionStarted = System.nanoTime()
-            // Deliver native Android keys to Chromium in one UI-thread operation.
-            scenario.onActivity { activity ->
-                val target = requireNotNull(webView(activity.window.decorView))
-                assertTrue("Native WebView focus changed before typing", target.hasFocus())
-                for (event in keyEvents) target.dispatchKeyEvent(event)
+            // Give Chromium a renderer round trip between batches without refocusing or replaying input.
+            for (batch in keyEvents.asList().chunked(16)) {
+                assertTrue("Native key dispatch exhausted the shared budget for $selector", System.nanoTime() < deadline)
+                scenario.onActivity { activity ->
+                    val target = requireNotNull(webView(activity.window.decorView))
+                    assertTrue("Native WebView focus changed before typing", target.hasFocus())
+                    for (event in batch) target.dispatchKeyEvent(event)
+                }
+                val remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+                assertEquals("DOM input focus changed during native typing for $selector", "true", evaluate(scenario,
+                    "document.activeElement === document.querySelector(${JSONObject.quote(selector)})", remainingMillis))
             }
             timing.injectionReturned = System.nanoTime()
             timing.phase = TypingPhase.SETTLING
