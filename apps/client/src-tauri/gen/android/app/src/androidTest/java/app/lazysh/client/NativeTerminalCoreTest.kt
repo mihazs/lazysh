@@ -1,7 +1,6 @@
 package app.lazysh.client
 
 import android.os.Build
-import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.json.JSONArray
 import org.json.JSONObject
@@ -57,15 +56,18 @@ class NativeTerminalCoreTest {
 
     /**
      * What the probe says about this device (#2093, #2094): under the shipping policy, which refuses a CPU rasterizer, and under the debug
-     * build's switch, which a process that sets `LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU` turns on (the CI emulator has no other adapter). The first
+     * build's instrumentation switch (the CI emulator has no other adapter). The first
      * call is the cold one, the cost a launch pays; both answers, every adapter seen and the costs are the evidence the job keeps.
      */
     @Test fun theProbeRefusesASoftwareRasterizerUnlessTheDebugSwitchAllowsOne() {
-        val switch = "LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU"
-        Os.unsetenv(switch)
-        val shipping = probe()
-        Os.setenv(switch, "1", true)
-        val withSwitch = try { probe() } finally { Os.unsetenv(switch) }
+        val previous = NativeSoftwareGpu.swap(false)
+        val (shipping, withSwitch) = try {
+            val shipping = probe()
+            NativeSoftwareGpu.swap(true)
+            shipping to probe()
+        } finally {
+            NativeSoftwareGpu.swap(previous)
+        }
         Evidence.record("native-probe", JSONObject()
             .put("device", JSONObject().put("model", Build.MODEL).put("hardware", Build.HARDWARE).put("abi", Build.SUPPORTED_ABIS[0])
                 .put("sdk", Build.VERSION.SDK_INT).put("fingerprint", Build.FINGERPRINT))

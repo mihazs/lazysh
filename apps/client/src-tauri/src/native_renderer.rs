@@ -60,13 +60,28 @@ fn blink() -> BlinkClock {
 #[cfg(all(debug_assertions, target_os = "android"))]
 pub(crate) const SOFTWARE_GPU: &str = "LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU";
 
-/// The adapter policy of the app's renderers and of its probe: the platform's shipping policy, with CPU rasterizers
-/// allowed only in a debug build on Android whose process sets [`SOFTWARE_GPU`] (the instrumentation does, before it
-/// drives the page). The variable is not compiled into any other build: `native-android-release-core` checks the
-/// release library for its name.
+#[cfg(all(debug_assertions, target_os = "android"))]
+static INSTRUMENTED_SOFTWARE_GPU: AtomicBool = AtomicBool::new(false);
+
+// ARM64 translation can give Java and native code separate environments.
+#[cfg(all(debug_assertions, target_os = "android"))]
+#[no_mangle]
+pub extern "system" fn Java_app_lazysh_client_NativeSoftwareGpu_swap(
+    _: jni::JNIEnv,
+    _: jni::objects::JClass,
+    enabled: jni::sys::jboolean,
+) -> jni::sys::jboolean {
+    INSTRUMENTED_SOFTWARE_GPU
+        .swap(enabled != jni::sys::JNI_FALSE, AcqRel)
+        .into()
+}
+
+/// The adapter policy shared by the app's renderers and probe. Debug Android
+/// builds can opt into CPU adapters through the environment or instrumentation.
 pub(crate) fn policy() -> Policy {
     #[cfg(all(debug_assertions, target_os = "android"))]
-    let software = std::env::var_os(SOFTWARE_GPU).is_some();
+    let software = INSTRUMENTED_SOFTWARE_GPU.load(std::sync::atomic::Ordering::Acquire)
+        || std::env::var_os(SOFTWARE_GPU).is_some();
     #[cfg(not(all(debug_assertions, target_os = "android")))]
     let software = false;
     policy_for(software)

@@ -6,7 +6,6 @@ import android.os.Bundle
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
-import android.system.Os
 import android.view.SurfaceView
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -50,6 +49,7 @@ class NativeTerminalSessionTest {
     private val fixture by lazy { ownedSshFixture() }
     private val hostName by lazy { "Native session ${fixture.getString("nonce")}" }
     private val evidence = JSONObject()
+    private var previousSoftwareGpu: Boolean? = null
     private val native = "input[name='terminal-engine'][value='native']"
     private val nativePane = ".terminal-canvas[data-terminal-surface='native']"
 
@@ -71,11 +71,13 @@ class NativeTerminalSessionTest {
         }}; true"""
 
     @Before fun theUnlockedPage() {
-        // The CI emulator offers only a software adapter; the switch exists in a debug build only, and the probe reads it when the page first asks.
-        if (InstrumentationRegistry.getArguments().getString("lazyshSoftwareGpu") == "true") Os.setenv("LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU", "1", true)
         // A first connection asks for the notification permission; a system dialog would cover the page.
         runCatching { shell("pm grant app.lazysh.client android.permission.POST_NOTIFICATIONS") }
         PageDriver.awaitStartPage()
+        // The CI emulator offers only a software adapter; the switch exists in a debug build only, and the probe reads it when the test selects the native engine.
+        if (InstrumentationRegistry.getArguments().getString("lazyshSoftwareGpu") == "true") {
+            previousSoftwareGpu = NativeSoftwareGpu.swap(true)
+        }
         PageDriver.js(driver)
         // The top bar stays, and the first-run gesture tour does not cover the page (the same two settings as NativeWorkspaceTest.keepTopBar).
         PageDriver.js("(() => { localStorage.setItem('lazysh.show-top-bar.v1', 'true'); localStorage.setItem('lazysh.gestureTour.v1', '999'); window.dispatchEvent(new Event('storage')); return true; })()")
@@ -97,6 +99,7 @@ class NativeTerminalSessionTest {
         }
         runCatching { openEngineSettings(); choose("input[name='terminal-engine'][value='auto']"); act("window.__lz.click(\"button[aria-label='Close Preferences']\")") }
         runCatching { scenario.moveToState(Lifecycle.State.RESUMED) }
+        previousSoftwareGpu?.let { NativeSoftwareGpu.swap(it) }
     }
 
     private fun shell(command: String) = android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).use { it.readBytes() }
