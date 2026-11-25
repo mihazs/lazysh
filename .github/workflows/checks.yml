@@ -879,6 +879,9 @@ jobs:
           export RUSTUP_TOOLCHAIN=1.96.1
           bun install --frozen-lockfile
           cd apps/client/src-tauri
+          # Xcode retains PATH in its script phase and filters custom environment variables.
+          export PATH="$(dirname "$ZIG"):$PATH"
+          zig version | grep -Fx '0.16.0'
           # The generated Xcode script runs from gen/apple, so give Tauri the package script name.
           export npm_execpath="$(command -v bun)" npm_lifecycle_event=tauri
           ../../../node_modules/.bin/tauri ios init --ci
