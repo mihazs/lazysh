@@ -7831,6 +7831,8 @@ class NativeWorkspaceTest {
                 }
                 held=true;dispatch(android.view.MotionEvent.ACTION_DOWN,start);received(0,false)
                 dispatch(android.view.MotionEvent.ACTION_MOVE,start+(end-start)/2);received(1,false)
+                // Android extrapolates closely spaced MOVE samples past the fixed UP endpoint.
+                android.os.SystemClock.sleep(25)
                 dispatch(android.view.MotionEvent.ACTION_MOVE,end);received(2,false)
                 dispatch(android.view.MotionEvent.ACTION_UP,end);held=false;received(2,true)
                 val sample=JSONObject(checkNotNull(observer).snapshot())
