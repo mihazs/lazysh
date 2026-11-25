@@ -1612,9 +1612,11 @@ mod native {
             link: Arc<Link>,
             sent: Arc<Mutex<Vec<Vec<u8>>>>,
             access: crate::app_lock::AccessState,
+            _kept: std::sync::RwLockReadGuard<'static, ()>,
         }
 
         fn fixture() -> Fixture {
+            let kept = tests_keeping_cores().read().unwrap();
             let access = crate::app_lock::AccessState::disabled();
             let config = Config {
                 // 120 columns: a column above 95 makes an X10 report leave ASCII.
@@ -1635,6 +1637,7 @@ mod native {
                 link,
                 sent,
                 access,
+                _kept: kept,
             }
         }
 
@@ -1903,6 +1906,7 @@ mod native {
 
         #[test]
         fn a_locked_app_is_told_nothing_and_the_next_reader_brings_the_core_back_to_life() {
+            let _kept = tests_keeping_cores().read();
             let access = crate::ssh::test_support::unlocked_access();
             let lease = crate::ssh::test_support::ready_lease(&access);
             let (core, sent) = watched_core(&lease);
@@ -1951,15 +1955,29 @@ mod native {
             core.close();
         }
 
-        #[test]
-        fn a_reader_that_scrolls_or_resizes_rings_the_renderer_that_draws_the_core() {
+        fn watched_unlocked_core() -> (
+            AccessLease,
+            Runtime,
+            std::sync::RwLockReadGuard<'static, ()>,
+        ) {
+            let kept = tests_keeping_cores().read().unwrap();
             let lease = crate::app_lock::AccessState::disabled()
                 .lease(None)
                 .unwrap();
             let (core, _) = watched_core(&lease);
-            let (_, inbox) = core.drawing().unwrap();
+            (lease, core, kept)
+        }
+
+        fn print_rows(core: &Runtime) {
             let rows: String = (0..30).map(|row| format!("row {row}\r\n")).collect();
-            parsed(&core, rows.as_bytes());
+            parsed(core, rows.as_bytes());
+        }
+
+        #[test]
+        fn a_reader_that_scrolls_or_resizes_rings_the_renderer_that_draws_the_core() {
+            let (lease, core, _kept) = watched_unlocked_core();
+            let (_, inbox) = core.drawing().unwrap();
+            print_rows(&core);
             // What the program printed rang it; reading the screen changes nothing and rings nothing.
             assert!(inbox.rang(Duration::from_secs(5)), "the output rang");
             core.control_snapshot(&lease, None).unwrap();
@@ -1976,16 +1994,13 @@ mod native {
                 inbox.rang(Duration::from_secs(5)),
                 "the resize did not ring"
             );
+            core.close();
         }
 
         #[test]
         fn a_core_answers_a_reader_from_the_real_screen_and_never_with_a_cell() {
-            let lease = crate::app_lock::AccessState::disabled()
-                .lease(None)
-                .unwrap();
-            let (core, _) = watched_core(&lease);
-            let rows: String = (0..30).map(|row| format!("row {row}\r\n")).collect();
-            parsed(&core, rows.as_bytes());
+            let (lease, core, _kept) = watched_unlocked_core();
+            print_rows(&core);
             let live = core.control_snapshot(&lease, Some(8)).unwrap();
             fake::assert_no_cells(&live);
             assert_eq!(live["state"]["columns"], 40);
