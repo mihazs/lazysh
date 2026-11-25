@@ -29,6 +29,8 @@ async function mounted(output = 'hello world\r\nsecond line here') {
 }
 const at = (column: number, row: number) => [column * 10 + 5, row * 10 + 5] as const;
 
+const settle = () => new Promise(resolve => setTimeout(resolve, 5));
+
 describe('pointer selection on the native adapter anchor', () => {
   it('selects what a mouse drag covers, in either direction, and clears on a plain click', async () => {
     const {adapter, fire} = await mounted();
@@ -95,7 +97,13 @@ describe('pointer selection on the native adapter anchor', () => {
 
 describe('mouse reports to a program that tracks the mouse', () => {
   const sent = (core: Awaited<ReturnType<typeof mounted>>['core']) => core.mice.map(m => [m.action, m.button, m.x, m.y]);
-  const settle = () => new Promise(resolve => setTimeout(resolve, 5));
+
+  it.each([['1000', false], ['1002', false], ['1003', true]])('reports unbuttoned mouse motion only in any-motion mode (%s)', async (mode, hover) => {
+    const {core, fire} = await mounted(`\x1b[?${mode}h`);
+    fire('pointermove', ...at(3, 1));
+    await settle();
+    expect(sent(core)).toEqual(hover ? [['motion', undefined, 3, 1]] : []);
+  });
 
   it('sends a mouse its press, drag motion and release in the cell under it, and selects nothing', async () => {
     const {adapter, fire, core} = await mounted('\x1b[?1002h');
@@ -129,7 +137,6 @@ describe('mouse reports to a program that tracks the mouse', () => {
 });
 
 describe('mouse selection the way xterm.js does it', () => {
-  const settle = () => new Promise(resolve => setTimeout(resolve, 5));
 
   it('selects with Shift held while a program tracks the mouse, and sends that program no report', async () => {
     const {adapter, fire, core} = await mounted('hello world\r\n\x1b[?1000h');
