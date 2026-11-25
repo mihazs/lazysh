@@ -12,7 +12,13 @@ def start(port=1420):
 
     class Page(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            body = html if self.path == "/" else commands.get().encode()
+            if self.path == "/":
+                body = html
+            elif self.path == "/next":
+                body = commands.get().encode()
+            else:
+                self.send_error(404)
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/html" if self.path == "/" else "text/plain")
             self.send_header("Content-Length", str(len(body)))
