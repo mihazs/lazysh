@@ -134,6 +134,15 @@ pub struct RelayStatus {
     pub retained_unknown: u64,
     pub capacity_failures: u64,
 }
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayEventOwner {
+    pub agent: String,
+    pub session_id: String,
+    pub pane_id: Option<String>,
+    pub pane_server: Option<String>,
+}
+
 struct Policy {
     revision: i64,
     enabled: bool,
@@ -148,6 +157,15 @@ struct Job {
     attempts: i64,
 }
 impl Store {
+    pub fn relay_event_owner(
+        &self,
+        event_id: &str,
+        account_id: &str,
+        source_id: &str,
+        now: i64,
+    ) -> Result<Option<RelayEventOwner>> {
+        store::resolve_owner(&self.connection, event_id, account_id, source_id, now)
+    }
     pub fn relay_status(&self) -> Result<RelayStatus> {
         store::status(&self.connection)
     }

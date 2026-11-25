@@ -134,7 +134,14 @@ fn capacity_rejection_is_durable_but_sql_failure_is_not_hidden_as_capacity() {
     let now = Utc::now().timestamp();
     let transaction = store.connection.transaction().unwrap();
     for _ in 0..PENDING_LIMIT {
-        store::admit_transition(&transaction, Kind::Working, true, now).unwrap();
+        store::admit_transition(
+            &transaction,
+            Kind::Working,
+            &event(SessionState::Working),
+            true,
+            now,
+        )
+        .unwrap();
     }
     transaction.commit().unwrap();
     store
@@ -248,7 +255,14 @@ fn successful_claim_trims_expired_rows_before_committing_the_fresh_job() {
     let now = Utc::now().timestamp();
     let transaction = store.connection.transaction().unwrap();
     for _ in 0..102 {
-        store::admit_transition(&transaction, Kind::Working, true, now).unwrap();
+        store::admit_transition(
+            &transaction,
+            Kind::Working,
+            &event(SessionState::Working),
+            true,
+            now,
+        )
+        .unwrap();
     }
     transaction
         .execute(
@@ -519,5 +533,102 @@ mod notification_policy {
                 .unwrap(),
             Admission::Queue
         );
+    }
+}
+
+#[test]
+fn event_owner_is_transactional_source_bound_and_survives_restart() {
+    let (directory, mut store) = enabled();
+    let configured = config(directory.path());
+    // The bound account and source come from the stored policy, not a caller's guess.
+    let bound = store::policy(&store.connection).unwrap().config.unwrap();
+    let bound = Configuration::decode(&bound).unwrap();
+    let now = Utc::now();
+    let mut report = event(SessionState::NeedsAttention);
+    report.pane_server = Some("tmux:work".into());
+    store.ingest(&report, now).unwrap();
+    let id: String = store
+        .connection
+        .query_row("SELECT id FROM relay_outbox", [], |r| r.get(0))
+        .unwrap();
+    let expected = RelayEventOwner {
+        agent: report.agent.clone(),
+        session_id: report.session_id.clone(),
+        pane_id: report.pane_id.clone(),
+        pane_server: report.pane_server.clone(),
+    };
+    assert_eq!(
+        store
+            .relay_event_owner(&id, &bound.account_id, &bound.source_id, now.timestamp())
+            .unwrap(),
+        Some(expected)
+    );
+    assert_eq!(
+        store
+            .relay_event_owner(
+                &id,
+                &configured.account_id,
+                &configured.source_id,
+                now.timestamp()
+            )
+            .unwrap(),
+        None
+    );
+    drop(store);
+    let resolved = run::run(
+        run::RelayCommand::Resolve {
+            event_id: id.clone(),
+            account_id: bound.account_id.clone(),
+            source_id: bound.source_id.clone(),
+        },
+        directory.path(),
+    )
+    .unwrap();
+    assert_eq!(resolved["sessionId"], report.session_id);
+    assert_eq!(resolved["paneId"], report.pane_id.as_deref().unwrap());
+    assert!(resolved.get("project").is_none());
+    assert!(resolved.get("summary").is_none());
+    let mut store = Store::open(directory.path()).unwrap();
+    assert!(store
+        .relay_event_owner(&id, &bound.account_id, &bound.source_id, now.timestamp())
+        .unwrap()
+        .is_some());
+    assert!(store
+        .relay_event_owner(
+            &id,
+            &bound.account_id,
+            &bound.source_id,
+            now.timestamp() + TTL_SECONDS
+        )
+        .unwrap()
+        .is_none());
+    report.pane_id = Some("other-pane".into());
+    store.ingest(&report, now).unwrap();
+    assert!(store
+        .relay_event_owner(&id, &bound.account_id, &bound.source_id, now.timestamp())
+        .unwrap()
+        .is_none());
+    store.relay_disable(1).unwrap();
+    assert!(store
+        .relay_event_owner(&id, &bound.account_id, &bound.source_id, now.timestamp())
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn event_owner_failure_rolls_back_both_session_and_outbox() {
+    let (_directory, mut store) = enabled();
+    store.connection.execute_batch("CREATE TRIGGER reject_owner BEFORE INSERT ON relay_event_owner BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    assert!(store
+        .ingest(&event(SessionState::Working), Utc::now())
+        .is_err());
+    for table in ["sessions", "relay_outbox", "relay_event_owner"] {
+        let count: i64 = store
+            .connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "{table}");
     }
 }

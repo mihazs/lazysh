@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS relay_outbox (
  attempts INTEGER NOT NULL CHECK(attempts>=0 AND attempts<=3),
  next_attempt INTEGER NOT NULL, may_sent INTEGER NOT NULL CHECK(may_sent IN (0,1)), receipt TEXT);
 CREATE INDEX IF NOT EXISTS relay_due ON relay_outbox(state,next_attempt);
+CREATE TABLE IF NOT EXISTS relay_event_owner (
+ event_id TEXT PRIMARY KEY, agent TEXT NOT NULL, session_id TEXT NOT NULL,
+ pane_id TEXT, pane_server TEXT);
+
 ";
 pub(crate) fn initialize(connection: &Connection) -> Result<()> {
     connection.execute_batch(SCHEMA)?;
@@ -111,11 +115,16 @@ pub(super) fn change(
 }
 fn trim_terminal(connection: &Connection) -> Result<()> {
     connection.execute("DELETE FROM relay_outbox WHERE state NOT IN ('queued','sending') AND rowid NOT IN (SELECT rowid FROM relay_outbox WHERE state NOT IN ('queued','sending') ORDER BY rowid DESC LIMIT ?1)",[TERMINAL_LIMIT])?;
+    connection.execute(
+        "DELETE FROM relay_event_owner WHERE event_id NOT IN (SELECT id FROM relay_outbox)",
+        [],
+    )?;
     Ok(())
 }
 pub(crate) fn admit_transition(
     transaction: &Transaction<'_>,
     kind: Kind,
+    event: &crate::Event,
     changed: bool,
     now: i64,
 ) -> Result<()> {
@@ -141,10 +150,11 @@ pub(crate) fn admit_transition(
         return Ok(());
     }
     trim_terminal(transaction)?;
+    let event_id = uuid::Uuid::new_v4().to_string();
     transaction.execute(
         "INSERT INTO relay_outbox VALUES(?1,?2,?3,?4,?5,?6,'queued',0,0,0,NULL)",
         params![
-            uuid::Uuid::new_v4().to_string(),
+            event_id,
             policy.revision,
             config,
             kind.as_str(),
@@ -152,7 +162,55 @@ pub(crate) fn admit_transition(
             now + TTL_SECONDS
         ],
     )?;
+    transaction.execute(
+        "INSERT INTO relay_event_owner VALUES (?1,?2,?3,?4,?5)",
+        params![
+            event_id,
+            event.agent,
+            event.session_id,
+            event.pane_id,
+            event.pane_server
+        ],
+    )?;
     Ok(())
+}
+
+pub(super) fn resolve_owner(
+    connection: &Connection,
+    event_id: &str,
+    account_id: &str,
+    source_id: &str,
+    now: i64,
+) -> Result<Option<super::RelayEventOwner>> {
+    for id in [event_id, account_id, source_id] {
+        if uuid::Uuid::parse_str(id)
+            .map(|value| value.to_string() != id)
+            .unwrap_or(true)
+        {
+            return Err(invalid());
+        }
+    }
+    let current = policy(connection)?;
+    if !current.enabled {
+        return Ok(None);
+    }
+    let Some(config) = current
+        .config
+        .as_deref()
+        .map(Configuration::decode)
+        .transpose()?
+    else {
+        return Ok(None);
+    };
+    if config.account_id != account_id || config.source_id != source_id {
+        return Ok(None);
+    }
+    let owner = connection.query_row(
+        "SELECT o.agent,o.session_id,o.pane_id,o.pane_server FROM relay_event_owner o JOIN relay_outbox b ON b.id=o.event_id JOIN sessions s ON s.agent=o.agent AND s.session_id=o.session_id LEFT JOIN session_pane_server p ON p.agent=s.agent AND p.session_id=s.session_id WHERE b.id=?1 AND b.revision=?2 AND b.expires>?3 AND s.pane_id IS o.pane_id AND p.server IS o.pane_server",
+        params![event_id,current.revision,now],
+        |row| Ok(super::RelayEventOwner {agent:row.get(0)?,session_id:row.get(1)?,pane_id:row.get(2)?,pane_server:row.get(3)?}),
+    ).optional()?;
+    Ok(owner)
 }
 pub(super) fn claim(connection: &mut Connection, revision: i64, now: i64) -> Result<Option<Job>> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
