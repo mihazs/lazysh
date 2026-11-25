@@ -1,5 +1,5 @@
 import {Bell,Bot,ChevronLeft,ChevronRight,CloudUpload,Globe,Hand,Inbox,Info,Keyboard,KeyRound,MessageSquareText,Mic,Palette,RefreshCw,RotateCcw,Search,Server,ShieldCheck,SquareTerminal,type LucideIcon} from 'lucide-react';
-import {useId,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
+import {useEffect,useId,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import {formatNumber,t,useUi} from './i18n/core';
 import './SettingsNavigation.css';
 
@@ -7,7 +7,7 @@ import './SettingsNavigation.css';
  * A settings destination. An entry with `content` opens as a sub-page; one with `onSelect` is an
  * action row that hands off to another surface. Root entries are grouped by their `section`.
  */
-export type SettingsPage={id:string;title:string;parent?:string;section?:string;value?:string;tone?:'danger';disabled?:boolean}
+export type SettingsPage={id:string;title:string;parent?:string;section?:string;value?:string;tone?:'danger';disabled?:boolean;keywords?:readonly string[]}
   &({content:ReactNode;onSelect?:never}|{content?:never;onSelect:()=>void});
 export type SettingsSection={id:string;title?:string;footer?:string};
 type SearchResult={page:SettingsPage;label:string;match?:string};
@@ -35,11 +35,12 @@ function settingNames(page:Element) {
 }
 
 /** Navigation state is local; every editor remains mounted while its page is hidden. */
-export default function SettingsNavigation({pages,sections=[],footer}:{pages:SettingsPage[];sections?:SettingsSection[];footer?:ReactNode}) {
+export default function SettingsNavigation({pages,sections=[],footer,initialPage,onSelectedChange}:{pages:SettingsPage[];sections?:SettingsSection[];footer?:ReactNode;initialPage?:string;onSelectedChange?:(id:string|undefined)=>void}) {
   useUi();
   const ids=useId();
-  const [selected,setSelected]=useState<string>();
+  const [selected,setSelected]=useState<string | undefined>(initialPage);
   const [query,setQuery]=useState('');
+  useEffect(()=>{onSelectedChange?.(selected);},[selected,onSelectedChange]);
   // Bumped on every chosen row so a result on the page already open still reveals its setting.
   const [revealing,setRevealing]=useState(0);
   const root=useRef<HTMLDivElement>(null);
@@ -149,7 +150,7 @@ export default function SettingsNavigation({pages,sections=[],footer}:{pages:Set
       if([page.title,page.value??''].some(text=>fold(text).includes(wanted)))results.push({page,label:page.title});
       const body=bodies.get(page.id);
       const seen=new Set([page.title]);
-      for(const text of body?settingNames(body).map(ownText):[]) {
+      for(const text of [...page.keywords??[],...(body?settingNames(body).map(ownText):[])]) {
         if(text && !seen.has(text) && fold(text).includes(wanted)){seen.add(text);results.push({page,label:text,match:text});}
       }
     }

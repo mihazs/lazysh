@@ -367,18 +367,18 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await selectAgentSection(page,'activity');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});await expect(board).toHaveCount(1);
   await page.clock.runFor(200);
-  await expect(board.getByRole('button',{name:'Install companion',exact:true})).toBeVisible();
-  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>command==='install_companion'))).toEqual([]);
-  await board.getByRole('button',{name:'Install companion',exact:true}).click();
-  await expect(board.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
   const setup=board.getByRole('button',{name:'Setup',exact:true});
-  await expect(setup).toHaveAttribute('aria-expanded','true');
+  await expect(board.getByRole('button',{name:'Install companion',exact:true})).toHaveCount(0);
   await setup.click();
-  await expect(setup).toHaveAttribute('aria-expanded','false');
-  await expect(board.getByRole('region',{name:'Host companion settings',exact:true})).toBeHidden();
-  await setup.click();
-  await expect(board.getByRole('button',{name:'Update companion',exact:true})).toBeVisible();
-  await setup.click();
+  const preferences=page.getByRole('dialog',{name:'Preferences',exact:true});
+  await expect(preferences.getByRole('button',{name:'Install companion',exact:true})).toBeVisible();
+  await expect(preferences.getByText('Agent hook setup',{exact:true})).toBeVisible();
+  await expect(preferences.getByRole('checkbox',{name:'Keep display awake while this board is open'})).toBeVisible();
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(command=>command==='install_companion'))).toEqual([]);
+  await preferences.getByRole('button',{name:'Install companion',exact:true}).click();
+  await expect(preferences.getByText('Installed host companion 1.0.0.',{exact:true})).toBeVisible();
+  await expect(preferences.getByRole('button',{name:'Update companion',exact:true})).toBeVisible();
+  await preferences.getByRole('button',{name:'Close Preferences',exact:true}).click();
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   await expect(page.locator('.terminal-canvas:visible')).toHaveCount(1);
   await selectAgentSection(page,'live');
@@ -474,12 +474,13 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   await expect(board.getByText('Reported work',{exact:true})).toBeVisible();
   const search=board.getByRole('searchbox',{name:'Search reported agents',exact:true});await search.fill('/nav');
   await setup.click();
-  const settings=board.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
+  const settings=preferences.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
   const original=await settings.elementHandle();
+  await preferences.getByRole('button',{name:'Close Preferences',exact:true}).click();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{updated:boolean}}).workspaceNavigationState.updated=true;});
   await page.clock.runFor(5000);
   await expect(board.getByText('Refreshed work',{exact:true})).toBeVisible();
-  await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
+  await expect(search).toHaveValue('/nav');
   if(phone)await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
   else await modes.getByRole('button',{name:'Connections',exact:true}).click();
   await expect(board).toBeHidden();
@@ -488,10 +489,12 @@ test('one connected agent sidebar suspends hidden activity and preserves its dra
   if(phone){await expect(page.getByRole('button',{name:'Open hosts',exact:true})).toBeFocused();await page.getByRole('button',{name:'Open hosts',exact:true}).click();}
   await modes.getByRole('button',{name:'Agents navigation',exact:true}).click();
   await selectAgentSection(page,'activity');
-  await expect(board).toBeVisible();await expect(search).toHaveValue('/nav');await expect(settings).not.toBeChecked();
-  const installer=board.getByRole('button',{name:'Update companion',exact:true,includeHidden:true});
-  await expect(installer).toHaveCount(1);await expect(installer).toBeHidden();
+  await expect(board).toBeVisible();await expect(search).toHaveValue('/nav');
+  await setup.click();await expect(settings).not.toBeChecked();
   expect(await original!.evaluate(node=>node.isConnected)).toBe(true);
+  await preferences.getByText('Host companion installation',{exact:true}).click();
+  await expect(preferences.getByRole('button',{name:'Update companion',exact:true})).toBeVisible();
+  await preferences.getByRole('button',{name:'Close Preferences',exact:true}).click();
   expect((await commands()).filter(command=>command==='get_companion_settings')).toHaveLength(before.filter(command=>command==='get_companion_settings').length);
   await search.scrollIntoViewIfNeeded();
   expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
@@ -565,7 +568,8 @@ async function openCompanionBoard(page:Page,testInfo:TestInfo,flags:Record<strin
   const board=page.getByRole('region',{name:'Agent activity',exact:true});
   await page.clock.runFor(200);
   const calls=(name:string)=>page.evaluate(command=>(window as unknown as {workspaceNavigationCalls:string[]}).workspaceNavigationCalls.filter(call=>call===command).length,name);
-  return {board,calls};
+  await board.getByRole('button',{name:'Setup',exact:true}).click();
+  return {board:page.getByRole('dialog',{name:'Preferences',exact:true}),calls};
 }
 
 test('a host that cannot reach GitHub offers the labelled device install and the default route never downloads on the device',async({page},testInfo)=>{
@@ -586,8 +590,6 @@ test('a host that cannot reach GitHub offers the labelled device install and the
 
 test('Check for updates reports the host companion without installing or downloading',async({page},testInfo)=>{
   const {board,calls}=await openCompanionBoard(page,testInfo,{installed:true});
-  const setup=board.getByRole('button',{name:'Setup',exact:true});
-  if(await setup.getAttribute('aria-expanded')==='false')await setup.click();
   const panel=board.locator('details[aria-label="Host companion installation"]');
   if(!await panel.evaluate(node=>(node as HTMLDetailsElement).open))await panel.locator('summary').click();
   await panel.getByRole('button',{name:'Check for updates',exact:true}).click();
@@ -836,16 +838,16 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   await openConnectedAgents(page,testInfo.project.name==='phone');
   await selectAgentSection(page,'activity');
   const board=page.getByRole('region',{name:'Agent activity',exact:true});
-  await expect(board.getByRole('button',{name:'Setup',exact:true})).toHaveAttribute('aria-expanded','false');
   await board.getByRole('button',{name:'Agent hook setup',exact:true}).click();
-  const provider=board.getByRole('combobox',{name:'Hook provider',exact:true});
-  const setup=board.locator('details.companion-install[aria-label="Agent hook setup"] > summary');
+  const setupPage=page.getByRole('dialog',{name:'Preferences',exact:true});
+  const provider=setupPage.getByRole('combobox',{name:'Hook provider',exact:true});
+  const setup=setupPage.locator('details.companion-install[aria-label="Agent hook setup"] > summary');
   await expect(setup).toBeFocused();await expect(setup).toBeInViewport();
   const actions=()=>page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookActions:string[]}}).workspaceNavigationState.hookActions);
   expect(await actions()).toEqual([]);
-  await expect(board.getByRole('button',{name:'Install or update hooks',exact:true})).toHaveCount(0);
+  await expect(setupPage.getByRole('button',{name:'Install or update hooks',exact:true})).toHaveCount(0);
   await expect(provider).toHaveValue('');
-  const detected=board.getByRole('list',{name:'Detected host agents',exact:true});
+  const detected=setupPage.getByRole('list',{name:'Detected host agents',exact:true});
   const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
   await expect(codex).toHaveAttribute('aria-pressed','false');
   expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([4]);
@@ -854,28 +856,28 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   await expect(detected.getByRole('button',{name:/Kimi.*\.kimi-code/})).toBeEnabled();
   await expect(detected.getByRole('button',{name:/Kimi.*\/owned\/\.kimi(?!-)/})).toBeDisabled();
   await expect(detected.getByRole('button',{name:/Aider.*Callback health only/})).toBeDisabled();
-  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeDisabled();
+  await expect(setupPage.getByRole('button',{name:'Inspect setup',exact:true})).toBeDisabled();
   expect(await detected.getByRole('listitem').count()).toBeGreaterThanOrEqual(6);
   expect(await detected.evaluate(node=>node.scrollHeight>node.clientHeight&&node.clientHeight<=260)).toBe(true);
   await page.screenshot({path:testInfo.outputPath('detected-agent-list.png')});
   await codex.click();await expect(provider).toHaveValue('codex');
-  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeFocused();
-  await expect(board.getByRole('button',{name:'Inspect setup',exact:true})).toBeInViewport({ratio:1});
-  await expect(board.getByLabel('Host profile directory',{exact:true})).toHaveValue('/owned/profile');
+  await expect(setupPage.getByRole('button',{name:'Inspect setup',exact:true})).toBeFocused();
+  await expect(setupPage.getByRole('button',{name:'Inspect setup',exact:true})).toBeInViewport({ratio:1});
+  await expect(setupPage.getByLabel('Host profile directory',{exact:true})).toHaveValue('/owned/profile');
   expect(await actions()).toEqual([]);
   for(const row of await detected.getByRole('button').all())expect((await row.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   await page.screenshot({path:testInfo.outputPath('detected-agent-selection.png')});
-  await board.getByRole('button',{name:'Inspect setup',exact:true}).click();
-  await expect(board.getByText('Hooks need setup or repair.',{exact:true})).toBeVisible();
+  await setupPage.getByRole('button',{name:'Inspect setup',exact:true}).click();
+  await expect(setupPage.getByText('Hooks need setup or repair.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status']);
-  await board.getByRole('button',{name:'Install or update hooks',exact:true}).click();
-  await expect(board.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
-  await expect(board.getByRole('list',{name:'Readiness',exact:true}).getByText('Lifecycle event received on this host: None recorded',{exact:true})).toBeVisible();
-  await expect(board.getByText('Hooks are configured, but this host has recorded no event from this agent.',{exact:false})).toBeVisible();
-  await expect(board.getByText('Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.',{exact:true})).toBeVisible();
+  await setupPage.getByRole('button',{name:'Install or update hooks',exact:true}).click();
+  await expect(setupPage.getByText('Hooks configured. Live reporting has not been verified.',{exact:true})).toBeVisible();
+  await expect(setupPage.getByRole('list',{name:'Readiness',exact:true}).getByText('Lifecycle event received on this host: None recorded',{exact:true})).toBeVisible();
+  await expect(setupPage.getByText('Hooks are configured, but this host has recorded no event from this agent.',{exact:false})).toBeVisible();
+  await expect(setupPage.getByText('Start a new Codex session with this profile, open /hooks to review the lazysh hooks, then start a turn. Disabled hooks stay disabled.',{exact:true})).toBeVisible();
   expect(await actions()).toEqual(['status','install','status']);
   await expect(board.locator('.agent-card')).toHaveCount(0);
-  expect(await board.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
+  expect(await setupPage.evaluate(node=>node.scrollWidth<=node.clientWidth)).toBe(true);
   const source=await page.request.get('/src/AgentPanel.tsx');
   expect(await source.text()).toContain('setHookSetupRequest');
   await page.screenshot({path:testInfo.outputPath('empty-activity-hook-setup.png')});
@@ -979,8 +981,9 @@ for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'rep
   await page.screenshot({path:testInfo.outputPath('direct-activity.png'),animations:'disabled'});
   const search=board.getByRole('searchbox',{name:'Search reported agents',exact:true});await search.fill('/nav');
   await board.getByRole('button',{name:'Setup',exact:true}).click();
-  const settings=board.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
-  await board.getByRole('button',{name:'Setup',exact:true}).click();
+  const preferences=page.getByRole('dialog',{name:'Preferences',exact:true});
+  const settings=preferences.getByRole('checkbox',{name:'Recorded usage inspection',exact:true});await settings.uncheck();
+  await preferences.getByRole('button',{name:'Close Preferences',exact:true}).click();
   await jumps.getByRole('button',{name:'Live Herdr agents',exact:true}).click();
   await expect(sidebar.getByRole('group',{name:'Live Herdr agents',exact:true})).toBeFocused();
   expect(await scroller.evaluate(node=>node.scrollTop)).toBe(0);
@@ -993,10 +996,11 @@ for(const empty of [false,true])test(`Activity view reaches ${empty?'empty':'rep
   await expect(jumpActivity).toBeInViewport({ratio:0.9});await expect(search).toHaveValue('/nav');
   await jumpActivity.click();
   await board.getByRole('button',{name:'Setup',exact:true}).click();await expect(settings).not.toBeChecked();
+  await preferences.getByRole('button',{name:'Close Preferences',exact:true}).click();
   expect(await originalBoard!.evaluate(node=>node.isConnected)).toBe(true);expect(await originalCanvas!.evaluate(node=>node.isConnected)).toBe(true);
   const after=await calls();expect(after.filter(command=>['disconnect','write_stdin','install_companion','companion_hooks','attach_multiplexer','herdr_action'].includes(command))).toEqual([]);
   expect(after.filter(command=>command==='connect')).toHaveLength(1);
-  expect(after.filter(command=>command==='get_companion_settings')).toHaveLength(before.filter(command=>command==='get_companion_settings').length);
+  expect(after.filter(command=>command==='get_companion_settings')).toHaveLength(before.filter(command=>command==='get_companion_settings').length+1);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
@@ -1312,6 +1316,7 @@ test('native companion action stays owned during installed and reused results',a
   await openConnectedAgents(page,testInfo.project.name==='phone');await page.clock.runFor(200);
   const activity=/val companionActivity = "([^"]+)"/.exec(nativeWorkspaceSource)?.[1];
   if(activity)await page.locator(activity).click();
+  await page.getByRole('button',{name:'Setup',exact:true}).click();
   await expect(page.locator(nativeCompanionReadiness('Install companion','idle').panel)).toBeVisible();
   const initial=nativeCompanionReadiness('Install companion','idle');
   await page.evaluate(()=>{
@@ -1319,11 +1324,11 @@ test('native companion action stays owned during installed and reused results',a
     const foreign=panel.cloneNode(true) as HTMLDetailsElement;foreign.hidden=false;foreign.open=true;
     Object.assign(foreign.style,{position:'fixed',top:'0',left:'0',width:'160px',height:'120px',overflow:'hidden',zIndex:'10000'});
     document.body.append(foreign);Reflect.set(window,'nativeForeignCompanion',foreign);
-    panel.closest<HTMLElement>('.workspace-navigation-agents')!.hidden=true;
+    panel.closest<HTMLElement>('[data-settings-page=agents]')!.hidden=true;
   });
   await expect(page.locator('body > details.companion-install')).toBeVisible();
   expect(await page.evaluate(initial.expression)).toMatchObject({panelPresent:false,expectedActionVisible:false,matchingExpectedActionEnabled:false});
-  await page.evaluate(()=>{document.querySelector<HTMLElement>('.workspace-navigation-agents')!.hidden=false;Reflect.get(window,'nativeForeignCompanion').remove();});
+  await page.evaluate(()=>{document.querySelector<HTMLElement>('[data-settings-page=agents]')!.hidden=false;Reflect.get(window,'nativeForeignCompanion').remove();});
   await expect(page.locator(initial.panel)).toBeVisible();
   await page.evaluate(()=>{(window as unknown as {workspaceNavigationState:{holdReport:boolean}}).workspaceNavigationState.holdReport=true;});
   const records:unknown[]=[];
@@ -1590,4 +1595,18 @@ test('focused work destinations retain the terminal and expose every contextual 
   expect(await page.locator('.terminal-canvas:visible').evaluate((node,original)=>node===original,canvas)).toBe(true);
   const calls=await page.evaluate(()=>(window as any).workspaceNavigationCalls as string[]);
   expect(calls.filter(name=>['write_stdin','disconnect','herdr_action','attach_multiplexer'].includes(name))).toEqual([]);
+});
+
+test('Preferences search opens host agent settings before Activity has loaded',async({page},testInfo)=>{
+  await openClockedNavigation(page);
+  await openConnectedAgents(page,testInfo.project.name==='phone');
+  await page.evaluate(()=>{Object.assign((window as unknown as {workspaceNavigationState:object}).workspaceNavigationState,{missing:false,installed:true});});
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Return to terminal',exact:true}).click();
+  await (await workspaceControl(page,'Preferences')).click();
+  const preferences=page.getByRole('dialog',{name:'Preferences',exact:true});
+  await preferences.getByRole('searchbox',{name:'Search settings',exact:true}).fill('Recorded usage inspection');
+  await preferences.getByRole('button',{name:'Recorded usage inspection',exact:true}).click();
+  await expect(preferences.getByRole('checkbox',{name:'Recorded usage inspection',exact:true})).toBeVisible();
+  await expect(preferences.getByText('Agent hook setup',{exact:true})).toBeVisible();
+  await expect(preferences.getByText('Host companion installation',{exact:true})).toBeVisible();
 });
