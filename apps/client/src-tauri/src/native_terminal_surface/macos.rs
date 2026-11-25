@@ -84,8 +84,9 @@ fn place_in_webview(
         .window()
         .ok_or("The web view has no window")?
         .backingScaleFactor();
+    // WKWebView lays out the CSS viewport below the title bar of this window.
     let frame = web.convertRect_toView(
-        webview_rect(anchor, web.bounds(), web.isFlipped(), scale),
+        webview_rect(anchor, web.safeAreaRect(), web.isFlipped(), scale),
         Some(&parent),
     );
     let width = (anchor.width * anchor.dpr).round().max(1.0) as u32;
