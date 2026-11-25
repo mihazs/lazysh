@@ -6041,11 +6041,40 @@ mod tests {
     #[tokio::test]
     #[ignore = "benchmark: cargo test --features native-terminal --lib bridge_throughput -- --ignored --nocapture"]
     async fn bridge_throughput_channel_versus_core() {
+        #[cfg(unix)]
         fn cpu_seconds() -> f64 {
             let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
-            unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+            // SAFETY: usage is a writable rusage for the current process.
+            assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) }, 0);
             let seconds = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
             seconds(usage.ru_utime) + seconds(usage.ru_stime)
+        }
+        #[cfg(windows)]
+        fn cpu_seconds() -> f64 {
+            use windows_sys::Win32::{
+                Foundation::FILETIME,
+                System::Threading::{GetCurrentProcess, GetProcessTimes},
+            };
+            let mut creation = FILETIME::default();
+            let mut exit = FILETIME::default();
+            let mut kernel = FILETIME::default();
+            let mut user = FILETIME::default();
+            // SAFETY: the current process pseudo-handle is valid and each output is writable.
+            let ok = unsafe {
+                GetProcessTimes(
+                    GetCurrentProcess(),
+                    &mut creation,
+                    &mut exit,
+                    &mut kernel,
+                    &mut user,
+                )
+            };
+            assert_ne!(ok, 0, "{}", std::io::Error::last_os_error());
+            let seconds = |time: FILETIME| {
+                let ticks = (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+                ticks as f64 / 10_000_000.0
+            };
+            seconds(kernel) + seconds(user)
         }
         const MIB: usize = 64;
         let payload: Vec<u8> = (0..)
