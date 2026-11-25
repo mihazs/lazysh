@@ -217,7 +217,10 @@ run_instrument() { # run_instrument <runner> <class>: counts the raw status code
   say "instrumenting $2 with $1"
   thaw
   extra=''; [ -z "$fixture_remote" ] || extra=" -e lazyshSshFixture '$fixture_remote/fixture.json'"
-  raw=$(adb_s shell "am instrument -w -r -e class '$2'$extra '$1'" 2>&1 | tr -d '\r')
+  # Match Gradle so the runner can report before Tao exits the last Activity.
+  runner_args=''
+  case "$1" in */androidx.test.runner.AndroidJUnitRunner) runner_args=' -e waitForActivitiesToComplete false' ;; esac
+  raw=$(adb_s shell "am instrument -w -r$runner_args -e class '$2'$extra '$1'" 2>&1 | tr -d '\r')
   count() { printf '%s\n' "$raw" | grep -c "^INSTRUMENTATION_STATUS_CODE: $1\$"; }
   passed=$(count 0); failed=$(($(count -1) + $(count -2))); skipped=$(($(count -3) + $(count -4)))
   reason=''
