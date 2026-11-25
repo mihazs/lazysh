@@ -4726,7 +4726,9 @@ class NativeWorkspaceTest {
                   return true;
                 })()
             """))
-            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+            lateinit var point: FloatArray
+            scenario.onActivity { activity ->
+                val view = checkNotNull(webView(activity.window.decorView))
                 val origin = IntArray(2)
                 view.getLocationOnScreen(origin)
                 nativeTap.set(JSONObject().put("origin", JSONArray(origin.map { it.coerceIn(-65535, 65535) }))
@@ -4738,9 +4740,28 @@ class NativeWorkspaceTest {
                 val scale = view.width.toDouble() / values[2]
                 val x = values[0] * scale
                 val y = values[1] * scale
-                assertTrue("Transport control must remain inside the native WebView", x < view.width && y < view.height)
-                floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
-            }, Press.FINGER))
+                assertTrue("Transport control must remain inside the native WebView", x > 0 && x < view.width && y > 0 && y < view.height)
+                point = floatArrayOf((origin[0] + x).toFloat(), (origin[1] + y).toFloat())
+            }
+
+            // Espresso's single tap can oversleep between events and turn the select into a long press.
+            // Queue both native finger events without waiting for dispatch between DOWN and UP.
+            val time = android.os.SystemClock.uptimeMillis()
+            val finger = android.view.MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
+            }
+            val coordinates = android.view.MotionEvent.PointerCoords().apply { x = point[0]; y = point[1]; pressure = 1f; size = 1f }
+            for (action in listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP)) {
+                val event = android.view.MotionEvent.obtain(time, time, action, 1, arrayOf(finger), arrayOf(coordinates),
+                    0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
+                try {
+                    assertTrue("Android accepted the owned transport tap", instrumentation.uiAutomation.injectInputEvent(event, false))
+                } finally {
+                    event.recycle()
+                }
+            }
+            instrumentation.waitForIdleSync()
             val transportLabel = if (value == "mosh") {
                 val labels = JSONArray(evaluate(scenario,
                     "Array.from(document.querySelectorAll(${JSONObject.quote("$selector option[value=mosh]")})).map(x=>x.label)"))
