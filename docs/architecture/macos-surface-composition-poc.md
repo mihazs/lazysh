@@ -53,6 +53,12 @@ What this implies for the host, none of it verified against the real app:
 - **A Tauri command carries the anchor** (the Android and Linux contract, `native_terminal_surface_place`, `_remove`, `_state`), and the host finds the web view's superview from the `WKWebView` Tauri exposes. Tauri's own window setup and its `with_webview` hook were not in the loop here.
 - **The renderer's surface.** `terminal-renderer-wgpu` presents through wgpu's Metal backend; wgpu making a Metal surface from this `NSView` (it sets up its own `CAMetalLayer`) was not tried, the probe clears through Metal directly.
 
+## App integration
+
+The feature-enabled Tauri app uses the existing terminal surface commands to place an AppKit view beneath WKWebView. It converts the page anchor through the display backing scale and web view coordinates, and gives the shared renderer worker the retained Metal layer. Teardown joins that worker before removing the view.
+
+The hosted app job builds the native-enabled app and runs the anchor conversion test for Retina scale, page zoom, and flipped coordinates. The standalone probe supplies the window-server pixel evidence. The actual app still needs window readback, Retina and input checks, VoiceOver or a tested refusal, performance, and rollback acceptance for [#1333](https://github.com/mihazs/lazysh/issues/1333).
+
 ## What this does not establish
 
 - **Scale 2.** The one measurement the plan asks for that the runner could not give (above). A 2x host, or a runner image with a Retina display, is needed before macOS can flip; fractional scales, a window moved between displays of different scales and a scale change while a surface exists were not exercised.
@@ -77,3 +83,16 @@ POC_TRANSPARENT=0 target/release/surface-poc      # the control: a web view with
 ```
 
 Each run prints one `PASS`, `FAIL` or `INFO` line per check and appends one JSON record to `$POC_OUT/records.jsonl`, with a PNG of every step. Exit status: 0 every check passed, 1 a check failed, 2 the probe could not measure, 3 the display has no such scale (not a failure: not measured). The runs above are the `terminal-macos-surface` workflow, which uploads the records and images as the `lazysh-macos-surface-poc` artifact.
+
+## Checking the real app window
+
+With the feature-enabled macOS host from #2647, build a debug app and run the app-window driver in a logged-in macOS session with Xcode command-line tools and Python Pillow installed.
+
+```sh
+cargo build --locked --manifest-path apps/client/src-tauri/Cargo.toml --features native-terminal
+python3 packages/terminal-runtime/prototypes/macos-surface/scripts/check-app.py target/debug/lazysh /tmp/lazysh-app-window
+```
+
+The driver uses the same development URL and Tauri command fixture as the Wayland app test. It starts an owned local terminal, looks up the window belonging to the process it launched, and measures the four coloured cells during placement and movement. The DOM overlay is the visible capture control. Removal requires the native pixels to disappear while the overlay remains visible. The output directory retains frame images, the app log and a success report. The check requires macOS permission to capture the owned window.
+
+[The hosted macOS app run](https://github.com/mihazs/lazysh/actions/runs/45669417189) measured placement at (60, 72) and movement to (110, 102) on a 1x display. The renderer uses the WebView's safe area as its origin, so the 32-point title bar does not shift the terminal relative to the DOM. The window capture verified that removing the terminal cleared its pixels and left the overlay visible. Retina placement still needs a 2x capture.

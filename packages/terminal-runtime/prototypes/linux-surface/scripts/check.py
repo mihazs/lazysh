@@ -4,7 +4,7 @@ usage: [POC_RENDER=vulkan] check.py wayland|x11 below|above OUTDIR [--probe PATH
 --app PATH runs the same checks against the real app instead of the probe: a debug build of lazysh with the `native-terminal` feature, which loads
 its page from the dev URL. This script serves app-page.html there, and the page calls the app's own surface commands. On X11 the app must refuse.
 Exit status 0 only when every check passed; OUTDIR gets the screenshots of each step and report.json."""
-import atexit, glob, http.server, json, os, queue, subprocess, sys, threading, time
+import atexit, glob, json, os, queue, subprocess, sys, time
 import numpy as np
 from PIL import Image
 
@@ -36,30 +36,12 @@ if mode == "x11":  # a real X server on the same compositor: an X11 client sees 
     env["DISPLAY"] = ":9"
     del env["WAYLAND_DISPLAY"]
     time.sleep(1.0)
-todo, done = queue.Queue(), queue.Queue()  # --app: the commands the page fetches and the answers it posts
-
-
-class Page(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):  # "/" is the page; "/next" answers once there is a command for it
-        body = open(os.path.join(HERE, "app-page.html"), "rb").read() if self.path == "/" else todo.get().encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html" if self.path == "/" else "text/plain")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self):
-        done.put(self.rfile.read(int(self.headers["Content-Length"])).decode())
-        self.send_response(204)
-        self.end_headers()
-
-    def log_message(self, *args):
-        pass
-
-
 if real:
     # The app's dev URL (tauri.conf.json). Its files go to a private home, so a run never reads or writes the user's own.
-    threading.Thread(target=http.server.ThreadingHTTPServer(("127.0.0.1", 1420), Page).serve_forever, daemon=True).start()
+    sys.path.insert(0, HERE)
+    import app_driver
+    server, todo, done = app_driver.start()
+    atexit.register(server.server_close)
     home = os.path.abspath(f"{out}/home")
     os.makedirs(home, exist_ok=True)
     env.update(LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU="1", HOME=home, XDG_CONFIG_HOME=f"{home}/config", XDG_DATA_HOME=f"{home}/data", XDG_CACHE_HOME=f"{home}/cache")
