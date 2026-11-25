@@ -161,7 +161,10 @@ pub fn run() {
             use tauri::Manager;
             #[cfg(target_os = "linux")]
             build_unspawned_windows(app)?;
-            #[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
+            #[cfg(all(
+                any(target_os = "ios", target_os = "macos", target_os = "windows"),
+                native_terminal_core
+            ))]
             native_terminal_surface::desktop::install(app);
             #[cfg(feature = "sync-tls-acceptance")]
             sync::install_acceptance_root(app)?;
