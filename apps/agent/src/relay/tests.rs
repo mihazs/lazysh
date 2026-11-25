@@ -574,6 +574,23 @@ fn event_owner_is_transactional_source_bound_and_survives_restart() {
             .unwrap(),
         None
     );
+    for (account, source) in [
+        (&configured.account_id, &bound.source_id),
+        (&bound.account_id, &configured.source_id),
+    ] {
+        assert!(store
+            .relay_event_owner(&id, account, source, now.timestamp())
+            .unwrap()
+            .is_none());
+    }
+    assert!(store
+        .relay_event_owner(
+            "not-a-uuid",
+            &bound.account_id,
+            &bound.source_id,
+            now.timestamp()
+        )
+        .is_err());
     drop(store);
     let resolved = run::run(
         run::RelayCommand::Resolve {
@@ -602,12 +619,17 @@ fn event_owner_is_transactional_source_bound_and_survives_restart() {
         )
         .unwrap()
         .is_none());
-    report.pane_id = Some("other-pane".into());
-    store.ingest(&report, now).unwrap();
-    assert!(store
-        .relay_event_owner(&id, &bound.account_id, &bound.source_id, now.timestamp())
-        .unwrap()
-        .is_none());
+    for (pane, present) in [("other-pane", false), ("private-pane", true)] {
+        report.pane_id = Some(pane.into());
+        store.ingest(&report, now).unwrap();
+        assert_eq!(
+            store
+                .relay_event_owner(&id, &bound.account_id, &bound.source_id, now.timestamp())
+                .unwrap()
+                .is_some(),
+            present
+        );
+    }
     store.relay_disable(1).unwrap();
     assert!(store
         .relay_event_owner(&id, &bound.account_id, &bound.source_id, now.timestamp())
