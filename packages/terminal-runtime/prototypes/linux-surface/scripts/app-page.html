@@ -28,7 +28,12 @@ const commands = {
     return session;
   },
   // Four cells of an exact colour at the top left of a cleared screen.
-  paint: () => invoke('local_write', {sessionId: session, data: "printf '\\033[2J\\033[H\\033[48;2;200;30;30m    \\033[0m'\r"}),
+  paint: (...color) => {
+    const rgb = color.length === 0 ? ['200', '30', '30'] : color;
+    if (rgb.length !== 3 || rgb.some(value => !/^\d{1,3}$/.test(value) || Number(value) > 255)) throw new Error('Invalid colour');
+    return invoke('local_write', {sessionId: session, data: `printf '\\033[2J\\033[H\\033[48;2;${rgb.join(";")}m    \\033[0m'\r`});
+  },
+  cell: async () => JSON.stringify(await invoke('native_terminal_surface_cell', {fontSize: 14, dpr: devicePixelRatio})),
   probe: async () => JSON.stringify(await invoke('native_terminal_probe')),
 };
 const answer = body => fetch('/done', {method: 'POST', body});
