@@ -1,4 +1,6 @@
+import {listen} from '@tauri-apps/api/event';
 import {systemScreenReader} from './androidScreenReader';
+import {isIosApp} from './isIosApp';
 import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
@@ -907,7 +909,21 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     if (active) requestAnimationFrame(() => fit.current?.());
   }, [preferences, fonts, session, active, screenReader]);
 
-  // A native surface has no text a screen reader can reach: while that preference is on, the rows are mirrored into the container (#1329).
+  // VoiceOver can turn on after the registry has selected a backend. Make the live rows accessible in place.
+  const [voiceOver, setVoiceOver] = useState(false);
+  useEffect(() => {
+    if (!native || !isIosApp()) return;
+    let disposed = false, changed = false;
+    const listening = listen<boolean>('ios-voice-over-changed', ({payload}) => {
+      if (!disposed) { changed = true; setVoiceOver(payload); }
+    }).catch(() => undefined);
+    void listening.then(systemScreenReader).then(value => {
+      if (!disposed && !changed) setVoiceOver(value);
+    });
+    return () => { disposed = true; void listening.then(unlisten => unlisten?.()); };
+  }, [native]);
+
+  const screenReader = preferences.screenReader || voiceOver;
   useEffect(() => {
     const element = container.current;
     if (!element || !screenReader || !needsScreenReaderMirror(session.adapter)) return;

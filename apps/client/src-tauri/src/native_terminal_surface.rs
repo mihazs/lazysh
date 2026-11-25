@@ -13,18 +13,26 @@ use tauri::Manager;
 
 #[cfg(all(target_os = "android", native_terminal_core))]
 mod android;
+#[cfg(all(any(target_os = "ios", target_os = "macos"), native_terminal_core))]
+mod apple;
+#[cfg(all(target_os = "ios", native_terminal_core))]
+mod ios;
 #[cfg(all(target_os = "linux", native_terminal_core))]
 pub(crate) mod linux;
-#[cfg(all(target_os = "macos", native_terminal_core))]
-mod macos;
 #[cfg(native_terminal_core)]
 pub(crate) mod panes;
 #[cfg(all(target_os = "windows", native_terminal_core))]
 mod windows;
 
-#[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
+#[cfg(all(
+    any(target_os = "ios", target_os = "macos", target_os = "windows"),
+    native_terminal_core
+))]
 pub(crate) mod desktop;
-#[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
+#[cfg(all(
+    any(target_os = "ios", target_os = "macos", target_os = "windows"),
+    native_terminal_core
+))]
 use desktop as desktop_platform;
 #[cfg(all(target_os = "linux", native_terminal_core))]
 use linux as desktop_platform;
@@ -32,9 +40,9 @@ use linux as desktop_platform;
 #[cfg(not(target_os = "android"))]
 macro_rules! desktop_surface {
     ($method:ident($($arg:expr),*), $fallback:expr) => {{
-        #[cfg(all(any(target_os = "linux", target_os = "macos", target_os = "windows"), native_terminal_core))]
+        #[cfg(all(any(target_os = "linux", target_os = "ios", target_os = "macos", target_os = "windows"), native_terminal_core))]
         { desktop_platform::$method($($arg),*).await }
-        #[cfg(not(all(any(target_os = "linux", target_os = "macos", target_os = "windows"), native_terminal_core)))]
+        #[cfg(not(all(any(target_os = "linux", target_os = "ios", target_os = "macos", target_os = "windows"), native_terminal_core)))]
         { $fallback }
     }};
 }
@@ -267,7 +275,10 @@ async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
     linux::relook(app, session).await
 }
 
-#[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
+#[cfg(all(
+    any(target_os = "ios", target_os = "macos", target_os = "windows"),
+    native_terminal_core
+))]
 async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
     desktop::relook(app, session).await
 }
@@ -278,6 +289,7 @@ async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
         target_os = "android",
         target_os = "linux",
         target_os = "macos",
+        target_os = "ios",
         target_os = "windows"
     ))
 ))]
@@ -410,7 +422,12 @@ pub async fn native_terminal_surface_focus(
 #[cfg(not(any(
     target_os = "android",
     all(
-        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        any(
+            target_os = "linux",
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "windows"
+        ),
         native_terminal_core
     )
 )))]

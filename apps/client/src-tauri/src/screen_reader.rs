@@ -2,7 +2,7 @@
 //! the client's registry refuses it for a new session while this says yes, whether or not the user also turned on the in-app
 //! Screen reader announcements. The Kotlin plugin (`ScreenReaderPlugin.kt`) asks Android's accessibility manager: touch
 //! exploration, which TalkBack and its kin turn on, or an enabled service that speaks or brailles the screen. Linux
-//! asks AT-SPI whether the desktop has enabled accessibility.
+//! asks AT-SPI whether the desktop has enabled accessibility. UIKit and AppKit report VoiceOver directly.
 use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
@@ -59,6 +59,14 @@ fn linux_accessibility_active() -> Result<bool, String> {
     }
 }
 
+#[cfg(all(any(target_os = "ios", target_os = "macos"), native_terminal_core))]
+pub(crate) fn apple_voice_over_active() -> bool {
+    #[cfg(target_os = "ios")]
+    return objc2_ui_kit::UIAccessibilityIsVoiceOverRunning();
+    #[cfg(target_os = "macos")]
+    return objc2_app_kit::NSWorkspace::sharedWorkspace().isVoiceOverEnabled();
+}
+
 /// Whether a screen reader is on. Like the probe it reads the device and nothing of the user's, so a locked app may ask: the
 /// engine Auto resolves to is announced at launch, before the app is unlocked.
 #[tauri::command]
@@ -79,7 +87,20 @@ pub async fn screen_reader_active(app: AppHandle) -> Result<bool, String> {
             .await
             .map_err(|error| error.to_string())?
     }
-    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
+    #[cfg(all(any(target_os = "ios", target_os = "macos"), native_terminal_core))]
+    {
+        let (answer, asked) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = answer.send(apple_voice_over_active());
+        })
+        .map_err(|error| error.to_string())?;
+        asked.await.map_err(|error| error.to_string())
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        all(target_os = "linux", native_terminal_core),
+        all(any(target_os = "ios", target_os = "macos"), native_terminal_core)
+    )))]
     {
         let _ = app;
         Ok(false)
