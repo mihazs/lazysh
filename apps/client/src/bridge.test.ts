@@ -174,3 +174,24 @@ it('binds the failure of a native-path start so the core\'s commands do not wait
   await expect(api.connectLocal(Object.assign(()=>{},{link:{events:{},bind}}))).rejects.toThrow('refused');
   await expect(bind.mock.calls[0][0]).rejects.toThrow('refused');
 });
+
+it('detaches the renderer callback when a terminal session retires', async () => {
+  invoke.mockResolvedValueOnce({sessionId:'local:output-retirement'});
+  await api.connectLocal(vi.fn());
+  const active=invoke.mock.calls.at(-1)![1].events;
+  const deliver=active.onmessage;
+  disposeSessionOutput('local:output-retirement');
+  expect(active.onmessage).not.toBe(deliver);
+
+});
+
+it('detaches the renderer callback when terminal startup fails', async () => {
+  let deliver: unknown;
+  invoke.mockImplementationOnce(async (_command, args) => {
+    deliver = args.events.onmessage;
+    throw new Error('start failed');
+  });
+  await expect(api.connectLocal(vi.fn())).rejects.toThrow('start failed');
+  expect(deliver).toBeTypeOf('function');
+  expect(invoke.mock.calls.at(-1)![1].events.onmessage).not.toBe(deliver);
+});

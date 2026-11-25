@@ -1,5 +1,5 @@
 import {Channel} from '@tauri-apps/api/core';
-import {isAccessReady, sessionOutput, StaleAccessError} from './access';
+import {isAccessReady, channelSessionOutput, StaleAccessError} from './access';
 import type {SshEvent} from './bridge';
 import {registerSessionOutput} from './pendingSessions';
 import type {TerminalAdapter} from './terminalAdapter';
@@ -33,9 +33,8 @@ export async function handBackToXterm(session: LiveSession, {onEvent, createXter
   const held: SshEvent[] = [];
   let holding = true;
   const events = new Channel<SshEvent>();
-  const deliver = sessionOutput<SshEvent>(event => holding ? held.push(event) : onEvent(event));
-  events.onmessage = deliver;
-  registerSessionOutput(session.id, deliver.dispose);
+  const disposeOutput = channelSessionOutput(events, event => holding ? held.push(event) : onEvent(event));
+  registerSessionOutput(session.id, disposeOutput);
   let carried = false;
   try {
     await to.write!(new TextEncoder().encode(await releaseNativeCore(session.id, events)));

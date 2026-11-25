@@ -138,6 +138,18 @@ export function sessionOutput<T extends { type: string; data?: number[] }>(callb
   return Object.assign(deliver, { dispose() { disposed = true; queued = []; bytes = 0; stop?.(); stop = undefined; } });
 }
 
+const discardSessionEvent = () => {};
+
+/** A late native channel callback must not retain a retired renderer. */
+export function channelSessionOutput<T extends {type: string; data?: number[]}>(channel: {onmessage: (value: T) => void}, callback: (value: T) => void) {
+  const deliver = sessionOutput(callback);
+  channel.onmessage = deliver;
+  return () => {
+    channel.onmessage = discardSessionEvent;
+    deliver.dispose();
+  };
+}
+
 /** These commands expose only lock state or perform native-controlled OS authentication. */
 export const accessControl = {
   status: () => nativeInvoke<AccessStatus>('app_lock_status'),

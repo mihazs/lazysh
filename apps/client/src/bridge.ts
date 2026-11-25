@@ -1,4 +1,4 @@
-import { protectedInvoke as invoke, sessionOutput, guardAccessCallback } from './access';
+import { protectedInvoke as invoke, channelSessionOutput, guardAccessCallback } from './access';
 import { Channel, invoke as acknowledgeInvoke, isTauri } from "@tauri-apps/api/core";
 import type { RuntimeTransport } from './terminalAdapter';
 import type { AuthHint } from './authHints';
@@ -94,10 +94,10 @@ function createSession(command: string, args: Record<string,unknown>, onEvent: (
     return started;
   }
   const events = new Channel<SshEvent>();
-  const deliver = sessionOutput(onEvent); events.onmessage = deliver;
+  const disposeOutput = channelSessionOutput(events, onEvent);
   return invoke<{sessionId:string}>(command, {...args,events}).then(result=>{
-    registerSessionOutput(result.sessionId,deliver.dispose); return result;
-  }, error=>{deliver.dispose();throw error;});
+    registerSessionOutput(result.sessionId,disposeOutput); return result;
+  }, error=>{disposeOutput();throw error;});
 }
 function createRemoteSession(command:string,args:{sessionId:string}&Record<string,unknown>,onEvent:(event:SshEvent)=>void) {
   if(args.sessionId.startsWith('local:'))return Promise.reject(new Error('This tool requires an SSH connection.'));
