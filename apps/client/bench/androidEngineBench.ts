@@ -17,19 +17,19 @@ const client = path.resolve(import.meta.dirname, '..');
 const git = (...args: string[]) => { try { return execFileSync('git', args, { cwd: client, encoding: 'utf8' }).trim(); } catch { return null; } };
 
 /** The guest and its GPU path, from the guest itself (the same fields the lane records). */
-export function guestEnvironment(adb: Adb, serial: string) {
+export function guestEnvironment(adb: Adb, serial: string, packageName = WEBVIEW_HOST) {
   const text = (...args: string[]) => adb(...args).trim();
   const prop = (key: string) => text('shell', 'getprop', key) || null;
   const gles = text('shell', 'dumpsys SurfaceFlinger | grep -m1 GLES').replace(/^GLES:\s*/, ''), egl = prop('ro.hardware.egl') ?? '';
   const webview = /Current WebView package \(name, version\): \(([^,]+), ([^)]+)\)/.exec(adb('shell', 'dumpsys webviewupdate'));
-  const host = adb('shell', `dumpsys package ${WEBVIEW_HOST}`), vsync = /VSYNC period:\s+(\d+) ns/.exec(adb('shell', 'dumpsys SurfaceFlinger | grep -m1 "VSYNC period"'));
+  const host = adb('shell', `dumpsys package ${packageName}`), vsync = /VSYNC period:\s+(\d+) ns/.exec(adb('shell', 'dumpsys SurfaceFlinger | grep -m1 "VSYNC period"'));
   return {
     device: { serial, model: prop('ro.product.model'), abi: prop('ro.product.cpu.abi'), wmSize: text('shell', 'wm', 'size'), wmDensity: text('shell', 'wm', 'density'), fingerprint: prop('ro.build.fingerprint') },
     androidVersion: { release: prop('ro.build.version.release'), sdk: prop('ro.build.version.sdk') },
     display: { refreshHz: vsync ? Math.round(1e9 / Number(vsync[1])) : null },
     gpuPath: { path: gpuPath(gles, egl), egl: egl || null, gralloc: prop('ro.hardware.gralloc'), glesRenderer: gles || null },
     webview: { package: webview?.[1] ?? null, version: webview?.[2] ?? null },
-    hostApp: { package: WEBVIEW_HOST, lastUpdateTime: /lastUpdateTime=(.*)/.exec(host)?.[1]?.trim() ?? null },
+    hostApp: { package: packageName, lastUpdateTime: /lastUpdateTime=(.*)/.exec(host)?.[1]?.trim() ?? null },
   };
 }
 

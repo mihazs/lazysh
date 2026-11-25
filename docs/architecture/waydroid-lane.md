@@ -93,6 +93,14 @@ bun apps/client/bench/androidCompare.ts docs/architecture/benchmarks/terminal-la
 
 The host app of the benchmark page (`bench/android-webview`, built by `--build` or already installed) must be in the guest; `--package app.lazysh.webviewbench` makes the lane thaw and stop that app instead of the real one. The lane gives the run an id (`runId` in its evidence, for example `engine-xterm-20261122T204011Z`: the label and the start time) and exports it to every `--bench` command as `LAZYSH_LANE_RUN_ID`; a record carries it, and the compare script refuses records of different runs or guests. The benchmark is heavy on the host: start it through `/tmp/lazysh-heavy` on this machine, and note that the guest shares the host CPU and GPU with whatever else runs (the record keeps the host's load average at the end).
 
+The native idle driver exercises W0 through the real app and an owned OpenSSH server. After installing the native debug APK and its instrumentation APK, add this benchmark step to the same lane run as the xterm.js arm:
+
+```sh
+--bench native-idle 'cd apps/client && bun bench/androidNativeBench.ts "$LAZYSH_LANE_OUT/native-idle.json"'
+```
+
+It records three 30-second windows for each cursor mode. The host measures the app and its WebView processes while device instrumentation waits without touching the terminal. The record includes the renderer's adapter and the guest counters. W1–W4, W9 and W12 still need a native driver, so the comparison remains incomplete with W0 alone. For local emulator qualification, pass `--software-gpu` and set `LAZYSH_BENCH_ANDROID` and `LAZYSH_LANE_RUN_ID` explicitly. Emulator figures cannot establish the Waydroid targets.
+
 ## Exit codes
 
 | Code | Meaning | Evidence file |
