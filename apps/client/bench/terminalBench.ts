@@ -121,7 +121,7 @@ const sameScreen = (expected: string[]) => {
 };
 
 /** Applies chunks through the same credit window and ack-after-write contract as App.tsx. */
-async function drain(json: string[], until?: () => boolean, paced = false) {
+async function drain(json: string[], until?: () => boolean, paced = false, onLastApplied?: () => void) {
   const { terminal } = harness!, ack: number[] = [];
   let inflight = 0, waiter: (() => void) | undefined, decodeMs = 0, bytes = 0;
   for (let i = 0; (until ? !until() : i < json.length); i++) {
@@ -131,7 +131,7 @@ async function drain(json: string[], until?: () => boolean, paced = false) {
     while (inflight + data.length > WINDOW) await new Promise<void>(resolve => { waiter = resolve; });
     inflight += data.length; bytes += data.length;
     const written = performance.now();
-    put(terminal, data, () => { inflight -= data.length; ack.push(performance.now() - written); waiter?.(); waiter = undefined; });
+    put(terminal, data, () => { if (i === json.length - 1) onLastApplied?.(); inflight -= data.length; ack.push(performance.now() - written); waiter?.(); waiter = undefined; });
     await (paced ? frame() : yieldTask());
   }
   while (inflight > 0) await new Promise<void>(resolve => { waiter = resolve; });
@@ -224,15 +224,19 @@ const api = {
   /** W2, W3, W4: stream the prepared bytes and check the final screen. `paced` waits for a frame after every chunk, so each chunk is rendered, as output that arrives over time is. */
   async stream(paced = false) {
     await reset();
-    let renders = 0;
-    const counting = harness!.terminal.onRender(() => { renders++; });
+    let renders = 0, finalApplied = false, renderedAt: number | undefined;
+    const counting = harness!.terminal.onRender(() => {
+      renders++;
+      if (finalApplied) renderedAt ??= performance.now();
+    });
     const meter = meterFrames(), started = performance.now();
-    const { bytes, decodeMs, ackMs } = await drain(prepared!.json, undefined, paced);
+    const { bytes, decodeMs, ackMs } = await drain(prepared!.json, undefined, paced, () => { finalApplied = true; });
     const wallMs = performance.now() - started;
     await settle();
+    const renderThroughputMiBs = renderedAt === undefined ? null : bytes / 1048576 / ((renderedAt - started) / 1000);
     const frames = meter.stop();
     counting.dispose();
-    return { renders, bytes, wallMs, throughputMiBs: bytes / 1048576 / (wallMs / 1000), decodeMs, decodeMsPerMiB: decodeMs / (bytes / 1048576), ackMs: summarize(ackMs), pacing: pacing(frames.intervalsMs, nominal), longTasks: frames.longTasks, correct: sameScreen(prepared!.screen), chunkBytes: CHUNK };
+    return { renders, bytes, wallMs, renderThroughputMiBs, throughputMiBs: bytes / 1048576 / (wallMs / 1000), decodeMs, decodeMsPerMiB: decodeMs / (bytes / 1048576), ackMs: summarize(ackMs), pacing: pacing(frames.intervalsMs, nominal), longTasks: frames.longTasks, correct: sameScreen(prepared!.screen), chunkBytes: CHUNK };
   },
   /** W1: one remote burst at a time; write to apply, and write to the render that shows it. */
   async shell(interactions: number) {

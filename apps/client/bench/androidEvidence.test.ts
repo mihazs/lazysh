@@ -34,7 +34,7 @@ describe('the xterm.js arm from the baseline spec on Android', () => {
     { workload: 'W0', title: 'Idle, session open, no output', variant: 'cursor blink on, focused', correct: true, runs: [{ android: window(30000, 300, 900, 60) }, { android: window(30000, 330, 960, 66) }, { android: window(30000, 270, 840, 54) }] },
     { workload: 'W0', title: 'Idle, session open, no output', variant: 'cursor blink off, focused', correct: true, runs: [{ android: window(30000, 30, 150, 0) }] },
     { workload: 'W1', title: 'Small shell output (prompt, short commands)', variant: null, correct: true, runs: [{ renderMs: latency(12, 13, 300) }, { renderMs: latency(13, 14, 300) }] },
-    { workload: 'W2', title: 'Sustained plain text', variant: null, correct: true, runs: [{ throughputMiBs: 20, bytes: 4 * 1048576, android: window(200, 400, 50, 40, { p50: 4, p95: 5 }, 2) }, { throughputMiBs: 22, bytes: 4 * 1048576, android: window(180, 440, 55, 36, { p50: 4, p95: 6 }, 3) }] },
+    { workload: 'W2', title: 'Sustained plain text', variant: null, correct: true, runs: [{ throughputMiBs: 200, renderThroughputMiBs: 20, bytes: 4 * 1048576, android: window(200, 400, 50, 40, { p50: 4, p95: 5 }, 2) }, { throughputMiBs: 220, renderThroughputMiBs: 22, bytes: 4 * 1048576, android: window(180, 440, 55, 36, { p50: 4, p95: 6 }, 3) }] },
     { workload: 'W12', title: 'Keyboard input, one key at a time', variant: 'idle terminal', correct: true, runs: [{ latencyMs: latency(5, 9) }] },
     { workload: 'W12', title: 'Keyboard auto-repeat, about 30 Hz with jitter', variant: 'idle terminal', correct: true, runs: [{ latencyMs: latency(6, 10) }] },
     { workload: 'W12', title: 'Keyboard input during sustained output', variant: 'visible terminal flooded with W2 text; echo queues behind it', correct: false, runs: [{ latencyMs: latency(15, 31), android: window(6000, 6000, 900, 800, { p50: 4, p95: 33 }, 12) }] },
@@ -80,7 +80,7 @@ describe('the xterm.js arm from the baseline spec on Android', () => {
 
   it('records no figure at all for a workload whose guest counters are missing, never a zero', () => {
     const none = fromBaseline([{ workload: 'W2', title: 'Sustained plain text', variant: null, correct: true, runs: [{ throughputMiBs: 20, bytes: 1048576 }] }, { workload: 'W0', title: 'Idle', variant: 'cursor blink on, focused', correct: true, runs: [{}] }], 'xterm-dom');
-    expect(none.map(m => m.metric)).toEqual(['throughputMiBs']);
+    expect(none).toEqual([]);
   });
 });
 

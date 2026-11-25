@@ -103,7 +103,11 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
   await workload('W1', 'Small shell output (prompt, short commands)', scale.runs, () => page.evaluate(n => window.terminalBench.shell(n), scale.shell));
   for (const [id, title, kind, size] of [['W2', 'Sustained plain text', 'plain', scale.plain], ['W3', 'ANSI color heavy output', 'ansi', scale.ansi], ['W4', 'Cursor movement and full-screen redraw', 'redraw', scale.frames]] as const) {
     const run = await streamed(kind, size)();
-    await workload(id, title, scale.runs, run);
+    await workload(id, title, scale.runs, async () => {
+      const sample = await run();
+      expect(sample.renderThroughputMiBs ?? 0, `${id} must render after applying its final chunk`).toBeGreaterThan(0);
+      return sample;
+    });
   }
 
   // W12: real keyboard events through the page's input path, with the remote echoing at once.
