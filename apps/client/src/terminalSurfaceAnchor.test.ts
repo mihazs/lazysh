@@ -4,7 +4,8 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({invoke}));
 
-import {DRAW_CHECK_TRIES, rgbOf, SETTLE_FRAMES, trackSurfaceAnchor} from './terminalSurfaceAnchor';
+import {applyAccessStatus} from './access';
+import {DRAW_CHECK_TRIES, nativeSurface, rgbOf, SETTLE_FRAMES, trackSurfaceAnchor} from './terminalSurfaceAnchor';
 
 /** Frames the tracker asked for, run by hand so a test decides when the page "paints". */
 function frames() {
@@ -196,4 +197,32 @@ describe('trackSurfaceAnchor', () => {
     await tracker.stop();
     expect(invoke).toHaveBeenCalledTimes(2);
   });
+});
+
+
+it('uses the replacement renderer nonce for surface operations and permits removal while locked', async () => {
+  invoke.mockReset().mockResolvedValue(undefined);
+  const nonce = 'a'.repeat(64);
+  const access = {initialized: true, supported: true, reason: '', enabled: false};
+  applyAccessStatus({...access, locked: false, generation: '1', nonce});
+
+  await nativeSurface.place('s1', {x: 0, y: 0, width: 100, height: 100, dpr: 1}, 0);
+  await nativeSurface.state('s1');
+  await nativeSurface.look('s1', {theme: {foreground: '#ffffff'}, fontFamily: 'monospace', fontSize: 14, cursorStyle: 'block', cursorBlink: false, brightBold: false});
+  await nativeSurface.cell(14, 1);
+  await nativeSurface.focus('s1', true);
+  await nativeSurface.takeInput('s1');
+
+  expect(invoke.mock.calls.map(([command, , options]) => [command, options?.headers])).toEqual([
+    PLACE,
+    'native_terminal_surface_state',
+    'native_terminal_surface_look',
+    'native_terminal_surface_cell',
+    'native_terminal_surface_focus',
+    'native_terminal_surface_input',
+  ].map(command => [command, {'X-Lazysh-Access': nonce}]));
+
+  applyAccessStatus({...access, locked: true, generation: '2'});
+  await nativeSurface.remove('s1');
+  expect(invoke).toHaveBeenLastCalledWith(REMOVE, {session: 's1'});
 });
