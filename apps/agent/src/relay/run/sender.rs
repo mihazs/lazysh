@@ -148,6 +148,18 @@ fn add(counter: &mut u64) -> Result<()> {
     Ok(())
 }
 pub(super) fn worker(directory: &Path, expected_revision: u64) -> Result<WorkerReport> {
+    worker_with_lock_wait(directory, expected_revision, false)
+}
+
+pub(super) fn worker_automatic(directory: &Path, expected_revision: u64) -> Result<WorkerReport> {
+    worker_with_lock_wait(directory, expected_revision, true)
+}
+
+fn worker_with_lock_wait(
+    directory: &Path,
+    expected_revision: u64,
+    wait: bool,
+) -> Result<WorkerReport> {
     supported()?;
     if expected_revision > MAX_REVISION {
         return Err(invalid());
@@ -170,7 +182,17 @@ pub(super) fn worker(directory: &Path, expected_revision: u64) -> Result<WorkerR
     }
     // Installing before the lock makes observed ownership cancellation-ready even during startup.
     let mut cancelled = signal()?;
-    let _drain = drain_lock(directory)?;
+    let mut attempts = 0;
+    let _drain = loop {
+        match drain_lock(directory) {
+            Ok(lock) => break lock,
+            Err(Error::Relay("RelayDrainBusy")) if wait && attempts < 50 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => return Err(error),
+        }
+    };
     if !current(&store, policy.revision)? {
         return Ok(WorkerReport {
             stopped: "configuration_changed",

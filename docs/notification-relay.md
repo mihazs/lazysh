@@ -315,7 +315,7 @@ consent flow, then configure the companion publisher below. For example, use
 `lazysh-agent hooks preview --agent codex`, inspect
 `hooks status --agent codex --profile-root /home/user/.codex`, and install using
 that status's exact `installPlan`. Configuring the relay does not install hooks.
-The foreground `relay run` process is also a separate explicit opt-in. The same
+An enabled binding starts its sender automatically. The same
 source paths work with the encrypted ntfy destination, the external Gotify
 client or an Apprise key; no destination selection installs these callbacks automatically.
 
@@ -327,16 +327,15 @@ The companion can durably admit its **new normalized state transitions** to this
 lazysh-agent relay status
 lazysh-agent relay configure --expected-revision 0 --enable \
   --capability-file /private/relay-config/build-source
-lazysh-agent relay flush --limit 8 --deadline-seconds 30
 ```
 
 Use the current local `revision` from `relay status` for every configure or disable. A private-CA relay also requires explicit `--relay-ca-file FILE` on configure. Omit `--enable` to save a verified binding without enabling admission. Enable rejects a remotely disabled destination. Configure probes and atomically pins the relay account, source, target generation, origin and exact private capability/CA bytes; it does not send old events. The credential files remain owner-only and must remain at their checked paths. Even a whitespace-only file change invalidates the captured binding; explicitly configure again after any intended identity or trust-file change.
 
-Ordinary `ingest` performs no networking and starts no asynchronous runtime. In the same SQLite transaction as the local state update, an enabled companion queues a random stable event UUID only when the normalized state changes to `working`, `needs_attention` or `done`. Repeated state observations do not enqueue another event. It never uploads the session ID, agent label, pane ID, prompt, transcript, command, project directory or host address. The relay supplies the independently provisioned public alias. A known full local outbox preserves the local update and increments the durable `capacityFailures` counter; unexpected SQL/disk errors roll back the whole ingest rather than claiming a capacity rejection.
+Ordinary `ingest` writes to the local database and starts the configured sender if needed. In the same SQLite transaction as the local state update, an enabled companion queues a random stable event UUID only when the normalized state changes to `working`, `needs_attention` or `done`. Repeated state observations do not enqueue another event. It never uploads the session ID, agent label, pane ID, prompt, transcript, command, project directory or host address. The relay supplies the independently provisioned public alias. A known full local outbox preserves the local update and increments the durable `capacityFailures` counter; unexpected SQL/disk errors roll back the whole ingest rather than claiming a capacity rejection.
 
 Two opt-in host switches can keep an event out of this queue: one for agents that another agent started and one for an unlocked host desktop (Linux). The event is still stored locally. Both are off by default; see [notification policy](reference/companion-settings.md#notification-policy-nested-agents-and-an-unlocked-desktop).
 
-**Flush is explicit.** By default nothing installs a schedule, modifies hook configuration, starts a daemon, or sends pending work. Invoke flush yourself, explicitly start the foreground sender below, or configure an operator-owned schedule separately. This manual drain is not complete background mobile push. It owns one persistent private `relay-publisher.lock`, takes at most eight jobs, and stops admitting requests at the selected 1–30 second dispatch deadline. Existing SQLite admission retains its separate three-second shared budget; filesystem/OS work is not a hard real-time promise. A concurrent flush fails busy. The drain guard spans each admitted POST and its synchronous local finalization, including interruption; no detached local writer can complete after releasing that ownership.
+**Flush is explicit.** Enabling a binding starts the sender in a detached process. Later agent reports and snapshots restart it if it has exited. The sender is revision-pinned and shares the same single-owner lock as a manual flush. Set `LAZYSH_RELAY_AUTOSTART=0` when an operator-owned supervisor manages the sender. A host reboot still requires a subsequent companion invocation or an operator-owned startup service. Flush owns one persistent private `relay-publisher.lock`, takes at most eight jobs, and stops admitting requests at the selected 1–30 second dispatch deadline. Existing SQLite admission retains its separate three-second shared budget; filesystem/OS work is not a hard real-time promise. A concurrent flush fails busy. The drain guard spans each admitted POST and its synchronous local finalization, including interruption; no detached local writer can complete after releasing that ownership.
 
 The dedicated `/v1/bound-events` protocol requires the original account/source/target generation both for new admission and matching-receipt reconciliation. An older relay that lacks this route fails closed; the companion never falls back to the manual `/v1/events` endpoint. A lost response may retry only the same UUID and original binding. `relayRecorded` means the relay recorded a matching receipt, **not** that the destination accepted it. The companion retains receipt IDs in its private local database; its CLI exposes aggregate local status rather than a receipt list or a remote delivery-status probe. JSON flush reports include retry/blocked counts, a finite `lastFailure` class and a stop reason; `limit` reports exhausted dispatch slots; `drained` means no job was due at the last claim, so future retries can still remain. Successful process completion alone does not mean delivery. Status counts are local and make no remote probe.
 
@@ -350,7 +349,7 @@ Disable persists and advances the local revision, cancelling all old pending row
 
 ## Explicit foreground sender
 
-After explicitly enabling the local binding, you can start one foreground process instead of invoking flush repeatedly:
+If an external supervisor owns the sender, configure and invoke the companion with `LAZYSH_RELAY_AUTOSTART=0`, then start the foreground process:
 
 ```sh
 lazysh-agent relay run --expected-revision 1

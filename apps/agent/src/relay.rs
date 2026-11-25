@@ -8,6 +8,53 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub(crate) use store::{admit_transition, initialize};
+
+/// Starts one worker for the enabled revision without holding a caller's input or output descriptors.
+pub fn ensure_sender(directory: &std::path::Path, configuration_changed: bool) -> Result<()> {
+    if !cfg!(unix)
+        || std::env::var_os("LAZYSH_RELAY_AUTOSTART").as_deref() == Some(std::ffi::OsStr::new("0"))
+    {
+        return Ok(());
+    }
+    let status = Store::open(directory)?.relay_status()?;
+    if !status.enabled {
+        return Ok(());
+    }
+    if !configuration_changed {
+        match run::probe_worker(directory) {
+            Ok(false) => return Ok(()),
+            Ok(true) => (),
+            Err(error) => return Err(error),
+        }
+    }
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command
+        .args([
+            "relay",
+            "auto-run",
+            "--expected-revision",
+            &status.revision.to_string(),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe and the child performs no other work before exec.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+    }
+    command.spawn()?;
+    Ok(())
+}
 const MAX_REVISION: u64 = 9_007_199_254_740_991;
 const MAX_CONFIG: usize = 16384;
 const PENDING_LIMIT: i64 = 1000;
