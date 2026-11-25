@@ -53,6 +53,12 @@ What this implies for the host, none of it verified against the real app:
 - **A Tauri command carries the anchor** (the Android and Linux contract, `native_terminal_surface_place`, `_remove`, `_state`), and the host finds the web view's superview from the `WKWebView` Tauri exposes. Tauri's own window setup and its `with_webview` hook were not in the loop here.
 - **The renderer's surface.** `terminal-renderer-wgpu` presents through wgpu's Metal backend; wgpu making a Metal surface from this `NSView` (it sets up its own `CAMetalLayer`) was not tried, the probe clears through Metal directly.
 
+## App integration
+
+The feature-enabled Tauri app uses the existing terminal surface commands to place an AppKit view beneath WKWebView. It converts the page anchor through the display backing scale and web view coordinates, and gives the shared renderer worker the retained Metal layer. Teardown joins that worker before removing the view.
+
+The hosted app job builds the native-enabled app and runs the anchor conversion test for Retina scale, page zoom, and flipped coordinates. The standalone probe supplies the window-server pixel evidence. The actual app still needs window readback, Retina and input checks, VoiceOver or a tested refusal, performance, and rollback acceptance for [#1333](https://github.com/mihazs/lazysh/issues/1333).
+
 ## What this does not establish
 
 - **Scale 2.** The one measurement the plan asks for that the runner could not give (above). A 2x host, or a runner image with a Retina display, is needed before macOS can flip; fractional scales, a window moved between displays of different scales and a scale change while a surface exists were not exercised.
