@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.content.Intent
 import android.content.IntentFilter
@@ -744,7 +745,10 @@ class NativeWorkspaceTest {
         // textarea fixture reached this point with focus=true but no connection.
         // Wait for the exact native type action's constraints, without refocusing
         // or attempting input, within the existing five-second typing budget.
-        val typing = typeTextIntoFocusedView(text)
+        val typingConstraints = typeTextIntoFocusedView(text).constraints
+        val keyEvents = requireNotNull(KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD).getEvents(text.toCharArray())) {
+            "Native typing fixture contains characters without virtual keyboard events"
+        }
         val started = System.nanoTime()
         val deadline = started + TimeUnit.SECONDS.toNanos(5)
         val timing = TypingTiming(started, deadline)
@@ -757,7 +761,7 @@ class NativeWorkspaceTest {
                 var ready = false
                 timing.constraintChecks++
                 scenario.onActivity { activity ->
-                    ready = typing.constraints.matches(requireNotNull(webView(activity.window.decorView)))
+                    ready = typingConstraints.matches(requireNotNull(webView(activity.window.decorView)))
                 }
                 if (ready) { timing.constraintsReady = System.nanoTime(); break }
                 Thread.sleep(25)
@@ -775,10 +779,14 @@ class NativeWorkspaceTest {
             // into the focused WebView, preserving normal browser input events.
             timing.phase = TypingPhase.NATIVE_INJECTION
             timing.injectionStarted = System.nanoTime()
-            onView(isAssignableFrom(WebView::class.java)).perform(typing)
+            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            // Queue key events in order without Espresso waiting for idle between key events.
+            for (event in keyEvents) {
+                assertTrue("Test device rejected a native typing event", automation.injectInputEvent(event, false))
+            }
             timing.injectionReturned = System.nanoTime()
             timing.phase = TypingPhase.SETTLING
-            // Espresso acknowledges key injection, not the separate WebView renderer.
+            // Queuing keys does not acknowledge WebView renderer delivery.
             // Wait only for the exact result; never retype or assign the input value.
             val typed = "document.querySelector(${JSONObject.quote(selector)})?.value === ${JSONObject.quote(text)}"
             while (true) {
