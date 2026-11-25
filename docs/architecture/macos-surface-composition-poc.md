@@ -94,3 +94,5 @@ python3 packages/terminal-runtime/prototypes/macos-surface/scripts/check-app.py 
 ```
 
 The driver uses the same development URL and Tauri command fixture as the Wayland app test. It starts an owned local terminal, looks up the window belonging to the process it launched, and measures the four coloured cells during placement and movement. The DOM overlay is the visible capture control. Removal requires the native pixels to disappear while the overlay remains visible. The output directory retains frame images, the app log and a success report. The check requires macOS permission to capture the owned window.
+
+[The hosted macOS app run](https://github.com/mihazs/lazysh/actions/runs/45669417189) measured placement at (60, 72) and movement to (110, 102) on a 1x display. The renderer uses the WebView's safe area as its origin, so the 32-point title bar does not shift the terminal relative to the DOM. The window capture verified that removing the terminal cleared its pixels and left the overlay visible. Retina placement still needs a 2x capture.
