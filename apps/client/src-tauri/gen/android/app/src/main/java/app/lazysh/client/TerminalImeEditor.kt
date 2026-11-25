@@ -72,7 +72,14 @@ class TerminalImeEditor(
     val composingEnd: Int get() = compEnd
 
     /** The preedit the surface should draw at the cursor while the keyboard composes, or null. */
-    val composing: String? get() = if (compStart < 0) null else value.substring(compStart, compEnd)
+    val composing: String? get() {
+        if (compStart < 0) return null
+        // The terminal already drew the unchanged prefix at these positions.
+        var start = compStart
+        while (start < compEnd && start < previous.length && value[start] == previous[start]) start++
+        if (start > compStart && start < compEnd && value[start].isLowSurrogate() && value[start - 1].isHighSurrogate()) start--
+        return if (start == compEnd) null else value.substring(start, compEnd)
+    }
 
     // ---- InputConnection operations ----
 
@@ -167,6 +174,7 @@ class TerminalImeEditor(
             owned = value.length
         }
         sink.key(key)
+        if (!key.release && key.key == "Enter" && !key.shift && !key.ctrl && !key.alt && !key.meta) resetAndResync()
         return true
     }
 
@@ -267,8 +275,11 @@ class TerminalImeEditor(
         previous = value
         // Enter typed as text is a carriage return, sent as it is in every keyboard mode (#1043); a line break inside
         // longer text goes as typed, like xterm.js. Either way what came before the break is no longer editable.
-        if (delta.isNotEmpty()) sink.text(if (delta == "\n") "\r" else delta)
-        if (delta.contains('\n')) owned = value.length
+        if (delta.isNotEmpty()) {
+            sink.text(if (delta == "\n") "\r" else delta)
+            if (delta.endsWith('\n') || delta.endsWith('\r')) resetAndResync()
+            else if (delta.contains('\n') || delta.contains('\r')) owned = value.length
+        }
         return true
     }
 

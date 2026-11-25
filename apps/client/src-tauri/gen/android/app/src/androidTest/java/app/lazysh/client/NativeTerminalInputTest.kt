@@ -110,9 +110,11 @@ class NativeTerminalInputTest {
         connection.commitText("ls", 1)
         assertTrue(connection.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
         assertTrue(connection.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
-        assertEquals(listOf("text:ls", "key:Enter", "key:Enter/up"), delivered)
+        assertEquals("", connection.getTextBeforeCursor(10, 0).toString())
+        connection.commitText("ls", 1)
         connection.commitText("\n", 1)
-        assertEquals("a line break the keyboard commits as text is a carriage return", "text:\r", delivered.last())
+        assertEquals("", connection.getTextBeforeCursor(10, 0).toString())
+        assertEquals(listOf("text:ls", "key:Enter", "key:Enter/up", "text:ls", "text:\r"), delivered)
     }
 
     @Test fun hardwareShortcutsReachTheTerminalAsKeysAndSystemKeysDoNot() = onMain {
