@@ -1,3 +1,4 @@
+import {agentBoardContainer} from './agentBoardContainer';
 import {createRoot} from 'react-dom/client';
 import AgentPanel from '../../src/AgentPanel';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../../src/access';
@@ -19,8 +20,7 @@ export function mountAllHostsBoard(hosts:Hosts,active:string) {
     if(command==='agent_approvals')return {schemaVersion:1,requests:[]};
     throw new Error('Unexpected all hosts board fixture command');
   }}});
-  const container=document.createElement('div');container.className='agent-board-fixture';
-  Object.assign(container.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'100',background:'var(--theme-bg)',padding:'12px'});document.body.append(container);
+  const container=agentBoardContainer();
   const root=createRoot(container);
   root.render(<AgentPanel sessionId={active} hostKey={hosts[active].key} hostLabel={hosts[active].label} showHerdr={false} hosts={Object.entries(hosts).map(([sessionId,host])=>({sessionId,hostKey:host.key,hostLabel:host.label}))}/>);
   return {calls,opened,setReports(sessionId:string,rows:unknown[]){reports[sessionId]=rows;},fail(sessionId:string,on:boolean){if(on)failing.add(sessionId);else failing.delete(sessionId);},dispose(){root.unmount();container.remove();}};

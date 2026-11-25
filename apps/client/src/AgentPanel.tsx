@@ -1,4 +1,5 @@
 import {t, useUi, formatDateTime, formatNumber} from './i18n/core';
+import {createPortal} from 'react-dom';
 import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {bindProtectedInvoke,captureAccess,type AccessLease} from './access';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
@@ -49,9 +50,10 @@ export function parseReportedHistory(value:unknown, agentSessionId:string):Repor
   return row as ReportedHistory;
 }
 
-export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSource,herdrSession,onUseReportedHistory,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;/** Every connected host, to offer the board that merges them. */hosts?:readonly BoardHost[];local?:boolean;companionSource?:CompanionSource;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
+export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSource,herdrSession,onUseReportedHistory,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId,settingsTarget,settingsActive=false,onOpenSetup }: { sessionId: string;hostKey?:string;hostLabel?:string;/** Every connected host, to offer the board that merges them. */hosts?:readonly BoardHost[];local?:boolean;companionSource?:CompanionSource;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;settingsTarget?:HTMLElement|null;settingsActive?:boolean;onOpenSetup?:()=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
   useUi();
-  const visibility=useRef(panelVisible);visibility.current=panelVisible;
+  const panelOrSettingsVisible=panelVisible || settingsActive;
+  const visibility=useRef(panelOrSettingsVisible);visibility.current=panelOrSettingsVisible;
   const historyVisibility=useRef(activityVisible);historyVisibility.current=activityVisible;
   const [access]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -60,8 +62,9 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
   const [error, setError] = useState<UiErrorCause>('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [setupSource,setSetupSource]=useState<string>();
   const [hookSetupRequest,setHookSetupRequest]=useState<Readonly<{sessionId:string}>>();
+  const [pendingHookSetup,setPendingHookSetup]=useState<Readonly<{sessionId:string}>>();
+  useEffect(()=>{if(settingsActive && settingsTarget && pendingHookSetup?.sessionId===sessionId){setHookSetupRequest(pendingHookSetup);setPendingHookSetup(undefined);}},[settingsActive,settingsTarget,pendingHookSetup,sessionId]);
   const [loadedSessionId, setLoadedSessionId] = useState<string>();
   const archiveHost=hostKey ?? sessionId;
   const [archiveState,setArchive]=useState<{host:string;rows:readonly ArchivedReport[]}>(()=>({host:archiveHost,rows:readArchive(archiveHost)}));
@@ -92,7 +95,6 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
   const reportReturn=useRef<{target:HTMLButtonElement|null;scroll:ScrollPosition|null;source:string}|null>(null);
   useEffect(()=>{if(selection && visibility.current && selectedSource.current===selection.source && access.current() && !document.hidden)selectedReport.current?.focus();},[selection]);
   const ready=loaded && loadedSessionId===sessionId;
-  const setupOpen=setupSource===sessionId || !!error;
   const reports=ready && !error ? sessions : [];
   const currentReports=useRef(reports);currentReports.current=reports;
   const archivedReports=reports.filter(row=>isArchived(archived,row));
@@ -169,16 +171,22 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
   }
   useEffect(()=>{setSessions([]);setLiveAgents(undefined);setLoaded(false);setError('');lastUpdate.current=undefined;setCompanionUpdate(undefined);},[sessionId]);
   useEffect(()=>{
-    if(panelVisible && !document.hidden)void refresh();
-    else if(!panelVisible) {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
-    const interval=panelVisible ? window.setInterval(()=>{if(!document.hidden)void refresh();},5000) : undefined;
+    if(panelOrSettingsVisible && !document.hidden)void refresh();
+    else if(!panelOrSettingsVisible) {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
+    const interval=panelOrSettingsVisible ? window.setInterval(()=>{if(!document.hidden)void refresh();},5000) : undefined;
     const recovered=(event:Event)=>{
-      if(!panelVisible || document.hidden || (event as CustomEvent<unknown>).detail!==sessionId)return;
+      if(!panelOrSettingsVisible || document.hidden || (event as CustomEvent<unknown>).detail!==sessionId)return;
       if(snapshotFlight.current!==null)recoveryRefresh.current=sessionId;else void refresh();
     };
     window.addEventListener('lazysh-host-tools-restored',recovered);
     return()=>{window.removeEventListener('lazysh-host-tools-restored',recovered);window.clearInterval(interval);request.current++;snapshotFlight.current=null;recoveryRefresh.current=undefined;historyRequest.current++;historyFlight.current=null;historyOwner.current=null;};
-  },[sessionId,panelVisible]);
+  },[sessionId,panelOrSettingsVisible]);
+
+  const wasPanelVisible=useRef(panelVisible);
+  useEffect(()=>{
+    if(panelVisible && !wasPanelVisible.current && settingsActive && !document.hidden)void refresh();
+    wasPanelVisible.current=panelVisible;
+  },[panelVisible]);
 
   const reportSource={host:loadedSessionId,available:panelVisible && access.current() && ready && !error,rows:reports,lease:access};
   function archive(row:AgentSession) {
@@ -227,23 +235,25 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
     </>}
   </section>;
   const approvals=<ApprovalPanel sessionId={sessionId} visible={panelVisible} compactEmpty />;
+  const settingsVisible=settingsActive;
+  const configuration=<section className="agent-configuration" aria-label={t('agentsSetupAction')}>
+    <h3>{t('agentsSetupAction')}</h3>
+    <p className="agent-note">{t('agentsReportedHint')}</p>
+    <CompanionConsentSetting host={archiveHost}/>
+    {local?<p className="agent-note" data-companion-source={companionSource}>{companionSource?t('companionLocalSource',{source:t(companionSourceLabels[companionSource])}):t('companionLocalNote')}</p>:<CompanionInstallPanel sessionId={sessionId} visible={settingsVisible} ready={ready && !error} onInstalled={()=>{request.current++;snapshotFlight.current=null;void refresh();}}/>}
+    <CompanionHooksPanel sessionId={sessionId} visible={settingsVisible} reveal={hookSetupRequest}/>
+    {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} hostKey={archiveHost} visible={settingsVisible && !error} />}
+  </section>;
   const panel=<section className="tool-panel agent-panel" data-activity-detail={!!selected || undefined} hidden={!panelVisible} aria-label={t('agentsTitle')}>
     {!renderNavigation&&<>{approvals}{liveProcesses}</>}
     {peers.length>1 && <div className="agent-scope" role="group" aria-label={t('agentsScope')}>{(['host','all'] as const).map(value=><button type="button" className="filter-chip" key={value} aria-pressed={merged===(value==='all')} onClick={()=>setScope(value)}>{t(value==='host'?'agentsScopeHost':'agentsScopeAll')}</button>)}</div>}
     {merged ? <AllHostsBoard hosts={peers} visible={panelVisible && activityVisible} onOpen={()=>setScope('host')}/> : <>
-    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><SearchField query={query} onChange={setQuery}/><button type="button" className="icon-button agent-tool" title={t('agentsSetupAction')} aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={18} aria-hidden="true"/><span className="sr-only">{t('agentsSetupAction')}</span></button><button className="icon-button agent-tool" title={t('agentsRefresh')} disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('agentsRefresh')}</span></button></div>
+    <div className="tool-bar"><h3>{t('agentsTitle')}</h3><SearchField query={query} onChange={setQuery}/><button type="button" className="icon-button agent-tool" title={t('agentsSetupAction')} aria-haspopup="dialog" onClick={onOpenSetup}><Settings2 size={18} aria-hidden="true"/><span className="sr-only">{t('agentsSetupAction')}</span></button><button className="icon-button agent-tool" title={t('agentsRefresh')} disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('agentsRefresh')}</span></button></div>
     {ready && !error && companionUpdate && <CompanionUpdateRow update={companionUpdate}/>}
     <CompanionUpdateConsent sessionId={sessionId} host={archiveHost} ready={ready && !error && !local} companionReplied={!!companionUpdate} onInstalled={()=>{request.current++;snapshotFlight.current=null;void refresh();}}/>
     {error && <div className="agent-setup"><p className="inline-error" role="alert">{uiErrorText(error)}</p><h3>{t('agentsConnect')}</h3><p>{t(local?'agentsSetupLocal':'agentsSetup')}</p><p>{t('agentsSetupDocs',{path:'docs/companion.md'})}</p></div>}
-    <section className="agent-configuration" hidden={!setupOpen} aria-label={t('agentsSetupAction')}>
-      <h3>{t('agentsSetupAction')}</h3>
-      <p className="agent-note">{t('agentsReportedHint')}</p>
-      <KeepAwakeControl sessionId={sessionId} visible={panelVisible} />
-      <CompanionConsentSetting host={archiveHost}/>
-      {local?<p className="agent-note" data-companion-source={companionSource}>{companionSource?t('companionLocalSource',{source:t(companionSourceLabels[companionSource])}):t('companionLocalNote')}</p>:<CompanionInstallPanel sessionId={sessionId} visible={panelVisible} ready={ready && !error} onInstalled={()=>{setSetupSource(sessionId);request.current++;snapshotFlight.current=null;void refresh();}}/>}
-      <CompanionHooksPanel sessionId={sessionId} visible={panelVisible} reveal={hookSetupRequest}/>
-      {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} hostKey={archiveHost} visible={panelVisible && !error} />}
-    </section>
+    <KeepAwakeControl sessionId={sessionId} visible={panelVisible} settingsTarget={settingsTarget ?? null} settingsActive={settingsActive} />
+    {settingsTarget && createPortal(configuration,settingsTarget)}
     {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} reports={reportSource} />}
     <div className="agent-discovery">
       <StateFilter filter={filter} onChange={setFilter} count={ready && !error ? state=>state==='all'?matching.length:matching.filter(row=>row.state===state).length : undefined}/>
@@ -264,7 +274,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
     {historyError && <div><p className="inline-error" role="alert">{uiErrorText(historyError)}</p><p>{t('agentsHistoryManual')}</p></div>}
     {historyStatus && <div><p role="status">{t(historyStatus==='missing'?'agentsHistoryMissing':'agentsHistoryAmbiguous')}</p><p>{t('agentsHistoryManual')}</p></div>}
     {busy && !ready && !error && <p className="loading" role="status">{t('agentsReading')}</p>}
-    {!error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p>{!setupOpen && <button type="button" className="subtle-button" onClick={()=>{if(!visibility.current || selectedSource.current!==sessionId || !access.current())return;setSetupSource(sessionId);setHookSetupRequest({sessionId});}}><Settings2 size={15}/>{t('hooksTitle')}</button>}</div>}
+    {!error && ready && reports.length === 0 && <div className="panel-empty"><Bot size={28} /><h3>{t('agentsEmpty')}</h3><p>{t('agentsEmptyHint')}</p><button type="button" className="subtle-button" onClick={()=>{if(!visibility.current || selectedSource.current!==sessionId || !access.current())return;onOpenSetup?.();setPendingHookSetup({sessionId});}}><Settings2 size={15}/>{t('hooksTitle')}</button></div>}
     {visible.length > 0 && <div className="agent-board">{states.filter(state=>(filter==='all' || state===filter) && visible.some(row=>row.state===state)).map(state => <section key={state} aria-label={t(names[state])} className="agent-column status-group" data-state={state}><h4>{t(names[state])} <span className="status-group-count">{formatNumber(visible.filter(s => s.state === state).length)}</span></h4>{projectGroups(visible.filter(s => s.state === state)).map(([project,rows])=><section key={project} className="agent-project-group" aria-label={hostLabel?t('agentsProjectGroup',{project:pathBasename(project),host:hostLabel}):pathBasename(project)}><h5 className="agent-project-heading"><span className="agent-project-name" title={project}>{pathBasename(project)}</span>{hostLabel && <span className="agent-project-host">{hostLabel}</span>}<span className="status-group-count">{formatNumber(rows.length)}</span></h5>{rows.map(s => <article className="agent-card" data-selected={selected===s} key={reportKey(s)}><button ref={selected===s?reportTrigger:undefined} type="button" className="agent-report-row" aria-pressed={selected===s} aria-label={t('agentsSelectReport',{agent:s.agent,project:s.project})} onClick={event=>{reportTrigger.current=event.currentTarget;reportScroll.current=captureScrollPosition(event.currentTarget);reportReturn.current=null;setSelection({source:sessionId,key:reportKey(s)});}}><ReportRowContent row={s} now={now}/></button><div className="agent-card-actions">{s.agent==='Claude Code' && onUseReportedHistory && <button className="text-button" disabled={historyBusy || !access.current()} onClick={()=>void useReportedHistory(s)}>{t('agentsHistoryUse')}</button>}<button type="button" className="text-button agent-archive" aria-label={t('agentsArchiveReport',{agent:s.agent,project:pathBasename(s.project)})} onClick={()=>archive(s)}><Archive size={14} aria-hidden="true"/>{t('agentsArchive')}</button></div></article>)}</section>)}</section>)}</div>}
     {archivedReports.length>0 && <section className="agent-archived" aria-label={t('agentsArchivedTitle')}>
       <button ref={archiveToggle} type="button" className="subtle-button agent-archive-toggle" aria-expanded={showArchived} onClick={()=>setShowArchived(value=>!value)}><Archive size={15} aria-hidden="true"/>{t('agentsArchived',{total:formatNumber(archivedReports.length)})}</button>
