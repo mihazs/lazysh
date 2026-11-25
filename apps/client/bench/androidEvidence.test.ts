@@ -84,7 +84,7 @@ describe('the xterm.js arm from the baseline spec on Android', () => {
     const interrupted = { ...window(1000, 0, 0, 2, { p50: 1, p95: 2 }, 0), processSetChanged: true };
     const measured = fromBaseline([
       { workload: 'W0', title: 'Idle', variant: 'blink-off', correct: true, runs: [{ android: stable }, { android: interrupted }] },
-      { workload: 'W2', title: 'Stream', variant: null, correct: true, runs: [{ bytes: 1048576, throughputMiBs: 20, android: interrupted }] },
+      { workload: 'W2', title: 'Stream', variant: null, correct: true, runs: [{ bytes: 1048576, renderThroughputMiBs: 20, android: interrupted }] },
       { workload: 'W12', title: 'Keyboard input during output', variant: null, correct: true, runs: [{ latencyMs: latency(7, 10), android: interrupted }] },
     ], 'xterm-dom');
     expect(measured.map(({ metric, values }) => [metric, values])).toEqual([
