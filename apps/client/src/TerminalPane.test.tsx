@@ -15,6 +15,9 @@ import {createHeadlessCore} from "./xterm/nativeCoreHeadless";
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from './access';
 import {setGestureInsets,unknownInsets} from './gestureInsets';
 const mocks = vi.hoisted(() => ({write: vi.fn(), writeSequence:vi.fn(), resize: vi.fn(), fit:vi.fn(), propose:vi.fn(), zellijNavigate: vi.fn(), invoke: vi.fn(), openWebUrl: vi.fn(), clipboardIsAndroid:vi.fn(),clipboardRead:vi.fn(),clipboardCancel:vi.fn(), link: undefined as undefined | ((event: MouseEvent, uri: string) => void)}));
+const reader = vi.hoisted(() => ({ios: false, listen: vi.fn()}));
+vi.mock('./isIosApp', () => ({isIosApp: () => reader.ios}));
+vi.mock('@tauri-apps/api/event', async importOriginal => ({...await importOriginal<typeof import('@tauri-apps/api/event')>(), listen: reader.listen}));
 vi.mock("@tauri-apps/api/core", async importOriginal => ({...await importOriginal<typeof import("@tauri-apps/api/core")>(), invoke:mocks.invoke}));
 vi.mock("./bridge", () => ({api: mocks}));
 vi.mock("@xterm/addon-fit", () => ({FitAddon: class {fit() {mocks.fit();} proposeDimensions(){return mocks.propose();} dispose() {}}}));
@@ -90,6 +93,32 @@ it('enables the xterm accessibility tree when the Linux desktop requests accessi
     view.unmount();
   } finally {
     userAgent.mockRestore();
+  }
+});
+it('exposes existing native rows when VoiceOver turns on and removes them when it turns off', async () => {
+  reader.ios = true;
+  let changed: ((event: {payload: boolean}) => void) | undefined;
+  const unlisten = vi.fn();
+  reader.listen.mockImplementation(async (_event, handler) => { changed = handler; return unlisten; });
+  mocks.invoke.mockImplementation(async command => command === 'screen_reader_active' ? false : {});
+  const adapter = await openNativeTerminalAdapter(createHeadlessCore({rows: 3}));
+  const session = {id: 'voice-over', name: 'Host', connected: true, adapter} as unknown as LiveSession;
+  try {
+    await adapter.write!(new TextEncoder().encode('$ uptime'));
+    const view = render(<TerminalPane session={session} active reportError={vi.fn()} />);
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('screen_reader_active'));
+    expect(view.queryByRole('log')).toBeNull();
+    act(() => changed?.({payload: true}));
+    await waitFor(() => expect(view.getByRole('log')).toBeTruthy());
+    expect(view.getByText('$ uptime')).toBeTruthy();
+    act(() => changed?.({payload: false}));
+    expect(view.queryByRole('log')).toBeNull();
+    view.unmount();
+    await waitFor(() => expect(unlisten).toHaveBeenCalledOnce());
+  } finally {
+    reader.ios = false;
+    reader.listen.mockReset();
+    await adapter.dispose();
   }
 });
 

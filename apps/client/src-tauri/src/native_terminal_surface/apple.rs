@@ -1,9 +1,14 @@
 use super::desktop::{display, drawing, Pane, PANES};
+#[cfg(target_os = "ios")]
+use super::ios::{self, View};
 use super::{panes::look, Anchor, SurfaceState};
 use crate::native_renderer::{policy, Host};
 use lazysh_terminal_renderer_wgpu::{Target, Window};
-use objc2::{rc::Retained, MainThreadOnly};
-use objc2_app_kit::{NSView, NSWindowOrderingMode};
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::MainThreadOnly;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSView as View, NSWindowOrderingMode};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use objc2_quartz_core::CAMetalLayer;
 use std::ptr::NonNull;
@@ -11,8 +16,29 @@ use tauri::{AppHandle, Manager};
 
 pub(super) const DISPLAY_UNAVAILABLE: &str = "The native terminal web view is unavailable";
 
+#[cfg(target_os = "ios")]
+pub(super) fn install_ios(app: &tauri::App, window: &tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .with_webview(|web| {
+            // SAFETY: Tauri supplies a live WKWebView on the UIKit main thread.
+            if let Some(view) = unsafe { web.inner().cast::<View>().as_ref() } {
+                view.setOpaque(false);
+            }
+        })
+        .map_err(|error| error.to_string())?;
+    ios::watch_activity(|active| {
+        PANES.with_borrow(|panes| {
+            for pane in panes.values() {
+                pane.set_active(active);
+            }
+        })
+    });
+    ios::watch_voice_over(app.handle().clone());
+    Ok(())
+}
+
 pub(super) struct Surface {
-    view: Retained<NSView>,
+    view: Retained<View>,
     layer: Retained<CAMetalLayer>,
 }
 
@@ -36,22 +62,40 @@ fn webview_rect(anchor: Anchor, bounds: NSRect, flipped: bool, scale: f64) -> NS
 }
 
 fn place_in_webview(
-    web: &NSView,
+    web: &View,
     session: String,
     anchor: Anchor,
     background: u32,
 ) -> Result<SurfaceState, String> {
     display()?;
-    let mtm = MainThreadMarker::new().ok_or("AppKit requires the main thread")?;
-    // SAFETY: The main-thread WebView callback keeps its view hierarchy alive.
-    let parent = unsafe { web.superview() }.ok_or("The web view has no parent")?;
-    let scale = parent
-        .window()
-        .ok_or("The web view has no window")?
-        .backingScaleFactor();
-    // WKWebView lays out the CSS viewport below the title bar of this window.
+    let mtm = MainThreadMarker::new().ok_or("Apple views require the main thread")?;
+    if crate::screen_reader::apple_voice_over_active() {
+        return Err("VoiceOver requires the accessible terminal backend".into());
+    }
+    #[cfg(target_os = "ios")]
+    if !ios::active(mtm) {
+        return Ok(
+            PANES.with_borrow(|panes| panes.get(&session).map(Pane::state).unwrap_or_default())
+        );
+    }
+    #[cfg(target_os = "macos")]
+    let (parent, scale, flipped, viewport) = {
+        // SAFETY: The main-thread WebView callback keeps its view hierarchy alive.
+        let parent = unsafe { web.superview() }.ok_or("The web view has no parent")?;
+        let scale = parent
+            .window()
+            .ok_or("The web view has no window")?
+            .backingScaleFactor();
+        // macOS lays out the CSS viewport below the title bar.
+        (parent, scale, web.isFlipped(), web.safeAreaRect())
+    };
+    #[cfg(target_os = "ios")]
+    let (parent, scale, flipped, viewport) = {
+        let (parent, scale, flipped) = ios::geometry(web)?;
+        (parent, scale, flipped, web.bounds())
+    };
     let frame = web.convertRect_toView(
-        webview_rect(anchor, web.safeAreaRect(), web.isFlipped(), scale),
+        webview_rect(anchor, viewport, flipped, scale),
         Some(&parent),
     );
     let width = (anchor.width * anchor.dpr).round().max(1.0) as u32;
@@ -61,17 +105,25 @@ fn place_in_webview(
         if let Some(pane) = panes.get_mut(&session) {
             pane.surface.view.setFrame(frame);
             pane.surface.layer.setContentsScale(scale);
+            #[cfg(target_os = "ios")]
+            ios::resize_layer(&pane.surface.view, &pane.surface.layer);
             return pane.update(width, height, wanted, anchor, background);
         }
 
         let (core, inbox) = drawing(&session)?;
-        let view = NSView::initWithFrame(NSView::alloc(mtm), frame);
         let layer = CAMetalLayer::new();
         layer.setOpaque(true);
         layer.setContentsScale(scale);
-        view.setLayer(Some(&layer));
-        view.setWantsLayer(true);
-        parent.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(web));
+        #[cfg(target_os = "macos")]
+        let view = {
+            let view = View::initWithFrame(View::alloc(mtm), frame);
+            view.setLayer(Some(&layer));
+            view.setWantsLayer(true);
+            parent.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(web));
+            view
+        };
+        #[cfg(target_os = "ios")]
+        let view = ios::new_view(web, &parent, frame, &layer, mtm);
         let surface = Surface { view, layer };
         let pointer = NonNull::from(&*surface.layer).cast();
         // SAFETY: Pane keeps the layer alive until its renderer worker is joined.
@@ -97,8 +149,8 @@ pub(crate) async fn place(
     let (answer, asked) = tokio::sync::oneshot::channel();
     window
         .with_webview(move |web| {
-            // SAFETY: Tauri calls on the UI thread with a live WKWebView, an NSView subclass.
-            let view = unsafe { web.inner().cast::<NSView>().as_ref() };
+            // SAFETY: Tauri calls on the UI thread with a live WKWebView, a platform view subclass.
+            let view = unsafe { web.inner().cast::<View>().as_ref() };
             let result = view
                 .ok_or_else(|| "The native web view is gone".to_string())
                 .and_then(|view| place_in_webview(view, session, anchor, background));
