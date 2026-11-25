@@ -1,5 +1,12 @@
 # @lazysh/client
 
+## 1.101.4
+
+### Patch Changes
+
+- test(android): verify rendered xterm SSH echoes through the packaged app ([#2608](https://github.com/mihazs/lazysh/pull/2608))
+- fix(android): report Waydroid instrumentation results before app teardown ([#2601](https://github.com/mihazs/lazysh/pull/2601))
+
 ## 1.101.3
 
 ### Patch Changes
