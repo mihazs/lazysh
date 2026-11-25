@@ -108,3 +108,23 @@ test('a forged upload path is refused before it reaches the draft',async({page})
   await expect(page.getByRole('list',{name:'Draft attachments',exact:true})).toHaveCount(0);
   expect(await page.evaluate(steps)).toEqual([]);
 });
+
+test('SSH composer actions fit a 320-pixel keyboard viewport and Send submits once',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='phone','Compact Android viewport');
+  await page.setViewportSize({width:320,height:640});
+  await connect(page);
+  await page.getByRole('button',{name:'Compose',exact:true}).click();
+  await editor(page).fill('owned compact draft');
+  await page.setViewportSize({width:320,height:357});
+  const actions=page.locator('.terminal-compose-actions');
+  await expect(actions.getByRole('button')).toHaveCount(5);
+  for(const button of await actions.getByRole('button').all()) {
+    const box=(await button.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x+box.width).toBeLessThanOrEqual(320);
+    expect(box.y+box.height).toBeLessThanOrEqual(357);
+  }
+  await actions.getByRole('button',{name:'Send',exact:true}).tap();
+  await expect(editor(page)).toHaveCount(0);
+  await expect.poll(()=>page.evaluate(steps)).toEqual([['owned compact draft','\r']]);
+});

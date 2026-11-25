@@ -83,6 +83,7 @@
 .terminal-stage > .terminal-composer-sheet .terminal-composer-secondary > .icon-button:hover:not(:disabled) { background: var(--theme-hover); color: var(--theme-text, var(--text)); }
 .terminal-composer-sheet .terminal-composer-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--theme-muted, var(--muted)); font-size: 13px; white-space: nowrap; }
 @media (max-width: 600px) {
+  .terminal-stage > .terminal-composer-sheet > .terminal-draft-actions { flex-wrap: wrap; }
   /* The shortcuts stay in the field's accessible description; the row keeps room for both actions. */
   .terminal-composer-sheet .terminal-composer-hint { display: none; }
 }
