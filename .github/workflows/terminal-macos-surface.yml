@@ -106,3 +106,22 @@ jobs:
           sh .github/scripts/retry-zig-fetch.sh cargo test "${args[@]}" --no-run
           cargo test "${args[@]}" -- --list --exact "$case_name" | grep -Fx "$case_name: test"
           cargo test "${args[@]}" -- --exact "$case_name"
+      - name: Read the running Lazysh window
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CAPTURE_OUT: ${{ runner.temp }}/surface-app
+        run: |
+          sh .github/scripts/retry-zig-fetch.sh cargo build --manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --bin lazysh
+          python3 -m venv "$RUNNER_TEMP/lazysh-surface-python"
+          "$RUNNER_TEMP/lazysh-surface-python/bin/python" -m pip install 'Pillow==13.0.0'
+          "$RUNNER_TEMP/lazysh-surface-python/bin/python" packages/terminal-runtime/prototypes/macos-surface/scripts/check-app.py target/debug/lazysh "$CAPTURE_OUT"
+      - name: Retain app window captures
+        if: github.event_name == 'workflow_dispatch' && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-macos-app-surface
+          path: |
+            ${{ runner.temp }}/surface-app/*.png
+            ${{ runner.temp }}/surface-app/app.log
+            ${{ runner.temp }}/surface-app/report.json
+          if-no-files-found: warn
