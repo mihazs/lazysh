@@ -631,6 +631,8 @@ The Android runs above measure one engine at a time and read the page's own coun
 
 The xterm.js arm uses the first render callback after the last stream chunk was applied for W2–W4 throughput. It retains the earlier apply timing in the raw file for historical reports. If no such callback is observed, the current benchmark fails instead of substituting apply timing.
 
+A passing verdict requires paired decision metrics for every workload and variant below. Absolute PSS is optional because separate host apps have different base costs. An incomplete run lists its missing pairs and still reports any known regression.
+
 **Metrics** (every arm reports these; `gate` is what a metric decides, none for informational):
 
 | Metric | Unit | Better | Gate | Workloads | Definition |
