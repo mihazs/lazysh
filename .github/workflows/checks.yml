@@ -148,13 +148,14 @@ jobs:
         id: playwright-chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/client
-      # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six named terminal specs ask
-      # for xterm.js through the developer override, and a terminal of another backend fails them.
+      # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six legacy specs
+      # and the synthetic browser spec ask for xterm.js, and a terminal of another backend fails them.
       - if: steps.e2e.outputs.client == 'true'
         run: bunx moon run client:test-e2e
         env:
           LAZYSH_E2E_TERMINAL_BACKEND: xterm
-      # The native arm: skipped, with the backend registry's reason in the log, until the native backend is registered; then it runs.
+      # The native arm exercises the synthetic browser registry. The six legacy fixtures still report
+      # the packaged registry's refusal until each can mount the synthetic backend (#2123).
       - if: steps.e2e.outputs.client == 'true'
         run: bun run test:e2e:terminal
         working-directory: apps/client
