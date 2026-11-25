@@ -88,6 +88,7 @@ or `n/a` with a reason. Rows below were read from the fixing commits; a test not
 | [#2557](https://github.com/mihazs/lazysh/issues/2557) | Android system COLRv1 emoji and ZWJ families appeared as blank cells in the native terminal | this change | Rust renderer image test `colrv1_draws_a_color_emoji_and_its_zwj_ligature` using a subset of the Android font | n/a: the renderer fixture reproduces the defect |
 | [#2588](https://github.com/mihazs/lazysh/issues/2588) | The Android xterm baseline could use direct writes while claiming the app adapter | this change | `apps/client/bench/androidEngineBench.test.ts` drives the CLI with a hostile inherited write selection and a direct-write receipt | n/a |
 | [#2381](https://github.com/mihazs/lazysh/issues/2381) | The Android debug GPU probe refused SwiftShader under ARM64 translation even after instrumentation opted in, because Java and translated native code saw separate environments | this change | `NativeTerminalCoreTest.theProbeRefusesASoftwareRasterizerUnlessTheDebugSwitchAllowsOne` on an owned Android 15 Google emulator running the ARM64 APK. The parent detects SwiftShader but refuses it in both probes. | n/a |
+| [#2585](https://github.com/mihazs/lazysh/issues/2585) | Android benchmark reports included CPU, idle and frame counters from a window where a counted process disappeared | this change | `apps/client/bench/androidEvidence.test.ts` excludes interrupted guest windows without dropping independent throughput and latency | n/a |
 
 ## Adding a row
 

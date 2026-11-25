@@ -78,6 +78,23 @@ describe('the xterm.js arm from the baseline spec on Android', () => {
     expect(find(list, 'W9', 'churn', 'pssChurnDriftMiB')?.p50).toBe(6);
   });
 
+  it('excludes interrupted guest windows without dropping independent measurements', () => {
+    const stable = window(1000, 20, 30, 1);
+    const interrupted = { ...window(1000, 0, 0, 2, { p50: 1, p95: 2 }, 0), processSetChanged: true };
+    const measured = fromBaseline([
+      { workload: 'W0', title: 'Idle', variant: 'blink-off', correct: true, runs: [{ android: stable }, { android: interrupted }] },
+      { workload: 'W2', title: 'Stream', variant: null, correct: true, runs: [{ bytes: 1048576, throughputMiBs: 20, android: interrupted }] },
+      { workload: 'W12', title: 'Keyboard input during output', variant: null, correct: true, runs: [{ latencyMs: latency(7, 10), android: interrupted }] },
+    ], 'xterm-dom');
+    expect(measured.map(({ metric, values }) => [metric, values])).toEqual([
+      ['idleCpuMsPerSecond', [20]],
+      ['idleWakeupsPerSecond', [30]],
+      ['idleFramesPerSecond', [1]],
+      ['throughputMiBs', [20]],
+      ['inputLatencyMs', [7]],
+    ]);
+  });
+
   it('records no figure at all for a workload whose guest counters are missing, never a zero', () => {
     const none = fromBaseline([{ workload: 'W2', title: 'Sustained plain text', variant: null, correct: true, runs: [{ throughputMiBs: 20, bytes: 1048576 }] }, { workload: 'W0', title: 'Idle', variant: 'cursor blink on, focused', correct: true, runs: [{}] }], 'xterm-dom');
     expect(none).toEqual([]);
