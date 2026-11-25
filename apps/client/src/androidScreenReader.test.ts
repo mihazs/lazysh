@@ -39,6 +39,15 @@ describe('the screen reader Android reports', () => {
     }
   });
 
+  it('queries AppKit VoiceOver only in the packaged macOS app', async () => {
+    userAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)');
+    app.invoke.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    expect([await systemScreenReader(), await systemScreenReader()]).toEqual([true, false]);
+    app.tauri = false;
+    expect(await systemScreenReader()).toBe(false);
+    expect(app.invoke).toHaveBeenCalledTimes(2);
+  });
+
   it('is no, without asking the app, anywhere else', async () => {
     userAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36');
     expect(await systemScreenReader()).toBe(false);

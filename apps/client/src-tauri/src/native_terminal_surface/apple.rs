@@ -110,8 +110,7 @@ fn place_in_webview(
 ) -> Result<SurfaceState, String> {
     display()?;
     let mtm = MainThreadMarker::new().ok_or("Apple views require the main thread")?;
-    #[cfg(target_os = "ios")]
-    if objc2_ui_kit::UIAccessibilityIsVoiceOverRunning() {
+    if crate::screen_reader::apple_voice_over_active() {
         return Err("VoiceOver requires the accessible terminal backend".into());
     }
     #[cfg(target_os = "ios")]

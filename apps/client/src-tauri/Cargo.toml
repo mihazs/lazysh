@@ -76,7 +76,7 @@ quircs = "=0.10.3"
 # gtk and gdk are the versions tauri links; `client_system` wraps GDK's own `wl_display`.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }
-objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = ["std", "NSGraphics", "NSResponder", "NSView", "NSWindow", "objc2-core-foundation", "objc2-quartz-core"] }
+objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = ["std", "NSAccessibility", "NSGraphics", "NSResponder", "NSView", "NSWindow", "NSWorkspace", "objc2-core-foundation", "objc2-quartz-core"] }
 objc2-foundation = { version = "0.3", optional = true, default-features = false, features = ["std", "NSGeometry"] }
 objc2-quartz-core = { version = "0.3", optional = true, default-features = false, features = ["std", "CALayer", "CAMetalLayer", "objc2-core-foundation"] }
 
