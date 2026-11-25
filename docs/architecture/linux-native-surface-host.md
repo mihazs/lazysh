@@ -43,6 +43,8 @@ The page side is the Android one: `terminalSurfaceAnchor.ts` sends the same thre
 - With one focused local PTY and a 900 × 573 CSS-pixel pane, median idle app-process-tree CPU across three 10-second measurements was 2.10% of one logical CPU for native (2.00–2.20%) and 2.30% for xterm.js (2.30–2.40%). These debug-build samples exclude compositor CPU and GPU activity. [Idle CPU](https://github.com/mihazs/lazysh/issues/1331#issuecomment-7159677053)
 - Over five runs per engine with 120 alternating-color PTY updates at about 60 Hz, median run p50/p95 Wayland commit gaps were 16.73/16.93 ms for the native terminal subsurface and 16.74/17.30 ms for the xterm.js window. The xterm.js window can also commit UI changes. These client-side traces measure buffer submission cadence. Compositor presentation, render duration and dropped frames remain unmeasured. [Wayland timing](https://github.com/mihazs/lazysh/issues/1331#issuecomment-7159866485)
 
+- In niri 26.04 nested under KWin at 150% scaling, compositor screenshots showed the production command palette above the native terminal. The palette accepted text and, after dismissal, keyboard input reached the real local shell again. A compositor-driven resize reduced the native pane from 570 × 227 to 420 × 120 CSS pixels and the PTY grid from 67 × 13 to 49 × 7. [Fractional-scale run](https://github.com/mihazs/lazysh/issues/1331#issuecomment-7161554533)
+
 Gate G19 stays open for Linux. Remaining checks include Mutter, frame time, compositor and GPU cost, input parity, automatic assistive-technology detection and external screen-reader behavior.
 
 ## Next slices
