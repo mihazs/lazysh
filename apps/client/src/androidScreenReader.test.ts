@@ -25,6 +25,29 @@ describe('the screen reader Android reports', () => {
     expect([await systemScreenReader(), await systemScreenReader(), await systemScreenReader()]).toEqual([true, true, true]);
   });
 
+  it.each(['iPhone', 'iPad desktop mode'])('queries VoiceOver on packaged iOS (%s)', async (device) => {
+    userAgent(device === 'iPhone' ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)' : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)');
+    if (device !== 'iPhone') {
+      vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+      Object.defineProperty(navigator, 'maxTouchPoints', {configurable: true, value: 5});
+    }
+    try {
+      app.invoke.mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockRejectedValueOnce('unavailable');
+      expect([await systemScreenReader(), await systemScreenReader(), await systemScreenReader()]).toEqual([true, false, true]);
+    } finally {
+      Reflect.deleteProperty(navigator, 'maxTouchPoints');
+    }
+  });
+
+  it('queries AppKit VoiceOver only in the packaged macOS app', async () => {
+    userAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)');
+    app.invoke.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    expect([await systemScreenReader(), await systemScreenReader()]).toEqual([true, false]);
+    app.tauri = false;
+    expect(await systemScreenReader()).toBe(false);
+    expect(app.invoke).toHaveBeenCalledTimes(2);
+  });
+
   it('is no, without asking the app, anywhere else', async () => {
     userAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36');
     expect(await systemScreenReader()).toBe(false);
