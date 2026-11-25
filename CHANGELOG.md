@@ -10,6 +10,14 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.101.5] - 2026-11-25
+
+### Fixed
+
+- **bench:** connect the terminal benchmark to the Android WebView ([#2593](https://github.com/mihazs/lazysh/pull/2593))
+- **terminal:** wake the native renderer for output arriving during attachment ([#2623](https://github.com/mihazs/lazysh/pull/2623))
+- **bench:** preserve the Android native idle benchmark result during teardown ([#2632](https://github.com/mihazs/lazysh/pull/2632))
+
 ## [1.101.4] - 2026-11-25
 
 ### Fixed

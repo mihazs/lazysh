@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/apple-speech",
-  "version": "1.101.4",
+  "version": "1.101.5",
   "private": true,
   "license": "GPL-3.0-or-later",
   "dependencies": {

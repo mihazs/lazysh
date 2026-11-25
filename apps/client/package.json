@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/client",
-  "version": "1.101.4",
+  "version": "1.101.5",
   "private": true,
   "type": "module",
   "scripts": {
