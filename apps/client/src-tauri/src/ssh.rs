@@ -2320,6 +2320,7 @@ where
     let (input, input_rx) = mpsc::channel(32);
     let (cancel, cancellation) = watch::channel(false);
     let name = kind.name();
+    let is_mosh = matches!(kind, NativeTerminalKind::Mosh);
     let entry_requested = startup.is_some();
     let mut session = Session::new(
         parent.handle.clone(),
@@ -2328,7 +2329,7 @@ where
         creation,
         validate_size,
     );
-    if matches!(kind, NativeTerminalKind::Mosh) {
+    if is_mosh {
         session.file_control = Some(file_control::Control::new(parent.handle.clone()));
     } else if matches!(kind, NativeTerminalKind::EternalTerminal) {
         session.file_control = Some(file_control::Control::commands_only(parent.handle.clone()));
@@ -2368,7 +2369,10 @@ where
                     tokio::select! {
                         _ = cancelled.changed() => {local = true; break},
                         item = output_rx.recv() => match item {
-                            Some(bytes) => send_output(&active, &events, &bytes).await?,
+                            Some(bytes) => {
+                                let _frame = if is_mosh { active.core.begin_mosh_frame().await } else { None };
+                                send_output(&active, &events, &bytes).await?;
+                            }
                             None => break,
                         }
                     }
