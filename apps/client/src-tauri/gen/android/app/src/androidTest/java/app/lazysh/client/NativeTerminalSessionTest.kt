@@ -783,25 +783,27 @@ class NativeTerminalSessionTest {
         if (background.isNotEmpty()) fillBenchmarkHistory(id, prompt)
         fun terminalGrid() = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
         val showKeyboard = InstrumentationRegistry.getArguments().getString("lazyshShowBenchmarkKeyboard") == "true"
-        val grid = if (showKeyboard) {
-            fun keyboardVisible() = ui { activity ->
-                ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
-            }
-            if (!keyboardVisible()) click("button[aria-label='Show keyboard'], button[aria-label='Toggle keyboard']")
-            fun settledGrid(): JSONObject {
-                var previous = 0 to 0
-                var stableSince = System.nanoTime()
-                return PageDriver.poll("the native grid to settle with the keyboard visible", 15) {
-                    val state = terminalGrid()
-                    val size = state.getInt("columns") to state.getInt("rows")
-                    val visible = keyboardVisible()
-                    if (!visible || size != previous) {
-                        previous = size
-                        stableSince = System.nanoTime()
-                    }
-                    state.takeIf { visible && size.first > 0 && size.second > 0 && System.nanoTime() - stableSince >= 500_000_000 }
+        fun keyboardVisible() = ui { activity ->
+            ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+        }
+        fun settledGrid(): JSONObject {
+            var previous: Triple<Int, Int, Boolean>? = null
+            var stableSince = System.nanoTime()
+            return PageDriver.poll("the native benchmark grid to settle", 15) {
+                val state = terminalGrid()
+                val size = Triple(state.getInt("columns"), state.getInt("rows"), keyboardVisible())
+                if (size != previous) {
+                    previous = size
+                    stableSince = System.nanoTime()
+                }
+                state.takeIf {
+                    (!showKeyboard || size.third) && size.first > 0 && size.second > 0 &&
+                        System.nanoTime() - stableSince >= 500_000_000
                 }
             }
+        }
+        val grid = if (showKeyboard) {
+            if (!keyboardVisible()) click("button[aria-label='Show keyboard'], button[aria-label='Toggle keyboard']")
             val initial = settledGrid()
             val target = InstrumentationRegistry.getArguments().getString("lazyshBenchmarkRows")?.toInt() ?: 0
             val initialRows = initial.getInt("rows")
@@ -822,7 +824,7 @@ class NativeTerminalSessionTest {
                     assertEquals("the original benchmark columns", initial.getInt("columns"), it.getInt("columns"))
                 }
             }
-        } else terminalGrid()
+        } else settledGrid()
         if (showKeyboard) {
             val expectedSize = "lazysh-grid ${grid.getInt("rows")} ${grid.getInt("columns")}"
             typeIntoTheSurface("printf 'lazysh-grid %s\\r\\n' \"\$(stty size)\"")
@@ -972,6 +974,7 @@ class NativeTerminalSessionTest {
                 if (inputRun && !flood) output.write("done\n".toByteArray(Charsets.US_ASCII))
                 assertEquals("the host captured the counters", "done", input.readLine())
                 var observed = emptyList<String>()
+                var readback = "unavailable"
                 try {
                     PageDriver.poll("the exact $kind benchmark screen", 45) {
                         val snapshot = JSONObject(invoke("terminal_core_snapshot", id))
@@ -979,12 +982,15 @@ class NativeTerminalSessionTest {
                         val texts = window.getJSONArray("rows")
                         val top = snapshot.getJSONObject("state").getJSONObject("viewport").getInt("top")
                         val first = top - window.getInt("first")
+                        val state = snapshot.getJSONObject("state")
+                        readback = "${state.getInt("columns")}x${state.getInt("rows")} first=$first available=${texts.length()} ime=${keyboardVisible()}"
+                        if (first < 0 || first + expected.size > texts.length()) return@poll null
                         observed = List(expected.size) { texts.getString(first + it).trimEnd() }
                         observed.takeIf { it == expected }
                     }
                 } catch (error: AssertionError) {
                     val differing = expected.zip(observed).count { (want, got) -> want != got }
-                    throw AssertionError("$kind grid compared ${observed.size}/${expected.size} rows, $differing different; last row=${observed.lastOrNull()}", error)
+                    throw AssertionError("$kind grid compared ${observed.size}/${expected.size} rows, $differing different; grid=$readback; last row=${observed.lastOrNull()}", error)
                 }
                 if (showKeyboard) {
                     val current = terminalGrid()
