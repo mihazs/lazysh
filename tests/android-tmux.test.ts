@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {TmuxFixture,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCount,tmuxCopyModeVerified,tmuxCommandFailure,tmuxDefaultAttachVerified,tmuxDefaultDirectory,tmuxDefaultName,tmuxDefaultSession,tmuxDisplayClients,tmuxGesturesVerified,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSessionRows,tmuxSplitRows,tmuxTeardownObservation,tmuxViewHistory,tmuxWindowLifecycle,tmuxWindowRows,type TmuxView} from './support/androidTmux';
+import {TmuxFixture,muxVariable,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCount,tmuxCopyModeVerified,tmuxCommandFailure,tmuxDefaultAttachVerified,tmuxDefaultDirectory,tmuxDefaultName,tmuxDefaultSession,tmuxDisplayClients,tmuxGesturesVerified,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSessionRows,tmuxSplitRows,tmuxTeardownObservation,tmuxViewHistory,tmuxWindowLifecycle,tmuxWindowRows,type TmuxView} from './support/androidTmux';
 import {listening,OwnedProcess,SshFixture} from './support/androidSsh';
 import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
@@ -104,6 +104,7 @@ test('tmux Chat readback admits one delivery in the original pane and nothing el
 
 test('the companion joins only the pinned tmux fixture and only by an absolute path',async()=>{
   await expect(SshFixture.start(undefined,{agentBinary:'/usr/bin/true'})).rejects.toThrow('Owned agent binary requires the pinned tmux fixture');
+  await expect(TmuxFixture.start('relative/rmux',undefined,'rmux')).rejects.toThrow('Explicit pinned rmux binary required');
   await expect(TmuxFixture.start('/usr/bin/tmux','lazysh-agent')).rejects.toThrow('Explicit current-source companion required');
 });
 
@@ -199,7 +200,7 @@ test('lost-connection report counts only its case passing exactly once',()=>{
 const attachDisplay=async(owned:TmuxFixture,target:string,marker='')=>{
   const shell=await owned.ssh.client();
   await wait(()=>shell.stdout.includes(owned.ssh.prompt));
-  shell.child.stdin!.write(`exec tmux -u -L default attach-session -t '=${target}'\n`);
+  shell.child.stdin!.write(`exec ${owned.binary} -u -L default attach-session -t '=${target}'\n`);
   await wait(()=>shell.stdout.includes(marker));
   return shell;
 };
@@ -255,51 +256,55 @@ test('a restore phase counts only when its own case started and passed in a fini
 });
 
 // Real pinned tools are explicit; ordinary host checks never download or guess a binary.
-test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned namespaced tmux survives a real SSH detach and reattaches the original panes',async()=>{
-  const owned=await TmuxFixture.start();
-  const [alpha,beta]=owned.metadata().windows;
-  let client:OwnedProcess|undefined;
-  try {
-    expect(owned.metadata().windows.map(({index,name})=>[index,name])).toEqual([[0,'alpha'],[1,'beta']]);
-    await expect(owned.verifyDetachedAndReattached()).rejects.toThrow('Owned tmux attach, detach and reattach were not observed');
-    const clients=async(count:number)=>wait(async()=>{await owned.observe();return owned.diagnostic().history.at(-1)===count;});
-    const attach=(marker:string)=>attachDisplay(owned,'owned-tmux',marker);
-    client=await attach(alpha.marker);await clients(1);
-    // The host reads a window's original pane: its own marker is there, anything else is not.
-    expect(await owned.paneHolds(0,alpha.marker)).toBe(true);
-    expect(await owned.paneHolds(0,'NOT_IN_THE_PANE')).toBe(false);
-    await expect(owned.paneHolds(9,alpha.marker)).rejects.toThrow('topology');
-    client.child.stdin!.write('\x02d');
-    await client.finish('owned tmux prefix detach',5000);
-    await clients(0);
-    client=await attach(alpha.marker);await clients(1);
-    // The status line names windows only; beta's pane marker appears after the numbered switch.
-    expect(client.stdout.includes(beta.marker)).toBe(false);
-    client.child.stdin!.write('\x021');
-    await wait(()=>client!.stdout.includes(beta.marker));
-    await client.stop();
-    await owned.verifyDetachedAndReattached();
-    expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],defaultHistory:[],views:['alpha','beta'],windows:2,server:{state:'running',exit:null,signal:'none'}});
-    // A still-attached control-mode client, like the app's Jump binding, whose reader no
-    // longer drains its output must not break teardown: retiring SSH ends it first.
-    client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -t '=owned-tmux'");
-    await wait(()=>client!.stdout.includes('%session-changed'));
-    process.kill(-client.child.pid!,'SIGSTOP');
-    // Pane echo becomes undrained control output until the client can no longer leave.
-    const pressure=await owned.ssh.client(true,`i=0; while [ $i -lt 400 ]; do tmux -L default send-keys -l -t '=owned-tmux:0' '${'x'.repeat(4000)}'; i=$((i+1)); done`);
-    await pressure.finish('owned tmux control output pressure',20000);
-    await owned.stop();
-    await owned.stop();
-    process.kill(-client.child.pid!,'SIGCONT');
-    await expect(client.finish('owned tmux control client retired with SSH',5000)).rejects.toThrow('Owned fixture failed');
-  } finally {
-    await client?.stop();
-    await owned.stop();
-  }
-  await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
-  expect(await listening(owned.ssh.port)).toBe(false);
-  await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
-},60_000);
+for(const kind of ['tmux','rmux'] as const) {
+  test.skipIf(process.platform!=='linux' || !process.env[muxVariable[kind]])(`owned namespaced ${kind} survives a real SSH detach and reattaches the original panes`,async()=>{
+    const owned=await TmuxFixture.start(undefined,undefined,kind);
+    const [alpha,beta]=owned.metadata().windows;
+    let client:OwnedProcess|undefined;
+    try {
+      expect(owned.metadata().windows.map(({index,name})=>[index,name])).toEqual([[0,'alpha'],[1,'beta']]);
+      await expect(owned.verifyDetachedAndReattached()).rejects.toThrow('Owned tmux attach, detach and reattach were not observed');
+      const clients=async(count:number)=>wait(async()=>{await owned.observe();return owned.diagnostic().history.at(-1)===count;});
+      const attach=(marker:string)=>attachDisplay(owned,owned.name,marker);
+      client=await attach(alpha.marker);await clients(1);
+      // The host reads a window's original pane: its own marker is there, anything else is not.
+      expect(await owned.paneHolds(0,alpha.marker)).toBe(true);
+      expect(await owned.paneHolds(0,'NOT_IN_THE_PANE')).toBe(false);
+      await expect(owned.paneHolds(9,alpha.marker)).rejects.toThrow('topology');
+      client.child.stdin!.write('\x02d');
+      await client.finish('owned tmux prefix detach',5000);
+      await clients(0);
+      client=await attach(alpha.marker);await clients(1);
+      // The status line names windows only; beta's pane marker appears after the numbered switch.
+      expect(client.stdout.includes(beta.marker)).toBe(false);
+      client.child.stdin!.write('\x021');
+      await wait(()=>client!.stdout.includes(beta.marker));
+      await client.stop();
+      await owned.verifyDetachedAndReattached();
+      expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[0,1,0,1,0],defaultHistory:[],views:['alpha','beta'],windows:2,server:{state:'running',exit:null,signal:'none'}});
+      if(kind==='tmux') {
+        // A still-attached control-mode client, like the app's Jump binding, whose reader no
+        // longer drains its output must not break teardown: retiring SSH ends it first.
+        client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -t '=owned-tmux'");
+        await wait(()=>client!.stdout.includes('%session-changed'));
+        process.kill(-client.child.pid!,'SIGSTOP');
+        // Pane echo becomes undrained control output until the client can no longer leave.
+        const pressure=await owned.ssh.client(true,`i=0; while [ $i -lt 400 ]; do tmux -L default send-keys -l -t '=owned-tmux:0' '${'x'.repeat(4000)}'; i=$((i+1)); done`);
+        await pressure.finish('owned tmux control output pressure',20000);
+        await owned.stop();
+        await owned.stop();
+        process.kill(-client.child.pid!,'SIGCONT');
+        await expect(client.finish('owned tmux control client retired with SSH',5000)).rejects.toThrow('Owned fixture failed');
+      }
+    } finally {
+      await client?.stop();
+      await owned.stop();
+    }
+    await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
+    expect(await listening(owned.ssh.port)).toBe(false);
+    await expect(stat(owned.ssh.directory)).rejects.toMatchObject({code:'ENOENT'});
+  },60_000);
+}
 
 test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback requires the saved default session created once, attached, detached and attached again',async()=>{
   const owned=await TmuxFixture.start();
@@ -465,38 +470,42 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
   }
 },60_000);
 
-test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux teardown detaches a running control-mode client through the server before retiring SSH',async()=>{
-  const owned=await TmuxFixture.start();
-  // Like the app's Jump binding, this control client is still attached and draining when teardown starts.
-  const client=await owned.ssh.client(true,"tmux -u -L default -C attach-session -f no-output,ignore-size -t '=owned-tmux'");
-  try {
-    const deadline=performance.now()+5000;
-    while(!client.stdout.includes('%session-changed')){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
-    await owned.stop();
-    // The server's detach ends the control client normally; an SSH signal would not report %exit.
-    expect(await client.finish('owned tmux control client detached by teardown',5000)).toContain('%exit');
-  } finally {
-    await client.stop();
-    await owned.stop();
-  }
-  await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
-},60_000);
+for(const kind of ['tmux','rmux'] as const) {
+  test.skipIf(process.platform!=='linux' || !process.env[muxVariable[kind]])(`owned ${kind} teardown detaches a running control-mode client through the server before retiring SSH`,async()=>{
+    const owned=await TmuxFixture.start(undefined,undefined,kind);
+    // Like the app's Jump binding, this control client is still attached and draining when teardown starts.
+    const client=await owned.ssh.client(true,`${kind} -u -L default -C attach-session ${kind==='tmux'?'-f no-output,ignore-size ':''}-t '=${owned.name}'`);
+    try {
+      const deadline=performance.now()+5000;
+      while(!client.stdout.includes('%session-changed')){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
+      await owned.stop();
+      // The server's detach ends the control client normally; an SSH signal would not report %exit.
+      expect(await client.finish('owned tmux control client detached by teardown',5000)).toContain('%exit');
+    } finally {
+      await client.stop();
+      await owned.stop();
+    }
+    await expect(owned.observe()).rejects.toThrow('Owned tmux server identity changed');
+  },60_000);
+}
 
-test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux teardown retires a stalled owned client outside the SSH tree so the server still exits cleanly',async()=>{
-  const owned=await TmuxFixture.start();
-  // Outside the SSH tree and stopped, this owned tmux client can neither detach nor be retired with SSH.
-  const client=new OwnedProcess(join(owned.ssh.directory,'bin/tmux'),['-u','-L','default','-C','attach-session','-t','=owned-tmux'],owned.ssh.directory,owned.ssh.environment);
-  try {
-    const deadline=performance.now()+5000;
-    while(!client.stdout.includes('%session-changed')){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
-    process.kill(client.child.pid!,'SIGSTOP');
-    await owned.stop();
-    expect(client.child.signalCode).toBe('SIGKILL');
-  } finally {
-    await client.stop();
-    await owned.stop();
-  }
-},60_000);
+for(const kind of ['tmux','rmux'] as const) {
+  test.skipIf(process.platform!=='linux' || !process.env[muxVariable[kind]])(`owned ${kind} teardown retires a stalled owned client outside the SSH tree so the server still exits cleanly`,async()=>{
+    const owned=await TmuxFixture.start(undefined,undefined,kind);
+    // Outside the SSH tree and stopped, this owned tmux client can neither detach nor be retired with SSH.
+    const client=new OwnedProcess(owned.ssh.ownedBinary(kind),['-u','-L','default','-C','attach-session','-t',`=${owned.name}`],owned.ssh.directory,owned.ssh.environment);
+    try {
+      const deadline=performance.now()+5000;
+      while(!client.stdout.includes('%session-changed')){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(25);}
+      process.kill(client.child.pid!,'SIGSTOP');
+      await owned.stop();
+      expect(client.child.signalCode).toBe('SIGKILL');
+    } finally {
+      await client.stop();
+      await owned.stop();
+    }
+  },60_000);
+}
 
 // The real companion and tmux run under the fixture's own SSH environment, exactly as the app reaches them.
 test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX || !process.env.LAZYSH_TEST_AGENT_BIN)('owned tmux Chat readback requires the confirmed draft in the original pane once',async()=>{
