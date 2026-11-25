@@ -861,9 +861,8 @@ fn real_herdr_worktree_workspace_and_agent() {
             .env("GIT_COMMITTER_NAME", "lazysh")
             .env("GIT_COMMITTER_EMAIL", "lazysh@example.invalid")
             .env_remove("ENV")
-            .env_remove("BASH_ENV")
-            .env_remove("HERDR_SOCKET_PATH")
-            .env_remove("HERDR_SESSION");
+            .env_remove("BASH_ENV");
+        crate::herdr::isolate_test_socket(command, &root);
     };
     let mut server = Command::new("herdr");
     configure(&mut server);

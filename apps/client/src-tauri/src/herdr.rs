@@ -770,8 +770,32 @@ pub async fn herdr_action(
         .await
 }
 
+#[cfg(all(test, unix))]
+pub(crate) fn isolate_test_socket(command: &mut std::process::Command, home: &std::path::Path) {
+    command
+        .env("HERDR_SOCKET_PATH", home.join("herdr.sock"))
+        .env_remove("HERDR_CLIENT_SOCKET_PATH")
+        .env_remove("HERDR_SESSION");
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn real_fixture_commands_override_the_inherited_herdr_socket() {
+        use std::{collections::HashMap, ffi::OsStr, path::Path};
+
+        let home = Path::new("/tmp/lazysh-owned-test");
+        let command = RealHerdr::configured(home, "herdr");
+        let overrides: HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            overrides[OsStr::new("HERDR_SOCKET_PATH")],
+            Some(home.join("herdr.sock").as_os_str()),
+        );
+        assert_eq!(overrides[OsStr::new("HERDR_CLIENT_SOCKET_PATH")], None);
+        assert_eq!(overrides[OsStr::new("HERDR_SESSION")], None);
+    }
+
     use super::*;
 
     #[test]
@@ -1339,9 +1363,8 @@ mod tests {
                 .env_remove("BASH_ENV")
                 .current_dir(home)
                 .env("XDG_CONFIG_HOME", home)
-                .env("HERDR_CONFIG_PATH", home.join("config.toml"))
-                .env_remove("HERDR_SOCKET_PATH")
-                .env_remove("HERDR_SESSION");
+                .env("HERDR_CONFIG_PATH", home.join("config.toml"));
+            isolate_test_socket(&mut command, home);
             command
         }
         fn command(&self, program: &str) -> std::process::Command {
