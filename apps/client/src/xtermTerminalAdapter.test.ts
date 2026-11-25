@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import {beforeAll, describe, expect, it} from 'vitest';
+import {beforeAll, describe, expect, it, vi} from 'vitest';
 import {runTerminalAdapterContract} from './terminalAdapter.contract';
 import {XtermTerminalAdapter} from './xtermTerminalAdapter';
 import {xtermContractHarness} from './xterm/contractHarness';
@@ -35,6 +35,27 @@ describe('xterm backend specifics', () => {
     await adapter.attach({kind: 'dom', element});
     expect(element.querySelector('.xterm')).not.toBeNull();
     await adapter.dispose();
+  });
+
+  it('retires its display-scale subscription with the renderer', async () => {
+    const addListener = vi.fn(), removeListener = vi.fn();
+    const matchMedia = window.matchMedia;
+    const query = vi.spyOn(window, 'matchMedia').mockImplementation(value => ({
+      ...matchMedia(value),
+      addListener,
+      removeListener,
+    }));
+    const adapter = await xtermContractHarness.create();
+    try {
+      await adapter.attach(xtermContractHarness.target());
+      expect(query).toHaveBeenCalledWith(expect.stringContaining('resolution:'));
+      expect(addListener).toHaveBeenCalledOnce();
+      await adapter.dispose();
+      expect(removeListener).toHaveBeenCalledWith(addListener.mock.calls[0][0]);
+    } finally {
+      query.mockRestore();
+      await adapter.dispose();
+    }
   });
 
   it('delivers a wheel notch to the mounted element', async () => {
