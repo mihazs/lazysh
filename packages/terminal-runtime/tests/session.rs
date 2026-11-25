@@ -9,7 +9,7 @@ use lazysh_terminal_runtime::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::*};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use support::*;
 
 fn hub_with_hello() -> (Hub, Fixture) {
@@ -391,6 +391,49 @@ fn typing_returns_a_scrolled_back_reader_to_the_live_screen_unless_it_was_refuse
         live,
         "the preference keeps the reader in history"
     );
+}
+
+#[test]
+fn output_racing_attachment_is_in_the_snapshot_or_wakes_the_reader() {
+    let hub = Hub::new(HubConfig::default());
+    let (notify, wake) = std::sync::mpsc::channel();
+    let session = hub
+        .create(
+            "attach-race",
+            config(80, 24, 1 << 20),
+            Hooks {
+                writer: Recorder::new(),
+                credit: Box::new(|_| {}),
+                changed: Some(Box::new(move || {
+                    let _ = notify.send(());
+                })),
+            },
+        )
+        .unwrap();
+
+    for sequence in 0..500 {
+        session.detach();
+        while wake.try_recv().is_ok() {}
+        let text = format!("frame-{sequence:04}");
+        let bytes = format!("\x1b[H{text}").into_bytes();
+        assert_eq!(session.feed(bytes).unwrap(), Offer::Accepted);
+        let snapshot = session.attach().unwrap();
+        if lines(&snapshot)[0] == text {
+            continue;
+        }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            wake.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("output after the attach snapshot must wake its reader");
+            if session
+                .take_frame()
+                .unwrap()
+                .is_some_and(|frame| lines(&frame)[0] == text)
+            {
+                break;
+            }
+        }
+    }
 }
 
 #[test]
