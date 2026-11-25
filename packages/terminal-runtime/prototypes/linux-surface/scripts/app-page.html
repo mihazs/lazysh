@@ -38,6 +38,14 @@ const commands = {
 };
 const answer = body => fetch('/done', {method: 'POST', body});
 (async () => {
+  try {
+    const access = await invoke('app_lock_status');
+    if (!access.initialized || access.locked) throw new Error('The fixture requires an initialized, unlocked app');
+    await invoke('app_lock_ready', {generation: access.generation});
+  } catch (error) {
+    await answer(`ERR ready ${error}`);
+    return;
+  }
   await answer('READY');
   for (;;) {
     const [name, ...args] = (await (await fetch('/next')).text()).split(' ');

@@ -69,8 +69,9 @@ def run(app_path, out):
         app = subprocess.Popen([str(app_path)], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                env=dict(os.environ, HOME=str(home)))
         try:
-            if replies.get(timeout=120) != "READY":
-                raise RuntimeError("The app did not load the Tauri fixture")
+            ready = replies.get(timeout=120)
+            if ready != "READY":
+                raise RuntimeError(f"The Tauri fixture did not become ready: {ready}")
 
             def find_window():
                 if app.poll() is not None:
