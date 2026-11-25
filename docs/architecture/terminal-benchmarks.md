@@ -629,6 +629,8 @@ The Android runs above measure one engine at a time and read the page's own coun
 
 **The native arm** starts with W0 in `androidNativeBench.ts`, using the placed terminal and the same guest probes as the baseline. The remaining native workloads are tracked in [#2407](https://github.com/mihazs/lazysh/issues/2407). For a valid comparison, the native arm produces a record with the same run id and guest, the adapter `native-wgpu`, the wgpu adapter and backend in `arms[].gpu`, the same workload and variant ids and the same metric ids, folded with `perRun` and `perRunSummaries` from `androidEvidence.ts` (so p50 and p95 mean the same thing); the workloads' bytes from `bench/workloads.ts` (same seeds, sizes and 16 KiB chunks) and the same end-screen checks, with `correct` false when the screen differs; the instruments above read from the guest, not from the engine's own counters (`GpuStats` may explain a result, it decides nothing). A latency is the key or burst to the frame the renderer submitted for it. It runs in the real app, so its total PSS includes the app's own page: the compare script then compares growth over one session, unless the xterm.js arm also ran in the real app (the engine chosen in Settings), in which case the arms name the same host and the totals are compared too.
 
+The xterm.js arm uses the first render callback after the last stream chunk was applied for W2–W4 throughput. It retains the earlier apply timing in the raw file for historical reports. If no such callback is observed, the current benchmark fails instead of substituting apply timing.
+
 **Metrics** (every arm reports these; `gate` is what a metric decides, none for informational):
 
 | Metric | Unit | Better | Gate | Workloads | Definition |

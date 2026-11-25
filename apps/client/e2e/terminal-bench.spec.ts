@@ -47,6 +47,21 @@ if (!full) test('the fixed benchmark grid survives a viewport resize', async ({ 
   expect(await page.evaluate(() => window.terminalBench.open())).toMatchObject(grid);
 });
 
+if (!full) test('repeated streams render the live rows after clearing scrollback', async ({ page, baseURL }) => {
+  test.skip(androidSerial !== null, 'The smoke check uses the desktop DOM renderer.');
+  await page.goto(benchUrl(baseURL, 'renderer=dom&write=direct'));
+  await page.waitForFunction(() => !!window.terminalBench);
+  await page.evaluate(() => window.terminalBench.prepare('plain', 4 << 20));
+  for (let sample = 0; sample < 5; sample++) {
+    const result = await page.evaluate(() => window.terminalBench.stream());
+    expect(result.renderThroughputMiBs ?? 0).toBeGreaterThan(0);
+    const liveRows = await page.evaluate(() => window.terminalBench.screenLines());
+    const visibleRows = await page.locator('.xterm-rows > div').evaluateAll(rows =>
+      rows.map(row => (row.textContent ?? '').replaceAll('\u00a0', ' ').trimEnd()));
+    expect(visibleRows).toEqual(liveRows);
+  }
+});
+
 for (const writePath of writePaths) test(`terminal baseline, ${writePath} write path`, async ({ page, browser, browserName, baseURL }, info) => {
   const atStart = os.loadavg();
   test.skip(browserName !== 'chromium', 'CDP process metrics need Chromium.');
@@ -103,7 +118,11 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
   await workload('W1', 'Small shell output (prompt, short commands)', scale.runs, () => page.evaluate(n => window.terminalBench.shell(n), scale.shell));
   for (const [id, title, kind, size] of [['W2', 'Sustained plain text', 'plain', scale.plain], ['W3', 'ANSI color heavy output', 'ansi', scale.ansi], ['W4', 'Cursor movement and full-screen redraw', 'redraw', scale.frames]] as const) {
     const run = await streamed(kind, size)();
-    await workload(id, title, scale.runs, run);
+    await workload(id, title, scale.runs, async () => {
+      const sample = await run();
+      expect(sample.renderThroughputMiBs ?? 0, `${id} must render after applying its final chunk`).toBeGreaterThan(0);
+      return sample;
+    });
   }
 
   // W12: real keyboard events through the page's input path, with the remote echoing at once.

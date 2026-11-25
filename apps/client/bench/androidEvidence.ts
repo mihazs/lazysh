@@ -106,7 +106,7 @@ export function fromBaseline(results: BaselineResult[], adapter: string): Measur
     } else if (workload === 'W1') found.push(perRunSummaries(of('outputLatencyMs', null), runs.map(run => run.renderMs)));
     else if (['W2', 'W3', 'W4'].includes(workload))
       // A stream takes a fraction of a second, shorter than the window the frame counters can isolate from idle time around it: only sustained workloads report frames.
-      found.push(perRun(of('throughputMiBs', null), runs.map(run => run.throughputMiBs)), perRun(of('cpuMsPerMiB', null), runs.map(run => (finite(run.android?.cpuMs) ? run.android.cpuMs / (run.bytes / MiB) : null))));
+      found.push(perRun(of('throughputMiBs', null), runs.map(run => run.renderThroughputMiBs)), perRun(of('cpuMsPerMiB', null), runs.map(run => (finite(run.android?.cpuMs) ? run.android.cpuMs / (run.bytes / MiB) : null))));
     else if (workload === 'W12') {
       const name = keyVariants.find(([prefix]) => title.startsWith(prefix))?.[1] ?? title;
       found.push(perRunSummaries(of('inputLatencyMs', name), runs.map(run => run.latencyMs)));
