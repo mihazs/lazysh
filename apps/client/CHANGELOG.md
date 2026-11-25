@@ -1,5 +1,11 @@
 # @lazysh/client
 
+## 1.101.2
+
+### Patch Changes
+
+- fix(android): start the Google build on ARM64 translated by the Android emulator ([#2583](https://github.com/mihazs/lazysh/pull/2583))
+
 ## 1.101.1
 
 ### Patch Changes
