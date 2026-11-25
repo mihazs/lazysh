@@ -4858,8 +4858,11 @@ class NativeWorkspaceTest {
         openPreferences(scenario)
         preferencesCategory(scenario, "android-notifications")
         webButton("Open Android notification settings")
-        assertTrue("Android notification settings must open", device.wait(Until.hasObject(By.pkg("com.android.settings")), 10_000))
-        assertTrue(device.pressBack())
+        val settings = By.pkg("com.android.settings")
+        assertTrue("Android notification settings must open", device.wait(Until.hasObject(settings), 10_000))
+        // UiDevice.pressBack waits for a generic accessibility event that can be absent after a successful return.
+        assertTrue("Back key must dispatch from notification settings", device.pressKeyCode(KeyEvent.KEYCODE_BACK))
+        assertTrue("Android notification settings must close after Back", device.wait(Until.gone(settings), 10_000))
         awaitDocument(scenario, "returned to application preferences", "Boolean(document.querySelector(\"button[aria-label='Close Preferences']\"))")
         closePreferences()
     }
