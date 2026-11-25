@@ -42,7 +42,7 @@ def wait_for(sample, message, timeout=20):
         time.sleep(0.25)
 
 
-def windows_window(pid):
+def windows_window(pid, observed):
     import ctypes
     from ctypes import wintypes
 
@@ -51,15 +51,23 @@ def windows_window(pid):
     user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
     user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user.IsWindowVisible.argtypes = [wintypes.HWND]
-    user.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    observed.clear()
     matches = []
 
     @callback_type
     def visit(window, _):
         owner = wintypes.DWORD()
         user.GetWindowThreadProcessId(window, ctypes.byref(owner))
-        if owner.value == pid and user.IsWindowVisible(window) and user.GetWindowTextLengthW(window):
-            matches.append(window)
+        if owner.value == pid:
+            bounds = wintypes.RECT()
+            if user.GetClientRect(window, ctypes.byref(bounds)):
+                visible = bool(user.IsWindowVisible(window))
+                width, height = bounds.right - bounds.left, bounds.bottom - bounds.top
+                observed.append({"visible": visible, "client": [width, height]})
+                x, y, w, h = DOM_OVERLAY
+                if visible and width >= x + w and height >= y + h:
+                    matches.append(window)
         return True
 
     if not user.EnumWindows(visit, 0):
@@ -107,15 +115,22 @@ def run(app_path, out):
             if ready != "READY":
                 raise RuntimeError(f"The Tauri fixture did not become ready: {ready}")
 
+            observed = []
+
             def find_window():
                 if app.poll() is not None:
                     raise RuntimeError(f"The app exited with status {app.returncode}")
                 if windows:
-                    return windows_window(app.pid)
+                    return windows_window(app.pid, observed)
                 result = subprocess.run([str(finder), str(app.pid)], text=True, capture_output=True, timeout=5)
                 return result.stdout.strip() if result.returncode == 0 else None
 
-            window = wait_for(find_window, "No unique, visible app window")
+            try:
+                window = wait_for(find_window, "No unique, visible app window")
+            except RuntimeError:
+                if windows:
+                    (out / "owned-windows.json").write_text(json.dumps(observed), encoding="utf-8")
+                raise
             command("core 17 5")
             results = []
 
