@@ -1568,6 +1568,13 @@ jobs:
           LAZYSH_NATIVE_NAMESPACE_NETWORK: shared
         run: *native-fixture-namespace
       - *pinned-download-cache
+      - uses: ./.github/actions/ghostty-zig
+        if: env.LAZYSH_ANDROID_UI_NATIVE_TMUX == '1'
+        with:
+          link-source: 'true'
+      - name: Give the native tmux APK the pinned NDK
+        if: env.LAZYSH_ANDROID_UI_NATIVE_TMUX == '1'
+        run: echo "ANDROID_NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
       - *official-mosh-fixture
       - name: Build the pinned official ET 7.0.0 fixture outside the checkout
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'ssh-parity'
@@ -1631,7 +1638,7 @@ jobs:
       # The tmux owner needs only the companion binary: it reads the synthetic transcript the Chat case opens.
       # The owned device case runs `lazysh-agent devices ...` over its own sshd; no receiver or companion install is needed.
       - name: Build the real companion for the owned tmux Chat and device cases
-        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux' || env.LAZYSH_ANDROID_RUNTIME_OWNER == 'ssh-parity'
+        if: (env.LAZYSH_ANDROID_RUNTIME_OWNER == 'tmux' && env.LAZYSH_ANDROID_UI_NATIVE_TMUX != '1') || env.LAZYSH_ANDROID_RUNTIME_OWNER == 'ssh-parity'
         run: |
           cargo build --locked -p lazysh-agent --bin lazysh-agent
           printf '%s\n' "LAZYSH_TEST_AGENT_BIN=$GITHUB_WORKSPACE/target/debug/lazysh-agent" >> "$GITHUB_ENV"
@@ -1727,7 +1734,7 @@ jobs:
             sh .github/scripts/android-dismiss-error-dialogs.sh;
             case "$LAZYSH_ANDROID_RUNTIME_OWNER" in
             herdr-navigation) bun run test:android-herdr-navigation; exit $? ;;
-            tmux) bun run test:android-tmux; exit $? ;;
+            tmux) if [[ "${LAZYSH_ANDROID_UI_NATIVE_TMUX:-0}" == 1 ]]; then bun run test:android-native-tmux; else bun run test:android-tmux; fi; exit $? ;;
             zellij) bun run test:android-zellij; exit $? ;;
             terminal-core) bun run test:android-terminal-core:ci; exit $? ;;
             terminal-session) bun run test:android-native-session:ci; exit $? ;;
@@ -1987,6 +1994,19 @@ jobs:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: tmux
       LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-tmux-results
+    steps: *android-owned-runtime-steps
+
+  # The tmux controls on the native engine, separate from the xterm.js lane (#2500).
+  native-android-terminal-tmux:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: tmux
+      LAZYSH_ANDROID_UI_NATIVE_TMUX: '1'
+      LAZYSH_ANDROID_RUNTIME_ARTIFACT: lazysh-android-native-tmux-results
     steps: *android-owned-runtime-steps
 
   # Owned pinned Zellij 0.45.1 on the emulator (#1645); separate so its verdict is attributable. It needs no companion

@@ -490,6 +490,11 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux disco
   await ownedAndroidAcceptance('tmux',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,owned));
 },610_000);
 
+test.skipIf(process.env.LAZYSH_ANDROID_UI_NATIVE_TMUX!=='1')('actual Android native terminal runs the owned tmux window controls and clipboard consent',async()=>{
+  const owned=await TmuxFixture.start();
+  await ownedAndroidAcceptance('tmux',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,owned));
+},610_000);
+
 // Separate CI owner: only the pinned Zellij fixture and packaged UI decide this verdict.
 test.skipIf(process.env.LAZYSH_ANDROID_UI_ZELLIJ!=='1')('actual Android Zellij discovery, session list, attach, numbered tabs and detach keep the original session and panes',async()=>{
   const owned=await ZellijFixture.start();
