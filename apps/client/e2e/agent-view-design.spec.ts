@@ -199,6 +199,36 @@ test.describe('the conversation reads as a calm column on a phone',()=>{
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
   });
 
+  for(const theme of ['forest','midnight','paper'] as const)test(`the ${theme} composer has one soft focus indicator`,async({page})=>{
+    const agent=await openWork(page,theme);
+    const field=agent.getByRole('textbox',{name:'Draft for this terminal'});
+    await page.addStyleTag({content:'textarea:focus-visible { outline: 2px solid var(--ui-focus-ring); outline-offset: 2px; }'});
+    const composer=agent.locator('.agent-composer');
+    const idle=await composer.evaluate(node=>getComputedStyle(node).boxShadow);
+    await field.focus();
+    await expect(field).toBeFocused();
+    expect(await field.evaluate(node=>getComputedStyle(node).outlineStyle)).toBe('none');
+    await expect.poll(()=>composer.evaluate(node=>getComputedStyle(node).boxShadow)).not.toBe(idle);
+    const shadow=await composer.evaluate(node=>getComputedStyle(node).boxShadow);
+    const alpha=Number(shadow.match(/(?:,|\/)\s*([\d.]+)\)/)?.[1]);
+    expect(alpha,shadow).toBeGreaterThan(0);
+    expect(alpha).toBeLessThan(0.7);
+  });
+
+  test('the composer focus remains visible in forced colors',async({page})=>{
+    await page.emulateMedia({forcedColors:'active'});
+    const agent=await openWork(page,'forest');
+    const field=agent.getByRole('textbox',{name:'Draft for this terminal'});
+    await field.focus();
+    expect(await field.evaluate(node=>getComputedStyle(node).outlineStyle)).toBe('none');
+    const outline=await agent.locator('.agent-composer').evaluate(node=>{
+      const style=getComputedStyle(node);
+      return {style:style.outlineStyle,width:parseFloat(style.outlineWidth)};
+    });
+    expect(outline.style).toBe('solid');
+    expect(outline.width).toBeGreaterThanOrEqual(2);
+  });
+
   test('with the on-screen keyboard up the composer and the line being typed stay in view',async({page})=>{
     const agent=await openWork(page,'forest');await settled(agent);
     const field=agent.getByRole('textbox',{name:'Draft for this terminal'});
