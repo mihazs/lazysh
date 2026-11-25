@@ -15,6 +15,7 @@ or `n/a` with a reason. Rows below were read from the fixing commits; a test not
 
 | Bug | Symptom | Fix | Layers and tests | Appium |
 | --- | --- | --- | --- | --- |
+| [#2417](https://github.com/mihazs/lazysh/issues/2417) | The Linux singleton GUI test could submit the directory probe as `wdp` | Use ordered WebDriver key actions and verify the shell echo before submitting | native GUI `apps/client/native-e2e/singleton.spec.ts` (caller-relative literal directory) | n/a (Linux native GUI) |
 | [#2622](https://github.com/mihazs/lazysh/issues/2622) | Output can miss both the first snapshot and the renderer wake | Publish attachment while holding the snapshot lock | unit `packages/terminal-runtime/tests/session.rs`; desktop renderer host image suite | n/a (core scheduler) |
 | [#2617](https://github.com/mihazs/lazysh/issues/2617) | Android baseline receipt tests fail to start under Node 22 | Run the benchmark CLI with Bun while keeping the nested fixture stub | unit `androidEngineBench.test.ts` | n/a (host test runner) |
 | [#2630](https://github.com/mihazs/lazysh/issues/2630) | Android benchmark setup aborts when SurfaceFlinger omits the legacy vsync period | Read the active mode or legacy period from the display dump | unit `apps/client/bench/androidEngineBench.test.ts` | n/a (host benchmark probe) |
