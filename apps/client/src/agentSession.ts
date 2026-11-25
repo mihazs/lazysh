@@ -8,6 +8,7 @@ export type AgentRoster = {
 };
 export type AgentSessionInfo = {
   info?: AgentRoster;
+  goal?: {objective: string; status: string; updatedAt?: string; tokensUsed?: number; tokenBudget?: number; timeUsedSeconds?: number};
   model?: string; mode?: string; effort?: string; approval?: string; sandbox?: string;
   /** Last component of the working directory, the git branch and the worktree name: names, never paths. */
   folder?: string; branch?: string; worktree?: string;
@@ -49,6 +50,14 @@ export function parseSession(value: unknown): AgentSessionInfo | undefined {
   const raw = record(value);
   if (!raw) return undefined;
   const session: AgentSessionInfo = {};
+  const goal = record(raw.goal);
+  const objective = typeof goal?.objective === 'string' && goal.objective.trim() && goal.objective.length <= 16_384 ? goal.objective : undefined;
+  const status = label(goal?.status);
+  if (objective && status) {
+    const updatedAt = typeof goal?.updatedAt === 'string' && goal.updatedAt.length <= 64 && Number.isFinite(Date.parse(goal.updatedAt)) ? goal.updatedAt : undefined;
+    const tokensUsed = count(goal?.tokensUsed), tokenBudget = count(goal?.tokenBudget), timeUsedSeconds = count(goal?.timeUsedSeconds);
+    session.goal = {objective, status, ...(updatedAt ? {updatedAt} : {}), ...(tokensUsed !== undefined ? {tokensUsed} : {}), ...(tokenBudget !== undefined ? {tokenBudget} : {}), ...(timeUsedSeconds !== undefined ? {timeUsedSeconds} : {})};
+  }
   const info = parseRoster(raw.info);
   if (info) session.info = info;
   for (const key of ['model', 'mode', 'effort', 'approval', 'sandbox'] as const) {

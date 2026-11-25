@@ -432,10 +432,13 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // OpenCode's source is its database and the session in it, with no previews to ask for.
   const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex','opencode'].includes(bound.agent) && (bound.agent!=='opencode' || (!!bound.transcriptSessionId && !bound.herdr))
     ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : {kind:'path',agent:bound.agent,path:bound.path,...(bound.agent==='opencode'?{transcriptSessionId:bound.transcriptSessionId}:inlineImages?{inlineImages:true}:{}),...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
-  const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current() && !history.newer,sessionId,
+  const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current(),sessionId,
     target:watchTarget ?? {kind:'path',agent:'',path:''},lease:access,invoke,parsePage:parseWatchPage,onOp:op=>{
       // The window is away from the newest messages: they are read back by Jump to latest, not patched in.
-      if(historyRef.current.newer)return;
+      if(historyRef.current.newer){
+        if(op.kind==='replace')setSession(op.session);else if(op.session)setSession(op.session.value);
+        return;
+      }
       holdPosition();setError('');
       if(historyRef.current.paging && op.kind==='replace'){
         const sameStart=messagesRef.current[0]?.id===op.messages[0]?.id;

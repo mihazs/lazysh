@@ -1035,6 +1035,63 @@ fn codex_goal_and_compaction_records_become_event_lines_once() {
         .contains("PRIVATE"));
 }
 #[test]
+fn codex_goal_state_survives_paging_and_tracks_updates_and_clear() {
+    use lazysh_agent::transcript::{conversation_window_large, window::Window};
+    let meta = || codex_meta("11111111-1111-4111-8111-111111111111", "legacy");
+    let goal = |objective: &str, status: &str, used: u64| {
+        codex_event(
+            "thread_goal_updated",
+            json!({"goal":{"objective":objective,"status":status,"tokensUsed":used,"tokenBudget":100,"timeUsedSeconds":90}}),
+        )
+    };
+    for large in [false, true] {
+        for status in ["active", "paused", "complete", "blocked", "budget_limited"] {
+            let (_dir, path) = codex_file(&[
+                meta(),
+                codex_turn("one"),
+                goal("old", "active", 3),
+                codex_event("user_message", json!({"message":"first"})),
+                goal("new", status, 17),
+                codex_event("agent_message", json!({"message":"last"})),
+            ]);
+            let page = conversation_window_large(
+                &path,
+                TranscriptAgent::Codex,
+                1,
+                false,
+                &Window::Start,
+                large,
+            )
+            .unwrap();
+            let state = &page.session.as_ref().unwrap()["goal"];
+            assert_eq!(state["objective"], "new");
+            assert_eq!(state["status"], status);
+            assert_eq!(state["tokensUsed"], 17);
+            assert_eq!(state["tokenBudget"], 100);
+        }
+        let (_dir, path) = codex_file(&[
+            meta(),
+            codex_turn("one"),
+            goal("old", "active", 3),
+            codex_event("thread_goal_cleared", json!({})),
+        ]);
+        let page = conversation_window_large(
+            &path,
+            TranscriptAgent::Codex,
+            1,
+            false,
+            &Window::Tail,
+            large,
+        )
+        .unwrap();
+        assert!(page
+            .session
+            .as_ref()
+            .is_none_or(|session| session.get("goal").is_none()));
+    }
+}
+
+#[test]
 fn codex_complete_lines_are_followable_without_admitting_a_partial_tail() {
     use std::io::Write;
     let (_directory, path) = codex_file(&[
@@ -1447,6 +1504,32 @@ fn history_command_lists_one_folder_and_honors_the_discovery_setting() {
         String::from_utf8_lossy(&off.stderr)
     );
     assert!(!run("/work/app").status.success());
+}
+
+#[test]
+fn claude_goal_status_follows_its_active_conversation_branch() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let goal = |id: &str, parent: &str, objective: &str, met: bool| {
+        json!({"type":"attachment","uuid":id,"parentUuid":parent,
+        "timestamp":"2026-11-11T10:12:00Z", "attachment":{"type":"goal_status","condition":objective,"met":met}})
+    };
+    for met in [false, true] {
+        write(
+            &path,
+            &[
+                message("root", None, "user", "hello"),
+                goal("one", "root", "Old goal", false),
+                goal("two", "one", "New goal", met),
+                message("answer", Some("two"), "assistant", "done"),
+            ],
+        );
+        let page = conversation(&path, TranscriptAgent::Claude, 1).unwrap();
+        let state = &page.session.as_ref().unwrap()["goal"];
+        assert_eq!(state["objective"], "New goal");
+        assert_eq!(state["status"], if met { "complete" } else { "active" });
+        assert_eq!(state["updatedAt"], "2026-11-11T10:12:00Z");
+    }
 }
 
 #[test]
