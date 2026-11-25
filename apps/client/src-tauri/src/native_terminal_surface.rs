@@ -15,6 +15,8 @@ use tauri::Manager;
 mod android;
 #[cfg(all(target_os = "linux", native_terminal_core))]
 pub(crate) mod linux;
+#[cfg(all(target_os = "macos", native_terminal_core))]
+pub(crate) mod macos;
 #[cfg(native_terminal_core)]
 pub(crate) mod panes;
 #[cfg(all(target_os = "windows", native_terminal_core))]
@@ -202,9 +204,16 @@ pub async fn native_terminal_surface_place(
     {
         windows::place(&app, session, anchor, background).await
     }
+    #[cfg(all(target_os = "macos", native_terminal_core))]
+    {
+        macos::place(&app, session, anchor, background).await
+    }
     #[cfg(not(any(
         target_os = "android",
-        all(any(target_os = "linux", target_os = "windows"), native_terminal_core)
+        all(
+            any(target_os = "linux", target_os = "macos", target_os = "windows"),
+            native_terminal_core
+        )
     )))]
     {
         let _ = app;
@@ -251,9 +260,19 @@ async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
     windows::relook(app, session).await
 }
 
+#[cfg(all(target_os = "macos", native_terminal_core))]
+async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
+    macos::relook(app, session).await
+}
+
 #[cfg(all(
     native_terminal_core,
-    not(any(target_os = "android", target_os = "linux", target_os = "windows"))
+    not(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))
 ))]
 async fn relook(_: &AppHandle, _: String) -> Result<(), String> {
     Err(unavailable())
@@ -311,9 +330,16 @@ pub async fn native_terminal_surface_remove(app: AppHandle, session: String) -> 
     {
         windows::remove(&app, session).await
     }
+    #[cfg(all(target_os = "macos", native_terminal_core))]
+    {
+        macos::remove(&app, session).await
+    }
     #[cfg(not(any(
         target_os = "android",
-        all(any(target_os = "linux", target_os = "windows"), native_terminal_core)
+        all(
+            any(target_os = "linux", target_os = "macos", target_os = "windows"),
+            native_terminal_core
+        )
     )))]
     {
         let _ = app;
@@ -341,9 +367,16 @@ pub async fn native_terminal_surface_state(
     {
         windows::state(&app, session).await
     }
+    #[cfg(all(target_os = "macos", native_terminal_core))]
+    {
+        macos::state(&app, session).await
+    }
     #[cfg(not(any(
         target_os = "android",
-        all(any(target_os = "linux", target_os = "windows"), native_terminal_core)
+        all(
+            any(target_os = "linux", target_os = "macos", target_os = "windows"),
+            native_terminal_core
+        )
     )))]
     {
         let _ = app;
@@ -398,7 +431,10 @@ pub async fn native_terminal_surface_focus(
 
 #[cfg(not(any(
     target_os = "android",
-    all(any(target_os = "linux", target_os = "windows"), native_terminal_core)
+    all(
+        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        native_terminal_core
+    )
 )))]
 fn unavailable() -> String {
     "This build has no native terminal surface.".into()
@@ -628,7 +664,12 @@ mod tests {
 
     #[test]
     fn only_the_plugins_stable_code_reaches_the_page() {
-        assert_eq!(rejection("InvokeRejected(ErrorResponse { code: None, message: Some(\"native_surface_disabled\") })"), "native_surface_disabled");
+        assert_eq!(
+            rejection(
+                "InvokeRejected(ErrorResponse { code: None, message: Some(\"native_surface_disabled\") })"
+            ),
+            "native_surface_disabled"
+        );
         assert_eq!(rejection("native_surface_anchor"), "native_surface_anchor");
         assert_eq!(
             rejection("java.lang.IllegalStateException: surface at /data/user/0/app.lazysh.client"),
@@ -662,10 +703,12 @@ mod tests {
         assert_eq!(serde_json::to_value(&state).unwrap()["generation"], 2);
         // Whether the renderer drew, and why not, reach the page when the plugin says; a shell that cannot tell leaves both out.
         assert_eq!((state.drawing, state.reason.as_deref()), (None, None));
-        assert!(serde_json::to_value(&state)
-            .unwrap()
-            .get("drawing")
-            .is_none());
+        assert!(
+            serde_json::to_value(&state)
+                .unwrap()
+                .get("drawing")
+                .is_none()
+        );
         let refused: SurfaceState = serde_json::from_value(serde_json::json!({
             "placed": true, "ready": true, "generation": 1, "width": 10, "height": 10,
             "drawing": false, "reason": "no adapter could create a device"

@@ -897,7 +897,8 @@ pub fn terminal_core_available() -> CoreAvailability {
         cfg!(any(
             target_os = "android",
             target_os = "linux",
-            target_os = "windows"
+            target_os = "windows",
+            target_os = "macos"
         )),
     )
 }
@@ -1017,6 +1018,8 @@ fn surface() -> Result<(), String> {
     crate::native_terminal_surface::linux::display()?;
     #[cfg(all(target_os = "windows", native_terminal_core))]
     crate::native_terminal_surface::windows::display()?;
+    #[cfg(all(target_os = "macos", native_terminal_core))]
+    crate::native_terminal_surface::macos::display()?;
     Ok(())
 }
 
@@ -1084,10 +1087,10 @@ pub(crate) use native::{css_color, theme_of};
 mod native {
     use super::*;
     use lazysh_terminal_runtime::{
-        control_window, dom_mods, ffi, scrollback_bytes_for_lines, CellRange, Config, ControlEvent,
-        ControlQuery, ControlSnapshot, DisplayFailure, DomKey, Doorbell, Error as RuntimeError,
-        Hooks, Hub, HubConfig, KeyInput, MouseInput, Offer, Origin, PtyWriter, Refused, RgbColor,
-        ScrollAction, Session, Size, TerminalRuntime, Theme,
+        CellRange, Config, ControlEvent, ControlQuery, ControlSnapshot, DisplayFailure, DomKey,
+        Doorbell, Error as RuntimeError, Hooks, Hub, HubConfig, KeyInput, MouseInput, Offer,
+        Origin, PtyWriter, Refused, RgbColor, ScrollAction, Session, Size, TerminalRuntime, Theme,
+        control_window, dom_mods, ffi, scrollback_bytes_for_lines,
     };
 
     static HUB: LazyLock<Hub> = LazyLock::new(|| Hub::new(HubConfig::default()));
@@ -1775,9 +1778,11 @@ mod native {
             let fixture = fixture();
             let press = || mouse(MouseAction::Press, MouseButton::Left);
             assert!(fixture.encode(press()).is_empty(), "no tracking, no report");
-            assert!(fixture
-                .encode(CoreInput::Focus { focused: true })
-                .is_empty());
+            assert!(
+                fixture
+                    .encode(CoreInput::Focus { focused: true })
+                    .is_empty()
+            );
             fixture.program_prints(b"\x1b[?1000h\x1b[?1004h");
             // X10 encoding: ESC [ M, then button, column and row, each plus 32: column 111 is 0x8f.
             let report = fixture.encode(press());
@@ -2306,8 +2311,8 @@ mod native {
 
         #[tokio::test]
         #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
-        async fn a_mosh_display_the_core_cannot_follow_is_told_to_the_renderer_before_the_closing_notice(
-        ) {
+        async fn a_mosh_display_the_core_cannot_follow_is_told_to_the_renderer_before_the_closing_notice()
+         {
             let _kept = tests_keeping_cores().read();
             let mosh = || CoreConfig {
                 canonical_frames: true,
@@ -2384,7 +2389,7 @@ pub(crate) fn hub_usage() -> (usize, usize) {
 pub(crate) mod fake {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
-    use std::sync::{mpsc, Mutex};
+    use std::sync::{Mutex, mpsc};
 
     pub(crate) struct ChecksumCore {
         chunks: mpsc::Sender<Vec<u8>>,
@@ -3218,7 +3223,8 @@ mod tests {
                 any(
                     target_os = "android",
                     target_os = "linux",
-                    target_os = "windows"
+                    target_os = "windows",
+                    target_os = "macos"
                 )
             ))
         );
@@ -3343,9 +3349,11 @@ mod tests {
         for lines in [100, 20_000] {
             assert_eq!(open_error(Some(lines)).await, why, "{lines}");
         }
-        assert!(terminal_core_open(lease(), channel(), 0, 24, None, None)
-            .await
-            .is_err());
+        assert!(
+            terminal_core_open(lease(), channel(), 0, 24, None, None)
+                .await
+                .is_err()
+        );
         assert!(terminal_core_text(lease(), "none".into()).await.is_err());
         terminal_core_close("none".into()).unwrap();
     }
@@ -3368,9 +3376,11 @@ mod tests {
             .unwrap();
         assert!(text.into_inner().is_ok());
         access.replace_renderer().unwrap();
-        assert!(terminal_core_text(renderer, "lease-gated".into())
-            .await
-            .is_err());
+        assert!(
+            terminal_core_text(renderer, "lease-gated".into())
+                .await
+                .is_err()
+        );
         close("lease-gated");
     }
 
@@ -3494,13 +3504,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sent.into_inner().unwrap(), 0);
-        assert!(terminal_core_input(
-            renderer.clone(),
-            "input-gated".into(),
-            paste("x".repeat(MAX_PASTE + 1))
-        )
-        .await
-        .is_err());
+        assert!(
+            terminal_core_input(
+                renderer.clone(),
+                "input-gated".into(),
+                paste("x".repeat(MAX_PASTE + 1))
+            )
+            .await
+            .is_err()
+        );
         assert!(
             terminal_core_input(renderer.clone(), "missing".into(), paste("ok".into()))
                 .await
@@ -3510,13 +3522,15 @@ mod tests {
         terminal_core_input(renderer.clone(), "input-gated".into(), text("ok".into()))
             .await
             .unwrap();
-        assert!(terminal_core_input(
-            renderer.clone(),
-            "input-gated".into(),
-            text("x".repeat(MAX_PASTE + 1))
-        )
-        .await
-        .is_err());
+        assert!(
+            terminal_core_input(
+                renderer.clone(),
+                "input-gated".into(),
+                text("x".repeat(MAX_PASTE + 1))
+            )
+            .await
+            .is_err()
+        );
         assert_eq!(
             core.inputs.lock().unwrap().len(),
             2,
