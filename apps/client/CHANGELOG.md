@@ -1,5 +1,19 @@
 # @lazysh/client
 
+## 1.101.5
+
+### Patch Changes
+
+- fix(bench): connect the terminal benchmark to the Android WebView ([#2593](https://github.com/mihazs/lazysh/pull/2593))
+
+  <details><summary>Details</summary>
+
+  The benchmark connects without browser-only defaults and releases its ADB debugger forward when it exits.
+
+  </details>
+- fix(terminal): wake the native renderer for output arriving during attachment ([#2623](https://github.com/mihazs/lazysh/pull/2623))
+- fix(bench): preserve the Android native idle benchmark result during teardown ([#2632](https://github.com/mihazs/lazysh/pull/2632))
+
 ## 1.101.4
 
 ### Patch Changes
