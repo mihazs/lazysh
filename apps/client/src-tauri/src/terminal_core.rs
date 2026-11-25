@@ -900,6 +900,7 @@ pub fn terminal_core_available() -> CoreAvailability {
             target_os = "android",
             target_os = "linux",
             target_os = "windows",
+            target_os = "ios",
             target_os = "macos"
         )),
     )
@@ -1018,7 +1019,10 @@ async fn within(
 fn surface() -> Result<(), String> {
     #[cfg(all(target_os = "linux", native_terminal_core))]
     crate::native_terminal_surface::linux::display()?;
-    #[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
+    #[cfg(all(
+        any(target_os = "ios", target_os = "macos", target_os = "windows"),
+        native_terminal_core
+    ))]
     crate::native_terminal_surface::desktop::display()?;
     Ok(())
 }
@@ -3259,6 +3263,7 @@ mod tests {
                     target_os = "android",
                     target_os = "linux",
                     target_os = "windows",
+                    target_os = "ios",
                     target_os = "macos"
                 )
             ))

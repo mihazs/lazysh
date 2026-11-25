@@ -4,8 +4,8 @@ use lazysh_terminal_runtime::Session;
 use std::{cell::RefCell, collections::HashMap, sync::OnceLock};
 use tauri::{AppHandle, Manager};
 
-#[cfg(target_os = "macos")]
-use super::macos as platform;
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+use super::apple as platform;
 #[cfg(target_os = "windows")]
 use super::windows as platform;
 
@@ -33,6 +33,8 @@ pub(crate) fn install(app: &tauri::App) {
             .as_ref()
             .set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)))
             .map_err(|error| error.to_string())?;
+        #[cfg(target_os = "ios")]
+        platform::install_ios(app, &window)?;
         window.on_window_event(|event| {
             if matches!(event, tauri::WindowEvent::Destroyed)
                 || (cfg!(target_os = "windows")
@@ -88,6 +90,11 @@ impl Pane {
             scale: anchor.dpr as f32,
             background,
         }
+    }
+
+    #[cfg(target_os = "ios")]
+    pub(super) fn set_active(&self, active: bool) {
+        let _ = self.renderer.set_active(active);
     }
 
     pub(super) fn state(&self) -> SurfaceState {

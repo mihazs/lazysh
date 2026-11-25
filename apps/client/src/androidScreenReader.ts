@@ -1,13 +1,10 @@
-import {invoke} from '@tauri-apps/api/core';
+import {invoke, isTauri} from '@tauri-apps/api/core';
 import {isAndroidApp} from './isAndroidApp';
+import {isIosApp} from './isIosApp';
 
-/**
- * Whether Android reports a screen reader, asked of the app (`screen_reader_active`, #1329): touch exploration, which TalkBack and its
- * kin turn on, or an enabled service that speaks or brailles the screen. The native terminal draws no text a reader can reach.
- * Anywhere else it is no: iOS and the desktop have their own accessibility paths and the Screen reader announcements preference.
- * An Android app that cannot answer counts as having one, so the surface is never put in front of someone who cannot read it.
- */
+/** The native surface needs an accessible fallback when TalkBack or VoiceOver is active. */
 export async function systemScreenReader(): Promise<boolean> {
-  if (!isAndroidApp()) return false;
+  const macApp = isTauri() && /Macintosh/i.test(navigator.userAgent);
+  if (!isAndroidApp() && !isIosApp() && !macApp) return false;
   try { return await invoke<boolean>('screen_reader_active') !== false; } catch { return true; }
 }
