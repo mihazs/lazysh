@@ -272,9 +272,10 @@ class TerminalImeEditor(
         selEnd = from + (e - s)
     }
 
-    /** Called after every operation: outside a batch and while nothing is composing, the change is delivered. */
     private fun settle() {
-        if (depth > 0 || compStart >= 0) return
+        if (depth > 0) return
+        // SwiftKey reopens the last word on Backspace. A pure tail erase must show while it composes.
+        if (compStart >= 0 && !asciiTailErase(previous, value)) return
         if (!deliver()) return
         if (value.length > MAX_CONTEXT) resetAndResync()
     }
@@ -285,6 +286,7 @@ class TerminalImeEditor(
         val delta = ownedDelta(previous, value, owned)
         if (delta == null) { stage(); return false }
         previous = value
+        owned = minOf(owned, value.length)
         // Enter typed as text is a carriage return, sent as it is in every keyboard mode (#1043); a line break inside
         // longer text goes as typed, like xterm.js. Either way what came before the break is no longer editable.
         if (delta.isNotEmpty()) {
@@ -323,6 +325,10 @@ class TerminalImeEditor(
         const val MAX_CONTEXT = 65536
         private const val ERASE = "\u007f"
 
+        private fun asciiTailErase(previous: String, value: String): Boolean =
+            value.length < previous.length && previous.startsWith(value) &&
+                (value.length until previous.length).all { previous[it] in ' '..'~' }
+
         /**
          * The remote edit that turns [previous] into [value], or null when it cannot be made safely. Erasing the end
          * of the editor is a Backspace press even over text that a key made unowned since it was typed. Anything
@@ -331,7 +337,7 @@ class TerminalImeEditor(
          * (the peer owns erase units; rolling back committed Unicode is never guessed).
          */
         internal fun ownedDelta(previous: String, value: String, owned: Int): String? {
-            if (value.length < previous.length && previous.startsWith(value) && previous.substring(value.length).all { it in ' '..'~' })
+            if (asciiTailErase(previous, value))
                 return ERASE.repeat(previous.length - value.length)
             if (value.take(owned) != previous.take(owned)) return null
             val old = previous.substring(minOf(owned, previous.length)).codePoints().toArray()

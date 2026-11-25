@@ -210,6 +210,15 @@ class TerminalImeEditorTest {
         assertEquals("one DEL from the key and one from the edit, not two each", listOf("ab", "<Backspace>", "\u007f"), remote.sent)
     }
 
+    @Test fun typingContinuesAfterAKeyboardEraseCrossesThePreviousOwnershipBoundary() {
+        editor.commitText("first second", 1)
+        editor.settleOwnership()
+        editor.deleteSurroundingText(1, 0)
+        editor.commitText("d", 1)
+        assertEquals(listOf("first second", "\u007f", "d"), remote.sent)
+        assertRemoteFollowsEditor()
+    }
+
     @Test fun backspaceOverAnEmptyEditorStillReachesTheTerminal() {
         editor.key(TerminalKey("Backspace", "Backspace"))
         assertEquals(listOf("<Backspace>"), remote.sent)
@@ -327,6 +336,17 @@ class TerminalImeEditorTest {
     @Test fun anEmptyPasteSendsNothing() {
         assertTrue(editor.paste(""))
         assertEquals(emptyList<String>(), remote.sent)
+    }
+
+    @Test fun swiftKeyBackspaceErasesTheCommittedTailWhileRecomposingTheWord() {
+        editor.commitText("hello world ", 1)
+        batch { deleteSurroundingText(1, 0); setComposingRegion(6, 11) }
+        assertEquals("hello world", remote.line)
+        batch { setComposingText("worl", 1) }
+        assertEquals("hello worl", remote.line)
+        batch { setComposingText("world", 1); finishComposingText(); commitText(" ", 1) }
+        assertEquals(listOf("hello world ", "\u007f", "\u007f", "d "), remote.sent)
+        assertRemoteFollowsEditor()
     }
 
     /**

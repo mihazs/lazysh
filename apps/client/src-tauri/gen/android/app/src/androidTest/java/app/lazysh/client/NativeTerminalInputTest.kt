@@ -148,6 +148,16 @@ class NativeTerminalInputTest {
         assertEquals(listOf("text:first secod", "text:\u007fnd", "text:\u007f"), delivered)
     }
 
+    @Test fun aProvisionalConnectionDoesNotDisplaceTheServedKeyboard() = onMain {
+        val view = TerminalInputView(instrumentation.targetContext, sink)
+        val served = connect(view)
+        assertTrue(served.commitText("hello ", 1))
+
+        connect(view).closeConnection()
+        assertTrue(served.commitText("world", 1))
+        assertEquals(listOf("text:hello ", "text:world"), delivered)
+    }
+
     @Test fun aRetiredKeyboardCannotRewriteDeleteOrCommitTheCurrentWord() = onMain {
         val view = TerminalInputView(instrumentation.targetContext, sink)
         val retired = connect(view)

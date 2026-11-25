@@ -35,6 +35,8 @@ class TerminalInputView(
     private val onComposing: (String?) -> Unit = {},
 ) : View(context) {
     private var connection: Connection? = null
+    private var nextConnection = 0L
+    private var servedConnection = 0L
     private val imm = context.getSystemService(InputMethodManager::class.java)
     val editor = TerminalImeEditor(sink, acceptsInput, resync = { imm?.restartInput(this) })
 
@@ -50,12 +52,11 @@ class TerminalInputView(
         outAttrs.inputType = if (private) PrivateKeyboard.INPUT_TYPE else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
         outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or EditorInfo.IME_FLAG_NO_ENTER_ACTION or EditorInfo.IME_FLAG_NO_FULLSCREEN or
             EditorInfo.IME_FLAG_NO_EXTRACT_UI or (if (private) EditorInfoCompat.IME_FLAG_NO_PERSONALIZED_LEARNING else 0)
-        editor.connectionOpened()
         outAttrs.initialSelStart = editor.selectionStart
         outAttrs.initialSelEnd = editor.selectionEnd
         // What the editor holds, up front: SwiftKey reads the text around the caret from here and from getExtractedText before it composes, and works from nothing without them.
         EditorInfoCompat.setInitialSurroundingText(outAttrs, editor.text)
-        return Connection().also { connection = it }
+        return Connection(++nextConnection)
     }
 
     // Hardware keys the terminal owns; Back, volume and the rest stay with the system.
@@ -109,18 +110,29 @@ class TerminalInputView(
         onComposing(editor.composing)
     }
 
-    private inner class Connection : BaseInputConnection(this@TerminalInputView, false) {
+    private inner class Connection(private val id: Long) : BaseInputConnection(this@TerminalInputView, false) {
         private var monitorToken: Int? = null
-        private val active get() = connection === this
+        private var closed = false
+
+        private fun activate(): Boolean {
+            if (closed || id < servedConnection) return false
+            if (connection !== this) {
+                // Android can create and discard a connection without giving it to the keyboard.
+                servedConnection = id
+                connection = this
+                editor.connectionOpened()
+            }
+            return true
+        }
 
         private inline fun edit(selectionChanged: Boolean = true, change: () -> Boolean): Boolean {
-            if (!active) return false
+            if (!activate()) return false
             val result = change()
             publish(selectionChanged)
             return result
         }
 
-        override fun beginBatchEdit() = active && editor.beginBatchEdit()
+        override fun beginBatchEdit() = activate() && editor.beginBatchEdit()
         override fun endBatchEdit() = edit { editor.endBatchEdit() }
         override fun commitText(text: CharSequence?, newCursorPosition: Int) = edit { editor.commitText(text ?: "", newCursorPosition) }
         @RequiresApi(34)
@@ -133,14 +145,14 @@ class TerminalInputView(
         override fun deleteSurroundingText(beforeLength: Int, afterLength: Int) = edit { editor.deleteSurroundingText(beforeLength, afterLength) }
         override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int) = edit { editor.deleteSurroundingTextInCodePoints(beforeLength, afterLength) }
         override fun setSelection(start: Int, end: Int) = edit { editor.setSelection(start, end) }
-        override fun getTextBeforeCursor(n: Int, flags: Int): CharSequence = if (active) editor.textBeforeCursor(n) else ""
-        override fun getTextAfterCursor(n: Int, flags: Int): CharSequence = if (active) editor.textAfterCursor(n) else ""
-        override fun getSelectedText(flags: Int): CharSequence? = if (active) editor.selectedText() else null
+        override fun getTextBeforeCursor(n: Int, flags: Int): CharSequence = if (activate()) editor.textBeforeCursor(n) else ""
+        override fun getTextAfterCursor(n: Int, flags: Int): CharSequence = if (activate()) editor.textAfterCursor(n) else ""
+        override fun getSelectedText(flags: Int): CharSequence? = if (activate()) editor.selectedText() else null
         override fun getCursorCapsMode(reqModes: Int) = 0
 
         // The whole editor as one extracted text, which keyboards that track the field (SwiftKey) ask for; the editor has no extract UI.
         override fun getExtractedText(request: ExtractedTextRequest?, flags: Int): ExtractedText? {
-            if (!active) return null
+            if (!activate()) return null
             if (flags and InputConnection.GET_EXTRACTED_TEXT_MONITOR != 0) monitorToken = request?.token
             return extractedText()
         }
@@ -160,7 +172,7 @@ class TerminalInputView(
 
         @RequiresApi(Build.VERSION_CODES.S)
         override fun getSurroundingText(beforeLength: Int, afterLength: Int, flags: Int): SurroundingText? {
-            if (!active) return null
+            if (!activate()) return null
             val before = editor.textBeforeCursor(beforeLength)
             val selected = editor.selectedText() ?: ""
             return SurroundingText(before + selected + editor.textAfterCursor(afterLength), before.length, before.length + selected.length, editor.selectionStart - before.length)
@@ -183,7 +195,8 @@ class TerminalInputView(
 
         // A closed connection commits what it was composing, as an editor does, unless focus already left.
         override fun closeConnection() {
-            if (active) {
+            closed = true
+            if (connection === this) {
                 connection = null
                 editor.connectionClosed()
                 onComposing(null)
