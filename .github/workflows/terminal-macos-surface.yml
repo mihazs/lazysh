@@ -4,12 +4,16 @@ name: terminal-macos-surface
 # through the transparent WKWebView? The probe builds the real tao and wry window, reads its own window back from the window server
 # and judges placement, overlap, resize and recreate at 1x and 2x. It is not a required check and runs when the probe or app host changes.
 # What it found: docs/architecture/macos-surface-composition-poc.md.
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths: &surface-paths
       - packages/terminal-runtime/prototypes/macos-surface/**
       - apps/client/src-tauri/src/native_terminal_surface.rs
       - apps/client/src-tauri/src/native_terminal_surface/macos.rs
+      - apps/client/src-tauri/src/native_terminal_surface/desktop.rs
       - packages/terminal-renderer-wgpu/src/adapter.rs
       - .github/workflows/terminal-macos-surface.yml
   push:
@@ -17,11 +21,8 @@ on:
     paths: *surface-paths
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: terminal-macos-surface-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

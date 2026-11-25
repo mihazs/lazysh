@@ -16,11 +16,28 @@ mod android;
 #[cfg(all(target_os = "linux", native_terminal_core))]
 pub(crate) mod linux;
 #[cfg(all(target_os = "macos", native_terminal_core))]
-pub(crate) mod macos;
+mod macos;
 #[cfg(native_terminal_core)]
 pub(crate) mod panes;
 #[cfg(all(target_os = "windows", native_terminal_core))]
-pub(crate) mod windows;
+mod windows;
+
+#[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
+pub(crate) mod desktop;
+#[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
+use desktop as desktop_platform;
+#[cfg(all(target_os = "linux", native_terminal_core))]
+use linux as desktop_platform;
+
+#[cfg(not(target_os = "android"))]
+macro_rules! desktop_surface {
+    ($method:ident($($arg:expr),*), $fallback:expr) => {{
+        #[cfg(all(any(target_os = "linux", target_os = "macos", target_os = "windows"), native_terminal_core))]
+        { desktop_platform::$method($($arg),*).await }
+        #[cfg(not(all(any(target_os = "linux", target_os = "macos", target_os = "windows"), native_terminal_core)))]
+        { $fallback }
+    }};
+}
 
 /// Longest session id the shell accepts; the renderer's ids are UUIDs, a local terminal's `local:` and a UUID.
 const MAX_SESSION_LEN: usize = 64;
@@ -196,29 +213,11 @@ pub async fn native_terminal_surface_place(
         }))
         .await
     }
-    #[cfg(all(target_os = "linux", native_terminal_core))]
-    {
-        linux::place(&app, session, anchor, background).await
-    }
-    #[cfg(all(target_os = "windows", native_terminal_core))]
-    {
-        windows::place(&app, session, anchor, background).await
-    }
-    #[cfg(all(target_os = "macos", native_terminal_core))]
-    {
-        macos::place(&app, session, anchor, background).await
-    }
-    #[cfg(not(any(
-        target_os = "android",
-        all(
-            any(target_os = "linux", target_os = "macos", target_os = "windows"),
-            native_terminal_core
-        )
-    )))]
-    {
+    #[cfg(not(target_os = "android"))]
+    desktop_surface!(place(&app, session, anchor, background), {
         let _ = app;
         Err(unavailable())
-    }
+    })
 }
 
 /// Tells the renderer how the session looks (the preferences the page applies): from its next surface on, and
@@ -255,14 +254,9 @@ async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
     linux::relook(app, session).await
 }
 
-#[cfg(all(target_os = "windows", native_terminal_core))]
+#[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
 async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
-    windows::relook(app, session).await
-}
-
-#[cfg(all(target_os = "macos", native_terminal_core))]
-async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
-    macos::relook(app, session).await
+    desktop::relook(app, session).await
 }
 
 #[cfg(all(
@@ -322,29 +316,11 @@ pub async fn native_terminal_surface_remove(app: AppHandle, session: String) -> 
     {
         call::<()>(&app, "remove", serde_json::json!({ "session": session })).await
     }
-    #[cfg(all(target_os = "linux", native_terminal_core))]
-    {
-        linux::remove(&app, session).await
-    }
-    #[cfg(all(target_os = "windows", native_terminal_core))]
-    {
-        windows::remove(&app, session).await
-    }
-    #[cfg(all(target_os = "macos", native_terminal_core))]
-    {
-        macos::remove(&app, session).await
-    }
-    #[cfg(not(any(
-        target_os = "android",
-        all(
-            any(target_os = "linux", target_os = "macos", target_os = "windows"),
-            native_terminal_core
-        )
-    )))]
-    {
+    #[cfg(not(target_os = "android"))]
+    desktop_surface!(remove(&app, session), {
         let _ = app;
         Ok(())
-    }
+    })
 }
 
 /// The session's surface as it is now.
@@ -359,29 +335,11 @@ pub async fn native_terminal_surface_state(
     {
         call(&app, "state", serde_json::json!({ "session": session })).await
     }
-    #[cfg(all(target_os = "linux", native_terminal_core))]
-    {
-        linux::state(&app, session).await
-    }
-    #[cfg(all(target_os = "windows", native_terminal_core))]
-    {
-        windows::state(&app, session).await
-    }
-    #[cfg(all(target_os = "macos", native_terminal_core))]
-    {
-        macos::state(&app, session).await
-    }
-    #[cfg(not(any(
-        target_os = "android",
-        all(
-            any(target_os = "linux", target_os = "macos", target_os = "windows"),
-            native_terminal_core
-        )
-    )))]
-    {
+    #[cfg(not(target_os = "android"))]
+    desktop_surface!(state(&app, session), {
         let _ = app;
         Err(unavailable())
-    }
+    })
 }
 
 /// What the surface's keyboard editor delivered since the last call, once and in order: committed text, keys (as the core takes them)
@@ -703,12 +661,10 @@ mod tests {
         assert_eq!(serde_json::to_value(&state).unwrap()["generation"], 2);
         // Whether the renderer drew, and why not, reach the page when the plugin says; a shell that cannot tell leaves both out.
         assert_eq!((state.drawing, state.reason.as_deref()), (None, None));
-        assert!(
-            serde_json::to_value(&state)
-                .unwrap()
-                .get("drawing")
-                .is_none()
-        );
+        assert!(serde_json::to_value(&state)
+            .unwrap()
+            .get("drawing")
+            .is_none());
         let refused: SurfaceState = serde_json::from_value(serde_json::json!({
             "placed": true, "ready": true, "generation": 1, "width": 10, "height": 10,
             "drawing": false, "reason": "no adapter could create a device"
