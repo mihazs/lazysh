@@ -108,6 +108,9 @@ if (import.meta.main) {
       const adapter = `xterm-${renderer}`;
       arms.push({
         adapter, engine: `xterm.js ${baseline.toolchain.xterm}, ${renderer} renderer`, host: `${WEBVIEW_HOST}: the benchmark page in the Android System WebView ${environment.webview.version}`, gpu: baseline.page.gl ?? null, page: { ...baseline.page, writePath: baseline.writePath, adapterWrites: baseline.adapterWrites },
+        stream: { cols: baseline.page.cols, rows: baseline.page.rows, fixtures: {
+          W2: baseline.fixtures?.plain?.sha256, W3: baseline.fixtures?.ansi?.sha256, W4: baseline.fixtures?.redraw?.sha256,
+        } },
         notes: 'The app\'s createTerminal() and XtermTerminalAdapter in the benchmark page; the remote echoes at once (zero round trip); latency is the page timestamp of the key or burst to the xterm render callback, not to pixels; CPU, wakeups, frames and PSS are read from the guest (/proc, SurfaceFlinger timestats, dumpsys meminfo), not from the page.',
       });
       measurements.push(...fromBaseline(baseline.results as BaselineResult[], adapter));
