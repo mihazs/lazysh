@@ -2,6 +2,7 @@ package app.lazysh.client
 
 import android.content.ClipboardManager
 import android.graphics.Bitmap
+import android.os.Bundle
 import android.graphics.Rect
 import android.system.Os
 import android.view.SurfaceView
@@ -13,6 +14,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
+import java.net.InetSocketAddress
+import java.net.Socket
 import kotlin.math.roundToInt
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -433,7 +436,42 @@ class NativeTerminalSessionTest {
         }
     }
 
+    private fun measureIdle(port: Int) {
+        require(port in 1..65535)
+        val probe = JSONObject(PageDriver.invoke("native_terminal_probe"))
+        assertEquals("the native benchmark has an adapter", true, probe.getBoolean("available"))
+        instrumentation.sendStatus(2, Bundle().apply { putString("lazyshNativeBenchmarkGpu", probe.getJSONObject("adapter").toString()) })
+        val id = startNativeSession()
+        val prompt = fixture.getString("prompt").trim()
+        val nonce = fixture.getString("nonce")
+        awaitRow(id, "the prompt before measuring idle", { it.startsWith(prompt) })
+        awaitInk("the prompt before measuring idle") { ink(it, 0 until it.height / 6) > 40 }
+
+        for ((variant, cursor) in listOf("blink-on" to 1, "blink-off" to 2)) {
+            // Set the cursor in the SSH stream and check the marker before opening a measurement window.
+            val marker = "lazysh-idle-$variant"
+            typeIntoTheSurface("printf '\\033[$cursor q%s\\n' '$marker'")
+            awaitRow(id, "the idle cursor mode", { it == marker })
+            repeat(3) { sample ->
+                val before = coreText(id)
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress("127.0.0.1", port), 5000)
+                    socket.soTimeout = 45_000
+                    socket.getOutputStream().write("$nonce $variant $sample\n".toByteArray(Charsets.US_ASCII))
+                    // The host samples the guest while this thread blocks and the terminal is untouched.
+                    assertEquals("the host completed the idle window", "done", socket.getInputStream().bufferedReader(Charsets.US_ASCII).readLine())
+                }
+                assertEquals("the idle screen text stays unchanged", before, coreText(id))
+            }
+        }
+    }
+
     @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() {
+        val idlePort = InstrumentationRegistry.getArguments().getString("lazyshIdleBenchPort")
+        if (idlePort != null) {
+            measureIdle(idlePort.toInt())
+            return
+        }
         val started = System.nanoTime()
         fun elapsed() = (System.nanoTime() - started) / 1_000_000
         evidence.put("probe", JSONObject(PageDriver.invoke("native_terminal_probe")))
