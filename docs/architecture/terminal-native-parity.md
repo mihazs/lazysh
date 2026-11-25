@@ -10,7 +10,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 | Gap | Known not to work on native. |
 | N/A | No engine dependency, or xterm.js-only machinery. |
 
-**Summary: 54 features. Works 30, Partial 11, Unproven 6, Gap 4, N/A 3.**
+**Summary: 54 features. Works 31, Partial 11, Unproven 5, Gap 4, N/A 3.**
 
 
 ## Input
@@ -61,16 +61,16 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 
 | # | Feature | Native | Evidence or issue |
 | --- | --- | --- | --- |
-| 35 | Touch: long-press selects the word, handles extend it, Copy | Works | `TerminalPane.test.tsx` 'selection on a native session' (jsdom, headless core). On an Android surface: [#2501](https://github.com/mihazs/lazysh/issues/2501). |
+| 35 | Touch: long-press selects the word, handles extend it, Copy | Works | `TerminalPane.test.tsx` 'selection on a native session' (jsdom, headless core). Android instrumentation drives native long press, handle drag and Copy in `NativeTerminalSessionTest` ([#2501](https://github.com/mihazs/lazysh/issues/2501)). |
 | 36 | Mouse: drag, double click word, triple click line, Shift-click extends | Works | `nativePointerSelection.test.ts`. |
 | 37 | Shift-drag selects locally under mouse tracking; mouse drag scrolls at the edge | Works | `nativePointerSelection.test.ts` 'mouse selection the way xterm.js does it' (both cases fail on the parent commit; [PR #2510](https://github.com/mihazs/lazysh/pull/2510), closes [#2504](https://github.com/mihazs/lazysh/issues/2504)). |
 | 38 | Select all and Copy screen | Works | `TerminalPane.test.tsx` 'selects the whole buffer, history included, and copies the visible screen, from the selection actions' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)); `nativeTerminalAdapter.realCore.test.ts` (select-all from the core). |
 | 39 | Selected text read from the core across wrapped lines and history | Works | `nativeTerminalAdapter.realCore.test.ts` 'gives the adapter the core's text where the window of rows has none'. |
 | 40 | Typing clears the selection; a terminal reply does not | Works | `nativeTerminalAdapter.test.ts`. |
-| 41 | Copy writes the Android clipboard | Unproven | jsdom `TerminalPane.test.tsx` only: [#2501](https://github.com/mihazs/lazysh/issues/2501). |
-| 42 | OSC 52 clipboard write offered for consent; a query never answered | Works | Policy over the real core: `nativeTerminalAdapter.realCore.test.ts` (osc52.json); the sheet over a native pane: `TerminalPane.test.tsx` 'offers a program's clipboard write for consent...' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)). |
+| 41 | Copy writes the Android clipboard | Works | `NativeTerminalSessionTest` verifies the exact Android clipboard text after both word selection and handle extension ([#2501](https://github.com/mihazs/lazysh/issues/2501)). |
+| 42 | OSC 52 clipboard write offered for consent; a query never answered | Works | Policy over the real core: `nativeTerminalAdapter.realCore.test.ts` (osc52.json); the sheet over a native pane: `TerminalPane.test.tsx` 'offers a program's clipboard write for consent...' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)). Android instrumentation verifies the clipboard changes only after Allow. |
 | 43 | Find in the terminal history (next, previous, wrap, scroll to hit) | Works | `TerminalPane.test.tsx` 'finds a word in the whole buffer, scrolls to it and selects its row, and wraps to the first match' ([PR #2509](https://github.com/mihazs/lazysh/pull/2509)); `terminalAdapter.contract.ts` 'searches the whole buffer, wrapping, in both directions'. |
-| 44 | Links: URL, OSC 8 hyperlink, host path with the consent flow | Partial | `nativeLinkTap.test.ts`; `nativeTerminalAdapter.realCore.test.ts` (links.json, first and last cell of every link). A tap on an Android surface: [#2388](https://github.com/mihazs/lazysh/issues/2388), [#2501](https://github.com/mihazs/lazysh/issues/2501). |
+| 44 | Links: URL, OSC 8 hyperlink, host path with the consent flow | Partial | `nativeLinkTap.test.ts`; `nativeTerminalAdapter.realCore.test.ts` (links.json, first and last cell of every link). Android instrumentation taps a printed URL and verifies the link prompt and Copy URL ([#2501](https://github.com/mihazs/lazysh/issues/2501)). |
 
 ## Multiplexer pages and page features
 
