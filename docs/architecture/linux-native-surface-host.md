@@ -1,6 +1,6 @@
 # Linux native surface host
 
-Status: **host and renderer, in builds with the `native-terminal` feature, which no release enables**. A session that has a native core is drawn on its surface by the renderer host; no input, IME or accessibility reaches it. It is the surface host of [#1331](https://github.com/mihazs/lazysh/issues/1331) (epic [#1302](https://github.com/mihazs/lazysh/issues/1302)) and follows the strategy the [composition proof of concept](linux-surface-composition-poc.md) recommended: a `wl_subsurface` below a transparent toplevel and web view on Wayland, and xterm.js on X11 and Xwayland. Related: [Android host](android-native-surface-host.md) · [native rendering](native-rendering.md) · [terminal adapter](terminal-adapter.md) · [migration plan](terminal-migration-plan.md).
+Status: **host and renderer, in builds with the `native-terminal` feature, which no release enables**. A session that has a native core is drawn on its surface by the renderer host; the page captures Linux keyboard input in a DOM textarea. Linux IME and assistive-technology parity still require validation. Linux releases still default to xterm.js. It is the surface host of [#1331](https://github.com/mihazs/lazysh/issues/1331) (epic [#1302](https://github.com/mihazs/lazysh/issues/1302)) and follows the strategy the [composition proof of concept](linux-surface-composition-poc.md) recommended: a `wl_subsurface` below a transparent toplevel and web view on Wayland, and xterm.js on X11 and Xwayland. Related: [Android host](android-native-surface-host.md) · [native rendering](native-rendering.md) · [terminal adapter](terminal-adapter.md) · [migration plan](terminal-migration-plan.md).
 
 ## What exists
 
@@ -32,9 +32,15 @@ The page side is the Android one: `terminalSurfaceAnchor.ts` sends the same thre
 | A real local terminal with a native core, placed at an anchor, is drawn by the renderer host: its four cells of an exact colour read back at the surface's top left, a whole cell grid wide and high, at scale 1 and 2 | The same harness (`paint` and `core` commands of the fixture page; `terminal_core_open` and `local_connect` are the app's own) on lavapipe | Text glyphs, the cursor, a real GPU, device loss on this host, the user's font and theme (the host draws the system monospace at 14 CSS pixels on the default theme) |
 | Only a Wayland display passes the display check; no window means no | unit test in `linux.rs` | |
 
-Not established: the renderer on a real GPU or under Mutter and KWin, input and IME ([#1334](https://github.com/mihazs/lazysh/issues/1334)), a screen reader ([#1335](https://github.com/mihazs/lazysh/issues/1335)), the cost of a translucent window, frame time and energy. Gate G19 stays not met for Linux.
+## Local hardware and production-page results
+
+- The native debug app on `09c24f72` passed 13 composition fixture assertions at scale 1 in a private virtual KWin session on a Radeon RX 5500 XT using RADV Vulkan. With software fallback disabled, compositor readback verified placement, DOM overlap, anchor movement, removal, recreation, and four colored cells from a real local PTY. This KWin run did not drive compositor resize. [Hardware run](https://github.com/mihazs/lazysh/issues/1331#issuecomment-7159467435)
+- The debug app loaded the production terminal page from Vite. On the native engine, a mouse click focused the DOM terminal editor, and WebDriver keystrokes reached a real local shell. Both engines pasted the same Unicode text from the Wayland clipboard into the shell. Both preserved the clipboard before OSC 52 consent. After consent, WebKit reported success while the compositor clipboard retained the baseline for both engines in this WebDriver setup. [Keyboard](https://github.com/mihazs/lazysh/issues/1334#issuecomment-7159560141) · [Paste](https://github.com/mihazs/lazysh/issues/1334#issuecomment-7159576113) · [Copy](https://github.com/mihazs/lazysh/issues/1334#issuecomment-7159624063)
+- With one focused local PTY and a 900 × 573 CSS-pixel pane, median idle app-process-tree CPU across three 10-second measurements was 2.10% of one logical CPU for native (2.00–2.20%) and 2.30% for xterm.js (2.30–2.40%). These debug-build samples exclude compositor CPU and GPU activity. [Idle CPU](https://github.com/mihazs/lazysh/issues/1331#issuecomment-7159677053)
+
+Gate G19 stays open for Linux. Remaining checks include Mutter, frame time, compositor and GPU cost, input parity and assistive technology.
 
 ## Next slices
 
-1. Mount a native pane in the real page on Linux and measure it over the surface.
+1. Measure frame time and verify placement, overlap and resize on the production terminal page across compositors.
 2. Input and selection parity ([#1334](https://github.com/mihazs/lazysh/issues/1334)), screen-reader parity or a tested refusal ([#1335](https://github.com/mihazs/lazysh/issues/1335)), then the Linux default flip as its own gated change.
