@@ -64,14 +64,18 @@ fn session_of(cols: u16, rows: u16) -> (Session, Inbox) {
 }
 
 fn wait(what: &str, done: impl Fn() -> bool) {
-    let start = Instant::now();
+    assert!(wait_until(done), "timed out: {what}");
+}
+
+fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !done() {
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "timed out: {what}"
-        );
+        if Instant::now() >= deadline {
+            return false;
+        }
         std::thread::sleep(Duration::from_millis(5));
     }
+    true
 }
 
 /// The program prints `output`, and the core has parsed it.
@@ -156,7 +160,24 @@ impl Shown {
 
     /// The host draws `expected`, without being asked to.
     fn shows(&self, expected: &Image, what: &str) {
-        wait(what, || self.image().as_ref() == Some(expected));
+        let mut observed = None;
+        if wait_until(|| {
+            observed = self.image();
+            observed.as_ref() == Some(expected)
+        }) {
+            return;
+        }
+        let image = observed.unwrap_or_else(|| panic!("timed out: {what}; no renderer image"));
+        let different = image
+            .rgb
+            .chunks_exact(3)
+            .zip(expected.rgb.chunks_exact(3))
+            .filter(|(actual, expected)| actual != expected)
+            .count();
+        panic!(
+            "timed out: {what}; image={}x{} expected={}x{} differing pixels in common buffer={different} GPU counts (submissions, frames)={:?}",
+            image.width, image.height, expected.width, expected.height, self.drawn()
+        );
     }
 
     /// GPU submissions and presented frames so far.
