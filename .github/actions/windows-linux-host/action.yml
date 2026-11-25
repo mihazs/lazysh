@@ -40,6 +40,8 @@ runs:
     - name: Exercise discovery, attach, tree and actions from a Windows client against real tmux, Zellij and Herdr
       shell: bash
       env:
+        # Debug async lifecycle tests can exceed the default Rust test-thread stack on Windows.
+        RUST_MIN_STACK: '8388608'
         LAZYSH_TEST_EXTERNAL_SSH_PORT: '2222'
         LAZYSH_EXPECT_MUX_SUPPORT: tmux=full zellij=full herdr=full
       run: |
