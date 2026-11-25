@@ -1,6 +1,7 @@
 import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import {nativeIdleInstrumentationCommand} from '../apps/client/bench/androidNativeBench';
 import {androidNativeSessionAcceptance,sessionCases,validateNativeSessionReport} from './support/androidTerminalCore';
 
 const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
@@ -17,6 +18,12 @@ test('the native session report counts its one case passing exactly once',()=>{
 test('the shared Android runtime job and the terminal core job leave the native session to the job that builds the feature and runs only it',async()=>{
   const moon=Bun.YAML.parse(await readFile(join(import.meta.dir,'../apps/client/moon.yml'),'utf8')) as {tasks:Record<string,{script:string}>};
   expect(moon.tasks['test-android'].script.match(/notClass=(\S+)/)![1].split(',')).toContain('app.lazysh.client.NativeTerminalSessionTest');
+});
+
+test('the direct idle benchmark lets AndroidJUnitRunner report before Activity teardown',()=>{
+  const command=nativeIdleInstrumentationCommand('emulator-5554','/data/local/tmp/fixture.json',4242,true);
+  const wait=command.indexOf('waitForActivitiesToComplete');
+  expect(command.slice(wait-1,wait+2)).toEqual(['-e','waitForActivitiesToComplete','false']);
 });
 
 // The case needs the x86_64 debug APK built with the native-terminal feature and an explicitly selected emulator or Waydroid guest.
