@@ -2064,6 +2064,15 @@ class NativeWorkspaceTest {
             (()=>{const page=Array.from(document.querySelectorAll(${JSONObject.quote("$menu .workspace-tools-page")})).find(node=>!node.inert);
               return Boolean(page) && Math.abs(page.getBoundingClientRect().left-page.parentElement.getBoundingClientRect().left)<2;})()
         """
+        val geometry = """
+            (()=>{const track=document.querySelector(${JSONObject.quote("$menu .workspace-tools-track")});
+              const page=Array.from(track?.children??[]).find(node=>!node.inert);
+              if(!track||!page)return null;
+              const {left:trackLeft,width:trackWidth}=track.getBoundingClientRect();
+              const {left:pageLeft,width:pageWidth}=page.getBoundingClientRect();
+              return {index:Array.from(track.children).indexOf(page),scrollLeft:track.scrollLeft,
+                clientWidth:track.clientWidth,scrollWidth:track.scrollWidth,trackLeft,trackWidth,pageLeft,pageWidth};})()
+        """
         // The dots and the shown tabpanel's label must follow every swipe in the real WebView.
         val indicated = """
             (()=>{const carousel=document.querySelector(${JSONObject.quote("$menu .workspace-tools-carousel")});
@@ -2085,10 +2094,10 @@ class NativeWorkspaceTest {
             val remaining = if (offset > 0) offset - 1 else offset + 1
             awaitDocument(scenario, "workspace tools page swiped", "$pageOffset===$remaining && $settled && $indicated", deadline = deadline,
                 observe = { timeout ->
-                    val value = evaluateIfPresent(scenario, "[$pageOffset,$settled,$indicated]", timeout)
+                    val value = evaluateIfPresent(scenario, "[$pageOffset,$settled,$indicated,$geometry]", timeout)
                     val parts = JSONArray(value)
                     val observedOffset = parts.getInt(0).coerceIn(-4, 4)
-                    "offset=$observedOffset; expected=$remaining; settled=${parts.getBoolean(1)}; indicated=${parts.getBoolean(2)}"
+                    "offset=$observedOffset; expected=$remaining; settled=${parts.getBoolean(1)}; indicated=${parts.getBoolean(2)}; geometry=${parts.optJSONObject(3)}"
                 })
         }
         val target = onWebView().withElement(findElement(Locator.XPATH,
