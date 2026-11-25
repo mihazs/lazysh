@@ -15,6 +15,16 @@ const variants = ['blink-on', 'blink-off'];
 const samplesPerVariant = 3;
 const expected = variants.flatMap(variant => Array.from({ length: samplesPerVariant }, (_, sample) => `${variant} ${sample}`));
 
+export function nativeIdleInstrumentationCommand(serial: string, fixture: string, port: number, softwareGpu: boolean) {
+  return ['adb', '-s', serial, 'shell', 'am', 'instrument', '-w', '-r',
+    '-e', 'waitForActivitiesToComplete', 'false',
+    '-e', 'class', 'app.lazysh.client.NativeTerminalSessionTest',
+    '-e', 'lazyshSshFixture', fixture,
+    '-e', 'lazyshIdleBenchPort', String(port),
+    '-e', 'lazyshSoftwareGpu', String(softwareGpu),
+    `${packageName}.test/androidx.test.runner.AndroidJUnitRunner`];
+}
+
 async function runIdle(serial: string, softwareGpu: boolean) {
   const adb = adbFor(serial);
   const probe = androidProbe(adb, packageName);
@@ -77,13 +87,8 @@ async function runIdle(serial: string, softwareGpu: boolean) {
     adb('push', file, `${remote}/fixture.json`);
     filePushed = true;
     adb('shell', 'chmod', '600', `${remote}/fixture.json`);
-    const tester = Bun.spawn(['adb', '-s', serial, 'shell', 'am', 'instrument', '-w', '-r',
-      '-e', 'class', 'app.lazysh.client.NativeTerminalSessionTest',
-      '-e', 'lazyshSshFixture', `${remote}/fixture.json`,
-      '-e', 'lazyshIdleBenchPort', String(address.port),
-      '-e', 'lazyshSoftwareGpu', String(softwareGpu),
-      `${packageName}.test/androidx.test.runner.AndroidJUnitRunner`],
-    { stdout: 'pipe', stderr: 'inherit' });
+    const tester = Bun.spawn(nativeIdleInstrumentationCommand(serial, `${remote}/fixture.json`, address.port, softwareGpu),
+      { stdout: 'pipe', stderr: 'inherit' });
     const deadline = setTimeout(() => tester.kill(), 360_000);
     try {
       const output = await new Response(tester.stdout).text();
