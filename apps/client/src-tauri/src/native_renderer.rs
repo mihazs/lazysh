@@ -55,9 +55,9 @@ fn blink() -> BlinkClock {
     BlinkClock::new(BLINK_HALF_PERIOD, Duration::ZERO)
 }
 
-/// The variable that lets a debug build on Android draw on a CPU rasterizer. The CI emulator has none other, and
+/// The variable that lets a debug Android or Windows build draw on a CPU rasterizer. The CI emulator has none other, and
 /// the shipping policy refuses one: a device keeps xterm.js unless the native engine beats it, which software cannot.
-#[cfg(all(debug_assertions, target_os = "android"))]
+#[cfg(all(debug_assertions, any(target_os = "android", target_os = "windows")))]
 pub(crate) const SOFTWARE_GPU: &str = "LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU";
 
 #[cfg(all(debug_assertions, target_os = "android"))]
@@ -76,13 +76,15 @@ pub extern "system" fn Java_app_lazysh_client_NativeSoftwareGpu_swap(
         .into()
 }
 
-/// The adapter policy shared by the app's renderers and probe. Debug Android
-/// builds can opt into CPU adapters through the environment or instrumentation.
+/// The adapter policy shared by the app's renderers and probe. Debug Android and Windows builds can
+/// opt into CPU adapters through the environment; Android instrumentation can also opt in.
 pub(crate) fn policy() -> Policy {
     #[cfg(all(debug_assertions, target_os = "android"))]
     let software = INSTRUMENTED_SOFTWARE_GPU.load(std::sync::atomic::Ordering::Acquire)
         || std::env::var_os(SOFTWARE_GPU).is_some();
-    #[cfg(not(all(debug_assertions, target_os = "android")))]
+    #[cfg(all(debug_assertions, target_os = "windows"))]
+    let software = std::env::var_os(SOFTWARE_GPU).is_some();
+    #[cfg(not(all(debug_assertions, any(target_os = "android", target_os = "windows"))))]
     let software = false;
     policy_for(software)
 }

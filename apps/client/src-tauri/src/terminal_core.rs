@@ -1093,7 +1093,7 @@ mod native {
 
     static HUB: LazyLock<Hub> = LazyLock::new(|| Hub::new(HubConfig::default()));
 
-    /// Whether the app's policy accepts a CPU rasterizer: only a debug build on Android that asked for one.
+    /// Whether the app's policy accepts a CPU rasterizer: only an Android or Windows debug build that asked for one.
     pub(super) fn software() -> bool {
         crate::native_renderer::policy().allow_software
     }

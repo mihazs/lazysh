@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check a feature-enabled macOS app window from a logged-in desktop."""
+"""Check a feature-enabled Lazysh app window on a logged-in Windows or macOS desktop."""
 
 import argparse
 import json
@@ -9,10 +9,9 @@ import subprocess
 import sys
 import time
 
-from PIL import Image
+from PIL import Image, ImageGrab
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[1] / "linux-surface" / "scripts"))
 import app_driver
 
 DOM_OVERLAY = (200, 120, 140, 100)
@@ -43,12 +42,43 @@ def wait_for(sample, message, timeout=20):
         time.sleep(0.25)
 
 
+def windows_window(pid):
+    import ctypes
+    from ctypes import wintypes
+
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    user.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    matches = []
+
+    @callback_type
+    def visit(window, _):
+        owner = wintypes.DWORD()
+        user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+        if owner.value == pid and user.IsWindowVisible(window) and user.GetWindowTextLengthW(window):
+            matches.append(window)
+        return True
+
+    if not user.EnumWindows(visit, 0):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return matches[0] if len(matches) == 1 else None
+
+
 def run(app_path, out):
     out.mkdir(parents=True, exist_ok=True)
     home = out / "home"
     home.mkdir(exist_ok=True)
+    windows = sys.platform == "win32"
     finder = out / "owned-window"
-    subprocess.run(["swiftc", str(HERE / "owned-window.swift"), "-o", str(finder)], check=True, timeout=90)
+    environment = dict(os.environ, HOME=str(home))
+    if windows:
+        environment.update(APPDATA=str(home), LOCALAPPDATA=str(home), WEBVIEW2_USER_DATA_FOLDER=str(home / "webview"))
+    else:
+        swift = HERE.parents[1] / "macos-surface" / "scripts" / "owned-window.swift"
+        subprocess.run(["swiftc", str(swift), "-o", str(finder)], check=True, timeout=90)
 
     server, commands, replies = app_driver.start()
 
@@ -61,13 +91,17 @@ def run(app_path, out):
 
     def capture(window, step):
         png = out / f"{step}.png"
+        if windows:
+            image = ImageGrab.grab(window=window).convert("RGB")
+            image.save(png)
+            return image
         subprocess.run(["screencapture", "-x", "-o", "-l", window, str(png)], check=True, timeout=15)
         with Image.open(png) as image:
             return image.convert("RGB")
 
     with server, (out / "app.log").open("w") as log:
         app = subprocess.Popen([str(app_path)], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                               env=dict(os.environ, HOME=str(home)))
+                               env=environment)
         try:
             ready = replies.get(timeout=120)
             if ready != "READY":
@@ -76,6 +110,8 @@ def run(app_path, out):
             def find_window():
                 if app.poll() is not None:
                     raise RuntimeError(f"The app exited with status {app.returncode}")
+                if windows:
+                    return windows_window(app.pid)
                 result = subprocess.run([str(finder), str(app.pid)], text=True, capture_output=True, timeout=5)
                 return result.stdout.strip() if result.returncode == 0 else None
 
