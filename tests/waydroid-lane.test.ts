@@ -158,7 +158,7 @@ describe('a run that passes', () => {
     expect(result.code).toBe(0);
     expect(result.calls).toContain('waydroid session start');
     expect(result.calls).not.toContain('waydroid show-full-ui');
-    expect(result.calls.filter(call => call.includes('am instrument'))).toEqual([`adb -s ${SERIAL} shell am instrument -w -r -e class '${CLASS}' '${RUNNER}'`]);
+    expect(result.calls.filter(call => call.includes('am instrument'))).toEqual([`adb -s ${SERIAL} shell am instrument -w -r -e waitForActivitiesToComplete false -e class '${CLASS}' '${RUNNER}'`]);
     // Torn down in the order the lane needs: the app stopped, the connection it opened closed, the session it started stopped.
     expect(result.calls.slice(-3)).toEqual([`adb -s ${SERIAL} shell am force-stop app.lazysh.client`, `adb disconnect ${SERIAL}`, 'waydroid session stop']);
     expect({ session: result.session, lockReleased: !existsSync(result.lock) }).toEqual({ session: 'STOPPED', lockReleased: true });
@@ -290,7 +290,7 @@ describe('the owned SSH fixture', () => {
     const adb = result.calls.filter(call => /^adb -s \S+ (reverse|push|shell (mkdir|chmod|rm|am instrument))/.test(call)).map(call => call.replace(`adb -s ${SERIAL} `, ''));
     expect(adb).toEqual([
       'reverse --no-rebind tcp:4242 tcp:4242', `shell mkdir -m 700 ${remote}`, expect.stringMatching(new RegExp(`^push \\S+/fixture/fixture.json ${remote}/fixture.json$`)),
-      `shell chmod 600 ${remote}/fixture.json`, `shell am instrument -w -r -e class '${CLASS}' -e lazyshSshFixture '${remote}/fixture.json' '${RUNNER}'`,
+      `shell chmod 600 ${remote}/fixture.json`, `shell am instrument -w -r -e waitForActivitiesToComplete false -e class '${CLASS}' -e lazyshSshFixture '${remote}/fixture.json' '${RUNNER}'`,
       'reverse --remove tcp:4242', `shell rm -rf ${remote}`,
     ]);
     expect(await readFile(join(result.dir, 'stub', 'fixture-stopped'), 'utf8')).toBe('stopped\n');
