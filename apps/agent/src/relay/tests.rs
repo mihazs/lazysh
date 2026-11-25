@@ -632,3 +632,26 @@ fn event_owner_failure_rolls_back_both_session_and_outbox() {
         assert_eq!(count, 0, "{table}");
     }
 }
+
+#[test]
+fn older_database_adds_owner_table_without_inventing_owners_for_old_events() {
+    let (directory, mut store) = enabled();
+    let bound =
+        Configuration::decode(&store::policy(&store.connection).unwrap().config.unwrap()).unwrap();
+    let now = Utc::now();
+    store.ingest(&event(SessionState::Working), now).unwrap();
+    let id: String = store
+        .connection
+        .query_row("SELECT id FROM relay_outbox", [], |row| row.get(0))
+        .unwrap();
+    store
+        .connection
+        .execute_batch("DROP TABLE relay_event_owner")
+        .unwrap();
+    drop(store);
+    let store = Store::open(directory.path()).unwrap();
+    assert!(store
+        .relay_event_owner(&id, &bound.account_id, &bound.source_id, now.timestamp())
+        .unwrap()
+        .is_none());
+}
