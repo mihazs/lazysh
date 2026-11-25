@@ -97,7 +97,7 @@ class NativeTerminalSessionTest {
             revealHosts()
             if (js("window.__lz.click(\"button[aria-label='Delete $hostName']\")") == "true") click("[role=dialog] button", "Delete host")
         }
-        runCatching { openEngineSettings(); choose("input[name='terminal-engine'][value='auto']"); act("window.__lz.click(\"button[aria-label='Close Preferences']\")") }
+        runCatching { openTerminalSettings(); choose("input[name='terminal-engine'][value='auto']"); act("window.__lz.click(\"button[aria-label='Close Preferences']\")") }
         runCatching { scenario.moveToState(Lifecycle.State.RESUMED) }
         previousSoftwareGpu?.let { NativeSoftwareGpu.swap(it) }
     }
@@ -116,13 +116,12 @@ class NativeTerminalSessionTest {
 
     private fun <T> ui(block: (MainActivity) -> T) = PageDriver.onActivity(block)
 
-    /** The Preferences page, Terminal and accessibility, where the engine for new sessions is chosen. */
-    private fun openEngineSettings() {
+    private fun openTerminalSettings(category: String = "Terminal and accessibility") {
         PageDriver.poll("the Preferences page", 60) {
             if (js("window.__lz.click(\"button[aria-label='Preferences']\") || window.__lz.click(\".dialog button\", \"Preferences\")") == "true") true
             else { js("window.__lz.click('button.mobile-tools') || window.__lz.click(\"button[aria-label='Workspace tools']\")"); null }
         }
-        click(".settings-navigation button", "Terminal and accessibility")
+        click(".settings-navigation button", category)
     }
 
     private fun revealHosts() = PageDriver.poll("the hosts list", 60) {
@@ -131,7 +130,7 @@ class NativeTerminalSessionTest {
     }
 
     private fun chooseNative() {
-        openEngineSettings()
+        openTerminalSettings()
         try { until("the Native engine offered", 60, "(() => { const r = document.querySelector(${quoted(native)}); return !!r && !r.disabled; })()") }
         catch (error: AssertionError) { throw AssertionError("${error.message}: ${text("#terminal-engine-native-off")}", error) }
         choose(native)
@@ -491,7 +490,7 @@ class NativeTerminalSessionTest {
 
     private fun checkXtermSshEcho() {
         val choice = "input[name='terminal-engine'][value='xterm']"
-        openEngineSettings()
+        openTerminalSettings()
         choose(choice)
         until("xterm chosen", 30, "document.querySelector(${quoted(choice)}).checked")
         click("button[aria-label='Close Preferences']")
@@ -711,7 +710,7 @@ class NativeTerminalSessionTest {
             assertEquals("the app build cannot offer the native core", false, probe.getBoolean("available"))
             val cell = PageDriver.invoke("native_terminal_surface_cell", "{fontSize:14,dpr:1}")
             assertEquals("the surface command reports the build-time switch", "error The native terminal is disabled in this build", cell)
-            openEngineSettings()
+            openTerminalSettings()
             until("Native disabled in Preferences", 30, "document.querySelector(${quoted(native)})?.disabled === true")
             click("button[aria-label='Close Preferences']")
             val prompt = quoted(fixture.getString("prompt").trim())
@@ -1025,11 +1024,11 @@ class NativeTerminalSessionTest {
                 "printf '\\ncjk:\\xe6\\x97\\xa5\\xe6\\x9c\\xac\\xe8\\xaa\\x9e|\\nemo:\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x9a\\x80|\\ncmb:e\\xcc\\x81a\\xcc\\x88|\\nzwj:\\xf0\\x9f\\x91\\xa8\\xe2\\x80\\x8d\\xf0\\x9f\\x91\\xa9|\\nend:|\\n'"
             )
             awaitRow(id, "the last printed line", { it == "end:|" })
-            val state = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
-            val top = state.getJSONObject("viewport").getInt("top")
-            val rowCount = state.getInt("rows")
-            // Plain-text output joins wrapped lines. Search gives the physical screen row.
+            // Plain-text output joins wrapped lines. Search gives the current physical screen row.
             fun rowOf(prefix: String): Int {
+                val state = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
+                val top = state.getJSONObject("viewport").getInt("top")
+                val rowCount = state.getInt("rows")
                 val args = JSONObject().put("sessionId", id).put("query", prefix)
                     .put("direction", "backward").put("from", top + rowCount)
                 val hit = JSONObject(PageDriver.invoke("terminal_core_search", args.toString()))
@@ -1075,6 +1074,44 @@ class NativeTerminalSessionTest {
             assertCells("combining", cmb, 4, 2, 6)
             // A ZWJ family is one glyph of two cells, not its members side by side.
             assertCells("ZWJ", zwj, 4, 2, 6)
+            if (evidence.getString("systemFonts").contains("NotoSerifCJK-Regular.ttc")) {
+                fun selectFallback(family: String) {
+                    openTerminalSettings("Appearance and fonts")
+                    act(
+                        """(() => {
+                            const label = [...document.querySelectorAll('label')].find(node => node.textContent.trim() === 'CJK fallback families');
+                            const field = label?.querySelector('input');
+                            if (!field) return false;
+                            field.id = 'lz-cjk-fallback';
+                            return true;
+                        })()""".trimIndent(),
+                        "the CJK fallback preference"
+                    )
+                    set("#lz-cjk-fallback", family)
+                    click("button[aria-label='Close Preferences']")
+                    assertEquals("the same native session after changing fonts", id, session())
+                }
+
+                fun captureFallback(what: String, match: (List<Int>) -> Boolean): List<Int> {
+                    val row = rowOf("cjk:")
+                    fun glyphs(image: Bitmap) = (0 until 3).map { cellPicture(image, cell, row, 4 + 2 * it, 2) }
+                    val image = settled(what) {
+                        cellInk(it, cell, row, 10) > 0 && match(glyphs(it))
+                    }
+                    Evidence.recordPicture("native-session-surface-$what", image)
+                    return glyphs(image)
+                }
+
+                selectFallback("Noto Serif CJK JP")
+                val serif = captureFallback("cjk-serif") { glyphs ->
+                    glyphs.toSet().size == 3 && glyphs.zip(pictures).all { (after, before) -> after != before }
+                }
+                evidence.put("cjkSerifPictures", serif.joinToString(","))
+                selectFallback("Noto Sans CJK SC")
+                captureFallback("cjk-sans") { it == pictures }
+            } else {
+                evidence.put("cjkFallbackPreference", "Noto Serif CJK unavailable on this image")
+            }
         }
     }
 }
