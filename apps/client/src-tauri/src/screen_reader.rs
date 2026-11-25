@@ -2,7 +2,8 @@
 //! the client's registry refuses it for a new session while this says yes, whether or not the user also turned on the in-app
 //! Screen reader announcements. The Kotlin plugin (`ScreenReaderPlugin.kt`) asks Android's accessibility manager: touch
 //! exploration, which TalkBack and its kin turn on, or an enabled service that speaks or brailles the screen. Linux
-//! asks AT-SPI whether the desktop has enabled accessibility.
+//! asks AT-SPI whether desktop accessibility is enabled. Windows checks for a UI Automation subscriber or the
+//! legacy screen-reader flag.
 use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
@@ -59,6 +60,32 @@ fn linux_accessibility_active() -> Result<bool, String> {
     }
 }
 
+#[cfg(all(target_os = "windows", native_terminal_core))]
+fn windows_accessibility_active() -> Result<bool, String> {
+    use windows_sys::Win32::UI::{
+        Accessibility::UiaClientsAreListening,
+        WindowsAndMessaging::{SystemParametersInfoW, SPI_GETSCREENREADER},
+    };
+
+    let mut screen_reader: windows_sys::core::BOOL = 0;
+    // SAFETY: The legacy query writes one BOOL to the stack; neither query changes system settings.
+    unsafe {
+        if UiaClientsAreListening() != 0 {
+            return Ok(true);
+        }
+        if SystemParametersInfoW(
+            SPI_GETSCREENREADER,
+            0,
+            (&mut screen_reader as *mut windows_sys::core::BOOL).cast(),
+            0,
+        ) == 0
+        {
+            return Err("The Windows accessibility status is unavailable".into());
+        }
+    }
+    Ok(screen_reader != 0)
+}
+
 /// Whether a screen reader is on. Like the probe it reads the device and nothing of the user's, so a locked app may ask: the
 /// engine Auto resolves to is announced at launch, before the app is unlocked.
 #[tauri::command]
@@ -72,14 +99,21 @@ pub async fn screen_reader_active(app: AppHandle) -> Result<bool, String> {
             .map(|status| status.active)
             .map_err(|_| "The Android accessibility state is unavailable".to_string())
     }
-    #[cfg(all(target_os = "linux", native_terminal_core))]
+    #[cfg(all(any(target_os = "linux", target_os = "windows"), native_terminal_core))]
     {
         let _ = app;
-        tauri::async_runtime::spawn_blocking(linux_accessibility_active)
+        #[cfg(target_os = "linux")]
+        let status = linux_accessibility_active;
+        #[cfg(target_os = "windows")]
+        let status = windows_accessibility_active;
+        tauri::async_runtime::spawn_blocking(status)
             .await
             .map_err(|error| error.to_string())?
     }
-    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
+    #[cfg(not(any(
+        target_os = "android",
+        all(any(target_os = "linux", target_os = "windows"), native_terminal_core)
+    )))]
     {
         let _ = app;
         Ok(false)
