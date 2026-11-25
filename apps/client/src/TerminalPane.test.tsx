@@ -79,6 +79,20 @@ it('mirrors a native session\'s rows for a screen reader while that preference i
   view.unmount();
   await adapter.dispose();
 });
+it('enables the xterm accessibility tree when the Linux desktop requests accessibility', async () => {
+  const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (X11; Linux x86_64)');
+  vi.stubGlobal('isTauri', true);
+  mocks.invoke.mockImplementation(async command => command === 'screen_reader_active' ? true : undefined);
+  try {
+    const view = mount();
+    await waitFor(() => expect(terminal.options).toHaveProperty('screenReaderMode', true));
+    expect(getPreferences().screenReader).toBe(false);
+    view.unmount();
+  } finally {
+    userAgent.mockRestore();
+  }
+});
+
 describe('toolbar keys on a native session (#2493)',()=>{
   const keys = ['esc','tab','enter','backspace','left','up','down','right','Home','End','PageUp','PageDown','Insert','Delete','F1','F5','F12','c','|'] as const;
   const modifiers = [undefined,'ctrl','meta','shift'] as const;
