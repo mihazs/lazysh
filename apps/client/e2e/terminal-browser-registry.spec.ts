@@ -41,7 +41,7 @@ for(const text of ['你好','👩🏽‍💻'])test(`native composition and Ente
   }
 });
 
-test('a terminal clipboard request needs consent on the selected browser backend',async({page})=>{
+for(const action of ['Allow this copy','Deny'])test(`a terminal clipboard request honors "${action}" on the selected browser backend`,async({page})=>{
   const engine=requestedBackend()??'native';
   await mountNativeSurface(page,engine);
   try {
@@ -57,9 +57,9 @@ test('a terminal clipboard request needs consent on the selected browser backend
     await expect(consent).toContainText('terminal clipboard marker');
     await expect.poll(()=>screenText(page)).toContain('visible after OSC');
     expect(await clipboard()).toBe('before consent');
-    await consent.getByRole('button',{name:'Allow this copy',exact:true}).click();
-    await expect.poll(clipboard).toBe('terminal clipboard marker');
+    await consent.getByRole('button',{name:action,exact:true}).click();
     await expect(consent).toHaveCount(0);
+    await expect.poll(clipboard).toBe(action==='Deny'?'before consent':'terminal clipboard marker');
   } finally {
     await page.evaluate(()=>window.nativeSurface.dispose());
   }
