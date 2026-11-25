@@ -34,24 +34,4 @@ Layers and where they run:
 | The same contract over the real core | `nativeTerminalAdapter.realCore.test.ts` | Vitest over the real core | `herdr-native` |
 | Adapter semantics: window of rows, paste bracketing, wheel, search, canonical Mosh resize, input order | `nativeTerminalAdapter.test.ts` | Vitest | `client` |
 | Renderer look (theme, font, cursor, bold) sent once per change | `nativeTerminalAdapter.look.test.ts`; `panes.rs` host tests | Vitest; Rust | `client`; `native-terminal-bridge` |
-| Custom bold colour reaches the native surface and colours default-foreground bold glyphs | `terminalBackends.contract.test.ts`; `terminal-renderer-wgpu/tests/text.rs` | Vitest; wgpu pixel readback | `client`; renderer suite |
-| Grid follows the pane and the display density | `nativeTerminalAdapter.fit.test.ts`; `nativeTerminalAdapter.realCore.test.ts` 'sizes the real core to its pane' | Vitest | `client`; `herdr-native` |
-| History lines setting reaches an open session: the core keeps the new number of rows, a cut drops the oldest at once | `nativeTerminalAdapter.test.ts` 'native History lines setting'; `tauriNativeCoreBridge.test.ts`; `nativeTerminalAdapter.realCore.test.ts`; `packages/terminal-runtime/tests/scrollback.rs`; `local.rs` `the_real_core_keeps_the_history_lines_the_setting_changed_to` | Vitest; Vitest over the real core; Rust | `client`; `herdr-native`; `native-terminal-bridge` |
-| Imported fonts reach the app before the look | `nativeTerminalAdapter.fonts.test.ts` | Vitest | `client` |
-| Pinch zoom and configured touch gestures over a native pane | `TerminalPane.test.tsx` 'page features over a native pane' (pinch; two-finger swipe, tap and swipe) | Vitest | `client` |
-| Find, toolbar Paste, OSC 52 consent, Select all, Copy screen over a native pane | `TerminalPane.test.tsx` 'page features over a native pane'; 'selection on a native session' | Vitest | `client` |
-| Touch selection, handles and Copy | `TerminalPane.test.tsx` 'selection on a native session' | Vitest | `client` |
-| Mouse selection, mouse reports, Shift-drag and edge scrolling | `nativePointerSelection.test.ts` | Vitest | `client` |
-| Links: URL, OSC 8, host paths | `nativeLinkTap.test.ts`; `nativeTerminalAdapter.realCore.test.ts` (links.json) | Vitest | `client`; `herdr-native` |
-| Hardware keyboard, IME composition, key interceptor, Shift+PageUp | `e2e/terminal-native-input.spec.ts` | Playwright | `client` |
-| Soft keyboard text, keys and preedit on Android | `nativeSurfaceInput.test.ts`; `NativeTerminalInputTest` | Vitest; instrumentation | `client`; `native-android-runtime` |
-| Finger scroll over the surface, surface placement and teardown | `e2e/terminal-native-surface.spec.ts` | Playwright | `client` |
-| A native session draws the shell, takes typing, redraws after stop and start; hosts tmux with its status line and panes | `NativeTerminalSessionTest` | Instrumentation | `native-android-terminal-session` |
-| The core runs inside the app | `NativeTerminalCoreTest` | Instrumentation | `native-android-terminal-core` |
-| Screen reader: mirror of the rows, or refusal | `terminalBackends.test.ts`; `TerminalPane.test.tsx` 'mirrors a native session's rows'; `androidScreenReader.test.ts`; `NativeScreenReaderTest` | Vitest; instrumentation | `client`; `native-android-runtime` |
-| Engine choice, kill switch, reason line, fallback, Switch to xterm.js | `e2e/terminal-engine-setting.spec.ts`; `e2e/terminal-engine-diagnostic.spec.ts`; `terminalBackendRegistry.test.ts`; `App.terminalEngine.test.tsx`; `App.nativeSession.test.tsx`; `nativeHandback.test.ts` | Playwright; Vitest | `client` |
-| Herdr navigation cells on both engines | `herdrNavigationCells.test.ts` | Vitest | `client` |
-
-## Gaps that still need a test
-
-Each open gap has an issue that names its test; the table is the list of tests to add next: [#2501](https://github.com/mihazs/lazysh/issues/2501) selection, Copy and link taps on a placed surface; [#2502](https://github.com/mihazs/lazysh/issues/2502) rotation, keyboard insets and recreation; [#2500](https://github.com/mihazs/lazysh/issues/2500) multiplexer pages; [#2503](https://github.com/mihazs/lazysh/issues/2503) keyboard behaviour that read a DOM editor; [#2507](https://github.com/mihazs/lazysh/issues/2507) fonts on Android; [#2506](https://github.com/mihazs/lazysh/issues/2506) bold colour. A pull request that closes one adds its row here.
+| Cursor style and blink at native core open, after preference changes, and after DECSCUSR reset | `tauriNativeCoreBridge.test.ts`; `terminal_core.rs`; `terminal-runtime/tests/renderer.rs`; native renderer host pixel test | Vitest; Rust frame and pixel checks | `client`; `herdr-native`; `native-terminal-bridge` |

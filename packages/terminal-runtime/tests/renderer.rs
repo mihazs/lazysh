@@ -202,9 +202,13 @@ fn the_preferred_cursor_is_drawn_until_a_program_chooses_its_own_and_again_when_
         (Block, false),
         "the VT's own cursor, the preference not set"
     );
-    rt.set_cursor_default(Some(bar));
-    assert_eq!(shape(&mut rt), (Bar, true), "nothing sent: the preference");
-    // A steady block is the VT's own default too, so only the bytes tell a choice from none.
+    let mut rt = TerminalRuntime::new(lazysh_terminal_runtime::Config {
+        size: lazysh_terminal_runtime::Size::new(10, 2),
+        cursor_default: Some(bar),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(shape(&mut rt), (Bar, true), "the opening preference");
     for (bytes, expected, why) in [
         (
             &b"\x1b[2 q"[..],
@@ -235,14 +239,25 @@ fn the_preferred_cursor_is_drawn_until_a_program_chooses_its_own_and_again_when_
     assert_eq!(shape(&mut rt), (Underline, true));
     feed(&mut rt, b"\x1b[7 q\x1b[?2 q");
     assert_eq!(shape(&mut rt), (Underline, true), "the VT ignores them too");
-    // The preference changes live, and switching it off leaves the VT's cursor.
-    feed(&mut rt, b"\x1b[0 q");
+    // A live preference is saved while explicit styling is active.
+    feed(&mut rt, b"\x1b[2 q");
     rt.set_cursor_default(Some(CursorDefault {
         style: Underline,
         blink: false,
-    }));
-    assert_eq!(shape(&mut rt), (Underline, false));
-    rt.set_cursor_default(None);
+    }))
+    .unwrap();
+    assert_eq!(
+        shape(&mut rt),
+        (Block, false),
+        "explicit cursor still active"
+    );
+    feed(&mut rt, b"\x1b[0 q");
+    assert_eq!(
+        shape(&mut rt),
+        (Underline, false),
+        "reset applies the updated preference"
+    );
+    rt.set_cursor_default(None).unwrap();
     assert_eq!(shape(&mut rt), (Block, false));
 }
 
@@ -252,10 +267,10 @@ fn a_frame_is_made_when_only_the_cursors_choice_changed_what_is_drawn() {
     rt.set_cursor_default(Some(CursorDefault {
         style: CursorVisualStyle::Bar,
         blink: false,
-    }));
+    }))
+    .unwrap();
     rt.snapshot().unwrap();
     assert!(rt.take_frame().unwrap().is_none(), "nothing changed");
-    // The VT's state is the same steady block before and after; what is drawn is not.
     feed(&mut rt, b"\x1b[2 q");
     let frame = rt.take_frame().unwrap().expect("the cursor changed");
     assert_eq!(frame.cursor.visual_style, CursorVisualStyle::Block);

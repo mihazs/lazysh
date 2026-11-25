@@ -131,6 +131,19 @@ pub enum CursorStyle {
     Bar,
 }
 
+#[cfg(native_terminal_core)]
+impl CursorStyle {
+    pub(crate) fn with_blink(self, blink: bool) -> lazysh_terminal_runtime::CursorDefault {
+        use lazysh_terminal_runtime::{CursorDefault, CursorVisualStyle};
+        let style = match self {
+            Self::Bar => CursorVisualStyle::Bar,
+            Self::Block => CursorVisualStyle::Block,
+            Self::Underline => CursorVisualStyle::Underline,
+        };
+        CursorDefault { style, blink }
+    }
+}
+
 /// How the renderer draws a session: the preferences that decide its colours, glyphs and cursor. The theme is the
 /// client's `TerminalTheme`, as `terminal_core_theme` takes it, and `font_size` is in CSS pixels (what a pinch
 /// changes); the cursor is the one a program that never chose its own has.

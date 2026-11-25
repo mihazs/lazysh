@@ -12,7 +12,6 @@
 mod blink;
 mod clipboard;
 mod colors;
-mod cursor;
 mod doorbell;
 mod frame;
 mod hub;

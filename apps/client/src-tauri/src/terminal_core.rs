@@ -142,6 +142,8 @@ pub(crate) struct CoreConfig {
     pub(crate) theme: Option<Json>,
     /// The session's transport is Mosh: its frames decide the grid's size and the renderer's sizes are only intent.
     pub(crate) canonical_frames: bool,
+    pub(crate) cursor_style: Option<crate::native_terminal_surface::CursorStyle>,
+    pub(crate) cursor_blink: bool,
 }
 
 /// Most text one paste (or one committed text) may carry, the limit `write_stdin` puts on a paste.
@@ -1516,6 +1518,9 @@ mod native {
             ingress_bytes: crate::ssh::OUTPUT_WINDOW as usize,
             canonical_frames: open.canonical_frames,
             theme: theme.unwrap_or(defaults.theme),
+            cursor_default: open
+                .cursor_style
+                .map(|style| style.with_blink(open.cursor_blink)),
         };
         Ok(Box::new(move || {
             let (core, link) = create(config, &lease, move |event| {
@@ -2151,6 +2156,40 @@ mod native {
                 })),
                 ..CoreConfig::default()
             }
+        }
+
+        #[tokio::test]
+        #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+        async fn the_core_opens_with_the_preferred_cursor_and_resets_to_it() {
+            use crate::native_terminal_surface::CursorStyle;
+            use lazysh_terminal_runtime::CursorVisualStyle::{Bar, Block};
+
+            let _kept = tests_keeping_cores().read();
+            let opened = opened(
+                "cursor-default",
+                Some(CoreConfig {
+                    cursor_style: Some(CursorStyle::Bar),
+                    cursor_blink: true,
+                    ..CoreConfig::default()
+                }),
+            )
+            .await;
+            let (session, _) = opened.core.drawing().unwrap();
+            let cursor = || {
+                session
+                    .with(|runtime| runtime.snapshot().unwrap().cursor)
+                    .unwrap()
+            };
+            let style = || {
+                let cursor = cursor();
+                (cursor.visual_style, cursor.blinking)
+            };
+
+            assert_eq!(style(), (Bar, true));
+            opened.answers_to(b"\x1b[2 q");
+            assert_eq!(style(), (Block, false));
+            opened.answers_to(b"\x1b[0 q");
+            assert_eq!(style(), (Bar, true));
         }
 
         const COLOUR_QUERIES: &[u8] =

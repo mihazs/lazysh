@@ -67,6 +67,15 @@ describe('the native core over the Tauri commands', () => {
     await adapter.dispose();
   });
 
+  it('opens the core with the configured cursor before attaching a transport', async () => {
+    const {adapter} = await createNativeTerminalAdapter({
+      columns: 80, rows: 24, scrollbackLines: 5000, cursorStyle: 'bar', cursorBlink: true,
+    });
+    expect(commands()).toEqual(['terminal_core_open']);
+    expect(invoke.mock.calls[0][1]).toMatchObject({config: {cursorStyle: 'bar', cursorBlink: true}});
+    await adapter.dispose();
+  });
+
   it('turns the commands\' answers into the adapter\'s state, with the History lines it opened the core with', async () => {
     const {adapter} = await open();
     adapter.scroll({kind: 'toTop'});

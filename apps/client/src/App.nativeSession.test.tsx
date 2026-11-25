@@ -47,7 +47,7 @@ it('starts a Mosh session on the native engine: the core opens for Mosh frames, 
   mocks.api.connect.mockResolvedValueOnce({sessionId: 'ssh-control'});
   mocks.api.connectMosh.mockResolvedValueOnce({sessionId: 'core-mosh'});
   mocks.invoke.mockImplementation(async (command: string) => command === 'transport_capabilities' ? {mosh: true} : command === 'terminal_core_available' || command === 'native_terminal_probe' ? {available: true} : undefined);
-  act(() => savePreferences({...getPreferences(), terminalEngine: 'native'}));
+  act(() => savePreferences({...getPreferences(), terminalEngine: 'native', cursorStyle: 'underline', cursorBlink: false}));
   const user = await openConnection();
   await selectConnectionTransport(user, 'mosh');
   await user.click(screen.getByRole('button', {name: 'Connect'}));
@@ -58,7 +58,7 @@ it('starts a Mosh session on the native engine: the core opens for Mosh frames, 
   const session = mocks.terminalPaneProps.mock.calls.map(([props]) => props.session as LiveSession).find(live => live.id === 'core-mosh')!;
   expect(session.adapter).toMatchObject({backend: 'native', dataPath: 'runtime'});
   expect(session.selection).toMatchObject({id: 'native', reason: 'preference'});
-  expect(mocks.invoke).toHaveBeenCalledWith('terminal_core_open', expect.objectContaining({config: {canonicalFrames: true}}), expect.anything());
+  expect(mocks.invoke).toHaveBeenCalledWith('terminal_core_open', expect.objectContaining({config: {canonicalFrames: true, cursorStyle: 'underline', cursorBlink: false}}), expect.anything());
   expect(session.moshResize).toBeDefined();
   expect(session.connected).toBe(true);
   // The core applies the frames itself: its refusal of one is how the app learns the display cannot follow the transport.
