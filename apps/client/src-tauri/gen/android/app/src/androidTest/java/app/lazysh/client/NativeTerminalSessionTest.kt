@@ -669,14 +669,7 @@ class NativeTerminalSessionTest {
             window.__lz.find(${quoted(screen)}).querySelectorAll('.xterm-rows > div'),
             row => row.textContent.trimEnd()).includes($finalGrid)""")
         assertTrue("xterm did not create a native surface", ui { TerminalSurfaces.ids().isEmpty() })
-        val ownedTabClose = ".session-tabs button[aria-label='Disconnect $hostName']"
-        act("""(() => {
-            const buttons = document.querySelectorAll(${quoted(ownedTabClose)});
-            if (buttons.length !== 1 || buttons[0].disabled) return false;
-            buttons[0].click();
-            return true;
-        })()""", "disconnect the exact owned SSH tab")
-        until("the owned xterm session to close", 30, "!document.querySelector(${quoted(ownedTabClose)})")
+        closeOwnedXtermTab()
         val inputSha256 = java.security.MessageDigest.getInstance("SHA-256")
             .digest(expected.toByteArray(Charsets.US_ASCII)).joinToString("") { "%02x".format(it) }
         val record = JSONObject().put("engine", "xterm").put("transport", "ssh").put("inputSha256", inputSha256)
@@ -690,7 +683,56 @@ class NativeTerminalSessionTest {
         instrumentation.sendStatus(2, android.os.Bundle().apply { putString("lazyshXtermSshEcho", record.toString()) })
     }
 
+    private fun closeOwnedXtermTab() {
+        val ownedTabClose = ".session-tabs button[aria-label='Disconnect $hostName']"
+        act("""(() => {
+            const buttons = document.querySelectorAll(${quoted(ownedTabClose)});
+            if (buttons.length !== 1 || buttons[0].disabled) return false;
+            buttons[0].click();
+            return true;
+        })()""", "disconnect the exact owned SSH tab")
+        until("the owned xterm session to close", 30, "!document.querySelector(${quoted(ownedTabClose)})")
+    }
+
+    private fun checkBuildTimeKillSwitch() {
+        val override = js("localStorage.getItem('lazysh.terminal.backend')")
+        js("""(() => {
+            const key = 'lazysh.preferences.v1';
+            const preferences = JSON.parse(localStorage.getItem(key) ?? '{}');
+            localStorage.setItem(key, JSON.stringify({...preferences, version: 1, terminalEngine: 'native'}));
+            localStorage.setItem('lazysh.terminal.backend', 'native');
+            return true;
+        })()""")
+        try {
+            scenario.recreate()
+            PageDriver.awaitStartPage()
+            PageDriver.js(driver)
+            val probe = JSONObject(PageDriver.invoke("native_terminal_probe"))
+            assertEquals("the app build cannot offer the native core", false, probe.getBoolean("available"))
+            val cell = PageDriver.invoke("native_terminal_surface_cell", "{fontSize:14,dpr:1}")
+            assertEquals("the surface command reports the build-time switch", "error The native terminal is disabled in this build", cell)
+            openEngineSettings()
+            until("Native disabled in Preferences", 30, "document.querySelector(${quoted(native)})?.disabled === true")
+            click("button[aria-label='Close Preferences']")
+            val prompt = quoted(fixture.getString("prompt").trim())
+            val ready = """(() => {
+                const rows = document.querySelector('.terminal-canvas .xterm-rows');
+                return rows?.textContent.trimEnd() === $prompt && !document.querySelector(${quoted(nativePane)});
+            })()"""
+            connect(ready)
+            until("the real SSH prompt in xterm", 30, ready)
+            closeOwnedXtermTab()
+            Evidence.record("native-kill-switch", JSONObject().put("probe", probe).put("nativeChoiceDisabled", true).put("sshPromptDrawnInXterm", true))
+        } finally {
+            js("(() => { const prior = $override; if (prior === null) localStorage.removeItem('lazysh.terminal.backend'); else localStorage.setItem('lazysh.terminal.backend', prior); return true; })()")
+        }
+    }
+
     @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() {
+        if (InstrumentationRegistry.getArguments().getString("lazyshKillSwitch") == "true") {
+            checkBuildTimeKillSwitch()
+            return
+        }
         val idlePort = InstrumentationRegistry.getArguments().getString("lazyshIdleBenchPort")
         if (idlePort != null) {
             measureIdle(idlePort.toInt())
