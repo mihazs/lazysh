@@ -10,14 +10,16 @@ import {accessSnapshot,applyAccessStatus} from '../../src/access';
 import '../../src/styles.css';
 
 /** Synthetic remote screen only: no host, transport or private terminal content. */
-export function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false,edgeLog,edgeClose}:{mosh?:boolean;input?:(data:string)=>void;topAnchored?:boolean;edgeLog?:string[];edgeClose?:boolean}={}) {
+export function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false,edgeLog,edgeClose,fixedGrid}:{mosh?:boolean;input?:(data:string)=>void;topAnchored?:boolean;edgeLog?:string[];edgeClose?:boolean;fixedGrid?:{cols:number;rows:number}}={}) {
   applyAccessStatus({initialized:true,supported:true,reason:'Synthetic browser access fixture.',enabled:true,locked:false,
     generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'a'.repeat(64)});
   const host=document.createElement('section');
   Object.assign(host.style,{position:'fixed',inset:'0',zIndex:'100',display:'flex',flexDirection:'column',background:'#101010'});
   document.body.append(host);
   const terminal=createTerminal();
-  const session:LiveSession={id:mosh?'mosh-history-fixture':'ssh-history-fixture',hostId:'fixture',name:'History fixture',destination:'fixture',terminal,adapter:new XtermTerminalAdapter(terminal),connected:true};
+  const adapter=new XtermTerminalAdapter(terminal);
+  if(fixedGrid)adapter.fit=()=>terminal.resize(fixedGrid.cols,fixedGrid.rows);
+  const session:LiveSession={id:mosh?'mosh-history-fixture':'ssh-history-fixture',hostId:'fixture',name:'History fixture',destination:'fixture',terminal,adapter,connected:true};
   if(mosh)session.moshResize=installMoshResize(terminal);
   const errors:string[]=[],writes:string[]=[],opened:string[]=[],resizes:{cols:number;rows:number}[]=[];
   // The remote screen model repaints its last rows on each canonical Mosh frame.

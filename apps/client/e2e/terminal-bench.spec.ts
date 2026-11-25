@@ -15,6 +15,11 @@ import { medianOf, rng } from '../bench/workloads';
 const full = process.env.LAZYSH_BENCH === 'full';
 // The renderer candidate on the same xterm.js terminal: dom (the baseline), canvas or webgl (the shootout, #1323).
 const candidate = process.env.LAZYSH_BENCH_RENDERER ?? 'dom';
+const grid = process.env.LAZYSH_BENCH_GRID;
+const dimensions = grid?.match(/^([1-9][0-9]{0,2})x([1-9][0-9]{0,2})$/);
+const fixedGrid = dimensions ? { cols: Number(dimensions[1]), rows: Number(dimensions[2]) } : undefined;
+if (grid !== undefined && (!fixedGrid || fixedGrid.cols < 20 || fixedGrid.cols > 200 || fixedGrid.rows < 5 || fixedGrid.rows > 100))
+  throw new Error('LAZYSH_BENCH_GRID must be COLSxROWS within 20–200 columns and 5–100 rows');
 // Extra Chromium switches, recorded in the environment block (for example to pick a GL backend).
 const launchArgs = setUpBenchSpec(full);
 // Where the bytes enter the terminal: xterm's own write (the recorded baseline) or XtermTerminalAdapter.write (what App.tsx calls).
@@ -31,6 +36,17 @@ const results: Result[] = [];
 let geometry: Awaited<ReturnType<Page['evaluate']>> & Record<string, unknown> = {};
 let fixtures: Record<string, unknown> = {};
 
+if (!full) test('the fixed benchmark grid survives a viewport resize', async ({ page, baseURL }) => {
+  test.skip(androidSerial !== null, 'The Playwright viewport applies to desktop Chromium.');
+  await page.goto(benchUrl(baseURL, 'renderer=dom&write=adapter'));
+  await page.waitForFunction(() => !!window.terminalBench);
+  const grid = { cols: 49, rows: 15 };
+  expect(await page.evaluate(size => window.terminalBench.open(size), grid)).toMatchObject(grid);
+  await page.setViewportSize({ width: 820, height: 520 });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await page.evaluate(() => window.terminalBench.open())).toMatchObject(grid);
+});
+
 for (const writePath of writePaths) test(`terminal baseline, ${writePath} write path`, async ({ page, browser, browserName, baseURL }, info) => {
   const atStart = os.loadavg();
   test.skip(browserName !== 'chromium', 'CDP process metrics need Chromium.');
@@ -46,7 +62,8 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
   /** Total PSS of the host app and its renderer processes (null on a desktop run), after a forced GC. */
   const pssKiB = async () => { if (!probe) return null; await cdp.send('HeapProfiler.collectGarbage'); return probe.pssKiB(); };
   await cdp.send('Performance.enable');
-  geometry = await page.evaluate(() => window.terminalBench.open());
+  geometry = await page.evaluate(size => window.terminalBench.open(size), fixedGrid);
+  if (fixedGrid) expect(geometry).toMatchObject(fixedGrid);
   await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
   if (full) expect(geometry.build, 'Release builds only: run through bun run bench:terminal').toBe('production');
   // The candidate must really be drawing: canvas layers exist for the canvas and WebGL renderers and only for them.
@@ -160,6 +177,7 @@ for (const writePath of writePaths) test(`terminal baseline, ${writePath} write 
   }, 'churn', 'Total PSS of the app and its renderer processes after each cycle, after a forced GC.');
 
   expect(await page.evaluate(() => window.terminalBench.contextLosses()), 'a lost WebGL context falls back to the DOM renderer and invalidates the run').toBe(0);
+  if (fixedGrid) expect(await page.evaluate(() => window.terminalBench.open())).toMatchObject(fixedGrid);
   const seams = await page.evaluate(() => window.terminalBench.seams());
   if (candidate === 'dom') expect(seams.customBoldColor, 'the baseline renderer supports the custom bold color seam').toBe('applied');
   const adapterWrites = await page.evaluate(() => window.terminalBench.adapterWrites());
