@@ -77,10 +77,9 @@ skip the gate and run every job with the full matrix, which is the parity eviden
 Most jobs that are not required to merge never run on a pull request, whatever its paths:
 companion candidates, desktop (macOS, Windows), the Windows client against a Linux host, iOS simulator, Android Mosh, Herdr navigation,
 auxiliary, ntfy, the terminal core and renderer on macOS (`terminal-macos`, report-only) and the terminal core on iOS (`terminal-ios`, report-only). They run on pushes to `main`, and `main-verdict.yml` reports them there. The
-terminal performance gate (`terminal-perf`, report-only) is the exception: it also runs on a pull request that selects the
-terminal runtime area, so a regression shows on the pull request that causes it. The
-table below lists what a change can affect, and a pull request runs only the required jobs of
-that list plus `terminal-perf`. The macOS surface probe (`terminal-macos-surface.yml`, report-only) is its own workflow rather than a job here: it runs on a pull request or a push that changes the probe or the workflow, and not otherwise.
+terminal performance benchmark (`terminal-perf`) also runs on a pull request that selects the
+terminal runtime area. The `terminal-perf-verdict` job runs on every pull request and fails if classification fails or a selected benchmark does not pass.
+The table below lists what a change can affect. The macOS surface probe (`terminal-macos-surface.yml`, report-only) is its own workflow rather than a job here: it runs on a pull request or a push that changes the probe or the workflow, and not otherwise.
 The exception is the official Gotify Android lane (`native-android-gotify`): it is not required to merge either, but it also runs on a pull request that changes its owner or the relay, so a change to the lane is qualified before it lands.
 
 | Changed paths | Native jobs on the pull request |

@@ -65,6 +65,8 @@ async function runningJobs(outputs: Outputs, event = 'push') {
   const binaries = (await workflow('companion-artifacts.yml')).jobs.binary.strategy.matrix.include.length;
   const jobs: Record<string, number> = {};
   for (const [id, job] of Object.entries<any>(checks.jobs)) {
+    // This verdict observes failures as well as success, so it has its own cases below.
+    if (id === 'terminal-perf-verdict') continue;
     if (job.needs !== undefined) {
       const output = /^needs\.changes\.outputs\.([a-z_]+) == 'true'$/.exec(job.if)?.[1];
       expect(output, id).toBeDefined();
@@ -86,6 +88,30 @@ async function runningJobs(outputs: Outputs, event = 'push') {
   }
   return jobs;
 }
+
+test.each([
+  ['success', 'false', 'skipped', 0],
+  ['success', 'true', 'success', 0],
+  ['success', 'true', 'failure', 1],
+  ['success', 'true', 'cancelled', 1],
+  ['success', 'true', 'skipped', 1],
+  ['success', '', 'skipped', 1],
+  ['failure', 'false', 'skipped', 1],
+] as const)('terminal performance verdict: changes %s, selected %s, benchmark %s', async (changes, selected, benchmark, code) => {
+  const job = checks.jobs['terminal-perf-verdict'];
+  expect(job.needs).toEqual(['changes', 'terminal-perf']);
+  expect(job.if).toBe("always() && github.event_name == 'pull_request'");
+  const verdict = job.steps[0];
+  expect(verdict.env).toEqual({
+    CHANGES_RESULT: '${{ needs.changes.result }}',
+    PERF_SELECTED: '${{ needs.changes.outputs.terminal_perf }}',
+    PERF_RESULT: '${{ needs.terminal-perf.result }}',
+  });
+  const result = await run(project, ['sh', '-c', verdict.run], {
+    ...process.env, CHANGES_RESULT: changes, PERF_SELECTED: selected, PERF_RESULT: benchmark,
+  });
+  expect(result.code).toBe(code);
+});
 
 const neverNightly = "github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
@@ -286,6 +312,7 @@ test('every native job waits only for the gate and same-run Herdr bytes, and eve
   expect(Object.keys(declared).sort()).toEqual(Object.keys(everything).sort());
   for (const [id, job] of Object.entries<any>(checks.jobs)) {
     if (['changes', 'client', 'agent'].includes(id)) { expect(job.needs, id).toBeUndefined(); continue; }
+    if (id === 'terminal-perf-verdict') continue;
     const needs = [job.needs].flat();
     expect(needs[0], id).toBe('changes');
     expect(needs.slice(1).every(need => need === 'herdr-native'), id).toBe(true);

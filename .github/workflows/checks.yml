@@ -589,6 +589,24 @@ jobs:
             { echo "### Injected $mode regression (must fail)"; cat "$RUNNER_TEMP/inject-$mode.md"; } >> "$GITHUB_STEP_SUMMARY"
           done
 
+  terminal-perf-verdict:
+    needs: [changes, terminal-perf]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a valid terminal performance result
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          PERF_SELECTED: ${{ needs.changes.outputs.terminal_perf }}
+          PERF_RESULT: ${{ needs.terminal-perf.result }}
+        run: |
+          case "$CHANGES_RESULT:$PERF_SELECTED:$PERF_RESULT" in
+            success:false:skipped|success:true:success) exit 0 ;;
+          esac
+          echo "::error::Terminal performance gate could not pass (changes=$CHANGES_RESULT, selected=$PERF_SELECTED, benchmark=$PERF_RESULT)"
+          exit 1
+
   # The terminal core and the wgpu renderer on Apple silicon (#1333). herdr-native and terminal-perf compile
   # them for Linux and Android only; here libghostty-vt is built by Zig against the runner's Apple SDK and
   # the core and renderer crates are built and tested for aarch64-apple-darwin, the renderer on Metal. The
