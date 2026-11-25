@@ -1,9 +1,12 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, test, vi } from 'vitest';
 import { packagedSshEcho } from './androidEngineBench';
+
+// Resolve the host Bun before the fixture shadows it for the nested runner.
+const bun = execFileSync('bun', ['--eval', 'process.stdout.write(process.execPath)'], { encoding: 'utf8' });
 
 function runBaseline(receiptPath?: string) {
   const dir = mkdtempSync(join(tmpdir(), 'lazysh-android-baseline-'));
@@ -16,7 +19,7 @@ writes=0
 if [ "$path" = adapter ]; then writes=1; fi
 printf '{"writePath":"%s","adapterWrites":%s,"toolchain":{"xterm":"5.5.0"},"page":{},"results":[]}' "$path" "$writes" > "$LAZYSH_BENCH_OUT"
 `, { mode: 0o700 });
-    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'androidEngineBench.ts'), '--out', out, '--serial', 'emulator-5554'], {
+    const result = spawnSync(bun, [join(import.meta.dirname, 'androidEngineBench.ts'), '--out', out, '--serial', 'emulator-5554'], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, LAZYSH_BENCH_WRITE: 'direct', TEST_RECEIPT_PATH: receiptPath ?? '' },
     });
