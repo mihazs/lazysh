@@ -76,9 +76,13 @@ export const test = base.extend({
     adb('reverse', `tcp:${new URL(baseURL!).port}`, `tcp:${new URL(baseURL!).port}`);
     adb('shell', 'am', 'start', '-S', '-W', '-n', `${WEBVIEW_HOST}/.WebActivity`, '--es', 'url', 'about:blank');
     const port = adb('forward', 'tcp:0', `localabstract:webview_devtools_remote_${adb('shell', 'pidof', WEBVIEW_HOST).split(/\s+/)[0]}`);
-    // The debugging socket answers a moment after the process starts.
-    const browser = await retry(() => playwright.chromium.connectOverCDP(`http://127.0.0.1:${port}`), 20);
-    try { await use(browser.contexts()[0].pages()[0]); } finally { await browser.close(); adb('forward', '--remove', `tcp:${port}`); }
+    try {
+      // Android WebView has no browser context management. Its debugging socket can take a moment to answer.
+      const browser = await retry(() => playwright.chromium.connectOverCDP(`http://127.0.0.1:${port}`, { noDefaults: true }), 20);
+      try { await use(browser.contexts()[0].pages()[0]); } finally { await browser.close(); }
+    } finally {
+      adb('forward', '--remove', `tcp:${port}`);
+    }
   },
 });
 
