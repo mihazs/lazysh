@@ -4045,6 +4045,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "whisper-rs",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
