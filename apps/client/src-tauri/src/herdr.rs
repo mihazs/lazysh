@@ -772,10 +772,17 @@ pub async fn herdr_action(
 
 #[cfg(all(test, unix))]
 pub(crate) fn isolate_test_socket(command: &mut std::process::Command, home: &std::path::Path) {
-    command
-        .env("HERDR_SOCKET_PATH", home.join("herdr.sock"))
-        .env_remove("HERDR_CLIENT_SOCKET_PATH")
-        .env_remove("HERDR_SESSION");
+    command.env("HERDR_SOCKET_PATH", home.join("herdr.sock"));
+    for name in [
+        "HERDR_CLIENT_SOCKET_PATH",
+        "HERDR_SESSION",
+        "HERDR_ENV",
+        "HERDR_PANE_ID",
+        "HERDR_TAB_ID",
+        "HERDR_WORKSPACE_ID",
+    ] {
+        command.env_remove(name);
+    }
 }
 
 #[cfg(test)]
@@ -792,8 +799,16 @@ mod tests {
             overrides[OsStr::new("HERDR_SOCKET_PATH")],
             Some(home.join("herdr.sock").as_os_str()),
         );
-        assert_eq!(overrides[OsStr::new("HERDR_CLIENT_SOCKET_PATH")], None);
-        assert_eq!(overrides[OsStr::new("HERDR_SESSION")], None);
+        for name in [
+            "HERDR_CLIENT_SOCKET_PATH",
+            "HERDR_SESSION",
+            "HERDR_ENV",
+            "HERDR_PANE_ID",
+            "HERDR_TAB_ID",
+            "HERDR_WORKSPACE_ID",
+        ] {
+            assert_eq!(overrides[OsStr::new(name)], None, "{name}");
+        }
     }
 
     use super::*;
