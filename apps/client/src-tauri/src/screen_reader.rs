@@ -1,8 +1,8 @@
-//! Whether an Android screen reader is on (#1329). The native terminal draws on a GPU surface with no text a reader can reach, so
+//! Whether a mobile screen reader is on (#1329, #1335). The native terminal draws on a GPU surface with no text a reader can reach, so
 //! the client's registry refuses it for a new session while this says yes, whether or not the user also turned on the in-app
 //! Screen reader announcements. The Kotlin plugin (`ScreenReaderPlugin.kt`) asks Android's accessibility manager: touch
-//! exploration, which TalkBack and its kin turn on, or an enabled service that speaks or brailles the screen. Every other
-//! platform answers no: iOS and the desktop have their own accessibility paths and the registry's in-app preference.
+//! exploration, which TalkBack and its kin turn on, or an enabled service that speaks or brailles the screen. UIKit
+//! reports VoiceOver directly. Desktop continues to use the registry's in-app preference.
 use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
@@ -45,7 +45,16 @@ pub async fn screen_reader_active(app: AppHandle) -> Result<bool, String> {
             .map(|status| status.active)
             .map_err(|_| "The Android accessibility state is unavailable".to_string())
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(target_os = "ios", native_terminal_core))]
+    {
+        let (answer, asked) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = answer.send(objc2_ui_kit::UIAccessibilityIsVoiceOverRunning());
+        })
+        .map_err(|error| error.to_string())?;
+        asked.await.map_err(|error| error.to_string())
+    }
+    #[cfg(not(any(target_os = "android", all(target_os = "ios", native_terminal_core))))]
     {
         let _ = app;
         Ok(false)

@@ -110,6 +110,10 @@ fn place_in_webview(
     display()?;
     let mtm = MainThreadMarker::new().ok_or("Apple views require the main thread")?;
     #[cfg(target_os = "ios")]
+    if objc2_ui_kit::UIAccessibilityIsVoiceOverRunning() {
+        return Err("VoiceOver requires the accessible terminal backend".into());
+    }
+    #[cfg(target_os = "ios")]
     if !ios::active(mtm) {
         return Ok(PANES.with_borrow(|panes| {
             panes

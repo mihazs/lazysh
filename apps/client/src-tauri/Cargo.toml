@@ -85,7 +85,7 @@ block2 = { version = "0.6", optional = true }
 objc2 = { version = "0.6", optional = true }
 objc2-foundation = { version = "0.3", optional = true, default-features = false, features = ["std", "NSGeometry", "NSNotification", "NSObject", "NSOperation", "block2", "objc2-core-foundation"] }
 objc2-quartz-core = { version = "0.3", optional = true, default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CATransaction", "objc2-core-foundation"] }
-objc2-ui-kit = { version = "0.3", optional = true, default-features = false, features = ["std", "UIApplication", "UIResponder", "UIScreen", "UIView", "UIWindow", "objc2-core-foundation", "objc2-quartz-core"] }
+objc2-ui-kit = { version = "0.3", optional = true, default-features = false, features = ["std", "UIAccessibility", "UIApplication", "UIResponder", "UIScreen", "UIView", "UIWindow", "objc2-core-foundation", "objc2-quartz-core"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18", optional = true }
