@@ -2,7 +2,8 @@ import {expect} from '@playwright/test';
 import {requestedBackend} from '../src/e2eTerminalBackend';
 import {mountNativeSurface} from './fixtures/nativeSurfacePage';
 import {test} from './fixtures/terminalBackend';
-import {onAdapter,screenText} from './fixtures/terminalState';
+import {onAdapter,screenText,terminalCell} from './fixtures/terminalState';
+import {longPress} from './fixtures/terminalHistory';
 
 test.use({syntheticBackend:true});
 
@@ -59,6 +60,24 @@ test('a terminal clipboard request needs consent on the selected browser backend
     await consent.getByRole('button',{name:'Allow this copy',exact:true}).click();
     await expect.poll(clipboard).toBe('terminal clipboard marker');
     await expect(consent).toHaveCount(0);
+  } finally {
+    await page.evaluate(()=>window.nativeSurface.dispose());
+  }
+});
+
+test('a long press selects and copies text on the selected browser backend',async({page,isMobile})=>{
+  test.skip(!isMobile,'Long press requires a touch viewport.');
+  const engine=requestedBackend()??'native';
+  await mountNativeSurface(page,engine);
+  try {
+    await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(page.url()).origin});
+    await page.evaluate(()=>window.nativeSurface.output('fixture_word next'));
+    await expect.poll(()=>screenText(page)).toContain('fixture_word next');
+    await longPress(page,await terminalCell(page,0,4));
+    const copy=page.getByRole('toolbar',{name:'Selection actions'}).getByRole('button',{name:'Copy',exact:true});
+    await expect(copy).toBeVisible();
+    await copy.click();
+    await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe('fixture_word');
   } finally {
     await page.evaluate(()=>window.nativeSurface.dispose());
   }
