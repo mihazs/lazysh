@@ -51,13 +51,16 @@ if (import.meta.main) {
       const file = path.join(work, `xterm-${renderer}.json`);
       // The release build of the page, the spec's own full scale, in the guest's WebView; one renderer per invocation.
       const run = spawnSync('bun', ['run', 'bench:terminal', '--', 'e2e/terminal-bench.spec.ts', '--project=desktop'], {
-        cwd: client, stdio: 'inherit', env: { ...process.env, LAZYSH_BENCH_ANDROID: serial, LAZYSH_BENCH_RENDERER: renderer, LAZYSH_BENCH_OUT: file },
+        cwd: client, stdio: 'inherit', env: { ...process.env, LAZYSH_BENCH_ANDROID: serial, LAZYSH_BENCH_RENDERER: renderer, LAZYSH_BENCH_WRITE: 'adapter', LAZYSH_BENCH_OUT: file },
       });
       if (run.status !== 0) { console.error(`androidEngineBench: the baseline spec failed for the ${renderer} renderer (exit ${run.status}); no record written`); process.exit(1); }
       const baseline = JSON.parse(readFileSync(file, 'utf8'));
+      if (baseline.writePath !== 'adapter' || !Number.isSafeInteger(baseline.adapterWrites) || baseline.adapterWrites <= 0) {
+        throw new Error('Android baseline did not verify the adapter write path');
+      }
       const adapter = `xterm-${renderer}`;
       arms.push({
-        adapter, engine: `xterm.js ${baseline.toolchain.xterm}, ${renderer} renderer`, host: `${WEBVIEW_HOST}: the benchmark page in the Android System WebView ${environment.webview.version}`, gpu: baseline.page.gl ?? null, page: baseline.page,
+        adapter, engine: `xterm.js ${baseline.toolchain.xterm}, ${renderer} renderer`, host: `${WEBVIEW_HOST}: the benchmark page in the Android System WebView ${environment.webview.version}`, gpu: baseline.page.gl ?? null, page: { ...baseline.page, writePath: baseline.writePath, adapterWrites: baseline.adapterWrites },
         notes: 'The app\'s createTerminal() and XtermTerminalAdapter in the benchmark page; the remote echoes at once (zero round trip); latency is the page timestamp of the key or burst to the xterm render callback, not to pixels; CPU, wakeups, frames and PSS are read from the guest (/proc, SurfaceFlinger timestats, dumpsys meminfo), not from the page.',
       });
       measurements.push(...fromBaseline(baseline.results as BaselineResult[], adapter));
