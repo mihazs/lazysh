@@ -103,6 +103,46 @@ The native idle driver exercises W0 through the real app and an owned OpenSSH se
 
 It records three 30-second windows for each cursor mode. The host measures the app and its WebView processes while device instrumentation waits without touching the terminal. The record includes the renderer's adapter and the guest counters. W1–W4, W9 and W12 still need a native driver, so the comparison remains incomplete with W0 alone. For local emulator qualification, pass `--software-gpu` and set `LAZYSH_BENCH_ANDROID` and `LAZYSH_LANE_RUN_ID` explicitly. Emulator figures cannot establish the Waydroid targets.
 
+The packaged xterm path has a separate owned-SSH diagnostic. Run the Android
+`NativeTerminalSessionTest#aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart`
+with the standard `lazyshSshFixture` runner argument and `-e lazyshXtermSshEcho true`.
+It selects xterm in Preferences, connects through the production SSH UI, and
+commits 200 letters through the WebView input connection. The remote PTY echoes
+each byte. `xterm-ssh-echo.json` records the WebView event-to-row timing and the
+Android dispatch-to-row timing. Timestamp exchanges before and after the run
+bound the offset between the two clocks. The diagnostic rejects a bound wider
+than 2 ms and records the midpoint's uncertainty. The rendered row count is
+also recorded. A test-only WebView message identifies each echoed row update.
+Android waits for the corresponding visual state and records its window frame
+commit. The dispatch-to-commit interval includes that notification and frame
+scheduling. Both engines also use the test-only Android display capture
+probe to time the first screenshot with new echo ink. That interval includes
+the capture call and bounds when the glyph became visible in a screenshot. Matched Waydroid runs remain
+pending. [#2606](https://github.com/mihazs/lazysh/issues/2606)
+
+For a host-collected record, run the lane with the packaged debug app and its
+instrumentation APK installed:
+
+```sh
+apps/client/bench/waydroid-lane.sh --out lane.json --owned-ssh-fixture \
+  --bench xterm-ssh 'bun apps/client/bench/androidEngineBench.ts --packaged-ssh-echo --out "$LAZYSH_LANE_OUT/xterm-ssh.json"'
+```
+
+The host runs five fresh sessions against the same owned SSH fixture. It
+requires one receipt and a successful runner verdict per repetition, plus
+matching rendered grids, before writing the lane record. Each repetition checks the remote PTY size after input while the keyboard is still visible.
+
+For the single-character IME diagnostic, run the native `--check-commit`
+mode in the same lane with `LAZYSH_BENCH_ROWS` set to the xterm record’s
+rendered row count. Then run
+`bun apps/client/bench/androidImePair.ts xterm-ssh.json native-commit.json`.
+The tool requires matching run, guest, display, PTY grid, input hash, and
+the installed base and split APK digests before reporting each engine’s
+median run p50 and p95. Both drivers verify their APK digests at the start
+and end of measurement. Its output
+covers this workload only. The full Android gate still requires the
+remaining workloads and paired Waydroid runs.
+
 ## Exit codes
 
 | Code | Meaning | Evidence file |

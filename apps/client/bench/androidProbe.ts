@@ -7,6 +7,25 @@ import { execFileSync } from 'node:child_process';
 export type Adb = (...args: string[]) => string;
 export const adbFor = (serial: string): Adb => (...args) => execFileSync('adb', ['-s', serial, ...args], { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
 
+/** Read the APK digests from the installed app, including split APKs when present. */
+export function installedApkDigests(adb: Adb, packageName: string) {
+  if (!/^[A-Za-z0-9_.]+$/.test(packageName)) throw new Error('Invalid Android package name');
+  const paths = adb('shell', 'pm', 'path', packageName).trim().split(/\r?\n/).map(line => {
+    const match = /^package:(\/[A-Za-z0-9_./=+~-]+\.apk)$/.exec(line);
+    if (!match) throw new Error('Android did not report a safe installed APK path');
+    return match[1];
+  });
+  const digests = paths.map(file => {
+    const match = /^([a-f0-9]{64})\s/.exec(adb('shell', 'sha256sum', file));
+    if (!match) throw new Error('Android did not report an installed APK digest');
+    return { name: file.split('/').at(-1)!, sha256: match[1] };
+  });
+  if (!digests.some(apk => apk.name === 'base.apk') || new Set(digests.map(apk => apk.name)).size !== digests.length) {
+    throw new Error('The installed APK set must have one base and unique splits');
+  }
+  return digests.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** The throwaway app that hosts the benchmark page in the guest's WebView (bench/android-webview). */
 export const WEBVIEW_HOST = 'app.lazysh.webviewbench';
 

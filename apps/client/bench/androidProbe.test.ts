@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { androidProbe, gpuPath, histogramPercentile, parsePssKiB, parseStat, parseTimeStats, sumVoluntarySwitches, type Adb } from './androidProbe';
+import { androidProbe, gpuPath, histogramPercentile, installedApkDigests, parsePssKiB, parseStat, parseTimeStats, sumVoluntarySwitches, type Adb } from './androidProbe';
 
 // The texts below are what the Waydroid guest (Android 13, x86_64) printed for these commands, trimmed to the lines that matter.
 const meminfo = (total: number) => `** MEMINFO in pid 7198 [app.lazysh.webviewbench] **
@@ -126,5 +126,26 @@ describe('the probe of one measured window', () => {
   it('refuses to measure an app that is not running', () => {
     const adb: Adb = () => ' 1 0 init\n';
     expect(() => androidProbe(adb, 'app.lazysh.webviewbench').pssKiB()).toThrow(/is not running in the guest/);
+  });
+});
+
+
+describe('installed Android APK provenance', () => {
+  it('hashes the base and every split in canonical order', () => {
+    const base = '/data/app/~~abc==/app.lazysh.client-xyz==/base.apk';
+    const split = base.replace('base.apk', 'split_config.arm64_v8a.apk');
+    const adb: Adb = (...args) => {
+      if (args[1] === 'pm') return `package:${split}\r\npackage:${base}\r\n`;
+      return `${(args[2] === base ? 'a' : 'b').repeat(64)}  ${args[2]}\n`;
+    };
+    expect(installedApkDigests(adb, 'app.lazysh.client')).toEqual([
+      { name: 'base.apk', sha256: 'a'.repeat(64) },
+      { name: 'split_config.arm64_v8a.apk', sha256: 'b'.repeat(64) },
+    ]);
+  });
+
+  it('rejects paths containing shell syntax and incomplete digests', () => {
+    expect(() => installedApkDigests(() => 'package:/data/app/app;other/base.apk', 'app.lazysh.client')).toThrow(/safe installed APK path/);
+    expect(() => installedApkDigests((...args) => args[1] === 'pm' ? 'package:/data/app/base.apk' : 'no digest', 'app.lazysh.client')).toThrow(/digest/);
   });
 });

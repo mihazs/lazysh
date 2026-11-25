@@ -2,7 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { describe, expect, it, test, vi } from 'vitest';
+import { packagedSshEcho } from './androidEngineBench';
 
 function runBaseline(receiptPath?: string) {
   const dir = mkdtempSync(join(tmpdir(), 'lazysh-android-baseline-'));
@@ -31,4 +32,32 @@ it('requires the Android xterm baseline to write through the adapter', () => {
 
 it('does not publish a comparison record from a direct-write baseline', () => {
   expect(runBaseline('direct')).toMatchObject({ status: 1, record: null, stderr: expect.stringMatching(/adapter write path/) });
+});
+
+const fixture = '/data/local/tmp/lazysh-ui-ssh-0123456789abcdef0123456789abcdef/fixture.json';
+const packageName = 'app.lazysh.client';
+const receipt = (values: number[] = Array<number>(200).fill(18)) =>
+  'INSTRUMENTATION_STATUS: lazyshXtermSshEcho=' + JSON.stringify({
+    engine: 'xterm', transport: 'ssh', inputSha256: 'a'.repeat(64), ptyColumns: 49, renderedRows: 12, ptyRowsAfterInput: 12, androidDispatchToFrameCommitMs: values, androidDispatchToDisplayCaptureMs: values,
+  });
+const success = 'OK (1 test)\nINSTRUMENTATION_CODE: -1';
+
+describe('packaged Android SSH echo evidence', () => {
+  test('invokes the live fixture and accepts a complete frame receipt', () => {
+    const adb = vi.fn(() => [receipt(), success].join('\n'));
+    expect(packagedSshEcho(adb, fixture, packageName).androidDispatchToFrameCommitMs).toHaveLength(200);
+    expect(adb).toHaveBeenCalledWith('shell', 'am', 'instrument', '-w', '-r',
+      '-e', 'waitForActivitiesToComplete', 'false', '-e', 'class', 'app.lazysh.client.NativeTerminalSessionTest',
+      '-e', 'lazyshSshFixture', fixture, '-e', 'lazyshXtermSshEcho', 'true',
+      'app.lazysh.client.test/androidx.test.runner.AndroidJUnitRunner');
+  });
+
+  test.each([
+    success,
+    [receipt(), receipt(), success].join('\n'),
+    [receipt(), success, 'INSTRUMENTATION_RESULT: shortMsg=Process crashed.'].join('\n'),
+    [receipt([18]), success].join('\n'),
+  ])('rejects incomplete, ambiguous, or failed evidence', output => {
+    expect(() => packagedSshEcho(() => output, fixture, packageName)).toThrow();
+  });
 });
