@@ -243,7 +243,8 @@ run_instrument() { # run_instrument <runner> <class>: counts the raw status code
 run_bench() { # run_bench <name> <command>: the command writes its result files into $LAZYSH_LANE_OUT; they are kept beside the evidence
   say "benchmark $1: $2"
   mkdir "$work/bench-$1" || { fail "bench $1: the name is used twice"; return 1; }
-  LAZYSH_BENCH_ANDROID=$serial LAZYSH_LANE_OUT="$work/bench-$1" LAZYSH_LANE_PACKAGE=$package LAZYSH_LANE_RUN_ID=$run_id sh -c "$2" >&2 </dev/null; code=$?
+  fixture_path=''; [ -z "$fixture_remote" ] || fixture_path="$fixture_remote/fixture.json"
+  LAZYSH_LANE_SSH_FIXTURE=$fixture_path LAZYSH_BENCH_ANDROID=$serial LAZYSH_LANE_OUT="$work/bench-$1" LAZYSH_LANE_PACKAGE=$package LAZYSH_LANE_RUN_ID=$run_id sh -c "$2" >&2 </dev/null; code=$?
   files='[]'; stem=$(basename "$out" .json)
   for file in "$work/bench-$1"/*; do
     [ -f "$file" ] || continue

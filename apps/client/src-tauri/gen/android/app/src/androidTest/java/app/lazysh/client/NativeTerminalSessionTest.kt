@@ -4,10 +4,15 @@ import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.graphics.Rect
+import android.net.Uri
+import android.os.Build
 import android.system.Os
 import android.view.SurfaceView
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.webkit.WebMessage
+import android.webkit.WebMessagePort
+import android.webkit.WebView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -16,9 +21,12 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -130,7 +138,7 @@ class NativeTerminalSessionTest {
     }
 
     /** The host through the real editor, then the connection through its dialog, trusting the host key the way a user's tap does. */
-    private fun connect() {
+    private fun connect(ready: String = "false") {
         revealHosts()
         click("button[aria-label='Add host']")
         set("input[placeholder='Home workstation']", hostName)
@@ -146,8 +154,9 @@ class NativeTerminalSessionTest {
         click("[role=dialog] button", "Private key")
         set("[role=dialog] form.form-stack > label > textarea", fixture.getString("privateKey"))
         click("[role=dialog] form.form-stack button[type=submit]")
-        until("the host key to review", 60, "document.querySelector('.fingerprint code')?.textContent === ${quoted(fixture.getString("fingerprint"))}")
-        click("button", "Trust key and connect")
+        val expectedKey = "document.querySelector('.fingerprint code')?.textContent === ${quoted(fixture.getString("fingerprint"))}"
+        until("the expected host key or the owned shell prompt", 60, "($expectedKey) || ($ready)")
+        if (js(expectedKey) == "true") click("button", "Trust key and connect")
     }
 
     private fun session() = PageDriver.poll("the placed native session", 120) { ui { TerminalSurfaces.ids().singleOrNull() } }
@@ -466,10 +475,215 @@ class NativeTerminalSessionTest {
         }
     }
 
+    private fun checkXtermSshEcho() {
+        val choice = "input[name='terminal-engine'][value='xterm']"
+        openEngineSettings()
+        choose(choice)
+        until("xterm chosen", 30, "document.querySelector(${quoted(choice)}).checked")
+        click("button[aria-label='Close Preferences']")
+        val screen = ".terminal-canvas .xterm-screen"
+        val prompt = quoted(fixture.getString("prompt").trim())
+        val ready = """(() => {
+            const screen = window.__lz.find(${quoted(screen)});
+            return screen?.querySelector('.xterm-rows')?.textContent.trimEnd() === $prompt
+                && !document.querySelector(${quoted(nativePane)});
+        })()"""
+        connect(ready)
+        until("the owned SSH prompt on xterm", 60, ready)
+
+        val expected = "abcdefghij".repeat(20)
+        val marker = "lazysh-xterm-echo-ready"
+        val command = "stty -icanon -echo -opost; printf '\\033[?25l\\033[2J\\033[H%s %s\\r\\n' '$marker' \"\$(stty size)\"; " +
+            "dd bs=1 count=${expected.length} status=none; stty icanon echo; printf '\\r\\nlazysh-grid %s\\r\\n' \"\$(stty size)\""
+        click("button[aria-label='Compose']")
+        set(".terminal-compose textarea", command)
+        val (sendX, sendY) = screenPoint(".terminal-compose button[aria-label='Send']:not(:disabled)")
+        assertTrue("the composer receives the Send tap", UiDevice.getInstance(instrumentation).click(sendX, sendY))
+        val firstRow = "window.__lz.find(${quoted(screen)})?.querySelector('.xterm-rows > div')?.textContent.trimEnd()"
+        until("the remote raw echo program", 60, "$firstRow?.startsWith(${quoted("$marker ")}) === true")
+        val size = Regex("$marker ([1-9][0-9]*) ([1-9][0-9]*)").matchEntire(JSONTokener(js(firstRow)).nextValue() as String)
+        val (promptRows, cols) = checkNotNull(size) { "the SSH PTY's rows and columns" }.destructured
+        val editorReady = """(() => {
+            const editor = document.activeElement;
+            return editor.matches('.terminal-canvas .xterm-helper-textarea') && !editor.readOnly;
+        })()"""
+        if (js(editorReady) != "true") click("button[aria-label='Show keyboard'], button[aria-label='Toggle keyboard']")
+        until("the active xterm keyboard editor", 15, editorReady)
+
+        fun keyboardVisible() = ui { activity ->
+            ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+        }
+        var lastRows = 0
+        var stableSince = 0L
+        PageDriver.poll("the xterm grid to settle with the keyboard visible", 15) {
+            val keyboardVisible = keyboardVisible()
+            val rows = js("window.__lz.find(${quoted(screen)})?.querySelector('.xterm-rows')?.children.length").toIntOrNull() ?: 0
+            if (!keyboardVisible || rows != lastRows) {
+                lastRows = rows
+                stableSince = System.nanoTime()
+            }
+            true.takeIf { keyboardVisible && rows > 0 && System.nanoTime() - stableSince >= 500_000_000 }
+        }
+
+        // Each WebView timestamp falls inside its Android call interval.
+        fun clockOffset() = List(8) {
+            val before = System.nanoTime() / 1e6
+            val web = js("performance.now()").toDouble()
+            val after = System.nanoTime() / 1e6
+            (before - web) to (after - web)
+        }.reduce { left, right -> maxOf(left.first, right.first) to minOf(left.second, right.second) }
+        val beforeClock = clockOffset()
+
+        assertEquals("observe trusted keys and rendered echoes", "true", js("""(() => {
+            const screen = window.__lz.find(${quoted(screen)});
+            const rows = screen.querySelector('.xterm-rows');
+            const editor = screen.parentElement.querySelector('.xterm-helper-textarea');
+            const expected = ${quoted(expected)};
+            const proof = { samples: [], renderedAt: [], rows: 0, stable: true };
+            let started, framePort;
+            const connectPort = event => {
+                if (event.data !== 'lazysh-xterm-frame-probe' || event.ports.length !== 1) return;
+                framePort = event.ports[0];
+                window.removeEventListener('message', connectPort);
+                proof.framePortReady = true;
+            };
+            window.addEventListener('message', connectPort);
+            editor.addEventListener('beforeinput', event => {
+                if (event.isTrusted && event.data === expected[proof.samples.length]) started = event.timeStamp;
+            });
+            const observer = new MutationObserver(() => {
+                if (started === undefined) return;
+                const count = proof.samples.length + 1;
+                const lines = Array.from(rows.children, row => row.textContent.trimEnd());
+                if (lines[0] !== ${quoted("$marker $promptRows $cols")} || !lines.slice(1).join('').startsWith(expected.slice(0, count))) return;
+                if (count === 1) proof.rows = rows.children.length;
+                else proof.stable &&= rows.children.length === proof.rows;
+                const renderedAt = performance.now();
+                proof.samples.push(renderedAt - started);
+                proof.renderedAt.push(renderedAt);
+                framePort.postMessage(String(count));
+                started = undefined;
+                if (count === expected.length) observer.disconnect();
+            });
+            observer.observe(rows, { subtree: true, childList: true, characterData: true });
+            window.__lazyshXtermEcho = proof;
+            return true;
+        })()"""))
+        check(Build.VERSION.SDK_INT >= 29) { "Frame submission measurement requires Android 10" }
+        val frames = LinkedBlockingQueue<Pair<Int, Double>>()
+        val port = ui { activity ->
+            val web = checkNotNull(EdgeGestureExclusion.webView(activity.window.decorView)) as WebView
+            check(web.isAttachedToWindow && web.isHardwareAccelerated)
+            val (local, page) = web.createWebMessageChannel()
+            local.setWebMessageCallback(object : WebMessagePort.WebMessageCallback() {
+                override fun onMessage(port: WebMessagePort, message: WebMessage) {
+                    val echo = checkNotNull(message.data?.toIntOrNull())
+                    web.postVisualStateCallback(echo.toLong(), object : WebView.VisualStateCallback() {
+                        override fun onComplete(requestId: Long) {
+                            web.viewTreeObserver.registerFrameCommitCallback {
+                                frames.add(requestId.toInt() to System.nanoTime() / 1e6)
+                            }
+                            web.invalidate()
+                        }
+                    })
+                }
+            })
+            web.postWebMessage(WebMessage("lazysh-xterm-frame-probe", arrayOf(page)), Uri.parse(checkNotNull(web.url)))
+            local
+        }
+        val echoBounds = JSONArray(js("""(() => {
+            const rows = window.__lz.find(${quoted(screen)}).querySelectorAll('.xterm-rows > div');
+            const first = rows[1].getBoundingClientRect();
+            const last = rows[${(expected.length + cols.toInt() - 1) / cols.toInt()}].getBoundingClientRect();
+            return [first.left, first.top, first.right, last.bottom, innerWidth];
+        })()"""))
+        val pixels = ui { activity ->
+            val web = checkNotNull(EdgeGestureExclusion.webView(activity.window.decorView))
+            val origin = IntArray(2).also(web::getLocationOnScreen)
+            val scale = web.width / echoBounds.getDouble(4)
+            val bounds = Rect(
+                origin[0] + (echoBounds.getDouble(0) * scale).roundToInt(),
+                origin[1] + (echoBounds.getDouble(1) * scale).roundToInt(),
+                origin[0] + (echoBounds.getDouble(2) * scale).roundToInt(),
+                origin[1] + (echoBounds.getDouble(3) * scale).roundToInt(),
+            )
+            bounds
+        }.let { TerminalEchoPixels(instrumentation.uiAutomation, it) }
+        val displayTimings = mutableListOf<Double>()
+        val dispatches = mutableListOf<Double>()
+        val frameTimings = mutableListOf<Double>()
+        try {
+            until("the WebView frame probe port", 10, "window.__lazyshXtermEcho.framePortReady === true")
+            for ((index, key) in expected.withIndex()) {
+                val dispatchedAt = ui { activity ->
+                    val web = checkNotNull(EdgeGestureExclusion.webView(activity.window.decorView))
+                    val editor = checkNotNull(web.onCreateInputConnection(EditorInfo()))
+                    val started = System.nanoTime() / 1e6
+                    assertTrue("the WebView receives key ${index + 1}", editor.commitText(key.toString(), 1))
+                    started
+                }
+                dispatches.add(dispatchedAt)
+                displayTimings.add(pixels.awaitEcho(dispatchedAt))
+                val (echo, committedAt) = checkNotNull(frames.poll(10, TimeUnit.SECONDS)) {
+                    "The WebView did not submit a frame for echo ${index + 1}"
+                }
+                assertEquals("the committed frame corresponds to the current echo", index + 1, echo)
+                frameTimings.add(committedAt - dispatchedAt)
+            }
+        } finally {
+            ui { port.close() }
+        }
+        val afterClock = clockOffset()
+        val lower = maxOf(beforeClock.first, afterClock.first)
+        val upper = minOf(beforeClock.second, afterClock.second)
+        assertTrue("Android and WebView clocks agree to within 2 ms: $lower..$upper", upper - lower in 0.0..2.0)
+        val proof = JSONObject(js("window.__lazyshXtermEcho"))
+        val rendered = proof.getJSONArray("renderedAt")
+        val androidTimings = dispatches.mapIndexed { index, dispatch ->
+            val elapsed = rendered.getDouble(index) + (lower + upper) / 2 - dispatch
+            assertTrue("the DOM update follows Android dispatch", elapsed >= 0)
+            elapsed
+        }
+        assertTrue("each committed frame follows its row update within clock uncertainty",
+            frameTimings.zip(androidTimings).all { (frame, dom) -> frame + (upper - lower) / 2 >= dom })
+        val timings = proof.getJSONArray("samples")
+        assertTrue("the rendered row count stayed stable", proof.getInt("rows") > 0 && proof.getBoolean("stable"))
+        assertEquals("the 200 rendered echoes", expected.length, timings.length())
+        assertTrue("all echo latencies are valid", (0 until timings.length()).all { timings.getDouble(it).let { ms -> ms.isFinite() && ms >= 0 } })
+        val finalGrid = quoted("lazysh-grid ${proof.getInt("rows")} $cols")
+        until("the final SSH PTY size to match the xterm grid", 15, """Array.from(
+            window.__lz.find(${quoted(screen)}).querySelectorAll('.xterm-rows > div'),
+            row => row.textContent.trimEnd()).includes($finalGrid)""")
+        assertTrue("xterm did not create a native surface", ui { TerminalSurfaces.ids().isEmpty() })
+        val ownedTabClose = ".session-tabs button[aria-label='Disconnect $hostName']"
+        act("""(() => {
+            const buttons = document.querySelectorAll(${quoted(ownedTabClose)});
+            if (buttons.length !== 1 || buttons[0].disabled) return false;
+            buttons[0].click();
+            return true;
+        })()""", "disconnect the exact owned SSH tab")
+        until("the owned xterm session to close", 30, "!document.querySelector(${quoted(ownedTabClose)})")
+        val inputSha256 = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(expected.toByteArray(Charsets.US_ASCII)).joinToString("") { "%02x".format(it) }
+        val record = JSONObject().put("engine", "xterm").put("transport", "ssh").put("inputSha256", inputSha256)
+            .put("ptyRowsBeforeFocus", promptRows.toInt()).put("ptyColumns", cols.toInt())
+            .put("renderedRows", proof.getInt("rows")).put("ptyRowsAfterInput", proof.getInt("rows"))
+            .put("webViewBeforeInputToDomMs", timings)
+            .put("clockUncertaintyMs", (upper - lower) / 2).put("androidDispatchToDomMs", JSONArray(androidTimings))
+            .put("androidDispatchToFrameCommitMs", JSONArray(frameTimings))
+            .put("androidDispatchToDisplayCaptureMs", JSONArray(displayTimings))
+        Evidence.record("xterm-ssh-echo", record)
+        instrumentation.sendStatus(2, android.os.Bundle().apply { putString("lazyshXtermSshEcho", record.toString()) })
+    }
+
     @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() {
         val idlePort = InstrumentationRegistry.getArguments().getString("lazyshIdleBenchPort")
         if (idlePort != null) {
             measureIdle(idlePort.toInt())
+            return
+        }
+        if (InstrumentationRegistry.getArguments().getString("lazyshXtermSshEcho") == "true") {
+            checkXtermSshEcho()
             return
         }
         val started = System.nanoTime()

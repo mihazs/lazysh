@@ -4,14 +4,14 @@
 // The native engine's driver writes the same record into the same lane run; `androidCompare.ts` then sets them side by side.
 // Run it as a lane step so the lock, the guest checks and the run id come with it:
 //   waydroid-lane.sh --out <lane.json> --label engine-xterm --bench engine 'cd apps/client && bun bench/androidEngineBench.ts --out "$LAZYSH_LANE_OUT/engine.json"'
-// Usage: bun bench/androidEngineBench.ts --out <record.json> [--renderers dom,webgl] [--label <text>] [--run-id <id>] [--serial <adb serial>]
+// Usage: bun bench/androidEngineBench.ts --out <record.json> [--renderers dom,webgl | --packaged-ssh-echo] [--label <text>] [--run-id <id>] [--serial <adb serial>]
 // Needs: the host app (bench/android-webview) installed in the guest and adb; LAZYSH_BENCH_ANDROID or --serial names the guest.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ACCEPTED_RISK, fromBaseline, type Arm, type BaselineResult, type EvidenceRecord } from './androidEvidence';
-import { adbFor, gpuPath, WEBVIEW_HOST, type Adb } from './androidProbe';
+import { adbFor, gpuPath, installedApkDigests, WEBVIEW_HOST, type Adb } from './androidProbe';
 
 const client = path.resolve(import.meta.dirname, '..');
 const git = (...args: string[]) => { try { return execFileSync('git', args, { cwd: client, encoding: 'utf8' }).trim(); } catch { return null; } };
@@ -38,11 +38,53 @@ function arg(name: string, fallback?: string) {
   return at >= 0 ? process.argv[at + 1] : fallback;
 }
 
+export function packagedSshEcho(adb: Adb, fixture: string, packageName: string) {
+  if (!/^\/data\/local\/tmp\/lazysh-ui-ssh-[a-f0-9]{32}\/fixture\.json$/.test(fixture)) {
+    throw new Error('Packaged xterm requires the owned lane SSH fixture');
+  }
+  const output = adb('shell', 'am', 'instrument', '-w', '-r', '-e', 'waitForActivitiesToComplete', 'false',
+    '-e', 'class', 'app.lazysh.client.NativeTerminalSessionTest', '-e', 'lazyshSshFixture', fixture,
+    '-e', 'lazyshXtermSshEcho', 'true', `${packageName}.test/androidx.test.runner.AndroidJUnitRunner`);
+  const receipts = [...output.matchAll(/^INSTRUMENTATION_STATUS: lazyshXtermSshEcho=(.+)$/gm)];
+  if (!/^OK \(1 test\)$/m.test(output) || !/^INSTRUMENTATION_CODE: -1$/m.test(output)
+    || receipts.length !== 1 || /shortMsg=/.test(output)) {
+    throw new Error('Packaged xterm instrumentation did not finish with one echo receipt');
+  }
+  const sample = JSON.parse(receipts[0][1]);
+  if (sample?.engine !== 'xterm' || sample.transport !== 'ssh' || !/^[a-f0-9]{64}$/.test(sample.inputSha256)
+    || !Number.isSafeInteger(sample.ptyColumns) || sample.ptyColumns <= 0
+    || !Number.isSafeInteger(sample.renderedRows) || sample.renderedRows <= 0 || sample.ptyRowsAfterInput !== sample.renderedRows
+    || [sample.androidDispatchToFrameCommitMs, sample.androidDispatchToDisplayCaptureMs].some(timings =>
+      !Array.isArray(timings) || timings.length !== 200
+      || timings.some(ms => typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0))) {
+    throw new Error('Packaged xterm instrumentation returned an invalid frame sample');
+  }
+  return sample;
+}
+
 if (import.meta.main) {
   const out = arg('out'), serial = arg('serial', process.env.LAZYSH_BENCH_ANDROID), renderers = (arg('renderers', 'dom') ?? '').split(',');
   if (!out || !serial || renderers.some(r => !['dom', 'webgl', 'canvas'].includes(r))) {
-    console.error('usage: bun bench/androidEngineBench.ts --out <record.json> [--renderers dom,webgl] [--label <text>] [--run-id <id>] [--serial <adb serial>]  (the guest: --serial or LAZYSH_BENCH_ANDROID)');
+    console.error('usage: bun bench/androidEngineBench.ts --out <record.json> [--renderers dom,webgl | --packaged-ssh-echo] [--label <text>] [--run-id <id>] [--serial <adb serial>]  (the guest: --serial or LAZYSH_BENCH_ANDROID)');
     process.exit(2);
+  }
+  if (process.argv.includes('--packaged-ssh-echo')) {
+    const packageName = process.env.LAZYSH_LANE_PACKAGE ?? 'app.lazysh.client';
+    const runId = process.env.LAZYSH_LANE_RUN_ID;
+    if (!runId || !/^[A-Za-z0-9_.]+$/.test(packageName)) throw new Error('Packaged xterm requires a lane identity');
+    const adb = adbFor(serial);
+    const apks = installedApkDigests(adb, packageName);
+    const samples = Array.from({ length: 5 }, () => packagedSshEcho(adb, process.env.LAZYSH_LANE_SSH_FIXTURE ?? '', packageName));
+    if (samples.some(sample => sample.ptyColumns !== samples[0].ptyColumns || sample.renderedRows !== samples[0].renderedRows)) {
+      throw new Error('Packaged xterm repetitions used different terminal grids');
+    }
+    if (JSON.stringify(apks) !== JSON.stringify(installedApkDigests(adb, packageName))) {
+      throw new Error('Installed APKs changed during the xterm SSH measurements');
+    }
+    const environment = guestEnvironment(adb, serial, packageName);
+    mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+    writeFileSync(out, JSON.stringify({ kind: 'android-packaged-xterm-ssh-echo', runId, environment, apks, samples }, null, 2) + '\n');
+    process.exit(0);
   }
   const startedAt = new Date().toISOString(), adb = adbFor(serial), environment = guestEnvironment(adb, serial), work = mkdtempSync(path.join(os.tmpdir(), 'engine-bench-'));
   const arms: Arm[] = [], measurements: EvidenceRecord['measurements'] = [];

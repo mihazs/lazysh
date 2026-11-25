@@ -297,6 +297,12 @@ describe('the owned SSH fixture', () => {
     expect(result.evidence.status).toBe('passed');
   });
 
+  test('passes the remote fixture path to a benchmark', async () => {
+    const result = await lane(['--owned-ssh-fixture', '--bench', 'echo', 'printf %s "$LAZYSH_LANE_SSH_FIXTURE" > "$LAZYSH_LANE_OUT/fixture.txt"'], { fixture: 'ok' });
+    expect(result.code).toBe(0);
+    expect(await readFile(join(result.dir, 'evidence', 'lane-echo-fixture.txt'), 'utf8')).toBe(`${remote}/fixture.json`);
+  });
+
   test('is torn down when the instrumentation fails', async () => {
     const result = await lane(['--owned-ssh-fixture', '--apk', await apk(), '--instrument', RUNNER, CLASS], { fixture: 'ok', instrumentation: { [CLASS]: instrumentation([-2]) } });
     expect(result.code).toBe(1);
