@@ -8,14 +8,21 @@ const OVERRIDE_KEY = 'lazysh.terminal.backend';
 type Availability = {ok: true} | {ok: false; reason: string};
 
 /** Asks the app's own backend registry whether `requested` can be created, in the page, so the reason is the registry's. */
-async function probe(page: Page, requested: TerminalBackendId): Promise<Availability> {
-  const {id, fallbacks} = await page.evaluate(async requested => {
+async function probe(page: Page, requested: TerminalBackendId, synthetic: boolean): Promise<Availability> {
+  const {id, fallbacks} = await page.evaluate(async ({requested,synthetic}) => {
+    if (synthetic) {
+      const fixtureUrl = '/e2e/fixtures/browserTerminalRegistry.ts';
+      const {createBrowserTerminal} = await import(fixtureUrl) as typeof import('./browserTerminalRegistry');
+      const {selection,adapter} = await createBrowserTerminal(requested);
+      await adapter.dispose();
+      return selection;
+    }
     const registryUrl = '/src/terminalBackends.ts'; // The dev server's URL of the app's registry, the same module instance the app uses.
     const {createTerminalAdapter} = await import(registryUrl) as typeof import('../../src/terminalBackends');
     const {selection, adapter} = await createTerminalAdapter({override: requested});
     adapter.dispose();
     return selection;
-  }, requested);
+  }, {requested,synthetic});
   return id === requested ? {ok: true} : {ok: false, reason: fallbacks.find(fallback => fallback.id === requested)?.reason ?? `the app chose ${id}`};
 }
 
@@ -23,8 +30,10 @@ async function probe(page: Page, requested: TerminalBackendId): Promise<Availabi
  * `test` of the terminal specs. A requested backend is applied before load. A backend the registry cannot create is reported as
  * skipped with the registry's reason, once, so the arm turns on by itself when the backend is registered.
  */
-export const test = base.extend<{requestedBackendApplied: void}, {backendAvailability: Availability}>({
-  backendAvailability: [async ({browser}, use, workerInfo) => {
+export const test = base.extend<{requestedBackendApplied: void}, {backendAvailability: Availability; syntheticBackend: boolean}>({
+  // A spec opts in only after its page fixture can mount the synthetic native backend.
+  syntheticBackend: [false, {scope: 'worker', option: true}],
+  backendAvailability: [async ({browser,syntheticBackend}, use, workerInfo) => {
     const requested = requestedBackend();
     if (!requested) return use({ok: true});
     const page = await browser.newPage();
@@ -33,14 +42,15 @@ export const test = base.extend<{requestedBackendApplied: void}, {backendAvailab
       const origin = workerInfo.project.use.baseURL!;
       await page.route(`${origin}/backend-probe`, route => route.fulfill({contentType: 'text/html', body: '<!doctype html>'}));
       await page.goto(`${origin}/backend-probe`);
-      const availability = await probe(page, requested);
+      const availability = await probe(page, requested, syntheticBackend);
       if (!availability.ok) console.log(`${BACKEND_ENV}=${requested}: skipped, the registry reports: ${availability.reason}`);
       return await use(availability);
     } finally { await page.close(); }
   }, {scope: 'worker'}],
-  requestedBackendApplied: [async ({context, page, backendAvailability}, use, testInfo) => {
+  requestedBackendApplied: [async ({context, page, backendAvailability, syntheticBackend}, use, testInfo) => {
     const requested = requestedBackend();
     if (requested) {
+      if (syntheticBackend && !backendAvailability.ok) throw new Error(backendAvailability.reason);
       testInfo.skip(!backendAvailability.ok, `${requested} backend: ${backendAvailability.ok ? '' : backendAvailability.reason}`);
       await context.addInitScript(([key, backend]) => { try { localStorage.setItem(key, backend); } catch { /* No storage, no override. */ } }, [OVERRIDE_KEY, requested]);
     }

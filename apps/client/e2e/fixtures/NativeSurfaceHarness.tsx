@@ -1,10 +1,7 @@
+import {createBrowserTerminal} from './browserTerminalRegistry';
 import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import TerminalPane from '../../src/TerminalPane';
-import {createTerminal} from '../../src/xterm/terminal';
-import {createHeadlessCore} from '../../src/xterm/nativeCoreHeadless';
-import {openNativeTerminalAdapter} from '../../src/nativeTerminalAdapter';
-import {XtermTerminalAdapter} from '../../src/xtermTerminalAdapter';
 import type {LiveSession} from '../../src/terminal';
 import type {SurfaceAnchor} from '../../src/terminalSurfaceAnchor';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
@@ -31,9 +28,7 @@ export async function mountNativeSurfaceHarness({engine,refuse=false}:{engine:'n
     element.className=className;parent.append(element);return element;
   },host);
   document.body.append(host);
-  const core=engine==='native'?createHeadlessCore({columns:40,rows:10}):undefined;
-  const terminal=engine==='xterm'?createTerminal():undefined;
-  const adapter=core?await openNativeTerminalAdapter(core,{refreshMs:1}):new XtermTerminalAdapter(terminal!);
+  const {adapter,core}=await createBrowserTerminal(engine,{columns:40,rows:10});
   const session:LiveSession={id:'native-surface-fixture',hostId:'fixture',name:'Native surface fixture',destination:'fixture',adapter,connected:true};
   const calls:SurfaceCall[]=[],errors:string[]=[];
   const app=window.nativeFixtureInvoke;
@@ -61,6 +56,6 @@ export async function mountNativeSurfaceHarness({engine,refuse=false}:{engine:'n
     /** Ends the pane while the adapter lives on, as closing its session does. */
     unmount:()=>root.unmount(),
     /** Output from the program, as the transport would deliver it. */
-    output:(text:string)=>core?core.output(new TextEncoder().encode(text)):new Promise<void>(resolve=>terminal!.write(text,resolve)),
-    dispose(){try{root.unmount();}catch{/* already unmounted */}void adapter.dispose();terminal?.dispose();host.remove();document.getElementById('root')!.style.display='';}};
+    output:(text:string)=>core?core.output(new TextEncoder().encode(text)):adapter.write!(new TextEncoder().encode(text)),
+    dispose(){try{root.unmount();}catch{/* already unmounted */}void adapter.dispose();host.remove();document.getElementById('root')!.style.display='';}};
 }
