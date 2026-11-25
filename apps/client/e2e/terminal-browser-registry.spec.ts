@@ -20,13 +20,12 @@ test('the selected browser backend parses and exposes terminal output',async({pa
   }
 });
 
-test('native composition and Enter accept two identical commands independently',async({page,context})=>{
+for(const text of ['你好','👩🏽‍💻'])test(`native composition and Enter accept two identical ${text} commands independently`,async({page,context})=>{
   test.skip(requestedBackend()==='xterm','This case exercises the native typed-input editor.');
   await mountNativeSurface(page,'native');
   const keyboard=await context.newCDPSession(page);
   try {
     await onAdapter(page,adapter=>adapter.focus());
-    const text='你好';
     for(let count=1;count<=2;count++){
       await keyboard.send('Input.imeSetComposition',{text,selectionStart:text.length,selectionEnd:text.length});
       await keyboard.send('Input.insertText',{text});
