@@ -1,7 +1,9 @@
 import {useCallback,useEffect,useId,useLayoutEffect,useMemo,useRef,useState,type DragEvent} from 'react';
-import {ArrowLeft,LoaderCircle,Paperclip,SendHorizontal,Square} from 'lucide-react';
+import {Camera,FilePlus2,LoaderCircle,Paperclip,SendHorizontal,Square} from 'lucide-react';
 import {publishComposerControl,useDialogOpen} from './agentDialogAnswer';
+import {readClipboardImage,useClipboardPlatform} from './deviceClipboard';
 import AttachmentPanel from './AttachmentPanel';
+import {captureUiError,type UiErrorCause} from './i18n/localError';
 import AgentComposerChips from './AgentComposerChips';
 import AgentComposerInsert from './AgentComposerInsert';
 import AgentComposerNotice from './AgentComposerNotice';
@@ -57,6 +59,12 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const revision=useRef(0),composing=useRef(false),current=useRef(key);
   const [compositionActive,setCompositionActive]=useState(false);
   const [attachmentOpen,setAttachmentOpen]=useState(false);
+  const [attachmentOptions,setAttachmentOptions]=useState(false);
+  const [clipboardError,setClipboardError]=useState<UiErrorCause>('');
+  const [clipboardBusy,setClipboardBusy]=useState(false);
+  const clipboardPlatform=useClipboardPlatform();
+  const clipboardRead=useRef<AbortController|null>(null);
+  useEffect(()=>{setClipboardBusy(false);setClipboardError('');return ()=>{clipboardRead.current?.abort();clipboardRead.current=null;};},[key]);
   const [control,setControl]=useState<TerminalControl>();
   const [staged,setStaged]=useState(false);
   // The view answers dialogs through the same bound input.
@@ -80,9 +88,9 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   },[stopArmed]);
   useEffect(()=>{
     current.current=key;revision.current++;composing.current=false;
-    setCompositionActive(false);setAttachmentOpen(false);setStaged(false);setDraft(drafts.get(key)??'');setReceipt(undefined);setStopArmed(false);walk.current={index:null,text:''};
+    setCompositionActive(false);setAttachmentOpen(false);setAttachmentOptions(false);setStaged(false);setDraft(drafts.get(key)??'');setReceipt(undefined);setStopArmed(false);walk.current={index:null,text:''};
   },[key]);
-  const attach=useAgentAttachments({key,sessionId,draft,caret,limit:LIMIT,edit,place:position=>{wantCaret.current=position;}});
+  const attach=useAgentAttachments({key,sessionId,draft,caret,limit:LIMIT,composing,edit,place:position=>{wantCaret.current=position;}});
   // What the agent receives: every token already replaced by the path of its uploaded file.
   const text=attach.expanded;
   const source=useMemo<TerminalSource|undefined>(()=>{
@@ -108,7 +116,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const ready=!!control?.ready;
   // tmux takes a long prompt as one bounded paste; a Herdr pane takes what `send` takes.
   const bytes=draftLimit(labels?.backend??'tmux',true);
-  const sendable=ready && !holdSend && validTerminalDraft(text,bytes) && !control!.busy && !attach.busy;
+  const sendable=ready && !holdSend && validTerminalDraft(text,bytes) && !control!.busy && !attach.busy && !clipboardBusy;
   const tooLong=ready && !!text && !validTerminalDraft(text,bytes);
   const agent=conversation.agent;
   // Escape is not known to interrupt Grok Build, so the view offers it no key beyond the guarded send.
@@ -174,7 +182,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
       setReceipt({text,phase:'pending',at:Date.now(),before:promptsLike(prompts,text),beforeQueued:promptsLike(queuedPrompts,text)});
       control!.send();return;
     }
-    if(staging && stageable)stageDraft();
+    if(staging && stageable && !attach.busy && !clipboardBusy)stageDraft();
   }
   // One explicit second try: bind again and send the draft once. A draft edited since the failure is put back first.
   function retry() {
@@ -188,19 +196,27 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   // Automatic binding is given a chance first; Stage is the way out once it was refused or lost.
   const bindingPending=live && automatic && !control?.failed;
   const staging=!ready && stage && !bindingPending;
-  const canSubmit=sendable || (staging && !!text.trim() && text.length<=LIMIT && !attach.busy);
+  const canSubmit=sendable || (staging && !!text.trim() && text.length<=LIMIT && !attach.busy && !clipboardBusy);
   // A conversation that can neither take input nor be staged has nothing to compose; the options menu says why.
   if(!labels && !stage)return null;
   const dropping=(event:DragEvent)=>event.dataTransfer.types.includes('Files');
   return <section ref={box} className="agent-composer" data-attachment-open={attachmentOpen || undefined} data-busy={control?.busy || undefined} data-ready={ready || undefined} aria-label={t('agentComposerTitle')}
     onDragOver={event=>{if(dropping(event))event.preventDefault();}} onDrop={event=>{if(!dropping(event))return;event.preventDefault();void attach.upload([...event.dataTransfer.files]);}}>
-    {attachmentOpen && access.current() && <div className="agent-composer-attach">
-      <button type="button" className="subtle-button" onClick={()=>setAttachmentOpen(false)}><ArrowLeft size={18} aria-hidden="true"/>{t('navigationBack')}</button>
-      <p>{t('chatAttachmentScope')}</p>
-      <AttachmentPanel key={sessionId} sessionId={sessionId} onAttach={(path,uploaded)=>{
-        if(!access.current() || current.current!==key || composing.current)return;
-        attach.add({path,...uploaded});setAttachmentOpen(false);field.current?.focus({preventScroll:true});
-      }}/>
+    {attachmentOpen && access.current() && <div className="agent-composer-attach" role="group" aria-label={t('chatAddAttachment')}>
+      <label><FilePlus2 size={18} aria-hidden="true"/>{t('attachmentChoose')}<input aria-label={t('attachmentChooseLabel')} type="file" multiple disabled={attach.busy || clipboardBusy} onChange={event=>{const files=[...event.target.files ?? []];event.target.value='';if(files.length)void attach.upload(files).then(ok=>{if(ok)setAttachmentOpen(false);});}} /></label>
+      <label><Camera size={18} aria-hidden="true"/>{t('attachmentPhoto')}<input aria-label={t('attachmentPhotoLabel')} type="file" accept="image/*" capture="environment" disabled={attach.busy || clipboardBusy} onChange={event=>{const files=[...event.target.files ?? []];event.target.value='';if(files.length)void attach.upload(files).then(ok=>{if(ok)setAttachmentOpen(false);});}} /></label>
+      <button type="button" disabled={attach.busy || clipboardBusy || clipboardPlatform.phase==='loading'} onClick={()=>{
+        if(clipboardPlatform.phase!=='ready'){void clipboardPlatform.retry();return;}
+        if(clipboardRead.current)return;
+        const read=new AbortController();clipboardRead.current=read;setClipboardBusy(true);setClipboardError('');
+        void readClipboardImage(read.signal).then(file=>{if(!read.signal.aborted)return attach.upload([file]);return false;}).then(ok=>{if(ok && !read.signal.aborted)setAttachmentOpen(false);}).catch(error=>{if(!read.signal.aborted)setClipboardError(captureUiError(error));}).finally(()=>{if(clipboardRead.current===read){clipboardRead.current=null;setClipboardBusy(false);}});
+      }}>{t(clipboardPlatform.phase==='ready'?'attachmentPaste':clipboardPlatform.phase==='loading'?'clipboardChecking':'clipboardRetry')}</button>
+      <details className="agent-composer-attach-options" onToggle={event=>setAttachmentOptions(event.currentTarget.open)}><summary>{t('attachmentOptions')}</summary>
+        {attachmentOptions && <AttachmentPanel key={sessionId} sessionId={sessionId} onAttach={(path,uploaded)=>{
+          if(!access.current() || current.current!==key || composing.current)return;
+          attach.add({path,...uploaded});setAttachmentOpen(false);setAttachmentOptions(false);field.current?.focus({preventScroll:true});
+        }}/> }
+      </details>
     </div>}
     {popup && <AgentComposerPalette id={paletteId} label={popup.label} items={popup.items} active={Math.min(slashIndex,popup.items.length-1)} onPick={popup.pick} onHover={setSlashIndex}/>}
     {mode && <span className="agent-composer-mode" data-mode={mode}>{t(mode==='bash'?'agentModeBash':'agentModeMemory')}</span>}
@@ -230,7 +246,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
           }
           if(event.key==='Enter' && !event.shiftKey && (event.metaKey || event.ctrlKey || !coarse())){event.preventDefault();submit();}
         }}/>
-      <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>setAttachmentOpen(open=>!open)}><Paperclip size={18} aria-hidden="true"/></button>
+      <button type="button" className="icon-button" disabled={!access.current()} aria-expanded={attachmentOpen} aria-label={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} title={t(attachmentOpen?'chatCloseAttachment':'chatAddAttachment')} onClick={()=>{setAttachmentOpen(open=>!open);setAttachmentOptions(false);}}><Paperclip size={18} aria-hidden="true"/></button>
       {modeSwitch.button}
       {stoppable && <button type="button" className="icon-button agent-composer-stop" data-armed={stopArmed || undefined} disabled={control!.busy || !access.current()} aria-label={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} title={t(stopArmed?'agentComposerStopConfirm':'chatTerminalStop')} onClick={()=>{endComposition();if(stopArmed){setStopArmed(false);control!.stop();}else setStopArmed(true);}}><Square size={16} aria-hidden="true"/></button>}
       {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}>{control?.busy ? <LoaderCircle size={18} aria-hidden="true"/> : <SendHorizontal size={18} aria-hidden="true"/>}</button>}
@@ -251,7 +267,9 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
     {state && !(notice && (state==='notSent' || state==='uncertain')) && <p role="status" className="agent-composer-receipt" data-state={state}>{t(({sending:'agentReceiptSending',submitted:'agentReceiptSubmitted',sent:'agentReceiptSent',queued:'agentReceiptQueued',unconfirmed:'agentReceiptUnconfirmed',notSent:'agentReceiptNotSent',uncertain:'agentReceiptUncertain'} as const)[state])}
       {canRetry(state) && control && <> <button type="button" className="subtle-button" disabled={control.busy} onClick={retry}>{t('agentReceiptRetry')}</button></>}</p>}
     {modeSwitch.note}
-    {attach.busy && <p role="status" className="agent-composer-note">{t('attachmentUploading')}</p>}
+    {attach.cancelled && <p role="status" className="agent-composer-note">{t('uploadCancelledWarning')}</p>}
+    {attach.busy && <p role="status" className="agent-composer-note">{t('attachmentUploading')} <button type="button" onClick={attach.cancel}>{t('attachmentCancel')}</button></p>}
+    {clipboardError && <p role="alert" className="agent-composer-note">{uiErrorText(clipboardError)}</p>}
     {attach.error && <p role="alert" className="agent-composer-note">{uiErrorText(attach.error)}</p>}
     {holdSend && ready && <p role="status" className="agent-composer-note">{t('agentComposerAnswerFirst')}</p>}
     {tooLong && <p role="status" className="agent-composer-note">{t('agentComposerTooLong',{limit:formatNumber(bytes)})}</p>}

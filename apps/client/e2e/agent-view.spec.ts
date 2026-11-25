@@ -1412,9 +1412,11 @@ test('a pasted or picked file becomes a token chip that survives edits and reach
   await expect(draft).toHaveValue('compare [Image #1] ');
   // Pick through the paperclip, the only way on a phone.
   await agent.getByRole('button',{name:'Add attachment',exact:true}).click();
+  const choices=agent.getByRole('group',{name:'Add attachment',exact:true});
+  await expect(choices).toBeVisible();
+  expect((await choices.boundingBox())!.height).toBeLessThan(160);
+  await expect(draft).toBeVisible();
   await page.getByLabel('Choose attachment',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('notes')});
-  await page.getByRole('button',{name:'Upload attachment',exact:true}).click();
-  await page.getByRole('button',{name:'Add uploaded path to Chat draft',exact:true}).click();
   await expect(draft).toHaveValue('compare [Image #1] [File #2] ');
   const chips=agent.getByRole('list',{name:'Draft attachments',exact:true});
   await expect(chips.getByRole('listitem')).toHaveText(['[Image #1] before.png','[File #2] notes.txt']);

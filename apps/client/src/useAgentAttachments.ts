@@ -1,4 +1,4 @@
-import {useEffect,useMemo,useRef,useState} from 'react';
+import {useEffect,useMemo,useRef,useState,type RefObject} from 'react';
 import {useProtectedApi} from './access';
 import {api as nativeApi} from './bridge';
 import {checkAttachment,imageSize} from './attachment';
@@ -13,8 +13,8 @@ const held=new Map<string,readonly ComposerAttachment[]>();
 /** Uploaded files in the Agent composer, as the terminal composer holds them: a numbered token in the draft that stays whole
  * under any edit and becomes the host path the upload returned only when the draft is sent. Pasting or dropping a file uploads it
  * through the same attachment path as the paperclip. */
-export function useAgentAttachments({key,sessionId,draft,caret,limit,edit,place}:{
-  key:string;sessionId:string;draft:string;caret:number;limit:number;
+export function useAgentAttachments({key,sessionId,draft,caret,limit,composing,edit,place}:{
+  key:string;sessionId:string;draft:string;caret:number;limit:number;composing:RefObject<boolean>;
   /** Replace the whole draft. */
   edit:(next:string)=>void;
   /** Put the caret here once the replaced draft is on screen. */
@@ -23,7 +23,15 @@ export function useAgentAttachments({key,sessionId,draft,caret,limit,edit,place}
   const [all,setAll]=useState(()=>held.get(key)??[]);
   const [error,setError]=useState<UiErrorCause>('');
   const api=useProtectedApi(nativeApi);
-  const job=useHostUpload(api,sessionId,failure=>setError(captureUiError(failure)));
+  const failed=useRef(false);
+  const job=useHostUpload(api,sessionId,failure=>{failed.current=true;setError(captureUiError(failure));});
+  const operation=useRef(0);
+  const pending=useRef<number | undefined>(undefined);
+  const [reading,setReading]=useState(false);
+  const deferred=useRef<StagedComposerAttachment[]>([]);
+  const owner=useRef(key);
+  if(owner.current!==key){owner.current=key;operation.current++;deferred.current=[];}
+  useEffect(()=>()=>{operation.current++;},[key,sessionId]);
   const latest=useRef({draft,caret,all,key});latest.current={draft,caret,all,key};
   const before=useRef<{value:string;attachments:readonly ComposerAttachment[]}|null>(null);
   const lastCaret=useRef<number|undefined>(undefined);
@@ -45,22 +53,29 @@ export function useAgentAttachments({key,sessionId,draft,caret,limit,edit,place}
     save([...all,attachment]);edit(inserted.value);place(inserted.caret);
   }
   async function upload(files:readonly File[]) {
-    if(job.active())return;
-    setError('');
+    if(pending.current!==undefined || job.active())return false;
+    const current=++operation.current;pending.current=current;setReading(true);
+    failed.current=false;setError('');
+    try {
     for(const file of files) {
       try {
         checkAttachment(file);
         const bytes=new Uint8Array(await file.arrayBuffer());
+        if(current!==operation.current)return false;
         const size=imageSize(bytes);
         if(size && file.type && file.type!==size.mime && file.type!=='application/octet-stream')throw new LocalUiError('attachmentTypeMismatch');
         const image=!!size || file.type.startsWith('image/');
         const preview=image?new Blob([bytes],{type:size?.mime??file.type}):undefined;
-        await job.start(async()=>({path:file.name,bytes,temporary:true}),path=>add({kind:image?'image':'file',path,name:file.name,preview}));
-      } catch(failure) {setError(captureUiError(failure));return;}
+        await job.start(async()=>({path:file.name,bytes,temporary:true}),path=>{if(current===operation.current){const staged={kind:image?'image' as const:'file' as const,path,name:file.name,preview};if(composing.current)deferred.current.push(staged);else add(staged);}});
+        if(current!==operation.current || failed.current)return false;
+      } catch(failure) {if(current===operation.current)setError(captureUiError(failure));return false;}
     }
+    return current===operation.current;
+    } finally {if(pending.current===current){pending.current=undefined;setReading(false);}}
   }
   return {
-    list,expanded,error,busy:job.busy,add,upload,
+    list,expanded,error,busy:reading || job.busy,cancelled:job.cancelled,add,upload,
+    cancel:()=>{operation.current++;job.cancel();},
     dismiss:()=>setError(''),
     remove:(attachment:ComposerAttachment)=>edit(removeComposerToken(latest.current.draft,attachment)),
     /** An edit that touches part of a token removes the whole token; IME composition is corrected once it commits. */
@@ -74,10 +89,13 @@ export function useAgentAttachments({key,sessionId,draft,caret,limit,edit,place}
       begin:()=>{before.current={value:latest.current.draft,attachments:list};},
       end(committed:string) {
         const start=before.current;before.current=null;
-        if(!start)return;
-        const corrected=atomicComposerEdit(start.value,committed,start.attachments);
-        if(corrected.caret===undefined)return;
-        edit(corrected.value);place(corrected.caret);
+        if(start){
+          const corrected=atomicComposerEdit(start.value,committed,start.attachments);
+          latest.current.draft=corrected.value;
+          if(corrected.caret!==undefined){latest.current.caret=corrected.caret;edit(corrected.value);place(corrected.caret);}
+        }
+        const waiting=deferred.current;deferred.current=[];
+        for(const staged of waiting){try{add(staged);}catch(failure){setError(captureUiError(failure));break;}}
       },
     },
     /** Keep the caret and selection outside a token. */
