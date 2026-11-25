@@ -54,6 +54,12 @@ What the measurement settles. The desk study's open question, whether a transpar
 Decision for the plan: the Windows composition gate is **provisionally passed on a hosted runner** for that arrangement and is **not accepted**. [#1332](https://github.com/mihazs/lazysh/issues/1332) stays open: the app's own window and Tauri's setup, per-monitor DPI, IME through TSF, device-reset recovery, Narrator and NVDA, a real GPU, and the kill switch are still to be shown, so **Windows keeps xterm.js, Auto resolves to xterm.js there and the Native option stays disabled with the reason** until its native surface exists and passes ([S4](terminal-migration-plan.md#rollout-stages), [G19](terminal-migration-plan.md#acceptance-gates-and-evidence)). These runs are the pull request's; the run on `main` after the merge is the evidence the plan counts.
 
 
+## App integration
+
+The feature-enabled Windows app hosts a D3D12 renderer in a child HWND below WebView2. Its surface commands place the child in device pixels using the CSS anchor and report the drawable size. The web view keeps input ownership. The renderer worker stops before its child window is destroyed.
+
+The Windows probe workflow also compiles the feature-enabled app and tests fractional and high-DPI anchor conversion. Real app capture, per-monitor DPI transitions, input, accessibility, device recovery and rollback still need their own acceptance evidence for [#1332](https://github.com/mihazs/lazysh/issues/1332).
+
 ## What this does not establish
 
 - **No hardware.** A hosted runner has no GPU (Direct3D 12 is WARP) and no physical display: a real driver's swapchain, its DirectFlip and independent flip paths, and multiple monitors are not measured. **Accepted risk, not measured.**

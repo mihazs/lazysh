@@ -87,10 +87,19 @@ exit 28
 
 test('both Zig downloads allow slow progress and still verify the archive before extraction', async () => {
   const linux = (await document('.github/actions/ghostty-zig/action.yml')).runs.steps;
-  const windows = (await document('.github/workflows/checks.yml')).jobs['terminal-windows'].steps;
-  for (const steps of [linux, windows]) {
-    const step = steps.find((step: any) => step.name === 'Provision checksum-verified Zig 0.16.0 outside the checkout');
-    const [download, verify, extract] = step.run.trim().split('\n').slice(1, 4);
+  const windows = await readFile(join(project, '.github/scripts/windows-terminal-zig.sh'), 'utf8');
+  const linuxStep = linux.find((step: any) => step.name === 'Provision checksum-verified Zig 0.16.0 outside the checkout');
+  const windowsDownload = windows.split('\n').findIndex(line => line.startsWith('LAZYSH_RESUME_PINNED_DOWNLOAD=1'));
+  expect(windowsDownload).toBeGreaterThan(0);
+  const checks = (await document('.github/workflows/checks.yml')).jobs['terminal-windows'].steps;
+  const app = (await document('.github/workflows/windows-surface-probe.yml')).jobs['terminal-windows-app-host'].steps;
+  for (const steps of [checks, app]) {
+    expect(steps.some((step: any) => step.run?.includes('sh .github/scripts/windows-terminal-zig.sh'))).toBe(true);
+  }
+  for (const [download, verify, extract] of [
+    linuxStep.run.trim().split('\n').slice(1, 4),
+    windows.split('\n').slice(windowsDownload, windowsDownload + 3),
+  ]) {
     expect(download).toContain('LAZYSH_RESUME_PINNED_DOWNLOAD=1');
     expect(download).toContain("--proto '=https' --tlsv1.2 --connect-timeout 20");
     expect(download).toContain('--speed-limit 1024 --speed-time 30 --max-time 720');

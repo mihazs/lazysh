@@ -10,14 +10,16 @@ name: windows-surface-probe
 # Results and limits: docs/architecture/windows-surface-composition-poc.md.
 on:
   pull_request:
-    paths:
+    paths: &surface-paths
       - packages/terminal-runtime/prototypes/windows-surface/**
       - .github/workflows/windows-surface-probe.yml
+      - .github/scripts/windows-terminal-zig.sh
+      - apps/client/src-tauri/src/native_terminal_surface.rs
+      - apps/client/src-tauri/src/native_terminal_surface/windows.rs
+      - packages/terminal-renderer-wgpu/src/adapter.rs
   push:
     branches: [main]
-    paths:
-      - packages/terminal-runtime/prototypes/windows-surface/**
-      - .github/workflows/windows-surface-probe.yml
+    paths: *surface-paths
   workflow_dispatch:
 
 permissions:
@@ -75,3 +77,37 @@ jobs:
           path: ${{ runner.temp }}/windows-surface
           if-no-files-found: warn
           retention-days: 7
+
+  terminal-windows-app-host:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out LF line endings
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.1
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/lazysh-pinned-downloads
+          key: lazysh-pinned-downloads-terminal-windows-v1-zig68659eb5
+      - name: Provision Zig and the Windows SDK description
+        run: |
+          root="$(cygpath -m "$RUNNER_TEMP")/lazysh-terminal-windows-app"
+          sh .github/scripts/windows-terminal-zig.sh "$root"
+          {
+            echo "ZIG=$root/zig-x86_64-windows-0.16.0/zig.exe"
+            echo "LIBGHOSTTY_VT_WINDOWS_LIBC=$root/windows-libc.txt"
+            echo "ZIG_LOCAL_CACHE_DIR=$root/zig-local"
+            echo "ZIG_GLOBAL_CACHE_DIR=$root/zig-global"
+            echo "CARGO_TARGET_DIR=$root/target"
+          } >> "$GITHUB_ENV"
+      - name: Build the native-enabled app and run the Windows anchor test
+        run: |
+          args=(--manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib)
+          case_name=native_terminal_surface::windows::tests::anchor_edges_map_to_physical_client_pixels
+          sh .github/scripts/retry-zig-fetch.sh cargo test "${args[@]}" --no-run
+          cargo test "${args[@]}" -- --list --exact "$case_name" | grep -Fx "$case_name: test"
+          cargo test "${args[@]}" -- --exact "$case_name"
