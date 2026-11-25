@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import {StrictMode,useState} from 'react';
+import {StrictMode,useEffect,useRef,useState,type ComponentProps} from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AgentPanel, parseReportedHistory, parseSnapshot,type ReportedHistorySource } from './AgentPanel';
@@ -32,6 +32,13 @@ async function pollingClock(run:(invoke:typeof import('@tauri-apps/api/core').in
 beforeEach(()=>{generation+=10;access();});
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+function SetupBoard(props:ComponentProps<typeof AgentPanel>) {
+  const [opened,setOpened]=useState(false),[expanded,setExpanded]=useState(false),[target,setTarget]=useState<HTMLDivElement|null>(null);
+  const initial=useRef(props.sessionId);
+  useEffect(()=>{if(initial.current!==props.sessionId){initial.current=props.sessionId;setOpened(false);setExpanded(false);}},[props.sessionId]);
+  return <><AgentPanel {...props} settingsTarget={opened ? target : null} settingsActive={expanded} onOpenSetup={()=>{setOpened(true);setExpanded(value=>!value);}}/>
+    <div ref={setTarget} hidden={!expanded}/></>;
+}
 describe('agent activity', () => {
   it('accepts versioned snapshots and rejects malformed host data', () => {
     expect(parseSnapshot({ schemaVersion: 1, sessions: [session] })).toEqual([session]);
@@ -57,7 +64,7 @@ describe('agent activity', () => {
   it('shows actual host events without an unimplemented approval action', async () => {
     const { invoke } = await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockResolvedValue({ schemaVersion: 1, sessions: [session] });
-    render(<AgentPanel sessionId="ssh-one" />);
+    render(<SetupBoard sessionId="ssh-one" />);
     expect(await screen.findByText('Permission requested')).toBeTruthy();
     expect(invoke).toHaveBeenCalledWith('agent_snapshot', { sessionId: 'ssh-one' }, { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(screen.queryByRole('button', { name: /allow|approve/i })).toBeNull();
@@ -65,9 +72,10 @@ describe('agent activity', () => {
   it('explains setup when the host companion is unavailable', async () => {
     const { invoke } = await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockRejectedValue({ message: 'lazysh-agent: command not found' });
-    render(<AgentPanel sessionId="ssh-one" />);
+    render(<SetupBoard sessionId="ssh-one" />);
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText('Connect your agents.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));
     expect(screen.getByRole('button',{name:'Install companion'})).toBeTruthy();
     expect(invoke).not.toHaveBeenCalledWith('get_companion_settings',expect.anything(), { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
@@ -78,9 +86,10 @@ describe('agent activity', () => {
       if(command==='agent_snapshot')return args && 'sessionId' in args && args.sessionId==='new-host'?new Promise(()=>{}):Promise.resolve({schemaVersion:1,sessions:[]});
       return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
     });
-    const {rerender}=render(<AgentPanel sessionId="old-host"/>);
+    const {rerender}=render(<SetupBoard sessionId="old-host"/>);
+    fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));
     await waitFor(()=>expect(invoke).toHaveBeenCalledWith('get_companion_settings',{sessionId:'old-host'}, { headers: { "X-Lazysh-Access": expect.any(String) } }));
-    rerender(<AgentPanel sessionId="new-host"/>);
+    rerender(<SetupBoard sessionId="new-host"/>);
     expect(invoke).not.toHaveBeenCalledWith('get_companion_settings',{sessionId:'new-host'}, { headers: { "X-Lazysh-Access": expect.any(String) } });
     expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
   });
@@ -111,14 +120,14 @@ it('offers exact reported Claude history only after the selected row action and 
 });
 it.each(['missing','ambiguous'] as const)('keeps the board/settings and manual fallback usable for %s metadata',async status=>{
   const invoke=await historyFixture({schemaVersion:1,status,sessionId:'a'});const route=vi.fn();
-  render(<AgentPanel sessionId="ssh-one" onUseReportedHistory={route}/>);fireEvent.click(await screen.findByRole('button',{name:'Use reported history'}));
+  render(<SetupBoard sessionId="ssh-one" onUseReportedHistory={route}/>);fireEvent.click(await screen.findByRole('button',{name:'Use reported history'}));
   await screen.findByText(t(status==='missing'?'agentsHistoryMissing':'agentsHistoryAmbiguous'));
   expect(screen.getByText(t('agentsHistoryManual'))).toBeTruthy();expect(screen.getByText('Permission requested')).toBeTruthy();
   fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));expect(screen.getByRole('region',{name:'Host companion settings'})).toBeTruthy();expect(route).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button',{name:'Refresh'}));await waitFor(()=>expect(invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(2));
 });
 it.each(['old companion: unrecognized arguments: reported-history','agentsHistoryInvalid'])('keeps old companion/raw failures verbatim with a static manual hint: %s',async raw=>{
-  await historyFixture(()=>Promise.reject(raw));render(<AgentPanel sessionId="ssh-one" onUseReportedHistory={vi.fn()}/>);
+  await historyFixture(()=>Promise.reject(raw));render(<SetupBoard sessionId="ssh-one" onUseReportedHistory={vi.fn()}/>);
   fireEvent.click(await screen.findByRole('button',{name:'Use reported history'}));expect(await screen.findByRole('alert')).toHaveProperty('textContent',raw);
   expect(screen.getByText(t('agentsHistoryManual'))).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));expect(screen.getByRole('region',{name:'Host companion settings'})).toBeTruthy();
 });
@@ -164,7 +173,7 @@ it.each(['source','activity'] as const)('does not let an old lookup settle a new
 it.each(['en','pt-BR','es'])('keeps reported-history action and fallback localized in %s',async locale=>{
   await historyFixture({schemaVersion:1,status:'missing',sessionId:'a'});
   try {
-    await uiI18n.changeLanguage(locale);render(<AgentPanel sessionId="ssh-one" onUseReportedHistory={vi.fn()}/>);
+    await uiI18n.changeLanguage(locale);render(<SetupBoard sessionId="ssh-one" onUseReportedHistory={vi.fn()}/>);
     fireEvent.click(await screen.findByRole('button',{name:t('agentsHistoryUse')}));
     await screen.findByText(t('agentsHistoryMissing'));expect(screen.getByText(t('agentsHistoryManual'))).toBeTruthy();
   } finally {await uiI18n.changeLanguage('en');}
@@ -316,16 +325,16 @@ it.each(['hidden','locked'] as const)('does not move focus for queued report sel
   } finally {draft.remove();}
 });
 it('suspends the same board while preserving its query and settings draft, then explicitly resumes its source',async()=>{
-  const invoke=await historyFixture(reported);const view=render(<AgentPanel sessionId="visible-board"/>);
+  const invoke=await historyFixture(reported);const view=render(<SetupBoard sessionId="visible-board"/>);
   await screen.findByText('Permission requested');
   const query=screen.getByRole('searchbox');fireEvent.change(query,{target:{value:'/work'}});
   fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));
   const usage=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});fireEvent.click(usage);
   const before=invoke.mock.calls.length;
-  view.rerender(<AgentPanel sessionId="visible-board" visible={false}/>);
+  view.rerender(<SetupBoard sessionId="visible-board" visible={false}/>);
   expect(screen.queryByRole('searchbox')).toBeNull();expect(query).toHaveProperty('value','/work');
   expect(invoke.mock.calls.length).toBe(before);
-  view.rerender(<AgentPanel sessionId="visible-board"/>);await screen.findByText('Permission requested');
+  view.rerender(<SetupBoard sessionId="visible-board"/>);await screen.findByText('Permission requested');
   expect(screen.getByRole('searchbox')).toBe(query);expect(usage).toHaveProperty('checked',false);
   expect(invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
   expect(invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(2);
@@ -359,7 +368,7 @@ it('refreshes reported activity only on the foreground visible board without rel
     view.rerender(<AgentPanel sessionId="live-board" visible={false}/>);
     await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(snapshots()).toBe(3);
     view.rerender(<AgentPanel sessionId="live-board"/>);await act(async()=>{});expect(snapshots()).toBe(4);
-    expect(invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(1);
+    expect(invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(0);
     expect(invoke.mock.calls.filter(([command])=>command==='agent_reported_history')).toHaveLength(0);
     view.unmount();
     await act(async()=>{await vi.advanceTimersByTimeAsync(10000);});expect(snapshots()).toBe(4);
@@ -400,7 +409,8 @@ it('refreshes a newly installed companion before a held pre-install read can pub
     if(command==='install_companion')return new Promise(resolve=>{finishInstall=resolve;});
     return Promise.resolve({schemaVersion:1,revision:0,transcriptDiscoveryEnabled:true,recordedUsageEnabled:true,deviceToolsEnabled:true});
   });
-  render(<AgentPanel sessionId="install-race"/>);
+  render(<SetupBoard sessionId="install-race"/>);
+  await screen.findByText('Missing companion');fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));
   fireEvent.click(await screen.findByRole('button',{name:'Install companion'}));
   await screen.findByText('Missing companion');
   fireEvent.click(screen.getByRole('button',{name:'Refresh'}));expect(reads).toBe(2);
@@ -973,10 +983,10 @@ describe('Herdr reported-session details',()=>{
 });
 
 it('keeps healthy setup collapsed while preserving mounted settings and hook drafts across explicit toggles',async()=>{
-  const invoke=await historyFixture(reported);const view=render(<AgentPanel sessionId="healthy-setup" showHerdr={false}/>);
+  const invoke=await historyFixture(reported);const view=render(<SetupBoard sessionId="healthy-setup" showHerdr={false}/>);
   await screen.findByText('Permission requested');
   const setup=screen.getByRole('button',{name:t('agentsSetupAction')});
-  expect(setup.getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
   expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
   fireEvent.click(setup);
   const settings=await screen.findByRole('region',{name:'Host companion settings'});
@@ -984,13 +994,13 @@ it('keeps healthy setup collapsed while preserving mounted settings and hook dra
   fireEvent.change(screen.getByLabelText(t('hooksProvider')),{target:{value:'codex'}});
   const hookProfile=screen.getByPlaceholderText('/home/user/.codex');fireEvent.change(hookProfile,{target:{value:'/owned/private/.codex'}});
   const usage=within(settings).getByRole('checkbox',{name:'Recorded usage inspection'});fireEvent.click(usage);
-  fireEvent.click(setup);expect(setup.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(setup);expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
   expect(screen.getByText('Permission requested')).toBeTruthy();
   fireEvent.click(setup);expect(screen.getByRole('region',{name:'Host companion settings'})).toBe(settings);
   expect(hookProfile).toHaveProperty('value','/owned/private/.codex');expect(usage).toHaveProperty('checked',false);
   expect(invoke.mock.calls.filter(([name])=>name==='get_companion_settings')).toHaveLength(1);
-  view.rerender(<AgentPanel sessionId="other-setup" showHerdr={false}/>);
-  await waitFor(()=>expect(setup.getAttribute('aria-expanded')).toBe('false'));
+  view.rerender(<SetupBoard sessionId="other-setup" showHerdr={false}/>);
+  await waitFor(()=>expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull());
   expect(screen.queryByRole('region',{name:'Host companion settings'})).toBeNull();
 });
 it.each(['standalone','navigation'])('collapses the healthy single-server %s chooser and retains its selected reader when expanded',async surface=>{
@@ -1012,9 +1022,9 @@ it.each(['standalone','navigation'])('collapses the healthy single-server %s cho
 
 it('offers empty Activity a direct hook-setup action without automatic inspection or installation',async()=>{
   const invoke=await historyFixture(reported,[]);
-  render(<AgentPanel sessionId="empty-activity" showHerdr={false}/>);
+  render(<SetupBoard sessionId="empty-activity" showHerdr={false}/>);
   await screen.findByText(t('agentsEmpty'));
-  expect(screen.getByRole('button',{name:t('agentsSetupAction')}).getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByRole('region',{name:t('agentsSetupAction')})).toBeNull();
   fireEvent.click(screen.getByRole('button',{name:t('hooksTitle')}));
   const setup=screen.getByRole('region',{name:t('agentsSetupAction')});
   const provider=within(setup).getByLabelText(t('hooksProvider'));
@@ -1044,7 +1054,7 @@ describe('project groups and archive', () => {
 
   it('groups each state by project on the connected host, newest project first', async () => {
     await board({current:[report('a1','/work/api','API one','2026-10-24T19:35:00Z'),report('b1','/work/docs','Docs one','2026-10-24T19:34:00Z'),report('a2','/work/api','API two','2026-10-24T19:33:00Z'),{...report('c1','/work/api','API done','2026-10-24T19:32:00Z'),state:'done'}]});
-    render(<AgentPanel sessionId="ssh-one" hostKey="host-1" hostLabel="Build box" showHerdr={false}/>);
+    render(<SetupBoard sessionId="ssh-one" hostKey="host-1" hostLabel="Build box" showHerdr={false}/>);
     await screen.findByText('API one');
     expect(groupNames('Working')).toEqual(['api on Build box','docs on Build box']);
     expect(groupNames('Done')).toEqual(['api on Build box']);
@@ -1055,7 +1065,7 @@ describe('project groups and archive', () => {
   it('archives a report on this device until a newer event, and forgets it after age-out', async () => {
     const rows={current:[report('a1','/work/api','API one','2026-10-24T19:35:00Z'),report('b1','/work/docs','Docs one','2026-10-24T19:34:00Z')]};
     await board(rows);
-    const view=render(<AgentPanel sessionId="ssh-one" hostKey="host-1" hostLabel="Build box" showHerdr={false}/>);
+    const view=render(<SetupBoard sessionId="ssh-one" hostKey="host-1" hostLabel="Build box" showHerdr={false}/>);
     await screen.findByText('API one');
     fireEvent.click(screen.getByRole('button',{name:'Archive Claude Code report for api'}));
     expect(screen.queryByText('API one')).toBeNull();
@@ -1090,7 +1100,7 @@ describe('project groups and archive', () => {
 
   it('keeps archives separate per host', async () => {
     await board({current:[report('a1','/work/api','API one','2026-10-24T19:35:00Z')]});
-    const view=render(<AgentPanel sessionId="ssh-one" hostKey="host-1" showHerdr={false}/>);
+    const view=render(<SetupBoard sessionId="ssh-one" hostKey="host-1" showHerdr={false}/>);
     fireEvent.click(await screen.findByRole('button',{name:'Archive Claude Code report for api'}));
     view.unmount();
     render(<AgentPanel sessionId="ssh-two" hostKey="host-2" showHerdr={false}/>);
@@ -1105,8 +1115,9 @@ it('tells a local session to place lazysh-agent on this device instead of offeri
     if(command==='get_companion_settings')throw new Error('lazysh-agent is not available on this device');
     return undefined;
   });
-  render(<AgentPanel sessionId="local:one" hostKey="local:default" hostLabel="This device" local />);
+  render(<SetupBoard sessionId="local:one" hostKey="local:default" hostLabel="This device" local />);
   expect(await screen.findByText(t('agentsSetupLocal'))).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));
   expect(screen.getByText(t('companionLocalNote'))).toBeTruthy();
   expect(screen.queryByText(t('companionInstallTitle'))).toBeNull();
   expect(screen.queryByText(t('agentsSetup'))).toBeNull();
@@ -1114,7 +1125,48 @@ it('tells a local session to place lazysh-agent on this device instead of offeri
 it.each([['bundled','Bundled'],['managed','Managed copy'],['path','On PATH']] as const)('names the %s companion a local session runs',async(source,label)=>{
   const {invoke}=await import('@tauri-apps/api/core');
   vi.mocked(invoke).mockResolvedValue({schemaVersion:1,sessions:[]});
-  render(<AgentPanel sessionId="local:one" hostKey="local:default" hostLabel="This device" local companionSource={source}/>);
+  render(<SetupBoard sessionId="local:one" hostKey="local:default" hostLabel="This device" local companionSource={source}/>);
+  fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));
   expect(await screen.findByText(`The companion runs on this device, with no SSH install. Source: ${label}.`)).toBeTruthy();
   expect(screen.queryByText(t('companionInstallTitle'))).toBeNull();
+});
+
+it('places activity configuration in Preferences while keeping the board usable',async()=>{
+  await historyFixture(reported);
+  const preferences=document.createElement('div');
+  document.body.append(preferences);
+  const open=vi.fn();
+  try {
+    const view=render(<AgentPanel sessionId="settings-host" showHerdr={false} settingsTarget={null} onOpenSetup={open}/>);
+    await screen.findByText('Permission requested');
+    fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));
+    expect(open).toHaveBeenCalledOnce();
+    expect(within(view.container).queryByRole('region',{name:'Host companion settings'})).toBeNull();
+    view.rerender(<AgentPanel sessionId="settings-host" showHerdr={false} settingsTarget={preferences} settingsActive onOpenSetup={open}/>);
+    expect(await within(preferences).findByRole('region',{name:'Host companion settings'})).toBeTruthy();
+    expect(within(preferences).getByText(t('hooksTitle'))).toBeTruthy();
+    expect(within(preferences).getByText(t('companionInstallTitle'))).toBeTruthy();
+    expect(within(preferences).getByText(t('keepAwakeLabel'))).toBeTruthy();
+    expect(within(view.container).queryByRole('region',{name:'Host companion settings'})).toBeNull();
+    view.rerender(<AgentPanel sessionId="settings-host" showHerdr={false} settingsTarget={null} onOpenSetup={open}/>);
+    expect(preferences.childNodes).toHaveLength(0);
+    expect(screen.getByText('Permission requested')).toBeTruthy();
+  } finally {preferences.remove();}
+});
+it('keeps hidden Preferences setup idle and reveals a requested hook after the page becomes active',async()=>{
+  const invoke=await historyFixture(reported,[]);
+  const target=document.createElement('div');document.body.append(target);
+  const open=vi.fn();
+  try {
+    const view=render(<AgentPanel sessionId="setup-idle" showHerdr={false} visible={false} settingsTarget={target} onOpenSetup={open}/>);
+    expect(invoke.mock.calls.filter(([command])=>command==='agent_snapshot')).toHaveLength(0);
+    expect(invoke.mock.calls.filter(([command])=>command==='get_companion_settings')).toHaveLength(0);
+    view.rerender(<AgentPanel sessionId="setup-idle" showHerdr={false} visible settingsTarget={target} onOpenSetup={open}/>);
+    await screen.findByText(t('agentsEmpty'));
+    fireEvent.click(screen.getByRole('button',{name:t('hooksTitle')}));
+    expect(open).toHaveBeenCalledOnce();
+    view.rerender(<AgentPanel sessionId="setup-idle" showHerdr={false} visible settingsTarget={target} settingsActive onOpenSetup={open}/>);
+    const hooks=within(target).getByText(t('hooksTitle')).closest('details');
+    await waitFor(()=>expect(hooks).toHaveProperty('open',true));
+  } finally {target.remove();}
 });

@@ -83,16 +83,26 @@ it.each([false,true])('returns to the opening session or skips its closed origin
   expect(mocks.api.connect).toHaveBeenCalledTimes(2);expect(mocks.api.disconnect).toHaveBeenCalledTimes(closeOrigin?1:0);
 });
 
-it('opens the existing Agents sidebar installer from account usage setup without starting installation',async()=>{
+it('opens the Preferences installer from account usage setup without starting installation',async()=>{
   mocks.accountUsageCompanionRequired=true;mocks.realAgents=true;
   mocks.api.connect.mockResolvedValue({sessionId:'usage-needs-companion'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));
   await screen.findByText('Live SSH terminal');await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
   await user.click(await screen.findByRole('button',{name:'Install or update companion'}));
   expect((await screen.findByRole('button',{name:'Install companion'})).closest('[hidden]')).toBeNull();
-  expect(screen.getByRole('button',{name:t('navigationAgents')}).getAttribute('aria-current')).toBe('page');
+  const preferences=within(screen.getByRole('dialog',{name:'Preferences'}));
+  expect(preferences.getByRole('button',{name:'Install companion'})).toBeTruthy();
   expect(mocks.invoke.mock.calls.some(([command])=>command==='companion_install')).toBe(false);
   expect(mocks.api.disconnect).not.toHaveBeenCalled();
+  await user.click(preferences.getByRole('button',{name:'Back'}));
+  await user.type(preferences.getByRole('searchbox',{name:'Search settings'}),'About lazysh');
+  await user.click(preferences.getByRole('button',{name:'About lazysh'}));
+  await user.click(screen.getByRole('button',{name:'Close About lazysh'}));
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  await user.click(screen.getByRole('button',{name:'Preferences'}));
+  const reopened=within(screen.getByRole('dialog',{name:'Preferences'}));
+  expect(reopened.getByRole('button',{name:'Connections'})).toBeTruthy();
+  expect(reopened.queryByRole('region',{name:'Host companion settings'})).toBeNull();
 });
 
 it('opens attachments from the live toolbar and retires held callbacks after navigation or unmount',async()=>{

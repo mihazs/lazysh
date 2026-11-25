@@ -5396,7 +5396,9 @@ class NativeWorkspaceTest {
             val originalProcess = android.os.Process.myPid()
             terminalProof(false)
             openReportedActivity()
-            val panel = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) > .agent-configuration:not([hidden]) > details.companion-install:not([hidden])[data-install-outcome]"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".agent-panel:not([hidden]) button[title='Setup']"))
+                .perform(webScrollIntoView()).perform(webClick())
+            val panel = "[data-settings-page='agents']:not([hidden]) .agent-configuration > details.companion-install:not([hidden])[data-install-outcome]"
             awaitDocument(scenario, "owned companion installation visible", present(panel))
             val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "selfTesting", "installing", "checkingInstalled", "cleaningUp", "preflight")
             val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "companion_host_network", "companion_host_tool_missing", "companion_verification_failed", "companion_self_test_failed", "companion_rolled_back", "companion_host_busy", "companion_unsafe_location", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")
@@ -5484,6 +5486,7 @@ class NativeWorkspaceTest {
                     proof.getBoolean("textMatches") && proof.getBoolean("pathMatches") && proof.getBoolean("residueAbsent"))
                 assertEquals("Owned companion must keep the packaged native process", originalProcess, android.os.Process.myPid())
             }
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
             returnToTerminal()
             terminalProof(true)
             println("lazysh packaged companion: actual Install and Update reused results, public version/path, original terminal shell and cleanup completed")
