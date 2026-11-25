@@ -882,7 +882,11 @@ fn availability(core: bool, host: bool) -> CoreAvailability {
 pub fn terminal_core_available() -> CoreAvailability {
     availability(
         cfg!(native_terminal_core),
-        cfg!(any(target_os = "android", target_os = "linux")),
+        cfg!(any(
+            target_os = "android",
+            target_os = "linux",
+            target_os = "macos"
+        )),
     )
 }
 
@@ -999,6 +1003,8 @@ async fn within(
 fn surface() -> Result<(), String> {
     #[cfg(all(target_os = "linux", native_terminal_core))]
     crate::native_terminal_surface::linux::display()?;
+    #[cfg(all(target_os = "macos", native_terminal_core))]
+    crate::native_terminal_surface::macos::display()?;
     Ok(())
 }
 
@@ -3161,7 +3167,11 @@ mod tests {
             answer["available"],
             cfg!(all(
                 native_terminal_core,
-                any(target_os = "android", target_os = "linux")
+                any(
+                    target_os = "android",
+                    target_os = "linux",
+                    target_os = "macos"
+                )
             ))
         );
         assert!(!answer["reason"].as_str().unwrap().is_empty());
