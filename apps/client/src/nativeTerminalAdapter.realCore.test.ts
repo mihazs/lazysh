@@ -44,6 +44,23 @@ describe.skipIf(!binary)('NativeTerminalAdapter over the real core', () => {
   runTerminalAdapterContract(name, harness);
   runTerminalCapabilityContract(name, harness);
 
+  it('applies captured Mosh frame geometry while holding local resize requests as intents', async () => {
+    const {frames} = JSON.parse(readFileSync(resolve('e2e/fixtures/mosh-resize-frames.json'), 'utf8')) as {
+      frames: {cols: number; rows: number; bytesHex: string; expectedCursor: [number, number]}[];
+    };
+    const adapter = await harness.create();
+    try {
+      adapter.enableCanonicalResize!();
+      for (const {cols, rows, bytesHex, expectedCursor: [x, y]} of frames) {
+        await adapter.write!(Buffer.from(bytesHex, 'hex'));
+        expect(adapter.size()).toEqual({columns: cols, rows});
+        expect(adapter.cursor()).toMatchObject({x, y});
+        adapter.requestSize({columns: cols + 1, rows: rows + 1});
+        expect(adapter.size()).toEqual({columns: cols, rows});
+      }
+    } finally { await adapter.dispose(); }
+  });
+
   it('answers the selection, word, search, select-all and copy-screen questions of selection.json as xterm.js does', async () => {
     for (const c of fixture<SelectionCase>('selection')) {
       const core = await openStdioCore(binary!, {columns: c.cols, rows: c.rows});
