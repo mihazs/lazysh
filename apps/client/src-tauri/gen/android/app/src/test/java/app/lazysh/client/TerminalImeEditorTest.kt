@@ -111,6 +111,16 @@ class TerminalImeEditorTest {
         assertEquals("there", editor.textAfterCursor(10))
     }
 
+    @Test fun largeKeyboardContextLengthsStayWithinTheEditor() {
+        editor.commitText("abc", 1)
+        editor.setSelection(1, 1)
+        assertEquals("bc", editor.textAfterCursor(Int.MAX_VALUE))
+        editor.deleteSurroundingText(0, Int.MAX_VALUE)
+        assertEquals("a", editor.text)
+        editor.deleteSurroundingTextInCodePoints(Int.MAX_VALUE, Int.MAX_VALUE)
+        assertEquals("", editor.text)
+    }
+
     @Test fun movingTheCaretSendsNothing() {
         batch { commitText("there", 1) }
         remote.sent.clear()

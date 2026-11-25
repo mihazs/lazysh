@@ -140,9 +140,9 @@ class TerminalImeEditor(
 
     fun deleteSurroundingTextInCodePoints(before: Int, after: Int): Boolean {
         var from = selectionStart
-        repeat(maxOf(before, 0)) { if (from > 0) from -= if (from >= 2 && value[from - 1].isLowSurrogate() && value[from - 2].isHighSurrogate()) 2 else 1 }
+        repeat(before.coerceIn(0, selectionStart)) { if (from > 0) from -= if (from >= 2 && value[from - 1].isLowSurrogate() && value[from - 2].isHighSurrogate()) 2 else 1 }
         var to = selectionEnd
-        repeat(maxOf(after, 0)) { if (to < value.length) to += if (to + 1 < value.length && value[to].isHighSurrogate() && value[to + 1].isLowSurrogate()) 2 else 1 }
+        repeat(after.coerceIn(0, value.length - selectionEnd)) { if (to < value.length) to += if (to + 1 < value.length && value[to].isHighSurrogate() && value[to + 1].isLowSurrogate()) 2 else 1 }
         delete(selectionStart - from, to - selectionEnd)
         settle()
         return true
@@ -158,7 +158,7 @@ class TerminalImeEditor(
 
     fun textBeforeCursor(length: Int): String = value.substring(maxOf(0, selectionStart - maxOf(length, 0)), selectionStart)
 
-    fun textAfterCursor(length: Int): String = value.substring(selectionEnd, minOf(value.length, selectionEnd + maxOf(length, 0)))
+    fun textAfterCursor(length: Int): String = value.substring(selectionEnd, selectionEnd + length.coerceIn(0, value.length - selectionEnd))
 
     fun selectedText(): String? = if (selectionStart == selectionEnd) null else value.substring(selectionStart, selectionEnd)
 
@@ -253,7 +253,7 @@ class TerminalImeEditor(
         val s = selectionStart
         val e = selectionEnd
         val from = maxOf(0, s - before)
-        val to = minOf(value.length, e + after)
+        val to = e + minOf(value.length - e, after)
         value = value.substring(0, from) + value.substring(s, e) + value.substring(to)
         fun remap(p: Int) = when {
             p <= from -> p
