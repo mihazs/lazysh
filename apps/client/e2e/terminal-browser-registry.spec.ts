@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {expect} from '@playwright/test';
 import {requestedBackend} from '../src/e2eTerminalBackend';
 import {mountNativeSurface} from './fixtures/nativeSurfacePage';
@@ -78,6 +79,27 @@ test('a long press selects and copies text on the selected browser backend',asyn
     await expect(copy).toBeVisible();
     await copy.click();
     await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe('fixture_word');
+  } finally {
+    await page.evaluate(()=>window.nativeSurface.dispose());
+  }
+});
+
+test('captured Mosh frames control the selected browser backend grid',async({page})=>{
+  const engine=requestedBackend()??'native';
+  await mountNativeSurface(page,engine);
+  try {
+    const {frames}=JSON.parse(readFileSync(new URL('./fixtures/mosh-resize-frames.json',import.meta.url),'utf8')) as {
+      frames:{cols:number;rows:number;bytesHex:string;expectedCursor:[number,number]}[];
+    };
+    await onAdapter(page,adapter=>{adapter.enableCanonicalResize!();});
+    for(const frame of frames){
+      const bytes=Array.from(Buffer.from(frame.bytesHex,'hex'));
+      await onAdapter(page,(adapter,data)=>adapter.write!(Uint8Array.from(data)),bytes);
+      const actual=await onAdapter(page,adapter=>({size:adapter.size(),cursor:adapter.cursor()}));
+      expect(actual).toMatchObject({size:{columns:frame.cols,rows:frame.rows},cursor:{x:frame.expectedCursor[0],y:frame.expectedCursor[1]}});
+      await onAdapter(page,adapter=>adapter.requestSize({columns:99,rows:17}));
+      expect(await onAdapter(page,adapter=>adapter.size())).toEqual(actual.size);
+    }
   } finally {
     await page.evaluate(()=>window.nativeSurface.dispose());
   }
