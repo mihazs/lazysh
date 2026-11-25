@@ -1160,6 +1160,10 @@ test('native keyboard oracle uses fractional visible bounds and rejects overflow
   const geometry=[rect(0,155.762,viewport.width,181.786),rect(0,282.81,viewport.width,338.571),rect(6,291.571,41.53,330.571),rect(91.06,291.571,126.589,330.571)];
   expect(geometry[0].right>Math.trunc(viewport.width)).toBe(true);
   expect(contains(viewport,geometry)).toBe(true);
+  const rounded={...viewport,height:379.047607421875};
+  const withSheetBottom=(bottom:number)=>geometry.map((value,i)=>i===0?rect(0,100.19047546386719,value.right,bottom):value);
+  expect(contains(rounded,withSheetBottom(379.04762268066406))).toBe(true);
+  expect(contains(rounded,withSheetBottom(rounded.height+1/64))).toBe(false);
   for(const index of [0,1,2,3]){
     const overflow=geometry.map((value,i)=>i===index?rect(value.left,value.top,viewport.width+1/64,value.bottom):value);
     expect(contains(viewport,overflow)).toBe(false);
