@@ -98,7 +98,8 @@ const pacing = (of: Of, name: string, runs: Run[]) => [perRunSummaries(of('frame
 /** The measurements of the xterm.js arm: what the baseline spec recorded, folded into the catalogue's metrics. */
 export function fromBaseline(results: BaselineResult[], adapter: string): Measurement[] {
   const found: Array<Measurement | null> = [];
-  for (const { workload, title, variant, correct, runs } of results) {
+  for (const { workload, title, variant, correct, runs: recordedRuns } of results) {
+    const runs = recordedRuns.map(run => run.android?.processSetChanged ? { ...run, android: undefined } : run);
     const of: Of = (metric, name) => ({ adapter, workload, variant: name, metric, correct });
     if (workload === 'W0') {
       const name = idleVariants[variant ?? ''] ?? variant;
