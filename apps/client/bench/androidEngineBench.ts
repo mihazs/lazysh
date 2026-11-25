@@ -20,13 +20,18 @@ const git = (...args: string[]) => { try { return execFileSync('git', args, { cw
 export function guestEnvironment(adb: Adb, serial: string, packageName = WEBVIEW_HOST) {
   const text = (...args: string[]) => adb(...args).trim();
   const prop = (key: string) => text('shell', 'getprop', key) || null;
-  const gles = text('shell', 'dumpsys SurfaceFlinger | grep -m1 GLES').replace(/^GLES:\s*/, ''), egl = prop('ro.hardware.egl') ?? '';
+  const surface = adb('shell', 'dumpsys SurfaceFlinger');
+  const gles = /^\s*GLES:[^\S\r\n]*(.*)$/m.exec(surface)?.[1]?.trim() ?? '';
+  const egl = prop('ro.hardware.egl') ?? '';
   const webview = /Current WebView package \(name, version\): \(([^,]+), ([^)]+)\)/.exec(adb('shell', 'dumpsys webviewupdate'));
-  const host = adb('shell', `dumpsys package ${packageName}`), vsync = /VSYNC period:\s+(\d+) ns/.exec(adb('shell', 'dumpsys SurfaceFlinger | grep -m1 "VSYNC period"'));
+  const host = adb('shell', `dumpsys package ${packageName}`);
+  const activeRate = Number(/activeMode=\{[^}\r\n]*\bvsyncRate=(\d+(?:\.\d+)?) Hz/.exec(surface)?.[1]);
+  const period = Number(/VSYNC period:\s+(\d+) ns/.exec(surface)?.[1]);
+  const refreshHz = activeRate > 0 ? activeRate : period > 0 ? Math.round(1e9 / period) : null;
   return {
     device: { serial, model: prop('ro.product.model'), abi: prop('ro.product.cpu.abi'), wmSize: text('shell', 'wm', 'size'), wmDensity: text('shell', 'wm', 'density'), fingerprint: prop('ro.build.fingerprint') },
     androidVersion: { release: prop('ro.build.version.release'), sdk: prop('ro.build.version.sdk') },
-    display: { refreshHz: vsync ? Math.round(1e9 / Number(vsync[1])) : null },
+    display: { refreshHz },
     gpuPath: { path: gpuPath(gles, egl), egl: egl || null, gralloc: prop('ro.hardware.gralloc'), glesRenderer: gles || null },
     webview: { package: webview?.[1] ?? null, version: webview?.[2] ?? null },
     hostApp: { package: packageName, lastUpdateTime: /lastUpdateTime=(.*)/.exec(host)?.[1]?.trim() ?? null },

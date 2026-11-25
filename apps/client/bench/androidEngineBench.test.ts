@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, test, vi } from 'vitest';
-import { packagedSshEcho } from './androidEngineBench';
+import { guestEnvironment, packagedSshEcho } from './androidEngineBench';
 
 // Resolve the host Bun before the fixture shadows it for the nested runner.
 const bun = execFileSync('bun', ['--eval', 'process.stdout.write(process.execPath)'], { encoding: 'utf8' });
@@ -63,4 +63,22 @@ describe('packaged Android SSH echo evidence', () => {
   ])('rejects incomplete, ambiguous, or failed evidence', output => {
     expect(() => packagedSshEcho(() => output, fixture, packageName)).toThrow();
   });
+});
+
+it.each([
+  ['legacy period', 'VSYNC period: 16666667 ns', 60],
+  ['API 36 active mode', 'activeMode={id=0, resolution=1080x2400, vsyncRate=119.88 Hz}', 119.88],
+  ['inactive mode only', '{id=1, resolution=1080x2400, vsyncRate=120.00 Hz}', null],
+  ['missing period', '', null],
+  ['invalid period', 'VSYNC period: 0 ns', null],
+])('reads the Android display rate from %s', (_format, line, hz) => {
+  const adb = (...args: string[]) => {
+    if (args[1]?.includes('grep -m1 "VSYNC period"')) {
+      if (!line.startsWith('VSYNC period:')) throw new Error('No legacy VSYNC line');
+      return line;
+    }
+    if (args.includes('dumpsys SurfaceFlinger')) return `GLES: fixture GPU\n${line}`;
+    return '';
+  };
+  expect(guestEnvironment(adb, 'emulator-5554').display.refreshHz).toBe(hz);
 });
