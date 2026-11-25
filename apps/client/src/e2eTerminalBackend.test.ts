@@ -2,7 +2,7 @@ import {dirname, join, relative, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import ts from 'typescript';
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {type AdapterPage, BACKEND_ENV, onAdapter, onEngine, requestedBackend} from './e2eTerminalBackend';
+import {type AdapterPage, assertNativeBackendObserved, BACKEND_ENV, onAdapter, onEngine, requestedBackend} from './e2eTerminalBackend';
 import type {TerminalAdapter, TerminalBackendId} from './terminalAdapter';
 import type {BackendSelection} from './terminalBackendRegistry';
 
@@ -34,6 +34,20 @@ describe('the backend a terminal e2e run asked for', () => {
   it('reads from a terminal of the requested backend', async () => {
     vi.stubEnv(BACKEND_ENV, 'xterm');
     await expect(onAdapter(pageDrawing('xterm'), (adapter: TerminalAdapter, suffix: string) => `${adapter.backend}${suffix}`, '!')).resolves.toBe('xterm!');
+  });
+
+  it('requires a successful native adapter read on the same page', async () => {
+    vi.stubEnv(BACKEND_ENV, 'native');
+    const native = pageDrawing('native'), wrong = pageDrawing('xterm');
+    await onEngine(native);
+    expect(() => assertNativeBackendObserved(native)).toThrow(/Native backend unverified/);
+    await expect(onAdapter(native, () => { throw new Error('read failed'); })).rejects.toThrow('read failed');
+    expect(() => assertNativeBackendObserved(native)).toThrow(/Native backend unverified/);
+    await expect(onAdapter(wrong, adapter => adapter.backend)).rejects.toThrow(/xterm backend/);
+    expect(() => assertNativeBackendObserved(wrong)).toThrow(/Native backend unverified/);
+    await expect(onAdapter(native, adapter => adapter.backend)).resolves.toBe('native');
+    expect(() => assertNativeBackendObserved(native)).not.toThrow();
+    expect(() => assertNativeBackendObserved(pageDrawing('native'))).toThrow(/Native backend unverified/);
   });
 
   it('asserts nothing when no backend was requested', async () => {

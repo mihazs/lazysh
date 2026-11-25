@@ -98,7 +98,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). Audit of `origin/ma
 
 ## Browser end-to-end arm
 
-`LAZYSH_E2E_TERMINAL_BACKEND=native` runs six Playwright specs (`terminal-ime`, `terminal-swiftkey`, `terminal-selection`, `terminal-clipboard`, `herdr-switch-tap`, `mosh-resize`). The browser has no core, so the registry refuses native and the arm is skipped in CI ([#2123](https://github.com/mihazs/lazysh/issues/2123)); none of those specs is evidence for a native row. The native Playwright specs (`terminal-native-input`, `terminal-native-surface`, `terminal-engine-*`) use a stand-in core and do run.
+`LAZYSH_E2E_TERMINAL_BACKEND=native` runs six Playwright specs (`terminal-ime`, `terminal-swiftkey`, `terminal-selection`, `terminal-clipboard`, `herdr-switch-tap`, `mosh-resize`). The browser has no core, so the registry refuses native and the arm is skipped in CI ([#2123](https://github.com/mihazs/lazysh/issues/2123)); none of those specs is evidence for a native row. The native Playwright specs (`terminal-native-input`, `terminal-native-surface`, `terminal-engine-*`) use a stand-in core and do run. When the native matrix arm runs, a case can pass only after it reads the native adapter through `onAdapter`; a successful availability probe alone leaves that case unverified.
 
 ## Ordered plan for the open gaps
 

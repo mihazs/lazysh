@@ -39,6 +39,15 @@ export interface AdapterPage {
   evaluateHandle(find: () => LiveSession): Promise<Handle<LiveSession>>;
 }
 
+const nativeReads = new WeakSet<AdapterPage>();
+
+/** Called after a native matrix case otherwise passed. A probe alone is not evidence for the case. */
+export function assertNativeBackendObserved(page: AdapterPage) {
+  if (!nativeReads.has(page)) {
+    throw new Error('Native backend unverified: this case did not complete an onAdapter read on the native terminal.');
+  }
+}
+
 /** Runs in the page: the session of the terminal drawn on screen. The App keeps its sessions in React state, so it is taken from the visible `TerminalPane`'s `session` prop rather than through a hook in the product. */
 const drawnSession = () => {
   type Fiber = {memoizedProps?: {session?: {adapter?: unknown}} | null; return: Fiber | null};
@@ -60,7 +69,9 @@ export async function onAdapter<R,A=void>(page:AdapterPage,use:(adapter:Terminal
   try{
     const requested=requestedBackend();
     if(requested)assertBackendUsed(await adapter.evaluate(terminal=>terminal.backend),requested);
-    return await adapter.evaluate(use,arg);
+    const result = await adapter.evaluate(use, arg);
+    if (requested === 'native') nativeReads.add(page);
+    return result;
   }finally{await adapter.dispose();await session.dispose();}
 }
 
