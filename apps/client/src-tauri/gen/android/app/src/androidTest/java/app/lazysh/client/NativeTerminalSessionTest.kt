@@ -983,13 +983,6 @@ class NativeTerminalSessionTest {
         }
     }
 
-    /** The device pixels of the pane's cell for the page's default 14 px font, as the renderer's own rule answers (`native_terminal_surface_cell`). */
-    private fun cellSize(): Pair<Int, Int> {
-        val dpr = JSONTokener(js("window.devicePixelRatio")).nextValue().toString().toDouble()
-        val cell = JSONObject(PageDriver.invoke("native_terminal_surface_cell", "{fontSize:14,dpr:$dpr}"))
-        return cell.getInt("width") to cell.getInt("height")
-    }
-
     /** The pixels of `columns` cells starting at `column` of screen row `row` that are not the pane's background. */
     private fun cellInk(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int = 1): Int {
         val background = bitmap.getPixel(bitmap.width - 1, bitmap.height - 1)
@@ -1045,7 +1038,7 @@ class NativeTerminalSessionTest {
                 }
             }
             val (cjk, emo, cmb, zwj) = listOf("cjk:", "emo:", "cmb:", "zwj:").map(::rowOf)
-            val cell = cellSize()
+            val cell = cellOfTheSession()
             evidence.put("cellWidthPx", cell.first).put("cellHeightPx", cell.second)
             val bitmap = try {
                 settled("the printed lines") { cellInk(it, cell, cjk, 10) > 0 && cellInk(it, cell, zwj, 6) > 0 }
