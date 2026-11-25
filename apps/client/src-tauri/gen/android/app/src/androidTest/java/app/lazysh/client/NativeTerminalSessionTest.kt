@@ -897,7 +897,24 @@ class NativeTerminalSessionTest {
 
             revealHosts()
             connectSavedHost(trustNewKey = false)
-            val fresh = session(replaced = id)
+            val fresh = try {
+                session(replaced = id)
+            } catch (error: AssertionError) {
+                runCatching {
+                    evidence.put("reconnectSurfaceStates", JSONArray(ui {
+                        TerminalSurfaces.ids().map { sessionId ->
+                            val state = TerminalSurfaces.state(sessionId)
+                            JSONObject().put("oldSession", sessionId == id)
+                                .put("placed", state.placed).put("ready", state.ready)
+                        }
+                    }))
+                    evidence.put("reconnectNativePane", js("Boolean(document.querySelector(${quoted(nativePane)}))") == "true")
+                    evidence.put("reconnectXtermPane", js("Boolean(document.querySelector('.terminal-canvas .xterm-screen'))") == "true")
+                    val failure = js("""JSON.parse(localStorage.getItem('lazysh.terminal.failure.native') ?? 'null')?.reason ?? ''""")
+                    evidence.put("reconnectNativeFailure", JSONTokener(failure).nextValue())
+                }
+                throw error
+            }
             awaitRow(fresh, "the new shell prompt", { it == fixture.getString("prompt").trim() })
             val pane = checkNotNull(surfaceView())
             val centre = ui {
