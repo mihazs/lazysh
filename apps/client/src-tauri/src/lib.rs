@@ -161,8 +161,8 @@ pub fn run() {
             use tauri::Manager;
             #[cfg(target_os = "linux")]
             build_unspawned_windows(app)?;
-            #[cfg(all(target_os = "macos", native_terminal_core))]
-            native_terminal_surface::macos::install(app);
+            #[cfg(all(any(target_os = "macos", target_os = "ios"), native_terminal_core))]
+            native_terminal_surface::apple::install(app);
             #[cfg(feature = "sync-tls-acceptance")]
             sync::install_acceptance_root(app)?;
             let mut state = ssh::AppState::new(app.path().app_config_dir()?)?;

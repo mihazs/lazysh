@@ -1,8 +1,16 @@
 use super::{panes::look, Anchor, SurfaceState};
 use crate::native_renderer::{policy, Host, Look};
 use lazysh_terminal_renderer_wgpu::{Target, Window};
-use objc2::{rc::Retained, MainThreadOnly};
-use objc2_app_kit::{NSView, NSWindowOrderingMode};
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::MainThreadOnly;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSView as View, NSWindowOrderingMode};
+#[cfg(target_os = "ios")]
+#[path = "ios.rs"]
+mod ios;
+#[cfg(target_os = "ios")]
+use ios::View;
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use objc2_quartz_core::CAMetalLayer;
 use std::{cell::RefCell, collections::HashMap, ptr::NonNull, sync::OnceLock};
@@ -23,6 +31,18 @@ pub(crate) fn install(app: &tauri::App) {
             .as_ref()
             .set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)))
             .map_err(|error| error.to_string())?;
+        #[cfg(target_os = "ios")]
+        {
+            window
+                .with_webview(|web| {
+                    // SAFETY: Tauri supplies a live WKWebView on the UIKit main thread.
+                    if let Some(view) = unsafe { web.inner().cast::<View>().as_ref() } {
+                        view.setOpaque(false);
+                    }
+                })
+                .map_err(|error| error.to_string())?;
+            ios::watch_activity(set_active);
+        }
         window.on_window_event(|event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 PANES.with_borrow_mut(HashMap::clear);
@@ -39,9 +59,20 @@ pub(crate) fn display() -> Result<(), String> {
         .unwrap_or_else(|| Err("The native terminal web view is unavailable".into()))
 }
 
+#[cfg(target_os = "ios")]
+fn set_active(active: bool) {
+    PANES.with_borrow(|panes| {
+        for pane in panes.values() {
+            if let Some(renderer) = &pane.renderer {
+                let _ = renderer.set_active(active);
+            }
+        }
+    });
+}
+
 struct Pane {
     renderer: Option<Host>,
-    view: Retained<NSView>,
+    view: Retained<View>,
     layer: Retained<CAMetalLayer>,
     state: SurfaceState,
     look: Look,
@@ -51,7 +82,7 @@ struct Pane {
 
 impl Drop for Pane {
     fn drop(&mut self) {
-        // The worker finishes using the layer before AppKit can release it.
+        // The worker finishes using the layer before the platform releases it.
         drop(self.renderer.take());
         self.view.removeFromSuperview();
     }
@@ -71,21 +102,36 @@ fn webview_rect(anchor: Anchor, bounds: NSRect, flipped: bool, scale: f64) -> NS
 }
 
 fn place_in_webview(
-    web: &NSView,
+    web: &View,
     session: String,
     anchor: Anchor,
     background: u32,
 ) -> Result<SurfaceState, String> {
     display()?;
-    let mtm = MainThreadMarker::new().ok_or("AppKit requires the main thread")?;
-    // SAFETY: The main-thread WebView callback keeps its view hierarchy alive.
-    let parent = unsafe { web.superview() }.ok_or("The web view has no parent")?;
-    let scale = parent
-        .window()
-        .ok_or("The web view has no window")?
-        .backingScaleFactor();
+    let mtm = MainThreadMarker::new().ok_or("Apple views require the main thread")?;
+    #[cfg(target_os = "ios")]
+    if !ios::active(mtm) {
+        return Ok(PANES.with_borrow(|panes| {
+            panes
+                .get(&session)
+                .map(|pane| pane.state.clone())
+                .unwrap_or_default()
+        }));
+    }
+    #[cfg(target_os = "macos")]
+    let (parent, scale, flipped) = {
+        // SAFETY: The main-thread WebView callback keeps its view hierarchy alive.
+        let parent = unsafe { web.superview() }.ok_or("The web view has no parent")?;
+        let scale = parent
+            .window()
+            .ok_or("The web view has no window")?
+            .backingScaleFactor();
+        (parent, scale, web.isFlipped())
+    };
+    #[cfg(target_os = "ios")]
+    let (parent, scale, flipped) = ios::geometry(web)?;
     let frame = web.convertRect_toView(
-        webview_rect(anchor, web.bounds(), web.isFlipped(), scale),
+        webview_rect(anchor, web.bounds(), flipped, scale),
         Some(&parent),
     );
     let width = (anchor.width * anchor.dpr).round().max(1.0) as u32;
@@ -95,6 +141,8 @@ fn place_in_webview(
         if let Some(pane) = panes.get_mut(&session) {
             pane.view.setFrame(frame);
             pane.layer.setContentsScale(scale);
+            #[cfg(target_os = "ios")]
+            ios::resize_layer(&pane.view, &pane.layer);
             if (pane.state.width, pane.state.height) != (width, height) {
                 pane.renderer.as_ref().unwrap().resize(width, height)?;
                 (pane.state.width, pane.state.height) = (width, height);
@@ -111,13 +159,19 @@ fn place_in_webview(
             .ok()
             .and_then(|core| core.drawing())
             .ok_or("The session has no native core to draw")?;
-        let view = NSView::initWithFrame(NSView::alloc(mtm), frame);
         let layer = CAMetalLayer::new();
         layer.setOpaque(true);
         layer.setContentsScale(scale);
-        view.setLayer(Some(&layer));
-        view.setWantsLayer(true);
-        parent.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(web));
+        #[cfg(target_os = "macos")]
+        let view = {
+            let view = View::initWithFrame(View::alloc(mtm), frame);
+            view.setLayer(Some(&layer));
+            view.setWantsLayer(true);
+            parent.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(web));
+            view
+        };
+        #[cfg(target_os = "ios")]
+        let view = ios::new_view(web, &parent, frame, &layer, mtm);
         let state = SurfaceState {
             placed: true,
             ready: true,
@@ -159,7 +213,7 @@ pub(super) async fn place(
     window
         .with_webview(move |web| {
             // SAFETY: Tauri calls on the UI thread with a live WKWebView, an NSView subclass.
-            let view = unsafe { web.inner().cast::<NSView>().as_ref() };
+            let view = unsafe { web.inner().cast::<View>().as_ref() };
             let result = view
                 .ok_or_else(|| "The native web view is gone".to_string())
                 .and_then(|view| place_in_webview(view, session, anchor, background));

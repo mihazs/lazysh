@@ -9,7 +9,7 @@ on:
     paths: &surface-paths
       - packages/terminal-runtime/prototypes/macos-surface/**
       - apps/client/src-tauri/src/native_terminal_surface.rs
-      - apps/client/src-tauri/src/native_terminal_surface/macos.rs
+      - apps/client/src-tauri/src/native_terminal_surface/apple.rs
       - packages/terminal-renderer-wgpu/src/adapter.rs
       - .github/workflows/terminal-macos-surface.yml
   push:
@@ -102,7 +102,7 @@ jobs:
       - name: Build the native-enabled app and run the macOS anchor test
         run: |
           args=(--manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib)
-          case_name=native_terminal_surface::macos::tests::css_anchor_respects_backing_scale_zoom_and_flipped_coordinates
+          case_name=native_terminal_surface::apple::tests::css_anchor_respects_backing_scale_zoom_and_flipped_coordinates
           sh .github/scripts/retry-zig-fetch.sh cargo test "${args[@]}" --no-run
           cargo test "${args[@]}" -- --list --exact "$case_name" | grep -Fx "$case_name: test"
           cargo test "${args[@]}" -- --exact "$case_name"
