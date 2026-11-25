@@ -104,7 +104,11 @@ export function fromBaseline(results: BaselineResult[], adapter: string): Measur
     if (workload === 'W0') {
       const name = idleVariants[variant ?? ''] ?? variant;
       found.push(perRun(of('idleCpuMsPerSecond', name), runs.map(run => perSecond(run.android?.cpuMs, run.android))), perRun(of('idleWakeupsPerSecond', name), runs.map(run => perSecond(run.android?.wakeups, run.android))), perRun(of('idleFramesPerSecond', name), runs.map(run => perSecond(run.android?.frames, run.android))));
-    } else if (workload === 'W1') found.push(perRunSummaries(of('outputLatencyMs', null), runs.map(run => run.renderMs)));
+    } else if (workload === 'W1') {
+      if (runs.every(run => Number.isSafeInteger(run.bursts) && run.bursts > 0 && run.renderMs?.n === run.bursts
+        && finite(run.renderMs.p50) && finite(run.renderMs.p95)))
+        found.push(perRunSummaries(of('outputLatencyMs', null), runs.map(run => run.renderMs)));
+    }
     else if (['W2', 'W3', 'W4'].includes(workload))
       // A stream takes a fraction of a second, shorter than the window the frame counters can isolate from idle time around it: only sustained workloads report frames.
       found.push(perRun(of('throughputMiBs', null), runs.map(run => run.renderThroughputMiBs)), perRun(of('cpuMsPerMiB', null), runs.map(run => (finite(run.android?.cpuMs) ? run.android.cpuMs / (run.bytes / MiB) : null))));
