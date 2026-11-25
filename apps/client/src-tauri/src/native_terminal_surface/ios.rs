@@ -5,6 +5,7 @@ use objc2_foundation::{
 };
 use objc2_quartz_core::{CAMetalLayer, CATransaction};
 use objc2_ui_kit::{
+    UIAccessibilityIsVoiceOverRunning, UIAccessibilityVoiceOverStatusDidChangeNotification,
     UIApplication, UIApplicationDidBecomeActiveNotification, UIApplicationState,
     UIApplicationWillResignActiveNotification, UIView,
 };
@@ -42,6 +43,28 @@ pub(super) fn watch_activity(changed: fn(bool)) {
         })
     };
     OBSERVERS.with_borrow_mut(|existing| existing.extend(observers));
+}
+
+pub(super) fn watch_voice_over(app: tauri::AppHandle) {
+    use tauri::Emitter;
+    let center = NSNotificationCenter::defaultCenter();
+    let queue = NSOperationQueue::mainQueue();
+    let block = RcBlock::new(move |_| {
+        let _ = app.emit(
+            "ios-voice-over-changed",
+            UIAccessibilityIsVoiceOverRunning(),
+        );
+    });
+    // SAFETY: The notification name is a UIKit constant and the handler runs on the main queue.
+    let observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(UIAccessibilityVoiceOverStatusDidChangeNotification),
+            None,
+            Some(&queue),
+            &block,
+        )
+    };
+    OBSERVERS.with_borrow_mut(|observers| observers.push(observer));
 }
 
 pub(super) fn geometry(web: &View) -> Result<(Retained<View>, f64, bool), String> {

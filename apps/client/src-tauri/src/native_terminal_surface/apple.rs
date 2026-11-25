@@ -42,6 +42,7 @@ pub(crate) fn install(app: &tauri::App) {
                 })
                 .map_err(|error| error.to_string())?;
             ios::watch_activity(set_active);
+            ios::watch_voice_over(app.handle().clone());
         }
         window.on_window_event(|event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
