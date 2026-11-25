@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.101.1
+
+### Patch Changes
+
+- fix(android): keep the native terminal active after reconnecting from a recreated Activity ([#2556](https://github.com/mihazs/lazysh/pull/2556))
+
+  <details><summary>Details</summary>
+
+  Fresh native sessions use the replacement renderer's current access lease for surface and keyboard requests.
+
+  </details>
+
 ## 1.101.0
 
 ### Minor Changes

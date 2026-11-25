@@ -10,6 +10,12 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.101.1] - 2026-11-25
+
+### Fixed
+
+- **android:** keep the native terminal active after reconnecting from a recreated Activity ([#2556](https://github.com/mihazs/lazysh/pull/2556))
+
 ## [1.101.0] - 2026-11-24
 
 ### New
