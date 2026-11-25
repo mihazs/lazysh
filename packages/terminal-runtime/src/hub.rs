@@ -741,9 +741,12 @@ impl Session {
     /// [`Hooks::changed`] fires as output arrives. The session and transport are untouched. While
     /// attached, the session is served ahead of detached ones on its worker.
     pub fn attach(&self) -> Result<Frame, SessionError> {
-        let frame = self.with(|runtime| runtime.snapshot())??;
-        self.cell.attached.store(true, Release);
-        Ok(frame)
+        self.with(|runtime| {
+            let frame = runtime.snapshot()?;
+            // Publish the attachment before the worker can parse output beyond this snapshot.
+            self.cell.attached.store(true, Release);
+            Ok(frame)
+        })?
     }
 
     pub fn detach(&self) {
