@@ -53,7 +53,9 @@ it('opens a caller-relative literal directory in the original GUI and observes t
   // Keys typed before the shell has started and printed its prompt can be lost, so the case waits for that, then types, and a failure shows what the terminal held.
   let shown='';
   await browser.waitUntil(async()=>{shown=await terminal.getText();return shown.trim().length>0;},{timeout:20_000,timeoutMsg:'Owned local shell printed no prompt'});
-  await terminal.click();await browser.keys(['p','w','d','\uE007']);
+  await terminal.click();await typeText(browser,'pwd');
+  await browser.waitUntil(async()=>(await terminal.getText()).trimEnd().endsWith('pwd'),{timeout:5_000,timeoutMsg:'Owned local shell did not echo pwd in order'});
+  await browser.keys('\uE007');
   try {await browser.waitUntil(async()=>{shown=await terminal.getText();return shown.includes(expected);},{timeout:20_000});}
   catch {throw new Error(`Owned local shell cwd was not observed; terminal text ${JSON.stringify(shown.slice(-600))}; expected ${JSON.stringify(expected)}`);}
   expect(fixture.connections).toBe(0);

@@ -15,6 +15,7 @@ or `n/a` with a reason. Rows below were read from the fixing commits; a test not
 
 | Bug | Symptom | Fix | Layers and tests | Appium |
 | --- | --- | --- | --- | --- |
+| [#2417](https://github.com/mihazs/lazysh/issues/2417) | The Linux singleton GUI test could submit the directory probe as `wdp` | Use ordered WebDriver key actions and verify the shell echo before submitting | native GUI `apps/client/native-e2e/singleton.spec.ts` (caller-relative literal directory) | n/a (Linux native GUI) |
 | [#2622](https://github.com/mihazs/lazysh/issues/2622) | Output can miss both the first snapshot and the renderer wake | Publish attachment while holding the snapshot lock | unit `packages/terminal-runtime/tests/session.rs`; desktop renderer host image suite | n/a (core scheduler) |
 | [#2580](https://github.com/mihazs/lazysh/issues/2580) | The signed Google ARM64 APK crashes before its first view under the Android x86_64 translation bridge | Use ONNX Runtime’s CPU-info fallback for that translated guest | Published Android APK qualification on API 35 (Google flavor) | n/a (external signed-APK instrumentation) |
 | [#2571](https://github.com/mihazs/lazysh/issues/2571) | An agent question appears detached from its place in the conversation and shows a second raw disclosure | Keep question cards in transcript order as one item | web `e2e/agent-view-overlap.spec.ts` | n/a (browser layout) |
