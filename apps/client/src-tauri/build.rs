@@ -32,6 +32,12 @@ fn main() {
     {
         println!("cargo:rustc-cfg=parakeet_local");
     }
+    if os == "android"
+        && arch == "aarch64"
+        && std::env::var_os("CARGO_FEATURE_PARAKEET_ANDROID").is_some()
+    {
+        println!("cargo:rustc-link-arg=-Wl,--wrap=cpuinfo_initialize");
+    }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
         && (std::env::var_os("CARGO_FEATURE_PARAKEET_ACCEPTANCE").is_some()
             || std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64"))
