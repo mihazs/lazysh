@@ -314,11 +314,13 @@ impl Link {
 }
 
 /// A core and where its session's output goes once it was released: the Channel [`release`] was given. One
-/// delivery holds the lock, so a chunk goes whole to the core or whole to that Channel.
+/// delivery holds the channel lock, so a chunk goes whole to the core or whole to that Channel.
+/// Mosh also holds a frame lock across the chunks of a complete update.
 #[derive(Clone)]
 struct Attached {
     core: Arc<dyn Core>,
     handed: Arc<Mutex<Option<Channel<SshEvent>>>>,
+    mosh_frame: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Attached {
@@ -336,6 +338,12 @@ impl CoreSlot {
     fn consuming(&self) -> Option<&Attached> {
         let (_, attached) = self.0.get()?;
         attached.handed().is_none().then_some(attached)
+    }
+
+    /// A complete Mosh update can span several credited output chunks.
+    pub(crate) async fn begin_mosh_frame(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        let (_, attached) = self.0.get()?;
+        Some(attached.mosh_frame.lock().await)
     }
 
     /// A renderer must not acknowledge output a core consumes: the core alone returns that credit. After a
@@ -429,6 +437,7 @@ impl Prepared {
         let attached = Attached {
             core: self.core.clone(),
             handed: Arc::default(),
+            mosh_frame: Arc::default(),
         };
         slot.0.set((id.to_owned(), attached.clone())).ok();
         registry().live.insert(id.to_owned(), attached);
@@ -522,11 +531,14 @@ pub(crate) fn close(id: &str) {
 const RELEASE_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Hand the session's transport back to the WebView (#1342): its output goes to `events` from the next chunk on,
-/// and the answer is the core's ANSI snapshot once it has parsed every chunk it was fed before that. The core is
-/// freed either way. On an error the output already flows to `events`, with no screen to start from.
+/// or the next complete Mosh update. The answer is the core's ANSI snapshot once it has parsed every chunk it was fed before that. The core is
+/// freed after the transfer even if snapshotting fails. If an update blocks the transfer, the core keeps ownership.
 pub(crate) async fn release(id: &str, events: Channel<SshEvent>) -> Result<String, String> {
     let attached = attached(id)?;
     {
+        let _frame = tokio::time::timeout(RELEASE_DRAIN, attached.mosh_frame.lock())
+            .await
+            .map_err(|_| "The Mosh frame did not finish before handback".to_owned())?;
         let mut handed = attached.handed();
         if handed.is_some() {
             return Err("This session is already being released".into());
@@ -3122,6 +3134,42 @@ mod tests {
                 "No native terminal core for this session"
             );
         }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard isolates the test registry
+    async fn mosh_handback_waits_for_the_rest_of_the_current_frame() {
+        let _kept = tests_keeping_cores().read();
+        let (_, prepared) = ChecksumCore::prepared();
+        let slot = CoreSlot::default();
+        let id = "mosh-frame-handback";
+        prepared.attach(id, &slot, Arc::new(|_| {}), Arc::new(|_, _| Ok(())));
+        let (next, mut received) = crate::ssh::test_support::json_events();
+        let first = channel();
+        let routed = slot.route(&first);
+        let frame = slot.begin_mosh_frame().await;
+        let opener = b"\x1b]7777;lazysh-mosh;1;begin;1;30;6\x1b\\";
+        let tail = b"screen\x1b]7777;lazysh-mosh;1;end;1\x1b\\";
+        routed.data(opener).unwrap();
+
+        let handback = release(id, next);
+        tokio::pin!(handback);
+        tokio::select! {
+            biased;
+            _ = &mut handback => panic!("handback split a Mosh frame"),
+            _ = tokio::task::yield_now() => {}
+        }
+
+        routed.data(tail).unwrap();
+        drop(frame);
+        assert_eq!(
+            handback.await.unwrap().as_bytes(),
+            [opener.as_slice(), tail.as_slice()].concat()
+        );
+        let next_frame =
+            b"\x1b]7777;lazysh-mosh;1;begin;2;30;6\x1b\\next\x1b]7777;lazysh-mosh;1;end;2\x1b\\";
+        routed.data(next_frame).unwrap();
+        assert_eq!(fake::received(&mut received).0, next_frame);
     }
 
     #[tokio::test]
