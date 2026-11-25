@@ -83,3 +83,14 @@ POC_TRANSPARENT=0 target/release/surface-poc      # the control: a web view with
 ```
 
 Each run prints one `PASS`, `FAIL` or `INFO` line per check and appends one JSON record to `$POC_OUT/records.jsonl`, with a PNG of every step. Exit status: 0 every check passed, 1 a check failed, 2 the probe could not measure, 3 the display has no such scale (not a failure: not measured). The runs above are the `terminal-macos-surface` workflow, which uploads the records and images as the `lazysh-macos-surface-poc` artifact.
+
+## Checking the real app window
+
+With the feature-enabled macOS host from #2647, build a debug app and run the app-window driver in a logged-in macOS session with Xcode command-line tools and Python Pillow installed.
+
+```sh
+cargo build --locked --manifest-path apps/client/src-tauri/Cargo.toml --features native-terminal
+python3 packages/terminal-runtime/prototypes/macos-surface/scripts/check-app.py target/debug/lazysh /tmp/lazysh-app-window
+```
+
+The driver uses the same development URL and Tauri command fixture as the Wayland app test. It starts an owned local terminal, looks up the window belonging to the process it launched, and measures the four coloured cells during placement and movement. The DOM overlay is the visible capture control. Removal requires the native pixels to disappear while the overlay remains visible. The output directory retains frame images, the app log and a success report. The check requires macOS permission to capture the owned window.
