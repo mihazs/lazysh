@@ -4,4 +4,4 @@
 
 fix(bench): compare Android terminal streams only when their grids and bytes match
 
-The comparator requires matching terminal dimensions and fixture hashes for W2–W4 measurements.
+The xterm benchmark can replay the native arm’s grid from a same-run receipt. The runner and comparator verify the fixture hashes and dimensions for W2–W4.

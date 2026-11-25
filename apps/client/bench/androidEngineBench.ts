@@ -4,7 +4,7 @@
 // The native engine's driver writes the same record into the same lane run; `androidCompare.ts` then sets them side by side.
 // Run it as a lane step so the lock, the guest checks and the run id come with it:
 //   waydroid-lane.sh --out <lane.json> --label engine-xterm --bench engine 'cd apps/client && bun bench/androidEngineBench.ts --out "$LAZYSH_LANE_OUT/engine.json"'
-// Usage: bun bench/androidEngineBench.ts --out <record.json> [--renderers dom,webgl | --packaged-ssh-echo] [--label <text>] [--run-id <id>] [--serial <adb serial>]
+// Usage: bun bench/androidEngineBench.ts --out <record.json> [--renderers dom,webgl [--native-stream <receipt.json>] | --packaged-ssh-echo] [--label <text>] [--run-id <id>] [--serial <adb serial>]
 // Needs: the host app (bench/android-webview) installed in the guest and adb; LAZYSH_BENCH_ANDROID or --serial names the guest.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -43,6 +43,20 @@ function arg(name: string, fallback?: string) {
   return at >= 0 ? process.argv[at + 1] : fallback;
 }
 
+function nativeStream(file: string, runId: string, serial: string): NonNullable<Arm['stream']> {
+  const receipt = JSON.parse(readFileSync(file, 'utf8'));
+  if (receipt?.kind !== 'android-native-stream-correctness' || receipt.mode !== 'streams'
+    || receipt.runId !== runId || receipt.environment?.device?.serial !== serial) {
+    throw new Error('Native stream receipt must describe this lane run and guest');
+  }
+  const { columns: cols, rows, sha256 } = receipt.prepared ?? {};
+  if (!Number.isInteger(cols) || cols < 20 || cols > 200 || !Number.isInteger(rows) || rows < 5 || rows > 100
+    || !['plain', 'ansi', 'redraw'].every(key => typeof sha256?.[key] === 'string' && /^[a-f0-9]{64}$/.test(sha256[key]))) {
+    throw new Error('Native stream receipt has an invalid grid or fixture digest');
+  }
+  return { cols, rows, fixtures: { W2: sha256.plain, W3: sha256.ansi, W4: sha256.redraw } };
+}
+
 export function packagedSshEcho(adb: Adb, fixture: string, packageName: string) {
   if (!/^\/data\/local\/tmp\/lazysh-ui-ssh-[a-f0-9]{32}\/fixture\.json$/.test(fixture)) {
     throw new Error('Packaged xterm requires the owned lane SSH fixture');
@@ -69,8 +83,9 @@ export function packagedSshEcho(adb: Adb, fixture: string, packageName: string) 
 
 if (import.meta.main) {
   const out = arg('out'), serial = arg('serial', process.env.LAZYSH_BENCH_ANDROID), renderers = (arg('renderers', 'dom') ?? '').split(',');
-  if (!out || !serial || renderers.some(r => !['dom', 'webgl', 'canvas'].includes(r))) {
-    console.error('usage: bun bench/androidEngineBench.ts --out <record.json> [--renderers dom,webgl | --packaged-ssh-echo] [--label <text>] [--run-id <id>] [--serial <adb serial>]  (the guest: --serial or LAZYSH_BENCH_ANDROID)');
+  const nativeReceipt = arg('native-stream');
+  if (!out || !serial || (process.argv.includes('--native-stream') && (!nativeReceipt || nativeReceipt.startsWith('--') || process.argv.includes('--packaged-ssh-echo'))) || renderers.some(r => !['dom', 'webgl', 'canvas'].includes(r))) {
+    console.error('usage: bun bench/androidEngineBench.ts --out <record.json> [--renderers dom,webgl [--native-stream <receipt.json>] | --packaged-ssh-echo] [--label <text>] [--run-id <id>] [--serial <adb serial>]  (the guest: --serial or LAZYSH_BENCH_ANDROID)');
     process.exit(2);
   }
   if (process.argv.includes('--packaged-ssh-echo')) {
@@ -91,32 +106,41 @@ if (import.meta.main) {
     writeFileSync(out, JSON.stringify({ kind: 'android-packaged-xterm-ssh-echo', runId, environment, apks, samples }, null, 2) + '\n');
     process.exit(0);
   }
-  const startedAt = new Date().toISOString(), adb = adbFor(serial), environment = guestEnvironment(adb, serial), work = mkdtempSync(path.join(os.tmpdir(), 'engine-bench-'));
+  const startedAt = new Date().toISOString();
+  const runId = arg('run-id', process.env.LAZYSH_LANE_RUN_ID ?? `standalone-${startedAt.replace(/\W/g, '')}`)!;
+  const reference = nativeReceipt ? nativeStream(nativeReceipt, runId, serial) : undefined;
+  const adb = adbFor(serial), environment = guestEnvironment(adb, serial), work = mkdtempSync(path.join(os.tmpdir(), 'engine-bench-'));
   const arms: Arm[] = [], measurements: EvidenceRecord['measurements'] = [];
   try {
     for (const renderer of renderers) {
       const file = path.join(work, `xterm-${renderer}.json`);
       // The release build of the page, the spec's own full scale, in the guest's WebView; one renderer per invocation.
       const run = spawnSync('bun', ['run', 'bench:terminal', '--', 'e2e/terminal-bench.spec.ts', '--project=desktop'], {
-        cwd: client, stdio: 'inherit', env: { ...process.env, LAZYSH_BENCH_ANDROID: serial, LAZYSH_BENCH_RENDERER: renderer, LAZYSH_BENCH_WRITE: 'adapter', LAZYSH_BENCH_OUT: file },
+        cwd: client, stdio: 'inherit', env: { ...process.env, LAZYSH_BENCH_ANDROID: serial, LAZYSH_BENCH_RENDERER: renderer, LAZYSH_BENCH_WRITE: 'adapter', LAZYSH_BENCH_OUT: file,
+          ...(reference && { LAZYSH_BENCH_GRID: `${reference.cols}x${reference.rows}` }) },
       });
       if (run.status !== 0) { console.error(`androidEngineBench: the baseline spec failed for the ${renderer} renderer (exit ${run.status}); no record written`); process.exit(1); }
       const baseline = JSON.parse(readFileSync(file, 'utf8'));
       if (baseline.writePath !== 'adapter' || !Number.isSafeInteger(baseline.adapterWrites) || baseline.adapterWrites <= 0) {
         throw new Error('Android baseline did not verify the adapter write path');
       }
+      const stream = { cols: baseline.page.cols, rows: baseline.page.rows, fixtures: {
+        W2: baseline.fixtures?.plain?.sha256, W3: baseline.fixtures?.ansi?.sha256, W4: baseline.fixtures?.redraw?.sha256,
+      } };
+      if (reference && (stream.cols !== reference.cols || stream.rows !== reference.rows
+        || (['W2', 'W3', 'W4'] as const).some(workload => stream.fixtures[workload] !== reference.fixtures[workload]))) {
+        throw new Error('Android xterm grid or fixture digests differ from the native stream receipt');
+      }
       const adapter = `xterm-${renderer}`;
       arms.push({
         adapter, engine: `xterm.js ${baseline.toolchain.xterm}, ${renderer} renderer`, host: `${WEBVIEW_HOST}: the benchmark page in the Android System WebView ${environment.webview.version}`, gpu: baseline.page.gl ?? null, page: { ...baseline.page, writePath: baseline.writePath, adapterWrites: baseline.adapterWrites },
-        stream: { cols: baseline.page.cols, rows: baseline.page.rows, fixtures: {
-          W2: baseline.fixtures?.plain?.sha256, W3: baseline.fixtures?.ansi?.sha256, W4: baseline.fixtures?.redraw?.sha256,
-        } },
+        stream,
         notes: 'The app\'s createTerminal() and XtermTerminalAdapter in the benchmark page; the remote echoes at once (zero round trip); latency is the page timestamp of the key or burst to the xterm render callback, not to pixels; CPU, wakeups, frames and PSS are read from the guest (/proc, SurfaceFlinger timestats, dumpsys meminfo), not from the page.',
       });
       measurements.push(...fromBaseline(baseline.results as BaselineResult[], adapter));
     }
     const record: EvidenceRecord = {
-      schema: 1, kind: 'android-engine-comparison', runId: arg('run-id', process.env.LAZYSH_LANE_RUN_ID ?? `standalone-${startedAt.replace(/\W/g, '')}`)!, label: arg('label') ?? null, startedAt, finishedAt: new Date().toISOString(),
+      schema: 1, kind: 'android-engine-comparison', runId, label: arg('label') ?? null, startedAt, finishedAt: new Date().toISOString(),
       source: { commit: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain') === null ? null : (git('status', '--porcelain') ?? '').length > 0 },
       environment: { ...environment, host: { cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, os: `${os.type()} ${os.release()}`, loadAverageAtEnd: os.loadavg() } },
       limits: 'Waydroid is the Android acceptance environment for the native-engine release (ADR 0001, Amendment 6): an x86_64 guest on the host GPU, so these figures are not a device result and every acceptedRisk is not measured. The host also runs other work: see loadAverageAtEnd.',
