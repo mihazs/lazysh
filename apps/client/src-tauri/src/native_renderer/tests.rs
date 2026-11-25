@@ -64,14 +64,18 @@ fn session_of(cols: u16, rows: u16) -> (Session, Inbox) {
 }
 
 fn wait(what: &str, done: impl Fn() -> bool) {
-    let start = Instant::now();
+    assert!(wait_until(done), "timed out: {what}");
+}
+
+fn wait_until(mut done: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !done() {
-        assert!(
-            start.elapsed() < Duration::from_secs(10),
-            "timed out: {what}"
-        );
+        if Instant::now() >= deadline {
+            return false;
+        }
         std::thread::sleep(Duration::from_millis(5));
     }
+    true
 }
 
 /// The program prints `output`, and the core has parsed it.
@@ -156,7 +160,24 @@ impl Shown {
 
     /// The host draws `expected`, without being asked to.
     fn shows(&self, expected: &Image, what: &str) {
-        wait(what, || self.image().as_ref() == Some(expected));
+        let mut observed = None;
+        if wait_until(|| {
+            observed = self.image();
+            observed.as_ref() == Some(expected)
+        }) {
+            return;
+        }
+        let image = observed.unwrap_or_else(|| panic!("timed out: {what}; no renderer image"));
+        let different = image
+            .rgb
+            .chunks_exact(3)
+            .zip(expected.rgb.chunks_exact(3))
+            .filter(|(actual, expected)| actual != expected)
+            .count();
+        panic!(
+            "timed out: {what}; image={}x{} expected={}x{} differing pixels in common buffer={different} GPU counts (submissions, frames)={:?}",
+            image.width, image.height, expected.width, expected.height, self.drawn()
+        );
     }
 
     /// GPU submissions and presented frames so far.
@@ -543,24 +564,48 @@ fn a_core_of_80_by_24_is_drawn_with_the_looks_a_phone_gets_before_its_page_sends
         &session,
         "lazysh@phone:~$ ls -la\r\ntotal 4\r\n\x1b[1;34mdocs\x1b[0m  notes.txt\r\n\x1b[41m red \x1b[0m",
     );
-    let read = |state: &mut Loop| state.renderer.as_mut().map(|r| r.read_image().unwrap());
-    // Text is the theme's light foreground: count the pixels that are, which the pane's dark background and the
-    // cursor's gold never are.
+    // The pane background and cursor are too dark to count as light foreground.
     let light = |image: &Image| {
-        (0..image.height)
-            .flat_map(|y| (0..image.width).map(move |x| (x, y)))
-            .filter(|&(x, y)| {
-                let p = image.pixel(x, y);
-                p.r > 0xc0 && p.g > 0xc0 && p.b > 0xc0
-            })
+        image
+            .rgb
+            .chunks_exact(3)
+            .filter(|pixel| pixel.iter().all(|&channel| channel > 0xc0))
             .count()
     };
-    wait("text is drawn", || {
-        host.ask(read)
-            .unwrap()
-            .is_some_and(|image| light(&image) > 100)
-    });
-    let image = host.ask(read).unwrap().unwrap();
+    let started = Instant::now();
+    let image = loop {
+        let sample = host
+            .ask(|state| {
+                state.renderer.as_mut().map(|renderer| {
+                    let frames = renderer.stats().frames_presented;
+                    let image = renderer.read_image().unwrap();
+                    (frames, image)
+                })
+            })
+            .unwrap();
+        if let Some((frames, image)) = sample {
+            let light_pixels = light(&image);
+            if light_pixels > 100 {
+                break image;
+            }
+            if started.elapsed() >= Duration::from_secs(10) {
+                let background = look.theme.background;
+                let non_background = image
+                    .rgb
+                    .chunks_exact(3)
+                    .filter(|pixel| *pixel != [background.r, background.g, background.b])
+                    .count();
+                let (width, height) = (image.width, image.height);
+                panic!(
+                    "timed out waiting for text: {width}x{height}, {frames} presented frames, \
+                     {non_background} non-background pixels, {light_pixels} light pixels"
+                );
+            }
+        } else if started.elapsed() >= Duration::from_secs(10) {
+            panic!("timed out waiting for text: renderer absent");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
     assert_eq!((image.width, image.height), (width, height));
     assert_eq!(
         image.pixel(width - 1, height - 1),
