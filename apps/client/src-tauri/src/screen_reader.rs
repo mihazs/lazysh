@@ -1,8 +1,8 @@
-//! Whether an Android screen reader is on (#1329). The native terminal draws on a GPU surface with no text a reader can reach, so
+//! Whether platform accessibility is active (#1329, #1335). The native terminal draws on a GPU surface with no text a reader can reach, so
 //! the client's registry refuses it for a new session while this says yes, whether or not the user also turned on the in-app
 //! Screen reader announcements. The Kotlin plugin (`ScreenReaderPlugin.kt`) asks Android's accessibility manager: touch
-//! exploration, which TalkBack and its kin turn on, or an enabled service that speaks or brailles the screen. Every other
-//! platform answers no: iOS and the desktop have their own accessibility paths and the registry's in-app preference.
+//! exploration, which TalkBack and its kin turn on, or an enabled service that speaks or brailles the screen. Linux
+//! asks AT-SPI whether the desktop has enabled accessibility.
 use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
@@ -32,6 +32,33 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+#[cfg(all(target_os = "linux", native_terminal_core))]
+fn linux_accessibility_active() -> Result<bool, String> {
+    use gtk::gio;
+    use gtk::glib::variant::ToVariant;
+
+    let bus = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+        .map_err(|_| "The Linux accessibility bus is unavailable".to_string())?;
+    let reply = bus.call_sync(
+        Some("org.a11y.Bus"),
+        "/org/a11y/bus",
+        "org.freedesktop.DBus.Properties",
+        "Get",
+        Some(&("org.a11y.Status", "IsEnabled").to_variant()),
+        None,
+        gio::DBusCallFlags::NONE,
+        600,
+        gio::Cancellable::NONE,
+    );
+    match reply {
+        Ok(value) => value
+            .get::<(gtk::glib::Variant,)>()
+            .and_then(|(value,)| value.get::<bool>())
+            .ok_or_else(|| "Invalid Linux accessibility status".to_string()),
+        Err(_) => Err("The Linux accessibility status is unavailable".into()),
+    }
+}
+
 /// Whether a screen reader is on. Like the probe it reads the device and nothing of the user's, so a locked app may ask: the
 /// engine Auto resolves to is announced at launch, before the app is unlocked.
 #[tauri::command]
@@ -45,7 +72,14 @@ pub async fn screen_reader_active(app: AppHandle) -> Result<bool, String> {
             .map(|status| status.active)
             .map_err(|_| "The Android accessibility state is unavailable".to_string())
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(target_os = "linux", native_terminal_core))]
+    {
+        let _ = app;
+        tauri::async_runtime::spawn_blocking(linux_accessibility_active)
+            .await
+            .map_err(|error| error.to_string())?
+    }
+    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
     {
         let _ = app;
         Ok(false)
