@@ -224,7 +224,7 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
     [followed?.herdrSession, followed?.paneId, followed?.terminalId, followedAgent, selected?.conversation.path]);
   const herdrClaude = herdrAgent?.agent === 'claude' ? herdrAgent : undefined;
   const herdrGuard = useCallback(async () => !!herdrClaude && shown && access.current() && await herdrStillWaits(invoke, sessionId, herdrClaude) && access.current(), [herdrClaude, shown, access, invoke, sessionId]);
-  // The dialog card reads the agent pane's own screen from the host, only while the agent is not busy with a turn.
+  // The dialog card reads the followed agent's screen when idle or its exact companion report names a question.
   const herdrView = useMemo(() => herdrAgent && hostScreen(async () => screenRows(await invoke('herdr_agent_screen', {sessionId, target: {herdrSession: herdrAgent.server, pane: herdrAgent.pane, terminal: herdrAgent.terminal, agent: herdrAgent.agent, agentSessionId: herdrAgent.agentSessionId}}))), [herdrAgent, invoke, sessionId]);
   const herdrStillHere = useCallback(async () => !!herdrAgent && shown && access.current() && await herdrStillRuns(invoke, sessionId, herdrAgent) && access.current(), [herdrAgent, shown, access, invoke, sessionId]);
   // What the companion's report of the followed agent says it waits for: Herdr's own status has the wait but not its kind.
@@ -398,7 +398,7 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
     {((!selected && tmux) || herdrClaude) && <AgentApprovalDock sessionId={sessionId} shown={shown && fresh} row={row} herdr={herdrClaude} access={access} invoke={invoke} />}
     {!selected && tmux && <AgentOpenCodeDock sessionId={sessionId} shown={shown && fresh} row={row} access={access} invoke={invoke} />}
-    {herdrAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && selected?.status !== 'working'} terminal={herdrView} agent={agentNames[herdrAgent.agent]} answerable={hasDialogProfile(agentNames[herdrAgent.agent])} guard={herdrStillHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
+    {herdrAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && (selected?.status !== 'working' || (herdrReport?.sessionId === herdrAgent.agentSessionId && waitingKind(herdrReport) === 'question'))} terminal={herdrView} agent={agentNames[herdrAgent.agent]} answerable={hasDialogProfile(agentNames[herdrAgent.agent])} guard={herdrStillHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {zellijAgent && row && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && row.state !== 'working'} terminal={zellijView} agent={row.agent} answerable={hasDialogProfile(row.agent)} guard={zellijHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {reader && !selected && !zellijAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh} terminal={terminal} agent={row?.agent} answerable={tmux && hasDialogProfile(row?.agent) && !!row?.paneId} guard={paneGuard} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {kept && <ChatPanel key={`${held ? JSON.stringify(held.conversation) : retained.current?.id}:${images[kept.agent]}`} images={!!images[kept.agent]} sessionId={sessionId} shown={shown && reader && fresh}

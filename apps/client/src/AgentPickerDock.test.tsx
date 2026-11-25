@@ -343,6 +343,28 @@ it('says the notes box of a Codex question waits in the terminal and sends nothi
   expect(keys()).toEqual([]);
 });
 
+it.each([
+  ['Codex', 'codex-question-notes', /Which color\?/, 'Add notes'],
+  ['Claude Code', 'ask-single', /Which color do you want to pick\?/, 'Type something'],
+])('shows the live %s question and the terminal affordance when no answer card is available', async (agent, file, question, input) => {
+  const {onShowTerminal} = mount(onTmux(fixture(file)), {agent, waiting: 'question'});
+  expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
+  expect(screen.getByText(question).textContent).toContain(input);
+  fireEvent.click(screen.getByRole('button', {name: t('agentViewShowTerminal')}));
+  expect(onShowTerminal).toHaveBeenCalledOnce();
+  expect(keys()).toEqual([]);
+});
+
+it('updates the visible unliftable question when the next question arrives', async () => {
+  const rows = fixture('codex-question-notes');
+  mount(onTmux(rows), {agent: 'Codex', waiting: 'question'});
+  expect(await screen.findByText(/Which color\?/)).toBeTruthy();
+  act(() => screenOf.set(onTmux(rows.map(row => row.replace('Which color?', 'Which fruit?').replace('Question 1/1', 'Question 2/2')))));
+  expect(await screen.findByText(/Which fruit\?/)).toBeTruthy();
+  expect(screen.queryByText(/Which color\?/)).toBeNull();
+  expect(keys()).toEqual([]);
+});
+
 it('keeps a new answer pending when an older question finishes late', async () => {
   let releaseFirst!: () => void;
   let releaseSecond!: () => void;

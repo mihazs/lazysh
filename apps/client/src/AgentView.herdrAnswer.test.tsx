@@ -13,7 +13,7 @@ const SESSION='00000001-0000-4000-8000-000000000000';
 useAgentViewHarness();
 
 const request=(id:string,sessionId=SESSION)=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId:null,toolName:'Bash',toolInput:{command:`run ${id}`},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
-type Host={pane:string;requests:unknown[];messages:unknown[];waiting:boolean;guard:boolean;session:string;decided:unknown[];agent:'claude'|'codex';status:string;screen:string[];summary?:string;press?:(input:{kind:string;rows?:number;enter?:boolean})=>void};
+type Host={pane:string;requests:unknown[];messages:unknown[];waiting:boolean;guard:boolean;session:string;decided:unknown[];agent:'claude'|'codex';status:string;screen:string[];summary?:string;reportSession?:string;duplicateReport?:boolean;press?:(input:{kind:string;rows?:number;enter?:boolean})=>void};
 /** The focused Herdr pane runs Claude Code `SESSION`; `pane` is where Herdr says that session runs now, `waiting` what the companion's report of it says. */
 function herdr(host:Partial<Host>={}) {
   const state:Host={pane:'w2E:pF',requests:[],messages:[{id:'p',role:'user',blocks:[{type:'text',text:'Hello'}]}],waiting:true,guard:false,session:SESSION,decided:[],agent:'claude',status:'idle',screen:[],...host};
@@ -24,7 +24,7 @@ function herdr(host:Partial<Host>={}) {
       return {...herdrNavigationTree,agents:[agent]};
     }
     if(command==='agent_herdr_conversation')return {schemaVersion:1,agent:state.agent,view:'active_branch',messages:state.messages,nextOffset:0,hasMore:false,activity:'waiting'};
-    if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:SESSION,agent:state.agent==='claude'?'Claude Code':'Codex',project:'/work',state:state.waiting?'needs_attention':'working',updatedAt:new Date().toISOString(),summary:state.summary??'Answer requested',paneId:null,eventCount:3}]};
+    if(command==='agent_snapshot'){const report={sessionId:state.reportSession??SESSION,agent:state.agent==='claude'?'Claude Code':'Codex',project:'/work',state:state.waiting?'needs_attention':'working',updatedAt:new Date().toISOString(),summary:state.summary??'Answer requested',paneId:null,eventCount:3};return {schemaVersion:1,sessions:state.duplicateReport?[report,report]:[report]};}
     if(command==='agent_approvals')return {schemaVersion:1,requests:state.requests};
     if(command==='resolve_agent_approval'){state.decided.push(args);return {schemaVersion:1,accepted:true};}
     // The guard is the same one the composer binds to; a stock host has none.
@@ -138,11 +138,23 @@ describe('a dialog open on the pane of the agent followed in Herdr',()=>{
     expect(calls('herdr_agent_input')[0]).toMatchObject({target:{agent:'codex',agentSessionId:SESSION}});
   });
   it('does not read the screen while the agent is working, and reads it again when it stops',async()=>{
-    const host=herdr({status:'working',screen:modelScreen(5)});
+    const host=herdr({status:'working',waiting:false,screen:modelScreen(5)});
     await settle();
     expect(calls('herdr_agent_screen')).toEqual([]);expect(screen.queryByRole('region',{name:'Dialog in the terminal'})).toBeNull();
     host.status='idle';await advance(3000);await advance(3000);
     expect(within(dialog()).getByRole('heading',{name:'Select model'})).toBeTruthy();
+  });
+  it('shows the exact session question despite stale working status without sending keys',async()=>{
+    herdr({agent:'codex',status:'working',screen:onTmux(dialogScreen('codex-question-notes'))});
+    await settle();
+    expect(within(dialog()).getByText(/Which color\?/)).toBeTruthy();
+    expect(pressed()).toEqual([]);
+  });
+  it.each([{reportSession:'another-session'}, {duplicateReport:true}])('does not read a working pane for a mismatched or ambiguous question report',async report=>{
+    herdr({agent:'codex',status:'working',screen:onTmux(dialogScreen('codex-question-notes')),...report});
+    await settle();
+    expect(calls('herdr_agent_screen')).toEqual([]);
+    expect(pressed()).toEqual([]);
   });
   it('says the agent waits in the terminal for a dialog it cannot read exactly, and sends no key',async()=>{
     herdr({waiting:false,screen:dialogScreen('permissions-tabs')});

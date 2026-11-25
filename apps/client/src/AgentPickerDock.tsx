@@ -25,17 +25,36 @@ const same = (a: Lift, b: Lift) => a.kind === b.kind && (a.kind !== 'dialog' || 
 const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 /** The dialog the agent has open on the terminal screen, re-read about 150 ms after output while the view is shown. */
-function useScreenLift(terminal: ScreenSource | undefined, active: boolean, agent: string): Lift {
-  const [lift, setLift] = useState<Lift>(none);
+function useScreenLift(terminal: ScreenSource | undefined, active: boolean, agent: string): {lift: Lift; rows: readonly string[]} {
+  const [state, setState] = useState<{lift: Lift; rows: readonly string[]}>({lift: none, rows: []});
   useEffect(() => {
-    if (!terminal || !active) {setLift(none); return;}
+    if (!terminal || !active) {setState({lift: none, rows: []}); return;}
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const read = () => {timer = undefined; const next = readLift(terminal, agent); setLift(previous => same(previous, next) ? previous : next);};
+    const read = () => {timer = undefined; const lift = readLift(terminal, agent); const {length, rows} = terminal.viewport();
+      const screen = lift.kind === 'unliftable' ? terminal.readRows?.(length - rows, rows) ?? [] : [];
+      setState(previous => same(previous.lift, lift) && JSON.stringify(previous.rows) === JSON.stringify(screen) ? previous : {lift, rows: screen});};
     read();
     const subscription = terminal.subscribe(() => {timer ??= setTimeout(read, 150);}, ['output']);
     return () => {subscription.dispose(); clearTimeout(timer);};
   }, [terminal, active, agent]);
-  return lift;
+  return state;
+}
+
+/** Display only a recognized question's current screen, without inferring how to answer it. */
+function questionScreen(agent: string, rows: readonly string[]): string {
+  const lastIndex = (items: readonly string[], matches: (row: string) => boolean) => {
+    for (let index = items.length - 1; index >= 0; index--) if (matches(items[index])) return index;
+    return -1;
+  };
+  const last = lastIndex(rows, row => agent === 'Codex' ? /tab or esc to clear notes/i.test(row) : /Enter to select.*Esc to cancel/.test(row));
+  if (last < 0) return '';
+  const before = rows.slice(0, last);
+  if (agent !== 'Codex' && (agent !== 'Claude Code' || !before.some(row => /Type something|Chat about this/.test(row)))) return '';
+  const first = agent === 'Codex' ? lastIndex(before, row => /^\s*Question \d+\/\d+/.test(row)) : (() => {
+    const rules = before.flatMap((row, index) => /^\s*─{8,}\s*$/.test(row) ? [index] : []);
+    return rules.length >= 2 ? rules[rules.length - 2] : -1;
+  })();
+  return first < 0 ? '' : rows.slice(first, last + 1).join('\n').trim();
 }
 
 type Phase = 'idle' | 'sending' | 'stale' | 'notMoved' | 'still' | 'failed';
@@ -48,12 +67,13 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
   sessionId: string; shown: boolean; terminal?: ScreenSource; answerable: boolean;
   /** The agent running in the pane, whose dialogs the screen is read for. */ agent?: string;
   /** Re-checks that the bound pane is still the one the agent's report names. */ guard: () => Promise<boolean>;
-  /** Approvals and questions have their own surface and need no banner here. */
+  /** The type of interaction reported by the agent, when available. */
   waiting?: 'approval' | 'question' | 'plan' | 'menu' | 'unknown'; onShowTerminal: () => void;
 }) {
-  const lift = useScreenLift(terminal, shown, agent);
-  // A Claude approval and any agent's question have a card of their own; a Codex approval is this dialog, so it has none.
-  const ownCard = waiting === 'question' || (waiting === 'approval' && agent === 'Claude Code');
+  const {lift, rows: screenRows} = useScreenLift(terminal, shown, agent);
+  // A Claude approval has its own card. Question cards can be absent or read-only,
+  // so an unliftable live question must still offer a path to the terminal.
+  const ownCard = waiting === 'approval' && agent === 'Claude Code';
   const control = useComposerControl(sessionId);
   const dialog = lift.kind === 'dialog' ? lift.dialog : undefined;
   const open = shown && lift.kind !== 'none';
@@ -152,7 +172,9 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
   // A dialog that cannot be read exactly, a menu the agent reported that is not on screen, or an approval or plan decision of an
   // agent whose dialogs were never captured (Grok Build, Gemini CLI, OpenCode): the terminal has it.
   const unreadable = !hasDialogProfile(agent) && (waiting === 'approval' || waiting === 'plan');
+  const question = questionScreen(agent, screenRows);
   if (shown && !ownCard && (lift.kind === 'unliftable' || waiting === 'menu' || unreadable)) return <section className="agent-picker" aria-label={t('agentPickerTitle')}>
+    {question && <pre className="agent-picker-screen">{question}</pre>}
     <p role="status">{t('agentWaitingInTerminal')}</p>
     <div className="button-row"><button type="button" onClick={onShowTerminal}>{t('agentViewShowTerminal')}</button></div>
   </section>;
