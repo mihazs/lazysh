@@ -1,5 +1,25 @@
 # @lazysh/client
 
+## 1.101.3
+
+### Patch Changes
+
+- fix(bench): verify adapter writes in the Android xterm baseline ([#2589](https://github.com/mihazs/lazysh/pull/2589))
+
+  <details><summary>Details</summary>
+
+  The comparison driver now selects the app adapter and rejects results from the direct-write path.
+
+  </details>
+- fix(terminal): keep the terminal usable in short landscape windows ([#2551](https://github.com/mihazs/lazysh/pull/2551))
+
+  <details><summary>Details</summary>
+
+  Long session labels stay on one line and the status footer gives its space to the terminal.
+
+  </details>
+- fix(android): apply imported fonts in the native terminal ([#2579](https://github.com/mihazs/lazysh/pull/2579))
+
 ## 1.101.2
 
 ### Patch Changes
