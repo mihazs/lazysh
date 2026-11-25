@@ -15,6 +15,8 @@ use tauri::Manager;
 mod android;
 #[cfg(all(target_os = "linux", native_terminal_core))]
 pub(crate) mod linux;
+#[cfg(all(target_os = "macos", native_terminal_core))]
+pub(crate) mod macos;
 #[cfg(native_terminal_core)]
 pub(crate) mod panes;
 
@@ -196,7 +198,14 @@ pub async fn native_terminal_surface_place(
     {
         linux::place(&app, session, anchor, background).await
     }
-    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
+    #[cfg(all(target_os = "macos", native_terminal_core))]
+    {
+        macos::place(&app, session, anchor, background).await
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        all(any(target_os = "linux", target_os = "macos"), native_terminal_core)
+    )))]
     {
         let _ = app;
         Err(unavailable())
@@ -237,9 +246,14 @@ async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
     linux::relook(app, session).await
 }
 
+#[cfg(all(target_os = "macos", native_terminal_core))]
+async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
+    macos::relook(app, session).await
+}
+
 #[cfg(all(
     native_terminal_core,
-    not(any(target_os = "android", target_os = "linux"))
+    not(any(target_os = "android", target_os = "linux", target_os = "macos"))
 ))]
 async fn relook(_: &AppHandle, _: String) -> Result<(), String> {
     Err(unavailable())
@@ -293,7 +307,14 @@ pub async fn native_terminal_surface_remove(app: AppHandle, session: String) -> 
     {
         linux::remove(&app, session).await
     }
-    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
+    #[cfg(all(target_os = "macos", native_terminal_core))]
+    {
+        macos::remove(&app, session).await
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        all(any(target_os = "linux", target_os = "macos"), native_terminal_core)
+    )))]
     {
         let _ = app;
         Ok(())
@@ -316,7 +337,14 @@ pub async fn native_terminal_surface_state(
     {
         linux::state(&app, session).await
     }
-    #[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
+    #[cfg(all(target_os = "macos", native_terminal_core))]
+    {
+        macos::state(&app, session).await
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        all(any(target_os = "linux", target_os = "macos"), native_terminal_core)
+    )))]
     {
         let _ = app;
         Err(unavailable())
@@ -368,7 +396,10 @@ pub async fn native_terminal_surface_focus(
     }
 }
 
-#[cfg(not(any(target_os = "android", all(target_os = "linux", native_terminal_core))))]
+#[cfg(not(any(
+    target_os = "android",
+    all(any(target_os = "linux", target_os = "macos"), native_terminal_core)
+)))]
 fn unavailable() -> String {
     "This build has no native terminal surface.".into()
 }

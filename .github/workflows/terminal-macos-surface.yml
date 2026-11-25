@@ -2,18 +2,19 @@ name: terminal-macos-surface
 
 # Report-only probe for #1333: does an NSView hosting a CAMetalLayer, a sibling of the web view inside wry's WryWebViewParent, show
 # through the transparent WKWebView? The probe builds the real tao and wry window, reads its own window back from the window server
-# and judges placement, overlap, resize and recreate at 1x and 2x. It is not a required check and runs only when the probe changes.
+# and judges placement, overlap, resize and recreate at 1x and 2x. It is not a required check and runs when the probe or app host changes.
 # What it found: docs/architecture/macos-surface-composition-poc.md.
 on:
   pull_request:
-    paths:
+    paths: &surface-paths
       - packages/terminal-runtime/prototypes/macos-surface/**
+      - apps/client/src-tauri/src/native_terminal_surface.rs
+      - apps/client/src-tauri/src/native_terminal_surface/macos.rs
+      - packages/terminal-renderer-wgpu/src/adapter.rs
       - .github/workflows/terminal-macos-surface.yml
   push:
     branches: [main]
-    paths:
-      - packages/terminal-runtime/prototypes/macos-surface/**
-      - .github/workflows/terminal-macos-surface.yml
+    paths: *surface-paths
   workflow_dispatch:
 
 permissions:
@@ -80,3 +81,28 @@ jobs:
           name: lazysh-macos-surface-poc
           path: ${{ runner.temp }}/surface-poc
           if-no-files-found: warn
+
+
+  terminal-macos-app-host:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.1
+      - name: Install app build dependencies
+        run: |
+          brew install coreutils protobuf openssl@3 zlib pkgconf
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix protobuf)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/ghostty-zig
+        with:
+          link-source: 'true'
+          zig-target: aarch64-macos
+          zig-sha256: b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489
+      - name: Build the native-enabled app and run the macOS anchor test
+        run: |
+          args=(--manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib)
+          case_name=native_terminal_surface::macos::tests::css_anchor_respects_backing_scale_zoom_and_flipped_coordinates
+          sh .github/scripts/retry-zig-fetch.sh cargo test "${args[@]}" --no-run
+          cargo test "${args[@]}" -- --list --exact "$case_name" | grep -Fx "$case_name: test"
+          cargo test "${args[@]}" -- --exact "$case_name"

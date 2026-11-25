@@ -111,9 +111,16 @@ pub fn ranked(policy: &Policy, adapters: &[AdapterInfo]) -> Vec<usize> {
 /// `ANativeWindow`, a `CAMetalLayer`'s view, an `HWND`, a Wayland or X11 surface. The renderer only
 /// hands them to wgpu, which creates the swapchain; nothing here is platform code.
 #[derive(Debug, Clone, Copy)]
-pub struct Window {
-    display: RawDisplayHandle,
-    window: RawWindowHandle,
+pub struct Window(WindowTarget);
+
+#[derive(Debug, Clone, Copy)]
+enum WindowTarget {
+    Raw {
+        display: RawDisplayHandle,
+        window: RawWindowHandle,
+    },
+    #[cfg(target_vendor = "apple")]
+    MetalLayer(NonNull<c_void>),
 }
 
 // SAFETY: the handles are ids and pointers this crate never dereferences; `Window::new`'s caller
@@ -128,7 +135,7 @@ impl Window {
     /// until every renderer created on them was destroyed or dropped: a host destroys the renderer
     /// before it lets the platform take the surface back.
     pub unsafe fn new(display: RawDisplayHandle, window: RawWindowHandle) -> Self {
-        Self { display, window }
+        Self(WindowTarget::Raw { display, window })
     }
 
     /// A `wl_surface` on the connection of `display` (a `wl_display`).
@@ -137,17 +144,32 @@ impl Window {
     ///
     /// The same as [`Window::new`]: both pointers are live Wayland objects of one connection.
     pub unsafe fn wayland(display: NonNull<c_void>, surface: NonNull<c_void>) -> Self {
-        Self {
+        Self(WindowTarget::Raw {
             display: RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display)),
             window: RawWindowHandle::Wayland(WaylandWindowHandle::new(surface)),
-        }
+        })
+    }
+
+    /// A layer installed by the AppKit or UIKit host before the renderer thread starts.
+    ///
+    /// # Safety
+    ///
+    /// The pointer must identify a live CAMetalLayer and remain valid until the
+    /// renderer is destroyed. The owning view is accessed only on the main thread.
+    #[cfg(target_vendor = "apple")]
+    pub unsafe fn metal_layer(layer: NonNull<c_void>) -> Self {
+        Self(WindowTarget::MetalLayer(layer))
     }
 }
 
 impl HasDisplayHandle for Window {
     fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-        // SAFETY: `Window::new`'s caller keeps the display alive.
-        Ok(unsafe { DisplayHandle::borrow_raw(self.display) })
+        match self.0 {
+            // SAFETY: `Window::new`'s caller keeps the display alive.
+            WindowTarget::Raw { display, .. } => Ok(unsafe { DisplayHandle::borrow_raw(display) }),
+            #[cfg(target_vendor = "apple")]
+            WindowTarget::MetalLayer(_) => Err(HandleError::Unavailable),
+        }
     }
 }
 
@@ -193,21 +215,25 @@ pub(crate) fn select_seen(
     // SIGSEGV on the probe's thread). A release build never names objects, so this makes a debug build draw as a release one does.
     #[cfg(target_os = "android")]
     descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
-    if let Some(window) = window {
+    if let Some(window @ Window(WindowTarget::Raw { .. })) = window {
         // OpenGL ES picks its display when the instance is made.
         descriptor = descriptor.with_display_handle(Box::new(window));
     }
     let instance = wgpu::Instance::new(descriptor);
     let surface = window
         .map(|w| {
-            // SAFETY: `Window::new`'s caller keeps both handles valid for as long as the renderer,
-            // which owns this surface, lives.
-            unsafe {
-                instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                    raw_display_handle: Some(w.display),
-                    raw_window_handle: w.window,
-                })
-            }
+            let target = match w.0 {
+                WindowTarget::Raw { display, window } => wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: Some(display),
+                    raw_window_handle: window,
+                },
+                #[cfg(target_vendor = "apple")]
+                WindowTarget::MetalLayer(layer) => {
+                    wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer.as_ptr())
+                }
+            };
+            // SAFETY: Each Window constructor requires its target to outlive this surface.
+            unsafe { instance.create_surface_unsafe(target) }
         })
         .transpose();
     let surface = match surface {

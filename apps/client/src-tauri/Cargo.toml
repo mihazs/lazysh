@@ -18,7 +18,7 @@ parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
 parakeet-android = ["dep:lazysh-parakeet-runtime"]
 # The native terminal core (libghostty-vt, built with Zig 0.16.0) and its wgpu renderer: off by default so no
 # build needs Zig or compiles wgpu.
-native-terminal = ["dep:lazysh-terminal-runtime", "dep:lazysh-terminal-renderer-wgpu", "dep:unicode-segmentation", "dep:unicode-width", "dep:gtk", "dep:gdk", "dep:wayland-client", "dep:wayland-backend"]
+native-terminal = ["dep:lazysh-terminal-runtime", "dep:lazysh-terminal-renderer-wgpu", "dep:unicode-segmentation", "dep:unicode-width", "dep:gtk", "dep:gdk", "dep:wayland-client", "dep:wayland-backend", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:objc2-quartz-core"]
 # Owned emulator builds only: trusts one extra root for the loopback WebDAV fixture (see `sync.rs`). Never a product feature.
 sync-tls-acceptance = []
 
@@ -74,6 +74,12 @@ quircs = "=0.10.3"
 
 # The Linux native terminal surface (a Wayland subsurface of GDK's toplevel, #1331): only with `native-terminal`.
 # gtk and gdk are the versions tauri links; `client_system` wraps GDK's own `wl_display`.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = ["std", "NSGraphics", "NSResponder", "NSView", "NSWindow", "objc2-core-foundation", "objc2-quartz-core"] }
+objc2-foundation = { version = "0.3", optional = true, default-features = false, features = ["std", "NSGeometry"] }
+objc2-quartz-core = { version = "0.3", optional = true, default-features = false, features = ["std", "CALayer", "CAMetalLayer", "objc2-core-foundation"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18", optional = true }
 gdk = { version = "0.18", optional = true }
