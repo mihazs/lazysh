@@ -46,17 +46,18 @@ describe.skipIf(!binary)('NativeTerminalAdapter over the real core', () => {
 
   it('applies captured Mosh frame geometry while holding local resize requests as intents', async () => {
     const {frames} = JSON.parse(readFileSync(resolve('e2e/fixtures/mosh-resize-frames.json'), 'utf8')) as {
-      frames: {cols: number; rows: number; bytesHex: string; expectedCursor: [number, number]}[];
+      frames: {cols: number; rows: number; bytesHex: string; expectedCursor: [number, number]; expectedLongRow: string}[];
     };
     const adapter = await harness.create();
     try {
       adapter.enableCanonicalResize!();
-      for (const {cols, rows, bytesHex, expectedCursor: [x, y]} of frames) {
+      for (const {cols, rows, bytesHex, expectedCursor: [x, y], expectedLongRow} of frames) {
         await adapter.write!(Buffer.from(bytesHex, 'hex'));
         expect(adapter.size()).toEqual({columns: cols, rows});
         expect(adapter.cursor()).toMatchObject({x, y});
         adapter.requestSize({columns: cols + 1, rows: rows + 1});
         expect(adapter.size()).toEqual({columns: cols, rows});
+        expect(adapter.readRows!(adapter.viewport().top + 1, 1)[0]).toContain(expectedLongRow);
       }
     } finally { await adapter.dispose(); }
   });
