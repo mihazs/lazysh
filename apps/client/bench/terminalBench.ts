@@ -9,7 +9,7 @@ import { attachRendererCandidate, type RendererCandidate } from '../src/xterm/re
 import { configureTerminalBold } from '../src/xterm/terminalBold';
 import { XtermTerminalAdapter } from '../src/xtermTerminalAdapter';
 import type { TerminalAdapter } from '../src/terminalAdapter';
-import { ansiColor, chunks, CHUNK, fullScreenRedraw, moshEnvelope, plainText, shellSession, styledText, summarize, type StyleFamily, type Workload } from './workloads';
+import { ansiColor, chunks, CHUNK, fullScreenRedraw, moshEnvelope, plainText, shellSession, styledText, summarize, type Geometry, type StyleFamily, type Workload } from './workloads';
 import type { Check, Replay } from './programWorkloads';
 
 /** Credit window of the Rust session workers (ssh.rs OUTPUT_WINDOW, local.rs WINDOW). */
@@ -55,9 +55,9 @@ const pending: number[] = [], latencies: number[] = [];
 let echoMode: 'keydown' | 'composition' = 'keydown', echoed = 0, typed = 0, writesAtBegin = 0;
 let echoColumn = 0;
 
-function open() {
+function open(fixedGrid?: Geometry) {
   if (harness) return harness;
-  harness = mountTerminalHistoryHarness({ input: data => echo(data) });
+  harness = mountTerminalHistoryHarness({ input: data => echo(data), fixedGrid });
   attach(harness.terminal);
   document.addEventListener('keydown', event => { if (echoMode === 'keydown') pending.push(event.timeStamp); }, true);
   document.addEventListener('compositionend', event => { if (echoMode === 'composition') pending.push(event.timeStamp); }, true);
@@ -175,8 +175,8 @@ function holds(terminal: Term, check: Check | null) {
 }
 
 const api = {
-  open() {
-    const { terminal } = open();
+  open(fixedGrid?: Geometry) {
+    const { terminal } = open(fixedGrid);
     return { cols: terminal.cols, rows: terminal.rows, scrollback: terminal.options.scrollback, cursorBlink: terminal.options.cursorBlink, fontSize: terminal.options.fontSize, devicePixelRatio: window.devicePixelRatio, viewport: [window.innerWidth, window.innerHeight], userAgent: navigator.userAgent, hardwareConcurrency: navigator.hardwareConcurrency, build: import.meta.env.PROD ? 'production' : 'development', renderer: `xterm-${candidate}`, writePath: viaAdapter ? 'adapter' : 'direct', canvases: terminal.element?.querySelectorAll('canvas').length ?? 0, gl: candidate === 'webgl' ? glInfo() : null, domNodes: document.getElementsByTagName('*').length };
   },
   /** App features that reach into xterm's DOM renderer: tried on the live terminal, because a different renderer may refuse them. Run after the measurements. */

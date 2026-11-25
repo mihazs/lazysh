@@ -92,9 +92,12 @@ bun run bench:terminal                      # both viewports, release build, abo
 bun run bench:terminal -- --project desktop  # one viewport, about 4.5 minutes
 LAZYSH_BENCH_OUT=/tmp/run.json bun run bench:terminal -- --project desktop
 LAZYSH_BENCH_WRITE=adapter bun run bench:terminal -- --project desktop   # every byte through XtermTerminalAdapter.write
+LAZYSH_BENCH_GRID=49x15 LAZYSH_BENCH_WRITE=adapter bun run bench:terminal -- --project desktop
 LAZYSH_BENCH_PAIRED=1 bun run bench:terminal -- --project desktop -g paired   # both write paths, stream by stream, about 2 minutes
 LAZYSH_BENCH_PAIRED=1 LAZYSH_BENCH_PAIRED_ROUNDS=40 LAZYSH_BENCH_PAIRED_KINDS=ansi bun run bench:terminal -- --project desktop -g paired   # more streams for one workload (plain, ansi, redraw)
 ```
+
+`LAZYSH_BENCH_GRID=COLSxROWS` holds the benchmark at a known measured grid even if the viewport changes. Leave it unset for the normal pane fit. For an Android pair, use the native arm’s grid.
 
 `bench:terminal` builds the benchmark page with `vite build -c vite.bench.config.ts` (minified, React production) and serves it with `vite preview`; the run is rejected if the page reports a non-production build. Output defaults to `apps/client/bench-results/terminal-baseline-<write path>-<viewport>.json` (git-ignored; a renderer candidate other than `dom` adds `-<candidate>` before the write path). Results worth keeping are copied to [`benchmarks/`](benchmarks/).
 
