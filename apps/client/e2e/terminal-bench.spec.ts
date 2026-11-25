@@ -47,6 +47,21 @@ if (!full) test('the fixed benchmark grid survives a viewport resize', async ({ 
   expect(await page.evaluate(() => window.terminalBench.open())).toMatchObject(grid);
 });
 
+if (!full) test('repeated streams render the live rows after clearing scrollback', async ({ page, baseURL }) => {
+  test.skip(androidSerial !== null, 'The smoke check uses the desktop DOM renderer.');
+  await page.goto(benchUrl(baseURL, 'renderer=dom&write=direct'));
+  await page.waitForFunction(() => !!window.terminalBench);
+  await page.evaluate(() => window.terminalBench.prepare('plain', 4 << 20));
+  for (let sample = 0; sample < 5; sample++) {
+    const result = await page.evaluate(() => window.terminalBench.stream());
+    expect(result.renderThroughputMiBs ?? 0).toBeGreaterThan(0);
+    const liveRows = await page.evaluate(() => window.terminalBench.screenLines());
+    const visibleRows = await page.locator('.xterm-rows > div').evaluateAll(rows =>
+      rows.map(row => (row.textContent ?? '').replaceAll('\u00a0', ' ').trimEnd()));
+    expect(visibleRows).toEqual(liveRows);
+  }
+});
+
 for (const writePath of writePaths) test(`terminal baseline, ${writePath} write path`, async ({ page, browser, browserName, baseURL }, info) => {
   const atStart = os.loadavg();
   test.skip(browserName !== 'chromium', 'CDP process metrics need Chromium.');
