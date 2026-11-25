@@ -25,14 +25,14 @@ describe('the screen reader Android reports', () => {
     expect([await systemScreenReader(), await systemScreenReader(), await systemScreenReader()]).toEqual([true, true, true]);
   });
 
-  it('asks the packaged Linux app for the accessibility status', async () => {
-    userAgent('Mozilla/5.0 (X11; Linux x86_64)');
+  it.each(['X11; Linux x86_64', 'Windows NT 10.0; Win64; x64'])('asks the packaged desktop app for accessibility status (%s)', async platform => {
+    userAgent(`Mozilla/5.0 (${platform})`);
     app.invoke.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     expect([await systemScreenReader(), await systemScreenReader()]).toEqual([true, false]);
   });
 
   it('is no, without asking the app, anywhere else', async () => {
-    userAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36');
+    userAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/537.36 Chrome/126 Safari/537.36');
     expect(await systemScreenReader()).toBe(false);
     userAgent(android);
     app.tauri = false;
