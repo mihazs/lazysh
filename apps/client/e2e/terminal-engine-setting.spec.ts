@@ -10,8 +10,8 @@ const notBuilt:Core={available:false,reason:'The native terminal core is not bui
 const engineRadio=(page:Page,name:'Auto'|'Native'|'xterm.js')=>page.getByRole('radio',{name,exact:true});
 
 /** The app on a synthetic host and a native bridge that answers the probe as `core`; `stored` seeds the device's preferences once, so a reload keeps what the spec chose. */
-async function openApp(page:Page,core:Core,stored:Record<string,unknown>={}) {
-  await installNativeBridge(page);
+async function openApp(page:Page,core:Core,stored:Record<string,unknown>={},screenReaderActive=false) {
+  await installNativeBridge(page,undefined,{screenReaderActive});
   await page.addInitScript(({core,stored})=>{
     if(!sessionStorage.getItem('seeded')){
       sessionStorage.setItem('seeded','1');
@@ -120,6 +120,16 @@ test('while a screen reader is active Native is refused with that message and ne
   await expect(page.getByText(message,{exact:true})).toHaveCount(0);
   await expect(engineRadio(page,'Native')).toBeEnabled();
   await expect(engineRadio(page,'Native')).toBeChecked();
+});
+
+test('desktop accessibility refuses Native even with in-app announcements off',async({page,isMobile})=>{
+  test.skip(isMobile || process.platform !== 'linux','Linux desktop accessibility.');
+  await openApp(page,{available:true},{terminalEngine:'native',screenReader:false},true);
+  await openEngineSettings(page);
+  await expect(engineRadio(page,'Native')).toBeDisabled();
+  await expect(page.getByRole('checkbox',{name:'Screen reader announcements',exact:true})).not.toBeChecked();
+  await closePreferences(page);
+  expect(await connect(page,false)).toMatchObject({backend:'xterm',selection:{fallbacks:[{id:'native',reason:'lacks accessibility'}]}});
 });
 
 test('the keyboard alone chooses the engine and passes over a disabled Native',async({page})=>{
