@@ -94,6 +94,14 @@ class TerminalImeEditorTest {
         assertEquals("the editor was never replaced under the keyboard", 0, resyncs)
     }
 
+    @Test fun recomposingAnAlreadyTypedWordDrawsOnlyTheNewSuffix() {
+        editor.commitText("the", 1)
+        batch { setComposingRegion(0, 3); setComposingText("there", 1) }
+        assertEquals("re", editor.composing)
+        editor.finishComposingText()
+        assertEquals(listOf("the", "re"), remote.sent)
+    }
+
     @Test fun extendingATailWithTheCaretBeforeItTypesOnlyTheNewLetters() {
         batch { commitText("the", 1) }
         remote.sent.clear()
@@ -121,15 +129,23 @@ class TerminalImeEditorTest {
     @Test fun softKeyboardEnterIsACarriageReturnAndEndsOwnershipOfTheLine() {
         batch { commitText("ls", 1) }; batch { commitText("\n", 1) }
         assertEquals(listOf("ls", "\r"), remote.sent)
+        assertEquals("", editor.textBeforeCursor(10))
         batch { commitText("x", 1) }
         assertEquals("typing goes on after the line break", listOf("ls", "\r", "x"), remote.sent)
-        assertRemoteFollowsEditor()
+        assertEquals("x", editor.text)
+    }
+
+    @Test fun enterBatchedWithTheFinalWordAlsoStartsAFreshLine() {
+        batch { commitText("hello", 1); commitText("\n", 1) }
+        assertEquals(listOf("hello\n"), remote.sent)
+        assertEquals("", editor.text)
+        assertEquals(1, resyncs)
     }
 
     @Test fun backspacingIntoAPreviousLineIsNotGuessedAt() {
-        batch { commitText("ls", 1) }; batch { commitText("\n", 1) }
+        batch { commitText("ls\nx", 1) }
         remote.sent.clear()
-        batch { deleteSurroundingText(1, 0) }
+        batch { deleteSurroundingText(2, 0) }
         assertEquals("nothing is replayed into the earlier command", emptyList<String>(), remote.sent)
         assertEquals(listOf(UnappliedEdit("ls", false)), remote.unapplied.filterNotNull())
         assertEquals("the keyboard is told to read the empty editor", 1, resyncs)
@@ -169,9 +185,11 @@ class TerminalImeEditorTest {
         assertEquals(emptyList<String>(), remote.sent)
         editor.key(TerminalKey("Enter", "Enter"))
         assertEquals(listOf("ab", "<Enter>"), remote.sent)
-        // The keyboard keeps composing the same word: only the new letter is typed.
+        assertNull(editor.composing)
+        assertEquals("", editor.text)
+        assertEquals(1, resyncs)
         batch { setComposingText("abc", 1); finishComposingText() }
-        assertEquals(listOf("ab", "<Enter>", "c"), remote.sent)
+        assertEquals(listOf("ab", "<Enter>", "abc"), remote.sent)
     }
 
     @Test fun aModifierAloneChangesNothing() {
