@@ -138,6 +138,36 @@ class NativeTerminalInputTest {
         assertEquals(listOf("text:ab", "key:Enter"), delivered)
     }
 
+    @Test fun anExplicitCorrectionReplacesOnlyTheRequestedWord() = onMain {
+        org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 34)
+        val input = connect(TerminalInputView(instrumentation.targetContext, sink))
+        input.commitText("first secod", 1)
+        assertTrue(input.replaceText(6, 11, "second", 1, null))
+        input.deleteSurroundingText(1, 0)
+        assertEquals("first secon", input.getTextBeforeCursor(256, 0).toString())
+        assertEquals(listOf("text:first secod", "text:\u007fnd", "text:\u007f"), delivered)
+    }
+
+    @Test fun aRetiredKeyboardCannotRewriteDeleteOrCommitTheCurrentWord() = onMain {
+        val view = TerminalInputView(instrumentation.targetContext, sink)
+        val retired = connect(view)
+        retired.commitText("first second ", 1)
+        retired.beginBatchEdit()
+        val keyboard = connect(view)
+        keyboard.setComposingText("third", 1)
+        assertFalse(retired.setComposingRegion(0, 13))
+        assertFalse(retired.deleteSurroundingText(13, 0))
+        assertFalse(retired.commitText("second ", 1))
+        retired.closeConnection()
+        assertEquals(listOf("text:first second "), delivered)
+
+        keyboard.setComposingText("thir", 1)
+        keyboard.commitText("third", 1)
+        keyboard.deleteSurroundingText(1, 0)
+        assertEquals("first second thir", keyboard.getTextBeforeCursor(256, 0).toString())
+        assertEquals(listOf("text:first second ", "text:third", "text:\u007f"), delivered)
+    }
+
     @Test fun losingWindowFocusDropsTheComposingTextAndDeliversNothing() = onMain {
         val view = TerminalInputView(instrumentation.targetContext, sink)
         val connection = connect(view)

@@ -223,6 +223,24 @@ class TerminalImeEditorTest {
         assertEquals("ab", editor.composing)
     }
 
+    @Test fun openingANewConnectionDoesNotInheritAnUnfinishedBatch() {
+        editor.commitText("first second ", 1)
+        assertTrue(editor.beginBatchEdit())
+        editor.connectionOpened()
+        batch { setComposingText("thir", 1); commitText("third", 1) }
+        editor.deleteSurroundingText(1, 0)
+        assertEquals("first second thir", remote.line)
+        assertEquals(listOf("first second ", "third", "\u007f"), remote.sent)
+    }
+
+    @Test fun reopeningTheEditorDeliversPendingCompositionOnce() {
+        editor.setComposingText("word", 1)
+        editor.connectionOpened()
+        editor.commitText(" next", 1)
+        assertEquals(listOf("word", " next"), remote.sent)
+        assertRemoteFollowsEditor()
+    }
+
     @Test fun losingFocusDropsTheComposingTextAndDeliversNothing() {
         batch { setComposingText("abc", 1) }
         editor.revoke()

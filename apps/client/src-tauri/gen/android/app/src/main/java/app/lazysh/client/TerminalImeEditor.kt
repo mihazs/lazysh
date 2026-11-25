@@ -65,6 +65,7 @@ class TerminalImeEditor(
     private var owned = 0
     private var depth = 0
 
+    val inBatch: Boolean get() = depth > 0
     val text: String get() = value
     val selectionStart: Int get() = minOf(selStart, selEnd)
     val selectionEnd: Int get() = maxOf(selStart, selEnd)
@@ -95,6 +96,15 @@ class TerminalImeEditor(
     fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
         val (start, end) = region()
         replace(start, end, text, newCursorPosition, composing = false)
+        settle()
+        return true
+    }
+
+    fun replaceText(start: Int, end: Int, text: CharSequence, newCursorPosition: Int): Boolean {
+        if (start < 0 || end < 0) return false
+        val from = minOf(start, end, value.length)
+        val to = minOf(maxOf(start, end), value.length)
+        replace(from, to, text, newCursorPosition, composing = false)
         settle()
         return true
     }
@@ -202,16 +212,18 @@ class TerminalImeEditor(
 
     /** The keyboard's connection closed while the view kept focus: what it was composing is committed as typed. */
     fun connectionClosed() {
+        depth = 0
         compStart = -1
         compEnd = -1
         flush()
     }
 
-    /** A new connection starts: the keyboard knows of no composition, and the text it reads is already delivered. */
+    /** The replacement keyboard starts from the text already delivered to the terminal. */
     fun connectionOpened() {
+        depth = 0
         compStart = -1
         compEnd = -1
-        previous = value
+        if (value != previous) flush()
         owned = value.length
     }
 
@@ -298,6 +310,7 @@ class TerminalImeEditor(
     }
 
     private fun clear() {
+        depth = 0
         value = ""
         previous = ""
         selStart = 0; selEnd = 0
