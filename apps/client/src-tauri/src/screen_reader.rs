@@ -1,8 +1,8 @@
-//! Whether an Android screen reader is on (#1329). The native terminal draws on a GPU surface with no text a reader can reach, so
+//! Whether a system screen reader is on (#1329, #1335). The native terminal draws on a GPU surface with no text a reader can reach, so
 //! the client's registry refuses it for a new session while this says yes, whether or not the user also turned on the in-app
 //! Screen reader announcements. The Kotlin plugin (`ScreenReaderPlugin.kt`) asks Android's accessibility manager: touch
-//! exploration, which TalkBack and its kin turn on, or an enabled service that speaks or brailles the screen. Every other
-//! platform answers no: iOS and the desktop have their own accessibility paths and the registry's in-app preference.
+//! exploration, which TalkBack and its kin turn on, or an enabled service that speaks or brailles the screen. UIKit
+//! and AppKit report VoiceOver directly. Other desktop platforms use the registry's in-app preference.
 use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
@@ -32,6 +32,14 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+#[cfg(all(any(target_os = "ios", target_os = "macos"), native_terminal_core))]
+pub(crate) fn apple_voice_over_active() -> bool {
+    #[cfg(target_os = "ios")]
+    return objc2_ui_kit::UIAccessibilityIsVoiceOverRunning();
+    #[cfg(target_os = "macos")]
+    return objc2_app_kit::NSWorkspace::sharedWorkspace().isVoiceOverEnabled();
+}
+
 /// Whether a screen reader is on. Like the probe it reads the device and nothing of the user's, so a locked app may ask: the
 /// engine Auto resolves to is announced at launch, before the app is unlocked.
 #[tauri::command]
@@ -45,7 +53,19 @@ pub async fn screen_reader_active(app: AppHandle) -> Result<bool, String> {
             .map(|status| status.active)
             .map_err(|_| "The Android accessibility state is unavailable".to_string())
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(any(target_os = "ios", target_os = "macos"), native_terminal_core))]
+    {
+        let (answer, asked) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = answer.send(apple_voice_over_active());
+        })
+        .map_err(|error| error.to_string())?;
+        asked.await.map_err(|error| error.to_string())
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        all(any(target_os = "ios", target_os = "macos"), native_terminal_core)
+    )))]
     {
         let _ = app;
         Ok(false)
