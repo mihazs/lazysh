@@ -9,7 +9,7 @@ import { attachRendererCandidate, type RendererCandidate } from '../src/xterm/re
 import { configureTerminalBold } from '../src/xterm/terminalBold';
 import { XtermTerminalAdapter } from '../src/xtermTerminalAdapter';
 import type { TerminalAdapter } from '../src/terminalAdapter';
-import { ansiColor, chunks, CHUNK, fullScreenRedraw, moshEnvelope, plainText, shellSession, styledText, summarize, type Geometry, type StyleFamily, type Workload } from './workloads';
+import { chunks, CHUNK, moshEnvelope, shellSession, streamWorkload, styledText, summarize, type Geometry, type StyleFamily, type Workload } from './workloads';
 import type { Check, Replay } from './programWorkloads';
 
 /** Credit window of the Rust session workers (ssh.rs OUTPUT_WINDOW, local.rs WINDOW). */
@@ -218,7 +218,7 @@ const api = {
   async calibrate() { return calibrate(); },
   async prepare(kind: 'plain' | 'ansi' | 'redraw', size: number) {
     const { cols, rows } = open().terminal;
-    await prepare(kind === 'plain' ? plainText({ bytes: size, cols, rows, seed: 20 }) : kind === 'ansi' ? ansiColor({ bytes: size, cols, rows, seed: 30 }) : fullScreenRedraw({ frames: size, cols, rows, seed: 40 }));
+    await prepare(streamWorkload(kind, size, { cols, rows }));
     return { bytes: prepared!.bytes, chunks: prepared!.chunks.length, sha256: prepared!.sha256, description: prepared!.description };
   },
   /** Words in `styles` distinct styles of one family (first-burst cost, #1323): returns how many glyph-style pairs a glyph cache has to draw once. */

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { streamSubmissions } from './androidNativeBench';
 import { fromBaseline, parseRecord, perRun, perRunSummaries, spread, type BaselineResult, type Measurement } from './androidEvidence';
 
 const base = { adapter: 'xterm-dom', workload: 'W2', variant: null, metric: 'throughputMiBs', correct: true } as const;
@@ -110,5 +111,18 @@ describe('reading a record back', () => {
     expect(() => parseRecord({ ...record, runId: '' })).toThrow(/runId and environment.device.serial/);
     expect(() => parseRecord({ ...record, measurements: [{ ...perRun(base, [1])!, metric: 'madeUp' }] })).toThrow(/unknown metric madeUp/);
     expect(() => parseRecord({ ...record, measurements: [{ ...perRun(base, [1])!, p95: null }] })).toThrow(/missing or non-finite/);
+  });
+});
+
+describe('native stream submission evidence', () => {
+  const sample = { workload: 'plain', submittedMs: 118.5, presentedBytes: 1200, processedBytes: 1200 };
+  const status = (data: unknown) => `INSTRUMENTATION_STATUS: lazyshNativeBenchmarkSubmission=${JSON.stringify(data)}`;
+
+  it('keeps a presentation whose frame contains the parsed output', () => {
+    expect(streamSubmissions(`INSTRUMENTATION_STATUS_CODE: 2\n${status(sample)}\nOK (1 test)\n`)).toEqual([sample]);
+  });
+
+  it('rejects a presentation before the parsed output reached the renderer', () => {
+    expect(() => streamSubmissions(status({ ...sample, presentedBytes: 1199 }))).toThrow(/invalid native stream submission/i);
   });
 });

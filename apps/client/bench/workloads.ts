@@ -114,6 +114,15 @@ export function fullScreenRedraw({ frames, cols, rows, seed }: Geometry & { fram
   return { data: encoder.encode(out), screen, description: `${frames} absolute-positioned repaints of the whole screen` };
 }
 
+/** The W2–W4 streams and their fixed seeds, shared by every benchmark arm. */
+export function streamWorkload(kind: 'plain' | 'ansi' | 'redraw', size: number, geometry: Geometry): Workload {
+  switch (kind) {
+    case 'plain': return plainText({ ...geometry, bytes: size, seed: 20 });
+    case 'ansi': return ansiColor({ ...geometry, bytes: size, seed: 30 });
+    case 'redraw': return fullScreenRedraw({ ...geometry, frames: size, seed: 40 });
+  }
+}
+
 /** W1: prompt, short command, short output; each element is one remote burst. */
 export function shellSession(interactions: number, { cols, rows }: Geometry, seed: number): { bursts: string[]; screen: Screen } {
   const next = rng(seed), bursts: string[] = [];

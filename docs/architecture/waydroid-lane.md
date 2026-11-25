@@ -101,7 +101,138 @@ The native idle driver exercises W0 through the real app and an owned OpenSSH se
 --bench native-idle 'cd apps/client && bun bench/androidNativeBench.ts "$LAZYSH_LANE_OUT/native-idle.json"'
 ```
 
-It records three 30-second windows for each cursor mode. The host measures the app and its WebView processes while device instrumentation waits without touching the terminal. The record includes the renderer's adapter and the guest counters. W1–W4, W9 and W12 still need a native driver, so the comparison remains incomplete with W0 alone. For local emulator qualification, pass `--software-gpu` and set `LAZYSH_BENCH_ANDROID` and `LAZYSH_LANE_RUN_ID` explicitly. Emulator figures cannot establish the Waydroid targets.
+Pass `--xterm-idle` in a second step of the same lane run to use the packaged
+xterm SSH path with the same idle counter interval. The xterm test checks
+that the terminal has focus and that the requested cursor mode is visible
+before taking the samples. Both drivers check installed APK digests before
+and after measurement.
+
+The paired Android 15 x86_64 emulator qualification used one installed APK
+set and an owned SSH shell for each engine. Each row is the median of three
+30-second windows. The native run used the software GPU switch.
+
+| Cursor | Metric | Packaged xterm | Native |
+| --- | --- | ---: | ---: |
+| Blinking | CPU ms/s | 57.94 | 9.99 |
+| Blinking | Wakeups/s | 602.93 | 17.19 |
+| Blinking | Presented frames/s | 2.63 | 1.86 |
+| Steady | CPU ms/s | 4.33 | 0.33 |
+| Steady | Wakeups/s | 71.50 | 1.07 |
+| Steady | Presented frames/s | 0.00 | 0.00 |
+
+The idle target passed for this emulator pair. The complete comparator
+returned `incomplete` because it received only W0. This result qualifies
+the harness for the Waydroid run.
+
+It records three 30-second windows for each cursor mode. The host measures the app and its WebView processes while device instrumentation waits without touching the terminal. The record includes the renderer's adapter and the guest counters. The same driver accepts `--check-streams` to verify the final visible rows for the full W2–W4 streams over OpenSSH at the native session's actual grid, five times per workload. Write this to a separate output file. The resulting correctness record carries the grid, byte counts, fixture SHA-256 hashes, and presentation samples. The shell command and its echo settle before sampling. Each sample records the time from stream release request to submission of the exact parsed byte watermark, and the host closes the counter window before the viewport check. The shell holds the final screen until the viewport and surface checks finish, then returns the prompt. The diagnostic interval still includes the release handshake and watermark polling. The same driver accepts `--check-shell` for five full W1 runs with 300 separate short-output bursts per run. Each burst waits for its own presentation watermark, and each run verifies the same final viewport as xterm. Its latency includes host release, SSH and PTY delivery. Pass `--check-input` for five runs of each idle W12 variant through the native editor and owned SSH echo: 200 single keys, 150 key-downs with repeats paced at up to 30 Hz, and 50 IME composition commits. Each input waits for its own presentation watermark and each run checks the echoed viewport. Pass `--check-flood` to replay W2 chunks from the owned SSH PTY while timing 200 echoed keys per run. The host Python 3 fixture writes an exact echo byte offset and holds each echo until it can be measured. Each next input arrives during a new output window. Pass `--check-commit` to show the native keyboard and send the same 200 single-letter Android IME commits used by the packaged xterm benchmark, five times. The record carries the actual grid and the input SHA-256. Set `LAZYSH_BENCH_ROWS` to the packaged xterm record’s rendered row count when the native pane is taller. The test caps the Android pane through its normal layout and checks both the native grid and remote PTY size before timing. Each IME echo also records Android dispatch to its first display capture with new glyph ink, using the same capture routine as packaged xterm. The native submission watermark remains a separate check. These diagnostics include SSH round-trip time. Pass `--check-memory` for native W9 PSS at one, five and ten real SSH sessions. The first reading uses a fresh session, and the multi-session readings follow 5,000 history lines per session. The driver checks the final line in each retained core and samples a stable process set. The driver then closes all ten sessions and measures PSS after each of five cycles that open, fill, and close five sessions. Each close verifies retirement of the tab, native surface, and native core. Pass `--check-background-5` or `--check-background-10` for five W9 runs of 200 echoed keys in the visible session. All sessions start with 5,000 history lines. Each inactive session streams 16 KiB chunks with a 10 ms pause between chunks and must advance its progress marker during each run. The output records a per-session chunk count and the foreground key-to-presentation timings. Matched W1–W4, W9 and W12 measurements remain open, so the comparison stays incomplete. For local emulator qualification, pass `--software-gpu` and set `LAZYSH_BENCH_ANDROID` and `LAZYSH_LANE_RUN_ID` explicitly. Emulator figures cannot establish the Waydroid targets.
+
+Pass `--xterm-streams` to replay the same W2–W4 fixtures over packaged
+xterm and OpenSSH. Set `LAZYSH_BENCH_ROWS` to the native arm’s row count if
+the xterm pane is taller. Both records include installed APK hashes and
+fixture hashes. Each xterm run checks every visible row before releasing
+the shell. Its elapsed time includes DOM polling and the host release
+handshake. On the Android 15 x86_64 emulator, all 15 packaged xterm samples
+matched their expected 49 × 15 screens. The fixture hashes matched the
+native stream run at the same grid.
+
+Add `--stream-display` to both stream commands for a separate latency
+pass. The fixture paints a colored space in the unused last column
+after its final byte. Both arms time from the stream release request to
+the first Android display capture containing the marker. The metric
+includes the host handshake and screenshot capture, so it is an upper
+bound on visibility. The text oracle still checks every final row.
+Display passes omit CPU, wakeup and frame counters because repeated
+captures add work. Keep the ordinary stream passes for those counters.
+
+The Android 15 x86_64 emulator observed the marker and verified the
+final text in all 15 runs per engine at 49 × 15, with matching fixture
+and app APK hashes. The native arm used its debug software GPU.
+Median time to display capture across five samples per workload was
+2,257 ms versus 600 ms for plain output, 1,325 ms versus 203 ms for ANSI,
+and 873 ms versus 210 ms for redraws (packaged xterm, then native).
+These samples qualify the shared endpoint on the emulator.
+
+For W1, run `--xterm-shell` and `--check-shell` with the same run ID
+and grid. The packaged xterm arm checks every visible row after each of
+the 300 bursts of command echoes, output, and prompts in all five runs.
+Its per-burst timing ends at the DOM observation. The native timing ends
+at the submission watermark. Both include SSH delivery. On the Android
+15 x86_64 emulator, both arms completed 1,500 observations with matching
+run ID, app APK hash, fixture hash, and 49 × 15 geometry.
+Add `--stream-display` to both shell commands for a shared display
+endpoint. Each burst paints a distinct completion color. The next burst
+stays gated until capture and the engine’s own checkpoint both finish.
+The evidence includes 300 capture latencies per run and omits CPU counters
+from these screenshot passes.
+On the Android 15 x86_64 emulator, both arms captured all 1,500 bursts
+with the same marked fixture and app APK. The median of the five runs’
+p50 and p95 readings was 80.6 and 101.3 ms for xterm, and 49.0 and
+53.0 ms for native with the debug software GPU.
+
+For W9 memory, pair `--xterm-memory` with `--check-memory` on the same
+installed app APK. Both arms sample guest process PSS at one fresh SSH
+session and at five and ten sessions after 5,000 history lines per
+session. Each then samples PSS after five additional cycles of opening,
+filling, and closing five sessions. The xterm arm checks that each tab
+received its history and that its DOM renderer is removed on close.
+The native arm also verifies surface and core retirement. PSS is sampled
+immediately after cleanup and includes the Android app and its WebView
+processes.
+
+On one Android 15 x86_64 emulator run with matching app APK hashes, xterm
+used 381 MiB at five sessions and 424 MiB at ten. Native used 399 MiB
+and 405 MiB with its debug software GPU. After the fifth cleanup cycle,
+xterm measured 573 MiB and native measured 353 MiB. The same run confirmed
+tab and renderer retirement on every close. The samples qualify the
+memory test on the emulator. Delayed reclamation and Waydroid measurements
+remain open.
+
+For input during sustained output, add `--stream-display` to
+`--check-flood` and use `--xterm-flood --stream-display` for packaged
+xterm. Set `LAZYSH_BENCH_ROWS` to the same keyboard-visible grid in both
+arms. Each run sends 200 single-character IME commits. The owned SSH
+fixture writes at least one 16 KiB chunk before arming each commit, then
+continues offering 16 KiB chunks every 4 ms while it waits for input.
+A unique color in the last row
+identifies each echo in the composited Android capture. Each record includes
+the input, marker, and flood fixture hashes for pair verification. The elapsed
+time starts at IME dispatch and includes the display capture.
+
+On the Android 15 x86_64 emulator, both engines passed all 1,000 echoes
+at 49 × 12 with matching app APK, input, markers, and flood data. The
+median across the five per-run p50 and p95 readings was 123.1 and
+151.0 ms for xterm, and 92.4 and 114.9 ms for native with the debug
+software GPU. The full Waydroid and multi-session input comparisons remain
+open.
+
+For input with five or ten open SSH sessions, add `--stream-display`
+to `--xterm-background-5` or `--xterm-background-10` and pair it with the
+matching `--check-background-5` or `--check-background-10` invocation.
+Use the same keyboard-visible row count for both arms. The foreground
+receives IME commits and their echoes while each other session offers
+16 KiB chunks with a 10 ms pause. The driver waits for every background
+worker's first receipt and requires each worker to advance during the
+measurement. The output records each worker's progress alongside the
+foreground display latencies.
+
+At five sessions on the Android 15 x86_64 emulator, both engines
+captured 1,000 echoes at 49 × 10 and all four background workers
+advanced in every run. The median per-run p50 and p95 were 172.6 and
+264.6 ms for packaged xterm, and 50.8 and 54.6 ms for native with the
+debug software GPU.
+At ten sessions, both engines again captured 1,000 echoes at 49 × 10,
+with all nine background workers advancing in every run. The median
+per-run p50 and p95 were 294.7 and 400.2 ms for packaged xterm, and 57.3
+and 65.2 ms for native with the debug software GPU. These emulator
+results qualify the fixture for the Waydroid comparison.
+
+The packaged driver honors the lane's `--package` selection. A
+side-by-side debug build must give the app and its instrumentation
+distinct package IDs and use the test APK's package for its fixture
+provider authorities. Use the same installed pair for both engines.
+Android requires the existing signer when updating an installed
+package, so a separate debug package can avoid replacing an unrelated
+installation.
 
 The packaged xterm path has a separate owned-SSH diagnostic. Run the Android
 `NativeTerminalSessionTest#aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart`

@@ -27,6 +27,17 @@ internal class TerminalEchoPixels(private val automation: UiAutomation, bounds: 
         }
     }
 
+    fun awaitColor(rgb: Int, started: Long): Double {
+        fun matches(pixels: IntArray) = pixels.any { it and 0xffffff == rgb }
+        check(!matches(before)) { "The stream completion color was visible before release" }
+        val deadline = System.nanoTime() + 15_000_000_000L
+        do {
+            val sample = pixels()
+            val captured = System.nanoTime()
+            if (matches(sample)) return (captured - started) / 1_000_000.0
+        } while (System.nanoTime() < deadline)
+        throw AssertionError("The stream completion color did not reach the captured display")
+    }
     fun awaitEcho(dispatchedAt: Double): Double {
         val deadline = System.nanoTime() + 5_000_000_000L
         do {

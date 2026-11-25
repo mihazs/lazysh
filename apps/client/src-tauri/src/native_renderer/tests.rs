@@ -227,6 +227,28 @@ fn a_suspended_host_draws_nothing_and_resuming_shows_what_arrived_meanwhile() {
 }
 
 #[test]
+fn the_presented_byte_watermark_advances_only_when_output_is_drawn() {
+    let text = format!("{STEADY}before");
+    let shown = Shown::new(&text, look());
+    let presented = || shown.host.ask(|state| state.presented).unwrap();
+    shown.shows(&reference(&text, &look(), None), "the initial frame");
+    let first = presented().unwrap();
+    assert_eq!(first.0, text.len() as u64);
+
+    shown.host.set_active(false).unwrap();
+    let tail = "\r\nwhile away";
+    prints(&shown.session, tail);
+    assert_eq!(presented(), Some(first));
+
+    shown.host.set_active(true).unwrap();
+    let all = format!("{text}{tail}");
+    shown.shows(&reference(&all, &look(), None), "the resumed frame");
+    let last = presented().unwrap();
+    assert_eq!(last.0, all.len() as u64);
+    assert!(last.1 > first.1);
+}
+
+#[test]
 fn a_lost_surface_detaches_and_a_newer_generation_draws_the_same_pixels_from_a_snapshot() {
     let text = format!("{STEADY}surface \x1b[32mone\x1b[0m");
     let shown = Shown::new(&text, look());

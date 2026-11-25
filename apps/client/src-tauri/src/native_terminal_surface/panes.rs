@@ -173,6 +173,11 @@ impl Panes {
         Ok(())
     }
 
+    #[cfg(all(debug_assertions, target_os = "android"))]
+    pub(crate) fn benchmark_presented(&self, id: &str) -> Option<(u64, std::time::Duration, u64)> {
+        self.0.get(id)?.host.benchmark_presented()
+    }
+
     /// The platform takes surface `generation` back: the renderer is destroyed before this returns, then the
     /// handle to the surface is released.
     pub(crate) fn lost(&mut self, id: &str, generation: u32) {

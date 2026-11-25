@@ -741,11 +741,17 @@ impl Session {
     /// [`Hooks::changed`] fires as output arrives. The session and transport are untouched. While
     /// attached, the session is served ahead of detached ones on its worker.
     pub fn attach(&self) -> Result<Frame, SessionError> {
+        self.attach_with_processed_bytes().map(|(frame, _)| frame)
+    }
+
+    /// The snapshot and its input watermark, captured under the same session lock.
+    pub fn attach_with_processed_bytes(&self) -> Result<(Frame, u64), SessionError> {
         self.with(|runtime| {
             let frame = runtime.snapshot()?;
+            let processed = runtime.processed_bytes();
             // Publish the attachment before the worker can parse output beyond this snapshot.
             self.cell.attached.store(true, Release);
-            Ok(frame)
+            Ok((frame, processed))
         })?
     }
 
@@ -781,7 +787,17 @@ impl Session {
     }
 
     pub fn take_frame(&self) -> Result<Option<Frame>, SessionError> {
-        Ok(self.with(|runtime| runtime.take_frame())??)
+        self.take_frame_with_processed_bytes()
+            .map(|(frame, _)| frame)
+    }
+
+    /// The frame delta and its input watermark, captured under the same session lock.
+    pub fn take_frame_with_processed_bytes(&self) -> Result<(Option<Frame>, u64), SessionError> {
+        Ok(self.with(|runtime| {
+            runtime
+                .take_frame()
+                .map(|frame| (frame, runtime.processed_bytes()))
+        })??)
     }
 
     /// Whether typing or pasting returns a viewport scrolled into history to the live screen

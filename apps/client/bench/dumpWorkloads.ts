@@ -3,13 +3,13 @@
 // engine can parse exactly what the recorded xterm.js baseline parsed (docs/architecture/terminal-benchmarks.md).
 // Usage: bun bench/dumpWorkloads.ts <directory>; read by harnessParse.mjs and the terminal runtime's harness_parse example.
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { ansiColor, fullScreenRedraw, plainText, type Geometry, type Workload } from './workloads';
+import { streamWorkload, type Geometry, type Workload } from './workloads';
 
 export const GEOMETRIES: Geometry[] = [{ cols: 152, rows: 38 }, { cols: 46, rows: 37 }];
 export const WORKLOADS: [string, (geometry: Geometry) => Workload][] = [
-  ['plain', geometry => plainText({ bytes: 4 << 20, ...geometry, seed: 20 })],
-  ['ansi', geometry => ansiColor({ bytes: 2 << 20, ...geometry, seed: 30 })],
-  ['redraw', geometry => fullScreenRedraw({ frames: 1500, ...geometry, seed: 40 })],
+  ['plain', geometry => streamWorkload('plain', 4 << 20, geometry)],
+  ['ansi', geometry => streamWorkload('ansi', 2 << 20, geometry)],
+  ['redraw', geometry => streamWorkload('redraw', 1500, geometry)],
 ];
 
 if (import.meta.main) {

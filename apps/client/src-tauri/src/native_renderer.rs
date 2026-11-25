@@ -51,6 +51,25 @@ fn now() -> Duration {
     EPOCH.elapsed()
 }
 
+// System.nanoTime() uses this Android clock, so instrumentation can compare the timestamps.
+#[cfg(all(debug_assertions, target_os = "android"))]
+fn presentation_time() -> Option<Duration> {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: time is writable until clock_gettime returns.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) } != 0 {
+        return None;
+    }
+    Some(Duration::new(time.tv_sec as u64, time.tv_nsec as u32))
+}
+
+#[cfg(all(test, not(all(debug_assertions, target_os = "android"))))]
+fn presentation_time() -> Option<Duration> {
+    Some(now())
+}
+
 fn blink() -> BlinkClock {
     BlinkClock::new(BLINK_HALF_PERIOD, Duration::ZERO)
 }
@@ -250,6 +269,10 @@ struct Loop {
     look: Look,
     composing: Option<String>,
     pacer: FramePacer,
+    #[cfg(any(test, all(debug_assertions, target_os = "android")))]
+    applied_bytes: u64,
+    #[cfg(any(test, all(debug_assertions, target_os = "android")))]
+    presented: Option<(u64, Duration)>,
 }
 
 impl Loop {
@@ -321,6 +344,10 @@ impl Loop {
     /// False when there is still no device: tried again after [`RETRY`].
     fn recover(&mut self, at: Duration) -> bool {
         self.stale = true;
+        #[cfg(any(test, all(debug_assertions, target_os = "android")))]
+        {
+            self.presented = None;
+        }
         let resumed = self.renderer.as_mut().is_some_and(|r| r.resume().is_ok());
         self.retry = (!resumed).then_some(at + RETRY);
         resumed
@@ -334,18 +361,23 @@ impl Loop {
         let changed = self.wake.pending.swap(false, AcqRel);
         // Composing text replaces cells of the cursor's row, so a row the core did not send again
         // could keep stale text: every frame is a snapshot while a keyboard composes.
-        let frame = if self.stale || changed && self.composing.is_some() {
-            Some(self.session.attach()?)
+        let (frame, _processed) = if self.stale || changed && self.composing.is_some() {
+            let (frame, processed) = self.session.attach_with_processed_bytes()?;
+            (Some(frame), processed)
         } else if changed {
-            self.session.take_frame()?
+            self.session.take_frame_with_processed_bytes()?
         } else {
-            None
+            (None, 0)
         };
         if let Some(mut frame) = frame {
             if let Some(text) = &self.composing {
                 compose(&mut frame, text);
             }
             renderer.apply(&frame)?;
+            #[cfg(any(test, all(debug_assertions, target_os = "android")))]
+            {
+                self.applied_bytes = _processed;
+            }
             self.stale = false;
         }
         renderer.set_overlay(Overlay {
@@ -356,6 +388,15 @@ impl Loop {
         if due.is_some_and(|due| due <= at) {
             renderer.draw()?;
             renderer.present()?;
+            #[cfg(any(test, all(debug_assertions, target_os = "android")))]
+            if self
+                .presented
+                .is_none_or(|(bytes, _)| bytes < self.applied_bytes)
+            {
+                if let Some(at) = presentation_time() {
+                    self.presented = Some((self.applied_bytes, at));
+                }
+            }
             self.pacer.drew(at);
         }
         Ok(())
@@ -384,6 +425,10 @@ impl Loop {
             renderer.destroy();
         }
         self.session.detach();
+        #[cfg(any(test, all(debug_assertions, target_os = "android")))]
+        {
+            self.presented = None;
+        }
     }
 
     fn surface(&mut self, target: Target, generation: u32) -> Result<(), String> {
@@ -544,6 +589,10 @@ impl Host {
             look,
             composing: None,
             pacer: FramePacer::new(REFRESH_HZ),
+            #[cfg(any(test, all(debug_assertions, target_os = "android")))]
+            applied_bytes: 0,
+            #[cfg(any(test, all(debug_assertions, target_os = "android")))]
+            presented: None,
         };
         let thread = std::thread::Builder::new()
             .name("lazysh-terminal-renderer".into())
@@ -569,6 +618,16 @@ impl Host {
         let gone = || "The terminal renderer stopped".to_string();
         self.wake.to.send(run).map_err(|_| gone())?;
         answered.recv().map_err(|_| gone())
+    }
+
+    #[cfg(all(debug_assertions, target_os = "android"))]
+    pub(crate) fn benchmark_presented(&self) -> Option<(u64, Duration, u64)> {
+        self.ask(|state| {
+            let (bytes, at) = state.presented?;
+            Some((bytes, at, state.session.stats().ok()?.processed))
+        })
+        .ok()
+        .flatten()
     }
 
     /// The session got a new surface: draw it again from a snapshot. A generation that is not
