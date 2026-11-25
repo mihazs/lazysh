@@ -67,6 +67,7 @@ vi.mock("@tauri-apps/api/core", () => ({ isTauri:()=>true, Channel: class { onme
   if(command==='app_lock_ready')return Promise.resolve();
   if(command==='desktop_launch_read'){const directoryReceipt=mocks.launchReceipt,hostReceipt=mocks.hostLaunchReceipt;mocks.launchReceipt=null;mocks.hostLaunchReceipt=null;return Promise.resolve({directoryReceipt,hostReceipt,notice:null});}
   if(command==='ui_locale_status')return Promise.resolve({nativeAuthority:false});
+  if(command==='screen_reader_active')return Promise.resolve(mocks.invoke(...request)).then(active=>active === undefined ? false : active);
   return mocks.invoke(...request);
 } }));
 
