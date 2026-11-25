@@ -39,3 +39,27 @@ test('native composition and Enter accept two identical commands independently',
     await page.evaluate(()=>window.nativeSurface.dispose());
   }
 });
+
+test('a terminal clipboard request needs consent on the selected browser backend',async({page})=>{
+  const engine=requestedBackend()??'native';
+  await mountNativeSurface(page,engine);
+  try {
+    await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(page.url()).origin});
+    const clipboard=()=>page.evaluate(()=>navigator.clipboard.readText());
+    await page.evaluate(()=>navigator.clipboard.writeText('before consent'));
+    await page.evaluate(async()=>{
+      const {output}=window.nativeSurface;
+      await output('\x1b]52;c;');
+      await output(btoa('terminal clipboard marker')+'\x07visible after OSC');
+    });
+    const consent=page.getByRole('region',{name:'Remote clipboard request',exact:true});
+    await expect(consent).toContainText('terminal clipboard marker');
+    await expect.poll(()=>screenText(page)).toContain('visible after OSC');
+    expect(await clipboard()).toBe('before consent');
+    await consent.getByRole('button',{name:'Allow this copy',exact:true}).click();
+    await expect.poll(clipboard).toBe('terminal clipboard marker');
+    await expect(consent).toHaveCount(0);
+  } finally {
+    await page.evaluate(()=>window.nativeSurface.dispose());
+  }
+});
