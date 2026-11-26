@@ -132,10 +132,14 @@ impl KeyInput {
             .next()
             .filter(|c| !c.is_control() && chars.next().is_none())
             .map(String::from);
+        // A layout or virtual keyboard can produce a named action on a different physical key.
+        // Keypad Enter shares the Enter name but has a distinct terminal protocol identity.
+        let key = match (event.code, event.key) {
+            ("NumpadEnter", "Enter") => key_from_code(event.code),
+            _ => key_from_code(event.key).or_else(|| key_from_code(event.code)),
+        };
         Self {
-            key: key_from_code(event.code)
-                .or_else(|| key_from_code(event.key))
-                .unwrap_or(ffi::GhosttyKey_GHOSTTY_KEY_UNIDENTIFIED),
+            key: key.unwrap_or(ffi::GhosttyKey_GHOSTTY_KEY_UNIDENTIFIED),
             mods: event.mods,
             text,
             composing: event.composing,

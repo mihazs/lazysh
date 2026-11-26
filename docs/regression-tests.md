@@ -15,6 +15,7 @@ or `n/a` with a reason. Rows below were read from the fixing commits; a test not
 
 | Bug | Symptom | Fix | Layers and tests | Appium |
 | --- | --- | --- | --- | --- |
+| [#2716](https://github.com/mihazs/lazysh/issues/2716) | A named key from a Wayland virtual layout sent the code of a different physical key | Honor the layout action and preserve keypad Enter | Rust `packages/terminal-runtime/tests/keys.rs` (remapped Return and Escape) | n/a (Linux Wayland PTY and shared encoder) |
 | [#2417](https://github.com/mihazs/lazysh/issues/2417) | The Linux singleton GUI test could submit the directory probe as `wdp` | Use ordered WebDriver key actions and verify the shell echo before submitting | native GUI `apps/client/native-e2e/singleton.spec.ts` (caller-relative literal directory) | n/a (Linux native GUI) |
 | [#2688](https://github.com/mihazs/lazysh/issues/2688) | Linux updater fixture can race an inherited executable writer | Retry transient executable-busy errors in fixture launches and verify a real open writer causes the first exec to fail | Rust `update_install::retries_exec_after_a_temporary_binary_writer_closes` | n/a (Linux test fixture) |
 | [#2622](https://github.com/mihazs/lazysh/issues/2622) | Output can miss both the first snapshot and the renderer wake | Publish attachment while holding the snapshot lock | unit `packages/terminal-runtime/tests/session.rs`; desktop renderer host image suite | n/a (core scheduler) |
