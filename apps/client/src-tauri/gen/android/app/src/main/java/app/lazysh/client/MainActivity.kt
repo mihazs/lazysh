@@ -3,7 +3,9 @@ package app.lazysh.client
 import android.os.Bundle
 import android.util.Log
 import android.webkit.WebView
+import android.widget.Toast
 import android.view.View
+import android.view.ViewGroup
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -29,6 +31,17 @@ class MainActivity : TauriActivity() {
     PrivateKeyboard.attach(webView)
     EdgeGestureInsets.attach(webView)
     super.onWebViewCreate(webView)
+  }
+
+  internal fun recoverWebView(webView: WebView): Boolean {
+    val activeView = EdgeGestureExclusion.webView(window.decorView) === webView
+    (webView.parent as? ViewGroup)?.removeView(webView)
+    webView.destroy()
+    if (activeView && !isFinishing && !isDestroyed) {
+      Toast.makeText(applicationContext, R.string.webview_recovery_reconnect, Toast.LENGTH_LONG).show()
+      recreate()
+    }
+    return true
   }
 
   /**

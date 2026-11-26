@@ -10,4 +10,5 @@
     <string name="auth_notification_channel">Sign-in requests</string>
     <string name="auth_notification_title">Sign-in is waiting</string>
     <string name="auth_notification_text">Open the %1$s sign-in page on this device</string>
+    <string name="webview_recovery_reconnect">Lazysh is reopening. Reconnect to resume your terminal sessions.</string>
 </resources>

@@ -36,6 +36,20 @@ internal object PageDriver {
         @Suppress("UNCHECKED_CAST") return out as T
     }
 
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.Q)
+    fun terminateRendererAndAwaitReplacement() {
+        val oldActivity = onActivity { activity ->
+            val webView = EdgeGestureExclusion.webView(activity.window.decorView) as WebView
+            val renderer = checkNotNull(webView.webViewRenderProcess) { "the owned WebView has a sandboxed renderer" }
+            assertTrue("Android accepted the renderer termination", renderer.terminate())
+            activity
+        }
+        poll("a replacement Activity after renderer exit", 30) {
+            onActivity { it.takeIf { activity -> activity !== oldActivity } }
+        }
+        awaitStartPage()
+    }
+
     /** What the surface itself holds, read from its buffer with `PixelCopy` and not from the composited screen. */
     fun pixelsOf(view: SurfaceView): Bitmap {
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
