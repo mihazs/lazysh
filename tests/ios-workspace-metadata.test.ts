@@ -184,6 +184,10 @@ test('configuration lists and architecture arrays retain explicit truncation mar
 
 test('the native iOS app runs the Metal probe on the same simulator after installation', async () => {
   const terminal = workflow.jobs['terminal-ios'].steps;
+  const setupBun = terminal.findIndex(step => step.uses === './.github/actions/setup-bun');
+  const runtime = terminal.findIndex(step => step.name === 'Run every test of the runtime inside the iOS simulator');
+  expect(setupBun).toBeGreaterThanOrEqual(0);
+  expect(setupBun).toBeLessThan(runtime);
   const install = terminal.findIndex(step => step.id === 'ios-terminal-install');
   const probe = terminal.findIndex(step => step.run?.includes('-only-testing:LazyshMoshAppTests/'));
   expect(install).toBeGreaterThanOrEqual(0);
