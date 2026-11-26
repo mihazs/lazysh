@@ -113,7 +113,7 @@ final class MoshAppIntegrationTests: XCTestCase {
         const status = await ipc.invoke('app_lock_status');
         return status.initialized && !status.locked ? status : null;
       }).catch(() => null);
-      if (!access) return {passed: false, stage: 'initialize app access', type: 'unavailable'};
+      if (!access) return {passed: false, stage: 'initialize app access', condition: 'unavailable'};
       const invoke = (command, args) => ipc.invoke(command, args, {headers: {'X-Lazysh-Access': access.nonce ?? ''}});
       const host = 'Owned iOS terminal UI ' + port;
       const engineKey = 'lazysh.terminal.backend';
@@ -136,8 +136,12 @@ final class MoshAppIntegrationTests: XCTestCase {
       const surface = () => document.querySelector('[data-terminal-surface=native]');
       const rows = () => [...document.querySelectorAll('.terminal-canvas .xterm-rows > div')].map(row => row.textContent);
       const sendInput = async (selector, data) => {
-        const editor = await waitFor('terminal editor', () => document.querySelector(selector));
-        editor.focus();
+        const editor = await waitFor('terminal editor focus', () => {
+          const input = document.querySelector(selector);
+          if (!input || !visible(input)) return null;
+          input.focus();
+          return document.activeElement === input ? input : null;
+        });
         editor.value = data;
         editor.dispatchEvent(new InputEvent('input', {bubbles: true, data, inputType: 'insertText'}));
         const enter = {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true};
@@ -168,7 +172,7 @@ final class MoshAppIntegrationTests: XCTestCase {
         await waitFor('the native terminal surface', surface);
         button(document, 'Skip')?.click();
         stage = 'type through native editor';
-        await sendInput('[data-terminal-editor]', 'LAZYSH_IOS_NATIVE');
+        await sendInput('[data-terminal-surface=native] [data-terminal-editor]', 'LAZYSH_IOS_NATIVE');
         stage = 'switch engines through workspace tools';
         await click('Workspace tools');
         const tools = await waitFor('workspace tools', () => document.querySelector('[role=dialog]:has(.workspace-tools-content)'));
@@ -179,8 +183,9 @@ final class MoshAppIntegrationTests: XCTestCase {
         if (tab?.getAttribute('aria-selected') === 'false') tab.click();
         await click(action, tools);
         stage = 'show xterm.js after switching';
-        await waitFor('native surface removed and xterm editor present', () =>
-          !surface() && document.querySelector('.terminal-canvas .xterm-helper-textarea'));
+        await waitFor('native surface removed', () => !surface());
+        stage = 'mount the xterm.js editor';
+        await waitFor('xterm editor present', () => document.querySelector('.terminal-canvas .xterm-helper-textarea'));
         stage = 'read the replayed native frame';
         await waitFor('replayed frame', () => rows().some(row => row.includes('LAZYSH_IOS_FRAME')));
         stage = 'read the native input acknowledgement after switching';
@@ -200,7 +205,10 @@ final class MoshAppIntegrationTests: XCTestCase {
         await waitFor('visible engine switch reason', () => visible(note));
         return {passed: true};
       } catch (error) {
-        return {passed: false, stage, type: error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : typeof error};
+        const type = error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : typeof error;
+        const condition = error instanceof Error && error.message.startsWith('Timed out waiting for ')
+          ? error.message.split(host).join('[fixture host]') : type;
+        return {passed: false, stage, condition};
       } finally {
         restore(engineKey, previousEngine);
         restore(topBarKey, previousTopBar);
@@ -216,8 +224,8 @@ final class MoshAppIntegrationTests: XCTestCase {
       case .success(let value):
         let verdict = value as? [String: Any]
         let stage = verdict?["stage"] as? String ?? "unknown stage"
-        let type = verdict?["type"] as? String ?? "unknown error"
-        XCTAssertEqual(verdict?["passed"] as? Bool, true, "Owned iOS terminal failed at \(stage) (\(type))")
+        let condition = verdict?["condition"] as? String ?? "unknown error"
+        XCTAssertEqual(verdict?["passed"] as? Bool, true, "Owned iOS terminal failed at \(stage) (\(condition))")
       case .failure(let error):
         let details = error as NSError
         let line = details.userInfo["WKJavaScriptExceptionLineNumber"] as? Int ?? 0
