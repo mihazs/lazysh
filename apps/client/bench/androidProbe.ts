@@ -45,8 +45,13 @@ export function parseStat(line: string): { cpuTicks: number; startTicks: number 
   return [utime, stime, start].every(Number.isFinite) ? { cpuTicks: utime + stime, startTicks: start } : null;
 }
 
+function parseCount(value: string | undefined): number | null {
+  const count = Number(value);
+  return Number.isSafeInteger(count) ? count : null;
+}
+
 /** One layer of `dumpsys SurfaceFlinger --timestats -dump`: the frames it presented, how many of its timeline frames missed their deadline (janky) and the present-to-present histogram (ms bucket to count). */
-export type Layer = { uid: number; name: string; frames: number; timelineFrames: number; jankyFrames: number; present2present: Array<[ms: number, count: number]> };
+export type Layer = { uid: number; name: string; frames: number; timelineFrames: number | null; jankyFrames: number | null; present2present: Array<[ms: number, count: number]> };
 export function parseTimeStats(dump: string): Layer[] {
   const layers: Layer[] = [];
   // Every layer's block starts at its "displayRefreshRate" line; the global block before them has no uid and is skipped.
@@ -54,10 +59,21 @@ export function parseTimeStats(dump: string): Layer[] {
     const uid = /^uid = (\d+)$/m.exec(block), name = /^layerName = (.*)$/m.exec(block), frames = /^totalFrames = (\d+)$/m.exec(block);
     if (!uid || !name || !frames || name[1] === 'none') continue;
     const histogram = /present2present histogram is as below:\n(.*)/.exec(block)?.[1] ?? '';
-    const count = (key: string) => Number(new RegExp(`^${key} = (\\d+)$`, 'm').exec(block)?.[1] ?? 0);
+    const count = (key: string) => parseCount(new RegExp(`^${key} = (\\d+)$`, 'm').exec(block)?.[1]);
     layers.push({ uid: Number(uid[1]), name: name[1], frames: Number(frames[1]), timelineFrames: count('totalTimelineFrames'), jankyFrames: count('jankyFrames'), present2present: [...histogram.matchAll(/(\d+)ms=(\d+)/g)].map(([, ms, count]) => [Number(ms), Number(count)]) });
   }
   return layers;
+}
+
+function jankyFramePercent(layers: Layer[]): number | null {
+  let total = 0, janky = 0;
+  for (const { frames, timelineFrames, jankyFrames } of layers) {
+    if (frames === 0 && !timelineFrames) continue;
+    if (!timelineFrames || jankyFrames === null || jankyFrames > timelineFrames) return null;
+    total += timelineFrames;
+    janky += jankyFrames;
+  }
+  return total > 0 ? 100 * janky / total : null;
 }
 
 /** Percentile (nearest bucket, 1 ms resolution below 34 ms) of the histograms of several layers added together; null when no interval was recorded. */
@@ -143,7 +159,7 @@ export function androidProbe(adb: Adb, packageName: string, clock: () => number 
           windowMs, cpuMs: (after.cpuTicks - before.cpuTicks) * TICK_MS, wakeups: after.switches - before.switches,
           frames: layers.reduce((sum, layer) => sum + layer.frames, 0),
           frameIntervalMs: layers.some(layer => layer.present2present.some(([, count]) => count > 0)) ? { p50: histogramPercentile(layers, 0.5)!, p95: histogramPercentile(layers, 0.95)! } : null,
-          jankyFramePercent: layers.some(layer => layer.timelineFrames > 0) ? (100 * layers.reduce((sum, layer) => sum + layer.jankyFrames, 0)) / layers.reduce((sum, layer) => sum + layer.timelineFrames, 0) : null,
+          jankyFramePercent: jankyFramePercent(layers),
           layers: layers.map(({ name, frames }) => ({ name, frames })),
           processSetChanged: pids.some(pid => !after.pids.includes(pid)),
         };
