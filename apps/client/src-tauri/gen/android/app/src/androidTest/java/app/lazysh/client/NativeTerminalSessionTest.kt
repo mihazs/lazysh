@@ -218,11 +218,6 @@ class NativeTerminalSessionTest {
         }
     }
 
-    /**
-     * A multiplexer in the native session (B10): tmux started from the session's shell runs a server and splits a window, the core shows
-     * what tmux answers, and the attached client's two panes, border and status line (#2487) are in the core's text. It reads the core's text, not the DOM, runs at the end of the one case (a second case in this
-     * class starts from the page the first leaves) and needs the tmux the job installs.
-     */
     private fun NativeSessionDriver.screenPoint(selector: String, label: String? = null): Pair<Int, Int> {
         val point = PageDriver.poll("visible touch target $selector", 15) {
             val result = js("""

@@ -76,7 +76,7 @@ Issue [#2492](https://github.com/mihazs/lazysh/issues/2492). The evidence below 
 
 | # | Feature | Native | Evidence or issue |
 | --- | --- | --- | --- |
-| 45 | tmux, Zellij, Herdr, rmux: Jump To, window and pane controls, tab strip, copy mode, gestures | Partial | `NativeWorkspaceTest.ownedTmuxControlsWithNativeEngine` checks tmux Jump To, numbered windows, copy mode and OSC 52 clipboard consent on Android. The remaining controls and multiplexers are tracked in [#2500](https://github.com/mihazs/lazysh/issues/2500). |
+| 45 | tmux, Zellij, Herdr, rmux: Jump To, window and pane controls, tab strip, copy mode, gestures | Partial | `NativeWorkspaceTest.ownedTmuxControlsWithNativeEngine` checks tmux Jump To, numbered windows, copy mode and OSC 52 clipboard consent on Android. `NativeWorkspaceTest.ownedZellijTabsWithNativeEngine` verifies tab switching, detach, and reattach against the same Zellij host session. The remaining controls and multiplexers are tracked in [#2500](https://github.com/mihazs/lazysh/issues/2500). |
 | 46 | Herdr phone navigation cells | Works | `herdrNavigationCells.test.ts` runs the same cases over xterm.js and the native adapter on the stand-in core. |
 | 47 | Herdr history swipe over a native pane | Unproven | [#2500](https://github.com/mihazs/lazysh/issues/2500). |
 | 48 | Attachments: paste an uploaded file's path into the terminal | Partial | `attachmentPaste.test.tsx` covers the bytes; the page reads only `adapter.modes().bracketedPaste` (covered for native by the contract) and writes through the transport. Not driven end to end over a native session; the Android cases of #2500 do not include it. |

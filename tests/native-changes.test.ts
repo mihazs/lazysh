@@ -119,17 +119,18 @@ test.each([
 
 const neverNightly = "github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'";
 const alwaysRun = { changes: 1, client: 1, agent: 1 };
+const zellijRuns = { 'native-android-zellij': 1, 'native-android-terminal-zellij': 1 };
 const tmuxRuns = { 'native-android-tmux': 1, 'native-android-terminal-tmux': 1 };
 const fullRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'terminal-perf': 1, 'terminal-macos': 1, 'terminal-windows': 1, 'terminal-ios': 1, 'native-linux-surface': 1, 'native-linux': 1, 'native-terminal-bridge': 1, 'native-desktop': 2, 'native-windows-linux-host': 1,
-  'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, 'native-android-terminal-session': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, ...tmuxRuns, 'native-android-zellij': 1,
+  'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, 'native-android-terminal-session': 1, 'native-android-mosh': 1, 'native-android-herdr-navigation': 1, ...tmuxRuns, ...zellijRuns,
   'native-android-ssh-parity': 1, 'native-linux-runtimes': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2, 'native-android-gotify': 1, 'native-ios-simulator': 1,
   'native-android-biometric': 1, 'native-android-appium': 1 };
 const clientRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1, 'native-linux-runtimes': 1, 'native-terminal-bridge': 1, 'native-desktop': 2, 'native-windows-linux-host': 1,
-  'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, ...tmuxRuns, 'native-android-zellij': 1, 'native-android-ssh-parity': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
+  'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1, ...tmuxRuns, ...zellijRuns, 'native-android-ssh-parity': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
 const agentRun = { ...alwaysRun, 'companion-candidates': 5, 'herdr-native': 1, 'native-linux': 1, 'native-desktop': 2, 'native-windows-linux-host': 1,
   'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-appium': 1 };
 const androidRun = { ...alwaysRun, 'herdr-native': 1, 'native-android': 1, 'native-android-runtime': 1, 'native-android-terminal-core': 1,
-  'native-android-herdr-navigation': 1, ...tmuxRuns, 'native-android-zellij': 1, 'native-android-ssh-parity': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
+  'native-android-herdr-navigation': 1, ...tmuxRuns, ...zellijRuns, 'native-android-ssh-parity': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 1, 'native-android-biometric': 1, 'native-android-appium': 1 };
 const iosRun = { ...alwaysRun, 'native-ios-simulator': 1 };
 const herdrRun = { ...alwaysRun, 'herdr-native': 1, 'native-linux': 1,
   'native-linux-runtimes': 1, 'native-android-runtime': 1, 'native-android-herdr-navigation': 1, 'native-android-appium': 1 };

@@ -496,10 +496,15 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_NATIVE_TMUX!=='1')('actual Android nat
 },610_000);
 
 // Separate CI owner: only the pinned Zellij fixture and packaged UI decide this verdict.
-test.skipIf(process.env.LAZYSH_ANDROID_UI_ZELLIJ!=='1')('actual Android Zellij discovery, session list, attach, numbered tabs and detach keep the original session and panes',async()=>{
-  const owned=await ZellijFixture.start();
-  await ownedAndroidAcceptance('Zellij',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,undefined,false,owned));
-},610_000);
+for(const [flag,title] of [
+  ['LAZYSH_ANDROID_UI_ZELLIJ','actual Android Zellij discovery, session list, attach, numbered tabs and detach keep the original session and panes'],
+  ['LAZYSH_ANDROID_UI_NATIVE_ZELLIJ','actual Android native terminal switches tabs on the owned Zellij display'],
+]) {
+  test.skipIf(process.env[flag]!=='1')(title,async()=>{
+    const owned=await ZellijFixture.start();
+    await ownedAndroidAcceptance('Zellij',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,undefined,false,owned));
+  },610_000);
+}
 
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned shared-navigation fixture binds three distinct zero-byte receiver identities',async()=>{
   const owned=await HerdrFixture.start(herdrTools(),undefined,true);

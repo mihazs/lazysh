@@ -55,7 +55,7 @@ const legacy: Record<string, string> = {
   'test:android-fdroid': 'client:test-android-fdroid', 'test:android-ntfy': 'client:test-android-ntfy', 'test:android-gotify': 'client:test-android-gotify', 'test:android': 'client:test-android',
   'test:android-theme-links': 'client:test-android-theme-links', 'test:android-ssh': 'client:test-android-ssh',
   'test:android-ssh-parity': 'client:test-android-ssh-parity', 'test:android-herdr-navigation': 'client:test-android-herdr-navigation',
-  'test:android-tmux': 'client:test-android-tmux', 'test:android-native-tmux': 'client:test-android-native-tmux', 'test:android-zellij': 'client:test-android-zellij', 'test:android-qr': 'client:test-android-qr', 'test:android-voice': 'client:test-android-voice', 'test:android-biometric': 'client:test-android-biometric',
+  'test:android-tmux': 'client:test-android-tmux', 'test:android-native-tmux': 'client:test-android-native-tmux', 'test:android-zellij': 'client:test-android-zellij', 'test:android-native-zellij': 'client:test-android-native-zellij', 'test:android-qr': 'client:test-android-qr', 'test:android-voice': 'client:test-android-voice', 'test:android-biometric': 'client:test-android-biometric',
   'init:ios': 'client:init-ios', 'build:ios': 'client:build-ios', 'test:ios-workspace': 'client:test-ios-workspace',
   'test:ios-surface-poc': 'client:test-ios-surface-poc',
   'check:rust': 'client-native:check-rust', 'test:rust': 'client-native:test-rust', lint: 'client-native:lint', 'format:check': 'client-native:format-check',
