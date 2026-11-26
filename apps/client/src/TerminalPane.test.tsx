@@ -165,6 +165,36 @@ describe('toolbar keys on a native session (#2493)',()=>{
     adapter.paste('c');
     await waitFor(() => expect(core.inputs.map(({data}) => data)).toEqual(['\x03', 'c', 'c']));
   });
+
+  it('runs saved chords and long-press alternatives once, and keeps snippets editable on native', async () => {
+    mocks.invoke.mockResolvedValue({});
+    savePreferences({...defaults,toolbar:['enter'],toolbarAlternates:{enter:{action:'custom',keys:'Escape'}},
+      chords:[{label:'Interrupt process',keys:'Ctrl+C'}],snippets:[{label:'Open project',text:'cd project'}]});
+    const core = createHeadlessCore({rows:4,columns:20,feed:true});
+    const adapter = await openNativeTerminalAdapter(core);
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+
+    pressMore('Interrupt process');
+    const enter = screen.getByRole('button',{name:'enter'});
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(enter,{pointerId:1,pointerType:'touch',button:0});
+      act(()=>vi.advanceTimersByTime(550));
+      fireEvent.contextMenu(enter);
+      fireEvent.pointerUp(enter,{pointerId:1,pointerType:'touch'});
+      fireEvent.click(enter,{detail:1});
+    } finally { vi.useRealTimers(); }
+    expect(mocks.writeSequence.mock.calls.map(call=>call[1])).toEqual([['\x03'],['\x1b']]);
+    expect(mocks.write).not.toHaveBeenCalled();
+
+    pressMore('Open project');
+    const editor = screen.getByRole<HTMLTextAreaElement>('textbox',{name:'Compose text'});
+    expect(editor.value).toBe('cd project');
+    expect(core.inputs).toEqual([]);
+    fireEvent.change(editor,{target:{value:'cd other'}});
+    fireEvent.click(screen.getByRole('button',{name:'Insert'}));
+    await waitFor(()=>expect(core.inputs.map(({data})=>data)).toEqual(['cd other']));
+  });
 });
 describe('selection on a native session',()=>{
   async function nativePane(output:string) {
