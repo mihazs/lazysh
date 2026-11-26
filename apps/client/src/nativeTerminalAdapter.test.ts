@@ -51,6 +51,25 @@ runTerminalAdapterContract('native (control plane over a headless core)', {
   target: anchor,
 });
 
+it('keeps the focused editor through a click on its canvas without intercepting an unfocused click', async () => {
+  const adapter = await openNativeTerminalAdapter(createHeadlessCore());
+  const target = anchor();
+  const canvas = document.getElementById(target.anchorId)!;
+  const mouseDown = () => canvas.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true}));
+  try {
+    await adapter.attach(target);
+    expect(mouseDown()).toBe(true);
+    adapter.focus();
+    expect(document.activeElement).toBe(adapter.inputElement());
+    expect(mouseDown()).toBe(false);
+    await adapter.detach();
+    expect(mouseDown()).toBe(true);
+  } finally {
+    await adapter.dispose();
+    canvas.remove();
+  }
+});
+
 async function open(options: HeadlessCoreOptions = {}) {
   const answers: NativeCoreSnapshot[] = [];
   const core = inspected(createHeadlessCore(options), answers);
