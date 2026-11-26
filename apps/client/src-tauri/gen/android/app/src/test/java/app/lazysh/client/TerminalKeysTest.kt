@@ -22,6 +22,21 @@ class TerminalKeysTest {
             key(KeyEvent.KEYCODE_C, KeyEvent.META_SHIFT_ON or KeyEvent.META_CTRL_ON or KeyEvent.META_ALT_ON or KeyEvent.META_META_ON, 'C'.code))
     }
 
+    @Test fun rightAltCharacterIsTypedWithoutTurningOrdinaryAltIntoText() {
+        val rightAlt = KeyEvent.META_ALT_ON or KeyEvent.META_ALT_RIGHT_ON
+        val transformed = TerminalKeys.key(KeyEvent.KEYCODE_Q, rightAlt, 'q'.code, false, false, '@'.code)
+        assertEquals(TerminalKey("KeyQ", "@"), transformed)
+        val ordinary = TerminalKeys.key(KeyEvent.KEYCODE_Q, rightAlt, 'q'.code, false, false, 'q'.code)
+        assertEquals(TerminalKey("KeyQ", "q", alt = true), ordinary)
+        for (modifier in listOf(KeyEvent.META_CTRL_ON, KeyEvent.META_META_ON)) {
+            val chord = TerminalKeys.key(KeyEvent.KEYCODE_Q, rightAlt or modifier, 'q'.code, false, false, '@'.code)
+            assertEquals(TerminalKey("KeyQ", "q", ctrl = modifier == KeyEvent.META_CTRL_ON,
+                alt = true, meta = modifier == KeyEvent.META_META_ON), chord)
+        }
+        val release = TerminalKeys.key(KeyEvent.KEYCODE_Q, rightAlt, 'q'.code, false, true, '@'.code)
+        assertEquals(TerminalKey("KeyQ", "@", release = true), release)
+    }
+
     @Test fun repeatAndReleaseAreCarried() {
         assertEquals(TerminalKey("ArrowUp", "ArrowUp", repeat = true), key(KeyEvent.KEYCODE_DPAD_UP, repeat = true))
         assertEquals(TerminalKey("ArrowUp", "ArrowUp", release = true), key(KeyEvent.KEYCODE_DPAD_UP, release = true))

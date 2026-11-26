@@ -19,7 +19,8 @@ export type SurfaceInputEvent =
   | {type: 'text'; text: string}
   | {type: 'paste'; text: string}
   | {type: 'key'; code: string; key: string; mods: {shift: boolean; ctrl: boolean; alt: boolean; meta: boolean}; repeat: boolean; release: boolean; composing: boolean}
-  | {type: 'preedit'; text: string | null};
+  | {type: 'preedit'; text: string | null}
+  | {type: 'barrier'; ticket: number};
 
 /** The app commands; the renderer never reaches the Kotlin plugin directly. */
 export const nativeSurface = {
@@ -32,6 +33,7 @@ export const nativeSurface = {
   remove: (session: string) => invoke<void>('native_terminal_surface_remove', {session}),
   /** Waits for what the keyboard typed since the last call; each event comes once. */
   takeInput: (session: string) => protectedInvoke<{events: SurfaceInputEvent[]}>('native_terminal_surface_input', {session}),
+  markInput: (session: string, barrier: number) => protectedInvoke<void>('native_terminal_surface_input', {session, barrier}),
   /** `keyboard: false` on a release leaves the keyboard open: a field of the page took it. */
   focus: (session: string, focused: boolean, keyboard = true, ifIdle?: boolean) => protectedInvoke<void>('native_terminal_surface_focus', {session, focused, keyboard, ifIdle}),
   state: (session: string) => protectedInvoke<SurfaceState>('native_terminal_surface_state', {session}),

@@ -362,15 +362,21 @@ pub async fn native_terminal_surface_state(
 pub async fn native_terminal_surface_input(
     app: AppHandle,
     session: String,
+    barrier: Option<i32>,
 ) -> Result<serde_json::Value, String> {
     validate_session(&session)?;
     #[cfg(target_os = "android")]
     {
-        call(&app, "input", serde_json::json!({ "session": session })).await
+        call(
+            &app,
+            "input",
+            serde_json::json!({ "session": session, "barrier": barrier }),
+        )
+        .await
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = app;
+        let _ = (app, barrier);
         Err("This build has no native terminal input.".into())
     }
 }

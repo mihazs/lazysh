@@ -15,6 +15,7 @@ function shell() {
   const releases: boolean[] = [];
   let wake: (() => void) | undefined;
   const api = {
+    markInput: vi.fn(async (_session: string, _ticket: number) => {}),
     takeInput: vi.fn(async () => {
       while (!batches.length) await new Promise<void>(resolve => { wake = resolve; });
       const next = batches.shift()!;
@@ -46,6 +47,19 @@ describe('Android surface input', () => {
     await settle();
     expect(core.inputs).toEqual([{data: 'ls', origin: 'ime'}, {data: '\x7f', origin: 'ime'}]);
     expect(core.keys.map(k => [k.key, k.release])).toEqual([['Enter', false], ['Enter', true]]);
+    input.dispose();
+  });
+
+  it('runs a toolbar action after delayed IME delivery and before processing later input', async () => {
+    const {adapter, core, api, push, input} = await setup();
+    const action = vi.fn(async () => { adapter.sendInput('\r', 'keyboard'); });
+    input.afterInput(action);
+    await vi.waitFor(() => expect(api.markInput).toHaveBeenCalledOnce());
+    const ticket = api.markInput.mock.calls[0][1];
+    expect(action).not.toHaveBeenCalled();
+    push([{type: 'text', text: 'a'}, {type: 'barrier', ticket}, {type: 'barrier', ticket}, {type: 'text', text: 'b'}]);
+    await vi.waitFor(() => expect(core.inputs.map(({data}) => data)).toEqual(['a', '\r', 'b']));
+    expect(action).toHaveBeenCalledOnce();
     input.dispose();
   });
 

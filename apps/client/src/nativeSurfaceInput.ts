@@ -12,6 +12,7 @@ import {nativeSurface} from './terminalSurfaceAnchor';
 /** Pause before asking again after the shell refused (no surface placed yet, app locked). */
 export const RETRY_MS = 500;
 const noop = () => {};
+let nextTicket = 0;
 
 type FocusCall = {focused: (element: HTMLElement) => void; blurred: (element: HTMLElement) => void};
 const watchers = new Set<FocusCall>();
@@ -42,6 +43,8 @@ export class SurfaceInput implements Disposable {
   private stopped = false;
   private wantsFocus = false;
   private focusRequest = 0;
+  private marking = Promise.resolve();
+  private readonly pending = new Map<number, () => Promise<void>>();
 
   constructor(
     private readonly adapter: NativeTerminalAdapter, private readonly session: string, private readonly anchor: HTMLElement,
@@ -90,8 +93,18 @@ export class SurfaceInput implements Disposable {
     }, noop);
   }
 
+  afterInput(action: () => Promise<void>) {
+    if (this.pending.size >= 64) throw new Error('Terminal input queue is full');
+    const ticket = nextTicket = nextTicket % 0x7fffffff + 1;
+    this.pending.set(ticket, action);
+    this.marking = this.marking.then(async () => {
+      if (this.pending.has(ticket)) await this.api.markInput(this.session, ticket);
+    }).catch(() => { this.pending.delete(ticket); });
+  }
+
   dispose() {
     this.stopped = true;
+    this.pending.clear();
     document.removeEventListener('focusin', this.pageField);
     document.removeEventListener('focusout', this.pageLeft);
     this.unwatch?.();
@@ -106,15 +119,23 @@ export class SurfaceInput implements Disposable {
         // A surface that appeared after the page asked for the keyboard gets it now.
         if (!placed && this.wantsFocus) this.api.focus(this.session, true).catch(noop);
         placed = true;
-        if (!this.stopped) for (const event of events) this.apply(event);
+        for (const event of events) {
+          if (this.stopped) break;
+          if (event.type === 'barrier') {
+            const action = this.pending.get(event.ticket);
+            this.pending.delete(event.ticket);
+            if (action) await action().catch(noop);
+          } else this.apply(event);
+        }
       } catch {
+        this.pending.clear();
         placed = false;
         await new Promise(resolve => setTimeout(resolve, RETRY_MS));
       }
     }
   }
 
-  private apply(event: Awaited<ReturnType<typeof nativeSurface.takeInput>>['events'][number]) {
+  private apply(event: Exclude<Awaited<ReturnType<typeof nativeSurface.takeInput>>['events'][number], {type: 'barrier'}>) {
     if (event.type === 'text') this.adapter.sendInput(event.text, 'ime');
     else if (event.type === 'paste') this.adapter.paste(event.text);
     else if (event.type === 'key') this.adapter.sendKey(event);

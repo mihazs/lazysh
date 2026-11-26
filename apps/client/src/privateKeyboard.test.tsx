@@ -12,7 +12,7 @@ import { t, uiI18n } from "./i18n/core";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), isTauri: () => false }));
 // The packaged Android app is the only place the setting exists; the browser tests below stand in for its WebView.
 vi.mock("./isAndroidApp", () => ({ isAndroidApp: vi.fn() }));
-const report = (active: boolean) => ["terminal_private_keyboard", { active }, { headers: { "X-Lazysh-Access": "" } }];
+const report = (active: boolean, enabled = true) => ["terminal_private_keyboard", { active, enabled }, { headers: { "X-Lazysh-Access": "" } }];
 const reports = () => vi.mocked(invoke).mock.calls.filter(([command]) => command === "terminal_private_keyboard");
 beforeEach(() => {
   localStorage.clear(); savePreferences({ ...defaults });
@@ -80,11 +80,18 @@ const focus = (name: string) => act(async () => { screen.getByLabelText(name).fo
 const blur = () => act(async () => { (document.activeElement as HTMLElement).blur(); await new Promise(resolve => setTimeout(resolve)); });
 
 describe("what the terminal reports to the Android shell", () => {
+  it("reports the native preference while a non-terminal DOM field has focus", async () => {
+    render(<Harness />);
+    await focus("chat composer");
+    await act(async () => { savePreferences({ ...getPreferences(), privateKeyboard: true }); });
+    expect(reports().map(call => call[1])).toEqual([{ active: false, enabled: false }, { active: false, enabled: true }]);
+  });
+
   it("is active only while the terminal editor has focus, never for the composer or another field", async () => {
     savePreferences({ ...defaults, privateKeyboard: true });
     render(<Harness />);
     await act(async () => {});
-    expect(reports().map(call => call[1])).toEqual([{ active: false }]);
+    expect(reports().map(call => call[1])).toEqual([{ active: false, enabled: true }]);
     await focus("terminal editor");
     expect(reports().at(-1)).toEqual(report(true));
     await focus("chat composer");
@@ -104,24 +111,30 @@ describe("what the terminal reports to the Android shell", () => {
   it("follows the setting while the terminal keeps focus, without a reconnect", async () => {
     render(<Harness />);
     await focus("terminal editor");
-    expect(reports().map(call => call[1])).toEqual([{ active: false }]);
+    expect(reports().map(call => call[1])).toEqual([{ active: false, enabled: false }]);
     await act(async () => { savePreferences({ ...getPreferences(), privateKeyboard: true }); });
     expect(reports().at(-1)).toEqual(report(true));
     await act(async () => { savePreferences({ ...defaults }); });
-    expect(reports().at(-1)).toEqual(report(false));
+    expect(reports().at(-1)).toEqual(report(false, false));
     expect(reports()).toHaveLength(3);
   });
 
   it("keeps reports in order even when the shell answers slowly", async () => {
     const answers: (() => void)[] = [];
-    vi.mocked(invoke).mockImplementation(() => new Promise<void>(resolve => { answers.push(resolve); }));
+    vi.mocked(invoke).mockImplementation(command => command === "terminal_private_keyboard"
+      ? new Promise<void>(resolve => { answers.push(resolve); })
+      : Promise.resolve(undefined));
     savePreferences({ ...defaults, privateKeyboard: true });
     render(<Harness />);
     await focus("terminal editor");
     await focus("chat composer");
     expect(reports()).toHaveLength(1);
-    for (let step = 0; step < 3; step++) { await act(async () => { answers.shift()?.(); }); }
-    expect(reports().map(call => (call[1] as { active: boolean }).active)).toEqual([false, true, false]);
+    for (const [index, active] of [false, true, false].entries()) {
+      await vi.waitFor(() => expect(reports()).toHaveLength(index + 1));
+      expect(reports()[index]).toEqual(report(active));
+      const answer = answers.shift()!;
+      await act(async () => { answer(); });
+    }
   });
 
   it("sends the state again after a refused report", async () => {

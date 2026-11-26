@@ -61,6 +61,17 @@ class InputRelayTest {
         assertEquals(listOf(emptyList<SurfaceInput>()), completions)
     }
 
+    @Test fun aToolbarBarrierFollowsEarlierCommitsAndPrecedesLaterCommits() {
+        val relay = InputRelay()
+        val got = ArrayList<List<SurfaceInput>>()
+        relay.take { got += it }
+        relay.text("a")
+        relay.mark(12)
+        relay.text("b")
+        relay.take { got += it }
+        assertEquals(listOf(SurfaceInput.Text("a"), SurfaceInput.Barrier(12), SurfaceInput.Text("b")), got.flatten())
+    }
+
     @Test fun aPasteKeepsItsPlaceBetweenTypedText() {
         val relay = InputRelay()
         relay.text("a"); relay.paste("b\nc"); relay.text("d")

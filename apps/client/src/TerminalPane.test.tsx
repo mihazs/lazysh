@@ -114,6 +114,30 @@ describe('toolbar keys on a native session (#2493)',()=>{
     expect(Object.values(reference).filter(bytes => bytes.length === 0).length, 'every key writes something').toBe(0);
   }, 60_000);
 
+  it.each([['ctrl', '\x01'], ['Alt', '\x1ba']])(
+    'lets an earlier Android IME commit consume sticky %s before toolbar Enter',
+    async (label, expected) => {
+      mocks.invoke.mockResolvedValue({});
+      savePreferences({...defaults, toolbar: ['ctrl', 'meta', 'enter']});
+      const core = createHeadlessCore({rows: 4, columns: 20, feed: true});
+      const adapter = await openNativeTerminalAdapter(core);
+      let afterInput: (() => Promise<void>) | undefined;
+      adapter.afterSurfaceInput = action => { afterInput = action; return true; };
+      render(<TerminalPane session={{id: 'ssh', name: 'Host', connected: true, adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+      await act(async () => {});
+      fireEvent.click(screen.getByRole('button', {name: label}));
+      await act(async () => { await afterInput?.(); });
+      fireEvent.click(screen.getByRole('button', {name: toolbarKeyLabel('enter')}));
+      expect(mocks.write).not.toHaveBeenCalled();
+      await act(async () => {
+        adapter.sendInput('a', 'ime');
+        await vi.waitFor(() => expect(core.inputs.map(({data}) => data)).toEqual([expected]));
+        await afterInput?.();
+      });
+      expect(mocks.write).toHaveBeenCalledWith('ssh', '\r');
+    },
+  );
+
   it('applies a sticky Ctrl to the next character the soft keyboard types, once', async () => {
     mocks.invoke.mockResolvedValue({});
     savePreferences({...defaults, toolbar: ['ctrl']});

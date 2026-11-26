@@ -28,6 +28,8 @@ internal object PrivateKeyboard {
 
     @Volatile var active = false
         private set
+    @Volatile var enabled = false
+        private set
     private var webView = WeakReference<WebView>(null)
 
     fun attach(view: WebView) { webView = WeakReference(view) }
@@ -43,10 +45,13 @@ internal object PrivateKeyboard {
     }
 
     /** Main thread. A change makes the keyboard ask the focused editor for its setup again, without reconnecting. */
-    fun set(value: Boolean) {
-        if (active == value) return
-        active = value
-        webView.get()?.let { view -> view.context.getSystemService(InputMethodManager::class.java)?.restartInput(view) }
+    fun set(active: Boolean, enabled: Boolean, nativeEditor: TerminalInputView?) {
+        val webChanged = this.active != active
+        val nativeChanged = this.enabled != enabled
+        this.active = active
+        this.enabled = enabled
+        val editor = if (nativeEditor != null) nativeEditor.takeIf { nativeChanged } else webView.get()?.takeIf { webChanged }
+        editor?.let { it.context.getSystemService(InputMethodManager::class.java)?.restartInput(it) }
     }
 }
 
@@ -58,6 +63,12 @@ class PrivateKeyboardPlugin(private val initialOwner: Activity) : MobilePlugin(i
     @Command fun set(invoke: Invoke) {
         val active = runCatching { invoke.getArgs().getBoolean("active") }.getOrNull()
             ?: return invoke.reject("private_keyboard_invalid")
-        owner.runOnUiThread { PrivateKeyboard.set(active); invoke.resolve() }
+        val enabled = runCatching { invoke.getArgs().getBoolean("enabled") }.getOrNull()
+            ?: return invoke.reject("private_keyboard_invalid")
+        val activity = owner
+        activity.runOnUiThread {
+            PrivateKeyboard.set(active, enabled, activity.currentFocus as? TerminalInputView)
+            invoke.resolve()
+        }
     }
 }

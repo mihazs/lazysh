@@ -29,20 +29,27 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 /// Whether the focused terminal editor should ask the soft keyboard to act as a private, plain key source.
 /// Cosmetic and device-local; the app-lock gate in front of every command is the only authority it needs.
 #[tauri::command]
-pub async fn terminal_private_keyboard(app: AppHandle, active: bool) -> Result<(), String> {
+pub async fn terminal_private_keyboard(
+    app: AppHandle,
+    active: bool,
+    enabled: bool,
+) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         use tauri::Manager;
         app.state::<Keyboard>()
             .0
-            .run_mobile_plugin_async::<()>("set", serde_json::json!({ "active": active }))
+            .run_mobile_plugin_async::<()>(
+                "set",
+                serde_json::json!({ "active": active, "enabled": enabled }),
+            )
             .await
             .map_err(|_| "The keyboard mode could not be changed".to_owned())
     }
     // Other platforms have no soft keyboard to shape: the report is accepted and ignored.
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (app, active);
+        let _ = (app, active, enabled);
         Ok(())
     }
 }

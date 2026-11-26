@@ -219,6 +219,12 @@ export class NativeTerminalAdapter implements TerminalAdapter {
       .then(() => { this.pulling = false; if (this.again) { this.again = false; this.ring(); } });
   }
 
+  afterSurfaceInput(action: () => Promise<void>) {
+    if (!(this.capture instanceof SurfaceInput)) return false;
+    this.capture.afterInput(() => this.command(action));
+    return true;
+  }
+
   sendInput(data: string | Uint8Array, origin: TerminalInputOrigin) {
     // Typing clears the selection, as xterm.js' selection service does on user input; a terminal's reply is not typing.
     if (origin !== 'terminal-reply') this.clearSelection();

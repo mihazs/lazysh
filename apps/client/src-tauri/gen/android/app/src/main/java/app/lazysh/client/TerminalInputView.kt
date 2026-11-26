@@ -48,8 +48,11 @@ class TerminalInputView(
     override fun onCheckIsTextEditor() = true
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        val private = PrivateKeyboard.active
-        outAttrs.inputType = if (private) PrivateKeyboard.INPUT_TYPE else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        val private = PrivateKeyboard.enabled
+        // Match the WebView terminal editor so keyboards treat both engines as the same input field.
+        outAttrs.inputType = if (private) PrivateKeyboard.INPUT_TYPE else
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_WEB_EDIT_TEXT or
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE or EditorInfo.IME_FLAG_NO_ENTER_ACTION or EditorInfo.IME_FLAG_NO_FULLSCREEN or
             EditorInfo.IME_FLAG_NO_EXTRACT_UI or (if (private) EditorInfoCompat.IME_FLAG_NO_PERSONALIZED_LEARNING else 0)
         outAttrs.initialSelStart = editor.selectionStart
@@ -79,8 +82,7 @@ class TerminalInputView(
             if (!release && event.repeatCount == 0) clipboardText()?.let { editor.paste(it); publish() }
             return true
         }
-        val unicode = event.getUnicodeChar(event.metaState and TerminalKeys.NON_TEXT_META.inv())
-        val key = TerminalKeys.key(event.keyCode, event.metaState, unicode, event.repeatCount > 0, release) ?: return false
+        val key = TerminalKeys.key(event, release) ?: return false
         editor.key(key)
         publish()
         return true
@@ -188,8 +190,7 @@ class TerminalInputView(
         /** Enter, Backspace, arrows and the like arrive here from the keyboard; they are keys, not text. */
         override fun sendKeyEvent(event: KeyEvent): Boolean {
             if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
-            val unicode = event.getUnicodeChar(event.metaState and TerminalKeys.NON_TEXT_META.inv())
-            val key = TerminalKeys.key(event.keyCode, event.metaState, unicode, event.repeatCount > 0, event.action == KeyEvent.ACTION_UP) ?: return false
+            val key = TerminalKeys.key(event, event.action == KeyEvent.ACTION_UP) ?: return false
             return edit { editor.key(key) }
         }
 
