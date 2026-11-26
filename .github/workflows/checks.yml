@@ -842,6 +842,7 @@ jobs:
           xcrun simctl bootstatus "$id" -b
       # `cargo test` hands each test executable to the runner, and `simctl spawn` runs it inside the simulator, which
       # sees this host's file system. It passes on only the variables with the SIMCTL_CHILD_ prefix.
+      - *source-bun
       - name: Run every test of the runtime inside the iOS simulator
         if: ${{ !cancelled() && steps.simulator.outcome == 'success' }}
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/terminal-runtime
@@ -864,7 +865,6 @@ jobs:
             xcrun vtool -show-build "$executable" | tee "$RUNNER_TEMP/vtool-$target.txt"
             grep -Eq "^ *platform $platform$" "$RUNNER_TEMP/vtool-$target.txt" || { echo "::error::the $target executable is not a $platform build"; exit 1; }
           done
-      - *source-bun
       - name: Build the native-enabled iOS app
         id: ios-terminal-app
         if: ${{ !cancelled() && steps.simulator.outcome == 'success' }}

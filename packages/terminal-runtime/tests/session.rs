@@ -702,10 +702,18 @@ fn filled_session(hub: &Hub, id: &str) -> (Fixture, usize) {
 #[test]
 fn an_idle_detached_session_is_compacted_without_changing_its_history_and_an_attached_one_is_not() {
     let hub = compacting_hub(Duration::from_millis(50));
-    let (quiet, sent) = filled_session(&hub, "quiet");
-    let (watched, _) = filled_session(&hub, "watched");
-    watched.session.attach().unwrap();
+    let quiet = session(&hub, "quiet", config(80, 24, 1 << 20));
+    let watched = session(&hub, "watched", config(80, 24, 1 << 20));
+    let lines = numbered_lines(20_000);
+    // Neither fixture may compact while the history is being seeded.
+    for fixture in [&quiet, &watched] {
+        fixture.session.attach().unwrap();
+        fixture.send(&lines);
+        fixture.settle(lines.len() as u64);
+    }
     let before = history(&quiet);
+    quiet.session.detach();
+    let sent = lines.len();
     wait_until(|| quiet.session.stats().unwrap().compactions > 0);
     assert_eq!(history(&quiet), before, "compaction changed the history");
     assert_eq!(
