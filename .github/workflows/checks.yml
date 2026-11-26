@@ -116,17 +116,6 @@ jobs:
           fetch-depth: 0
       - &source-bun
         uses: ./.github/actions/setup-bun
-      # Pull requests restore main's moon cache but never save their own, like the Rust caches.
-      - id: moon-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            .moon/cache/hashes
-            .moon/cache/outputs
-          key: moon-client-${{ runner.os }}-${{ hashFiles('bun.lock', 'Cargo.lock', '.moon/*.yml', '.moon/tasks/*.yml') }}-${{ github.sha }}
-          restore-keys: |
-            moon-client-${{ runner.os }}-${{ hashFiles('bun.lock', 'Cargo.lock', '.moon/*.yml', '.moon/tasks/*.yml') }}-
-            moon-client-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       # The same classification the `changes` job makes. The client job has no `needs` so it never waits for it, and the browser
       # suites below (about 50 of this job's 52 minutes) run only when the diff can reach the client: a documentation, release,
@@ -150,21 +139,11 @@ jobs:
       - name: Build, type-check and test the client
         if: github.event_name != 'pull_request'
         run: bunx moon run client:build client:check client:test client:check-mobile-e2e client:lint-mobile-e2e client:test-mobile-e2e-unit -c 1
-      - &playwright-version
-        name: Resolve the locked Playwright version
-        id: playwright
-        working-directory: apps/client
-        run: echo "version=$(bun -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
-      - &playwright-browsers
-        name: Restore Playwright browsers for the locked version
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium
+      # No browser cache: a hit (restore 2 to 7 s, install 8 to 13 s) was no faster than a miss (install 8 to 17 s),
+      # and the entry took 293 MB of the 10 GB budget (docs/architecture/build-caching.md).
       # Playwright runs its own apt-get; bound it and refresh the lists past a stalled mirror first.
       # tmux feeds e2e/tmux-clipboard.spec.ts; with CI set that spec fails instead of skipping without it.
       - run: sudo sh .github/scripts/apt-install.sh tmux
-      # Still installs the system dependencies; a cached browser only skips its download.
       - &playwright-chromium
         id: playwright-chromium
         run: bunx playwright install --with-deps chromium
@@ -185,14 +164,6 @@ jobs:
       - if: steps.e2e.outputs.client == 'true'
         run: bun run test:e2e:kill-switch
         working-directory: apps/client
-      - name: Save the moon cache from main
-        if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            .moon/cache/hashes
-            .moon/cache/outputs
-          key: ${{ steps.moon-cache.outputs.cache-primary-key }}
 
   agent:
     if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
@@ -2228,11 +2199,8 @@ jobs:
       - name: Build the client test binaries once
         run: cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --no-run
       # After bun install and the build, so a replaced fixture fails only the voice suites.
-      - name: Restore pinned public speech model fixtures
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/lazysh-runtime-fixtures
-          key: lazysh-speech-fixtures-921e4cf8-be07e048-59dfb9a4-1495e91b
+      # Not cached: the 0.6 GB download takes 4 to 14 s on a runner, about what restoring it costs, and every pull
+      # request that missed saved its own copy, which evicted main's Rust caches (docs/architecture/build-caching.md).
       - name: Download and verify pinned public speech model fixtures
         # The pins live in .github/scripts/speech-fixtures.sh, which the owned Android voice run shares.
         env:
@@ -2311,8 +2279,6 @@ jobs:
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored multiplexer::tests::real_local_ zellij::tests::real_local_ | grep -c ': test$' | grep -Fx 2
           LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
       # Pinned tmux (apt 3.4), Zellij 0.45.1 and the same-run stock Herdr drive a browser against lazysh's real terminal pane.
-      - *playwright-version
-      - *playwright-browsers
       - *playwright-chromium
       - name: Exercise tmux, Zellij and Herdr copies reaching the device clipboard through OSC 52 consent
         # The installs above have no status function, so an earlier failure skips them; without its browser this step would only add a misleading failure.
