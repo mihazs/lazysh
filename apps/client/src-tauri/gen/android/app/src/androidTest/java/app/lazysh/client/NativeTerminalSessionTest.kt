@@ -495,7 +495,7 @@ class NativeTerminalSessionTest {
     private val xtermRowsSelector = ".terminal-canvas .xterm-screen .xterm-rows"
 
     private fun startXtermBenchmark(expectPrompt: Boolean = true) {
-        openEngineSettings()
+        openTerminalSettings()
         choose("input[name='terminal-engine'][value='xterm']")
         click("button[aria-label='Close Preferences']")
         connect()

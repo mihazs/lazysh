@@ -6,7 +6,6 @@ use std::{
     fs, io,
     path::Path,
     process::{Child, Command, Stdio},
-    time::{Duration, Instant},
 };
 #[path = "support/update_fixture.rs"]
 #[allow(dead_code)]
@@ -23,27 +22,14 @@ fn running(path: &std::path::Path) -> Child {
     spawn_hold(path).unwrap()
 }
 
-// A script another test thread just wrote can be briefly busy to exec while a sibling's fork still
-// holds its write descriptor; the updater's own process runner retries the same way.
 fn spawn_hold(path: &Path) -> io::Result<Child> {
-    let deadline = Instant::now() + Duration::from_secs(1);
     let mut command = Command::new(path);
     command
         .arg("hold")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    loop {
-        match command.spawn() {
-            Err(error)
-                if error.kind() == io::ErrorKind::ExecutableFileBusy
-                    && Instant::now() < deadline =>
-            {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            result => return result,
-        }
-    }
+    fixture::with_executable_retry(|| command.spawn())
 }
 fn alive(child: &mut Child) -> bool {
     child.try_wait().unwrap().is_none()
@@ -77,7 +63,7 @@ fn starting_a_busy_stub_retries_only_until_it_can_run() {
         io::ErrorKind::ExecutableFileBusy
     );
     let release = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(100));
         drop(writer);
     });
     let mut child = spawn_hold(&binary).unwrap();

@@ -756,10 +756,9 @@ fn the_real_agent_updates_itself_and_its_downloaded_twin_passes_the_self_test() 
     assert_eq!(run.result()["current"]["version"], THIS);
     assert_eq!(fixture.installed(), bytes);
     assert_eq!(fixture.previous().unwrap(), companion(OLD));
-    let version = std::process::Command::new(fixture.managed().join("lazysh-agent"))
-        .arg("--version")
-        .output()
-        .unwrap();
+    let mut version = std::process::Command::new(fixture.managed().join("lazysh-agent"));
+    version.arg("--version");
+    let version = fixture::with_executable_retry(|| version.output()).unwrap();
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
         format!("lazysh-agent {THIS}")
@@ -781,4 +780,28 @@ fn the_real_agent_updates_itself_and_its_downloaded_twin_passes_the_self_test() 
     assert_eq!(back.result()["current"]["version"], THIS);
     assert_eq!(fixture.installed(), bytes);
     assert_eq!(fixture.previous().unwrap(), companion(NEW));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn retries_exec_after_a_temporary_binary_writer_closes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("companion");
+    fs::write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
+    mode(&path, 0o700);
+    let mut writer = Some(fs::OpenOptions::new().write(true).open(&path).unwrap());
+    let mut command = std::process::Command::new(&path);
+
+    let result = fixture::with_executable_retry(|| {
+        let result = command.output();
+        if writer.take().is_some() {
+            assert_eq!(
+                result.as_ref().unwrap_err().kind(),
+                std::io::ErrorKind::ExecutableFileBusy
+            );
+        }
+        result
+    });
+
+    assert!(result.unwrap().status.success());
 }
