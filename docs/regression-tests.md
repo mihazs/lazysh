@@ -126,6 +126,7 @@ or `n/a` with a reason. Rows below were read from the fixing commits; a test not
 | [#2606](https://github.com/mihazs/lazysh/issues/2606) | The Android flood benchmark could dispatch a key before the owned PTY started writing output | this change | `apps/client/bench/nativePtyFlood.test.ts` waits for the first-chunk receipt before sending a key, then verifies the marked output and exact echo offset | n/a |
 | [#2503](https://github.com/mihazs/lazysh/issues/2503) | A touch bound to opening the keyboard also opened it over Herdr navigation in a native pane | this change | unit `apps/client/src/TerminalPane.test.tsx`, `keeps Herdr navigation taps from opening the keyboard on a native pane` | n/a, the pane gesture reproduces in Vitest |
 | [#2503](https://github.com/mihazs/lazysh/issues/2503) | A touch bound to opening the keyboard also opened it over Herdr navigation in a native pane | this change | unit `apps/client/src/TerminalPane.test.tsx`, `keeps a delayed Herdr navigation tap from opening the keyboard after the pane redraws` | n/a, the pane gesture reproduces in Vitest |
+| [#2753](https://github.com/mihazs/lazysh/issues/2753) | Packaged Waydroid streams used different fixture bytes because xterm fit one extra column | Cap xterm columns and wait for the matching remote PTY grid | Bun: `apps/client/bench/androidNativeBench.test.ts` rejects out-of-range column caps | The paired Waydroid lane verifies grid and workload digests |
 
 ## Adding a row
 
