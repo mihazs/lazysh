@@ -28,10 +28,21 @@ function Write-AccessibilitySample([string]$phase) {
   } | ConvertTo-Json -Compress | Write-Output
 }
 
+$detector = 'screen_reader::windows_tests::real_narrator_changes_windows_accessibility_detection'
+function Assert-Detector([string]$expected) {
+  $env:LAZYSH_EXPECT_NARRATOR = $expected
+  $result = cargo test --locked -p lazysh --features native-terminal --lib -- --ignored --exact $detector
+  if ($LASTEXITCODE -ne 0 -or -not ($result -match '1 passed; 0 failed')) {
+    throw "The app detector did not complete the expected $expected assertion: $result"
+  }
+  Write-Output "App detector matched expected Narrator state $expected."
+}
+
 if ((Read-NarratorRunning) -or (Get-Process -Name Narrator -ErrorAction SilentlyContinue)) {
   throw 'The runner already has a Narrator session.'
 }
 Write-AccessibilitySample 'before'
+Assert-Detector 'false'
 
 $reader = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\Narrator.exe') -PassThru
 try {
@@ -44,6 +55,11 @@ try {
   }
   Write-Output 'Narrator running marker observed after startup.'
   Write-AccessibilitySample 'running'
+  Assert-Detector 'true'
+  Start-Sleep -Seconds 2
+  if ($reader.HasExited -or -not (Read-NarratorRunning)) {
+    throw 'The owned Narrator exited before the stop shortcut.'
+  }
   # Narrator Home can live in the tray, so the reader need not have a closable
   # main window. Use the documented Windows+Ctrl+Enter stop shortcut.
   Add-Type -Namespace LazyshRehearsal -Name Keyboard -MemberDefinition @'
@@ -66,6 +82,7 @@ public static extern void keybd_event(byte key, byte scan, uint flags, System.UI
   }
   Write-Output 'Narrator running marker cleared after normal shutdown.'
   Write-AccessibilitySample 'after'
+  Assert-Detector 'false'
 } finally {
   if (-not $reader.HasExited) {
     $reader.Kill()

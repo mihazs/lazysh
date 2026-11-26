@@ -155,102 +155,18 @@ mod tests {
 
 #[cfg(all(test, target_os = "windows", native_terminal_core))]
 mod windows_tests {
-    use super::windows_accessibility_active;
-    use std::{
-        process::{Command, Stdio},
-        thread::sleep,
-        time::{Duration, Instant},
-    };
-    use windows_sys::Win32::UI::{
-        Accessibility::UiaClientsAreListening,
-        WindowsAndMessaging::{SystemParametersInfoW, SPI_GETSCREENREADER},
-    };
-
     #[test]
-    #[ignore = "requires an isolated interactive Windows runner"]
-    fn the_windows_reader_probe_tracks_an_owned_uia_subscription() {
+    #[ignore = "requires the owned Narrator rehearsal"]
+    fn real_narrator_changes_windows_accessibility_detection() {
         assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
         assert_eq!(
             std::env::var("RUNNER_ENVIRONMENT").as_deref(),
             Ok("github-hosted")
         );
-        let mut legacy_reader: windows_sys::core::BOOL = 0;
-        // SAFETY: The legacy query writes one BOOL to the stack.
-        let (uia_listener, legacy_status) = unsafe {
-            (
-                UiaClientsAreListening() != 0,
-                SystemParametersInfoW(
-                    SPI_GETSCREENREADER,
-                    0,
-                    (&mut legacy_reader as *mut windows_sys::core::BOOL).cast(),
-                    0,
-                ) != 0,
-            )
-        };
-        assert_eq!(
-            windows_accessibility_active(),
-            Ok(false),
-            "runner baseline is occupied (UIA listener={uia_listener}, legacy query succeeded={legacy_status}, legacy flag={legacy_reader})"
-        );
-
-        let mut reader = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-MTA",
-                "-Command",
-                r#"
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
-Add-Type -ReferencedAssemblies UIAutomationClient, UIAutomationTypes -TypeDefinition @'
-using System.Windows.Automation;
-public static class OwnedAutomationSubscriber {
-    public static readonly AutomationFocusChangedEventHandler Handler = delegate { };
-}
-'@
-$handler = [OwnedAutomationSubscriber]::Handler
-[System.Windows.Automation.Automation]::AddFocusChangedEventHandler($handler)
-try { $null = [Console]::ReadLine() }
-finally { [System.Windows.Automation.Automation]::RemoveFocusChangedEventHandler($handler) }
-"#,
-            ])
-            .stdin(Stdio::piped())
-            .spawn()
-            .expect("start an owned UI Automation client");
-        let wait_until = |expected| {
-            let start = Instant::now();
-            while start.elapsed() < Duration::from_secs(10) {
-                if windows_accessibility_active() == Ok(expected) {
-                    return true;
-                }
-                sleep(Duration::from_millis(50));
-            }
-            false
-        };
-        let detected = wait_until(true);
-        drop(reader.stdin.take());
-        let shutdown = Instant::now();
-        let status = loop {
-            if let Some(status) = reader.try_wait().unwrap() {
-                break status;
-            }
-            if shutdown.elapsed() >= Duration::from_secs(5) {
-                reader.kill().unwrap();
-                break reader.wait().unwrap();
-            }
-            sleep(Duration::from_millis(50));
-        };
-        assert!(
-            status.success(),
-            "the UI Automation client exited with {status}"
-        );
-        assert!(
-            detected,
-            "the subscription never triggered the Windows probe"
-        );
-        assert!(
-            wait_until(false),
-            "the Windows probe retained the closed subscriber"
-        );
+        let expected: bool = std::env::var("LAZYSH_EXPECT_NARRATOR")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(super::windows_accessibility_active(), Ok(expected));
     }
 }
