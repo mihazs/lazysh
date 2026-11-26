@@ -114,7 +114,15 @@ const frames = (window?: Window): Summary | null => (window?.frameIntervalMs ? {
 
 type Of = (metric: MetricId, name: string | null) => Base;
 /** Frame pacing of the app's layers over a sustained window: interval and jank rate. */
-const pacing = (of: Of, name: string, runs: Run[]) => [perRunSummaries(of('frameIntervalMs', name), runs.map(run => frames(run.android))), perRun(of('jankyFramePercent', name), runs.map(run => run.android?.jankyFramePercent))];
+function pacing(of: Of, name: string, runs: Run[]) {
+  const rates: unknown[] = runs.map(run => run.android?.jankyFramePercent);
+  return [
+    perRunSummaries(of('frameIntervalMs', name), runs.map(run => frames(run.android))),
+    rates.every((rate): rate is number => finite(rate) && rate >= 0 && rate <= 100)
+      ? perRun(of('jankyFramePercent', name), rates)
+      : null,
+  ];
+}
 
 /** The measurements of the xterm.js arm: what the baseline spec recorded, folded into the catalogue's metrics. */
 export function fromBaseline(results: BaselineResult[], adapter: string): Measurement[] {
