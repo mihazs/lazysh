@@ -494,15 +494,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         lazysh_agent::host_features::read(&lazysh_agent::state_directory()?)?
             .check_simulator_streaming()?;
     }
-    let wake_sender = matches!(
-        &cli.command,
-        Command::Ingest { .. } | Command::Snapshot { .. } | Command::ApprovalRequest { .. }
-    );
-    if matches!(&cli.command, Command::ApprovalRequest { .. }) {
-        if let Ok(directory) = lazysh_agent::state_directory() {
-            let _ = lazysh_agent::relay::ensure_sender(&directory, false);
-        }
-    }
+    let mut wake_sender = false;
     let configure_sender = matches!(
         &cli.command,
         Command::Relay {
@@ -1017,6 +1009,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                     }
                     let (mut store, admission) = open_admitting(agent)?;
                     store.record_kimi_code(&observation, chrono::Utc::now(), admission)?;
+                    wake_sender = true;
                 }
             } else {
                 let (event, source) = if reported_history {
@@ -1043,6 +1036,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                         chrono::Utc::now(),
                         admission,
                     )?;
+                    wake_sender = true;
                 }
             }
             None
@@ -1059,6 +1053,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             store.settle_rejected_dialogs(chrono::Utc::now(), admission)?;
             let mut snapshot = store.snapshot(limit, chrono::Utc::now())?;
             snapshot.update = update;
+            wake_sender = true;
             Some(serde_json::to_value(snapshot).map_err(|_| Error::InvalidEvent)?)
         }
     };

@@ -471,6 +471,7 @@ pub fn request(
     )?;
     transaction.commit()?;
     record(directory, &request, agent, pane, admission)?;
+    let _ = crate::relay::ensure_sender(directory, false);
     let deadline = Instant::now() + Duration::from_secs(u64::from(timeout));
     let answer = loop {
         if Instant::now() >= deadline {
