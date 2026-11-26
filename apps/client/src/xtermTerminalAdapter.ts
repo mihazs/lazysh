@@ -91,7 +91,8 @@ export class XtermTerminalAdapter implements TerminalAdapter {
   dispose() {
     if (this.disposed) return this.disposed;
     // Everything below runs synchronously: the caller may drop its reference right after this call.
-    this.unmount?.(); this.unmount = undefined; this.fitAddon?.dispose();
+    this.unmount?.(); this.unmount = undefined;
+    this.fitAddon?.dispose(); this.fitAddon = undefined;
     this.intents?.dispose(); this.canonical?.dispose();
     this.sources.forEach(group => group.forEach(source => source.dispose())); this.sources.clear();
     this.events.clear();

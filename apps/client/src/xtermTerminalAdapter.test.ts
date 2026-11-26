@@ -58,11 +58,23 @@ describe('xterm backend specifics', () => {
     }
   });
 
-  it('delivers a wheel notch to the mounted element', async () => {
+  async function mountedAdapter() {
     const adapter = new XtermTerminalAdapter(new Terminal({cols: 20, rows: 5}));
     const element = document.createElement('div');
     document.body.append(element);
     await adapter.attach({kind: 'dom', element});
+    return {adapter, element};
+  }
+
+  it('ignores a scheduled fit after the terminal renderer is disposed', async () => {
+    const {adapter} = await mountedAdapter();
+    await adapter.dispose();
+    expect(() => adapter.fit()).not.toThrow();
+    expect(adapter.proposeSize()).toBeUndefined();
+  });
+
+  it('delivers a wheel notch to the mounted element', async () => {
+    const {adapter, element} = await mountedAdapter();
     const seen: WheelEvent[] = [];
     element.addEventListener('wheel', event => seen.push(event as WheelEvent));
     adapter.wheel({clientX: 3, clientY: 4, deltaY: -2, unit: 'line'});

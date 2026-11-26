@@ -10,7 +10,7 @@ import {captureUiError, LocalUiError, uiErrorText, type UiErrorCause} from './i1
 import {formatNumber, t, useUi} from './i18n/core';
 import {appVersion} from './version';
 import {companionSourceOf,localHostKey,localHostLabel} from './localHost';
-import {onBackButtonPress} from '@tauri-apps/api/app';
+import {watchAndroidBack} from './androidBack';
 import bedModeMark from '../../../brand/lazysh/svg/icon-gradient.svg';
 import {useClientLocale} from './i18n/useClientLocale';
 import {nativeLocale} from './i18n/nativeLocale';
@@ -1709,11 +1709,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   };
   useEffect(()=>{
     if(!native || !canHandleBack)return;
-    let alive=true;let unregister:(()=>Promise<void>)|undefined;
-    void onBackButtonPress(()=>{if(alive)handleBack.current();}).then(listener=>{
-      if(alive)unregister=()=>listener.unregister();else void listener.unregister();
-    }).catch(()=>{});
-    return()=>{alive=false;void unregister?.();};
+    return watchAndroidBack(() => handleBack.current());
   },[canHandleBack]);
   function chooseLiveSession(id:string) {
     agentDrawerOffset.current=undefined;

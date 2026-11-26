@@ -5,7 +5,7 @@
  * while locked, like a disconnect, and so are the probe's `terminal_core_available` and `native_terminal_probe`, which read the build and the device, nothing of the user's.
  */
 import {Channel, invoke as unguardedInvoke, isTauri} from '@tauri-apps/api/core';
-import {isAccessReady, protectedInvoke, sessionOutput, subscribeAccess} from './access';
+import {isAccessReady, protectedInvoke, channelSessionOutput, subscribeAccess} from './access';
 import type {SshEvent} from './bridge';
 import type {NativeCoreAnswer, NativeCoreBridge, NativeCoreEvent, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 import {NativeTerminalAdapter, type NativeAdapterOptions} from './nativeTerminalAdapter';
@@ -79,23 +79,22 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
   let {theme} = adapterOptions;
   const events = new Channel<NativeCoreEvent | SshEvent>();
   const listeners = new Set<(event: NativeCoreEvent) => void>();
-  const deliver = sessionOutput<NativeCoreEvent | SshEvent>(event => {
+  const disposeOutput = channelSessionOutput(events, event => {
     if (isCoreEvent(event)) listeners.forEach(listener => listener(event)); else { onTransportEvent?.(event); adapter.transport?.onEvent?.(event); }
   });
-  events.onmessage = deliver;
   try {
     // The colours the core reports to the programs that ask for them, and the Mosh mode, are fixed before its first byte.
     const config = theme || canonicalFrames || cursorStyle ? {theme, canonicalFrames, ...cursorStyle && {cursorStyle, cursorBlink}} : undefined;
     await protectedInvoke('terminal_core_open', {events, cols: columns, rows, scrollbackLines: opened, config});
   } catch (error) {
-    deliver.dispose();
+    disposeOutput();
     throw asError(error);
   }
 
   let bind!: (session: Promise<string>) => void, bound = false;
   const session = new Promise<string>(resolve => { bind = started => { bound = true; resolve(started); }; });
   // A failed start is the caller's to report; the commands that waited for the id reject with it and the adapter drops them.
-  session.then(id => registerSessionOutput(id, deliver.dispose), noop);
+  session.then(id => registerSessionOutput(id, disposeOutput), disposeOutput);
 
   const call = async <T>(command: string, args: Record<string, unknown> = {}) => {
     const sessionId = await session;
@@ -152,7 +151,7 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
     },
     close() {
       return closing ??= (async () => {
-        stopWatching(); deliver.dispose(); listeners.clear();
+        stopWatching(); disposeOutput(); listeners.clear();
         // A transport that never started has no session to wait for.
         const sessionId = bound ? await session.catch(() => undefined) : undefined;
         // A session that never started has no core to free: the failed start already did.
