@@ -3428,7 +3428,6 @@ class NativeWorkspaceTest {
         press("k", KeyEvent.KEYCODE_K)
         press("V", KeyEvent.KEYCODE_V, shift = true)
         press("\n", KeyEvent.KEYCODE_ENTER)
-        awaitCopyMode(false)
         awaitDocument(scenario, "tmux copy reaches the remote clipboard request",
             "Array.from(document.querySelectorAll('[role=region]')).some(x=>x.getAttribute('aria-label')==='Remote clipboard request' && x.textContent.includes(${JSONObject.quote(marker)}))")
         assertTrue("The copied line must not reach the clipboard before Allow", copied() != line)
@@ -3440,6 +3439,8 @@ class NativeWorkspaceTest {
             assertTrue("Allow did not write the copied tmux line to the system clipboard", System.nanoTime() < deadline)
             Thread.sleep(100)
         }
+        // With the IME and consent open, the native viewport can shrink to a blank row.
+        awaitCopyMode(false)
         // SystemUI previews a copied clip over the bottom-left for a few seconds; wait it out before the next tap.
         awaitClipboardPreviewGone(System.nanoTime())
         println("lazysh tmux: copy mode entered from its shortcut, a line copied and the system clipboard written after Allow")
@@ -5473,12 +5474,7 @@ class NativeWorkspaceTest {
                     verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label, nativeTmux)
                     if (!nativeTmux) verifyOwnedTmuxDefault(scenario, fixture, name, label)
                 } finally {
-                    if (nativeTmux) evaluate(scenario, """(() => {
-                        if ($previous === null) localStorage.removeItem('$key');
-                        else localStorage.setItem('$key', $previous);
-                        window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
-                        return true;
-                    })()""")
+                    if (nativeTmux) evaluate(scenario, PageDriver.restoreStorageScript(key, previous))
                 }
             } else if (requireZellij) {
                 verifyOwnedZellij(scenario, fixture.getJSONObject("zellij"), name)

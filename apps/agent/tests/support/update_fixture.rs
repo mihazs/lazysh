@@ -176,7 +176,7 @@ impl Fixture {
         self.finish(self.command(args))
     }
     pub fn finish(&self, mut command: Command) -> Run {
-        let output = command.output().unwrap();
+        let output = with_executable_retry(|| command.output()).unwrap();
         Run {
             code: output.status.code().unwrap(),
             stdout: String::from_utf8(output.stdout).unwrap(),
@@ -219,5 +219,24 @@ impl Fixture {
             ["ca.pem"],
             "this run must not create state"
         );
+    }
+}
+
+pub fn with_executable_retry<T>(
+    mut launch: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    // A sibling fork can briefly hold an inherited write descriptor until exec.
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match launch() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
     }
 }
