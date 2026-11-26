@@ -8,7 +8,7 @@ Layers and where they run:
 | --- | --- | --- |
 | Vitest over the stand-in core (`createHeadlessCore`) | `client` (`client:test`) | The first choice: the real adapter and pane, no device. |
 | Vitest over the real core (`nativeTerminalAdapter.realCore.test.ts`) | `herdr-native` | The runtime crate's stdio harness. |
-| Playwright (`e2e/terminal-native-*.spec.ts`, `terminal-engine-*.spec.ts`) | `client` (`client:test-e2e`) | The browser registry spec exercises output, IME, clipboard consent and touch selection with a stand-in core. Herdr tap tests use both backends. The other five legacy specs still skip the native arm ([#2123](https://github.com/mihazs/lazysh/issues/2123)). |
+| Playwright (`e2e/terminal-native-*.spec.ts`, `terminal-engine-*.spec.ts`) | `client` (`client:test-e2e`) | The browser registry spec exercises output, IME, clipboard consent and touch selection with a stand-in core. Herdr tap and selection tests use both backends. The other four legacy specs still skip the native arm ([#2123](https://github.com/mihazs/lazysh/issues/2123)). |
 | Rust renderer and surface host tests | `native-terminal-bridge` | A software GPU; not a required check. |
 | Instrumentation, a placed native session | `native-android-terminal-session` | Dedicated job, new Android UI cases go here. |
 | Instrumentation, the core in the app | `native-android-terminal-core` | `NativeTerminalCoreTest`. |

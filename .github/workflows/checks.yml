@@ -154,7 +154,7 @@ jobs:
         run: bunx moon run client:test-e2e
         env:
           LAZYSH_E2E_TERMINAL_BACKEND: xterm
-      # The native arm uses the synthetic browser registry for its dedicated cases and the Herdr tap spec.
+      # The native arm uses the synthetic browser registry for its dedicated cases, Herdr taps and selection.
       # The other legacy fixtures report the packaged registry's refusal until migrated (#2123).
       - if: steps.e2e.outputs.client == 'true'
         run: bun run test:e2e:terminal

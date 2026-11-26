@@ -1,8 +1,12 @@
 import {expect,type CDPSession,type Page} from '@playwright/test';
 import {test} from './fixtures/terminalBackend';
+import {requestedBackend} from '../src/e2eTerminalBackend';
+
 import {cell,historyLines,longPress,mountHistory,scrollHistory,settle} from './fixtures/terminalHistory';
 import {onAdapter,terminalBounds,terminalRows,terminalViewport} from './fixtures/terminalState';
 import {controlContrast} from './fixtures/controlContrast';
+
+test.use({syntheticBackend:true});
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
 const readClipboard=(page:Page)=>page.evaluate(()=>navigator.clipboard.readText());
@@ -11,7 +15,7 @@ const handle=(page:Page,which:'start'|'end')=>page.locator(`[data-selection-hand
 test.afterEach(async({page})=>{await page.evaluate(()=>window.ownedHistory?.dispose());});
 
 async function open(page:Page,mosh:boolean) {
-  await mountHistory(page,mosh);
+  await mountHistory(page,mosh,true,false,undefined,requestedBackend()??'xterm');
   await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(page.url()).origin});
   await page.evaluate(()=>navigator.clipboard.writeText('BEFORE'));
   await output(page,historyLines(300));await settle(page);
@@ -64,6 +68,7 @@ for(const mosh of [false,true])test.describe(mosh?'Mosh terminal':'SSH terminal'
     expect(down.end.y-down.start.y).toBeGreaterThan(down.rows);
     expect(down.text.split('\n').length).toBe(down.end.y-down.start.y+1);
     expect(down.text.startsWith(first.text)).toBe(true);
+    await settle(page);
     // A new selection near the bottom; its start handle goes past the top edge.
     await longPress(page,await cell(page,first.rows-2,3));
     await expect(handle(page,'start')).toBeVisible();
@@ -113,11 +118,13 @@ test('alternate screen mouse reporting keeps Shift-drag selection, Select all an
   await open(page,false);
   await page.evaluate(()=>window.ownedHistory.raw('\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[H'+Array.from({length:8},(_,i)=>`ALT_ROW_${i} text`).join('\r\n')));
   await settle(page);
-  const from=await cell(page,1,0),to=await cell(page,3,4);
+  const from=await cell(page,1,0),to=await cell(page,3,3);
+  // Drag toward the right edge of the underscore, short of the next cell.
+  to.x+=((await cell(page,3,4)).x-to.x)/4;
   await shiftDrag(page,from,to,4);
   await expect(actions(page)).toBeVisible();
   // The remote app received no mouse reports for the forced local selection.
-  expect(await page.evaluate(()=>window.ownedHistory.writes.filter(data=>data.startsWith('\x1b[<')))).toEqual([]);
+  expect(await page.evaluate(()=>window.ownedHistory.core?.mice??window.ownedHistory.writes.filter(data=>data.startsWith('\x1b[<')))).toEqual([]);
   await copyMatches(page);
   expect(await readClipboard(page)).toBe('ALT_ROW_1 text\nALT_ROW_2 text\nALT_');
   await shiftDrag(page,from,to,2);
@@ -127,6 +134,18 @@ test('alternate screen mouse reporting keeps Shift-drag selection, Select all an
   await actions(page).getByRole('button',{name:'Copy screen',exact:true}).click();
   await expect.poll(()=>readClipboard(page)).toBe(screen);
   await expect(actions(page)).toHaveCount(0);
+});
+
+test('desktop multi-click selects the word and then the full row',async({page},testInfo)=>{
+  test.skip(testInfo.project.name!=='desktop','Mouse selection.');
+  await open(page,false);
+  await page.evaluate(()=>window.ownedHistory.raw('\x1b[2J\x1b[8;1Howned_word adjacent'));
+  await settle(page);
+  const word=await cell(page,7,3);
+  await page.mouse.dblclick(word.x,word.y);
+  expect((await selected(page)).text).toBe('owned_word');
+  await page.mouse.click(word.x,word.y,{clickCount:3});
+  expect((await selected(page)).text.trimEnd()).toBe('owned_word adjacent');
 });
 
 test('selection actions float on the light theme glass without a painted edge',async({page},testInfo)=>{

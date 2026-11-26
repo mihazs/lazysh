@@ -1,8 +1,9 @@
 import {expect,type Page} from '@playwright/test';
 import {installNativeBridge} from './nativeBridge';
 import {onAdapter,terminalBounds,terminalCell,terminalDrawn} from './terminalState';
+import type {TerminalBackendId} from '../../src/terminalAdapter';
 import type {mountTerminalHistoryHarness} from './TerminalHistoryHarness';
-declare global {interface Window {ownedHistory:ReturnType<typeof mountTerminalHistoryHarness>;ownedHistoryInput?:(data:string)=>void;edgeLog:string[]}}
+declare global {interface Window {ownedHistory:Awaited<ReturnType<typeof mountTerminalHistoryHarness>>;ownedHistoryInput?:(data:string)=>void;edgeLog:string[]}}
 
 /** Loads the workspace with synthetic commands; the terminal harness mounts separately. */
 export async function openHistoryWorkspace(page:Page) {
@@ -17,13 +18,13 @@ export async function openHistoryWorkspace(page:Page) {
   await page.goto('/');
 }
 
-export async function mountHistory(page:Page,mosh:boolean,load=true,topAnchored=false,edge?:{close?:boolean}) {
+export async function mountHistory(page:Page,mosh:boolean,load=true,topAnchored=false,edge?:{close?:boolean},engine:TerminalBackendId='xterm') {
   if(load)await openHistoryWorkspace(page);
-  await page.evaluate(async({mosh,topAnchored,edge})=>{
+  await page.evaluate(async({mosh,topAnchored,edge,engine})=>{
     const fixture=await import('/e2e/fixtures/TerminalHistoryHarness.tsx');
     window.edgeLog=[];
-    window.ownedHistory=fixture.mountTerminalHistoryHarness({mosh,topAnchored,edgeLog:edge?window.edgeLog:undefined,edgeClose:edge?.close,input:data=>window.ownedHistoryInput?.(data)});
-  },{mosh,topAnchored,edge});
+    window.ownedHistory=await fixture.mountTerminalHistoryHarness({engine,mosh,topAnchored,edgeLog:edge?window.edgeLog:undefined,edgeClose:edge?.close,input:data=>window.ownedHistoryInput?.(data)});
+  },{mosh,topAnchored,edge,engine});
   await terminalDrawn(page);
   // A Mosh terminal adopts its geometry only from the first authoritative frame.
   if(mosh)await expect.poll(()=>page.evaluate(()=>window.ownedHistory.resizes.length)).toBeGreaterThan(0);
@@ -32,7 +33,7 @@ export async function mountHistory(page:Page,mosh:boolean,load=true,topAnchored=
 
 /** Waits until the xterm write queue and any pending Mosh frame are applied. */
 export async function settle(page:Page) {
-  await page.evaluate(()=>new Promise<void>(resolve=>setTimeout(()=>window.ownedHistory.terminal.write('',()=>requestAnimationFrame(()=>resolve())),60)));
+  await page.evaluate(async()=>{await new Promise(resolve=>setTimeout(resolve,60));await window.ownedHistory.raw('');await new Promise(resolve=>requestAnimationFrame(resolve));});
 }
 
 export const historyLines=(count:number,from=0,wrap=false)=>Array.from({length:count},(_,i)=>{
@@ -91,7 +92,7 @@ export async function longPress(page:Page,point:{x:number;y:number}) {
 }
 /** The on-screen keyboard holds a word in composition, as SwiftKey and Gboard do after typing. */
 export async function compose(page:Page,text:string) {
-  await page.evaluate(()=>window.ownedHistory.terminal.focus());
+  await page.evaluate(()=>window.ownedHistory.session.adapter.focus());
   const cdp=await page.context().newCDPSession(page);
   await cdp.send('Input.imeSetComposition',{text,selectionStart:text.length,selectionEnd:text.length});
   await cdp.detach();
