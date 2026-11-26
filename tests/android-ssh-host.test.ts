@@ -342,7 +342,10 @@ test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN
     expect(snapshot.panes.find((pane:{pane_id:string})=>pane.pane_id===agent.paneId)).toMatchObject({
       terminal_id:agent.terminalId,workspace_id:agent.workspaceId,tab_id:agent.tabId});
     const reports=await owned.ssh.client(true,'lazysh-agent snapshot --limit 50');
-    expect(JSON.parse(await reports.finish('owned empty companion reports',5000))).toEqual({schemaVersion:1,sessions:[]});
+    const board=JSON.parse(await reports.finish('owned empty companion reports',5000));
+    expect(board).toMatchObject({schemaVersion:1,liveAgents:{processes:expect.any(Array)}});
+    expect(board.sessions).toEqual([]);
+    expect(['available','truncated']).toContain(board.liveAgents.status);
     expect(history?.paneId).not.toBe(agent.paneId);
     expect(snapshot.focused_pane_id).toBe(agent.paneId);
     expect(await owned.history()).toMatchObject({offset:0,newTail:true});
