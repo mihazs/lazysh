@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.content.Intent
@@ -745,7 +746,10 @@ class NativeWorkspaceTest {
         // textarea fixture reached this point with focus=true but no connection.
         // Wait for the exact native type action's constraints, without refocusing
         // or attempting input, within the existing five-second typing budget.
-        val typing = typeTextIntoFocusedView(text)
+        val typingConstraints = typeTextIntoFocusedView(text).constraints
+        val keyEvents = requireNotNull(KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD).getEvents(text.toCharArray())) {
+            "Native typing fixture contains characters without virtual keyboard events"
+        }
         val started = System.nanoTime()
         val deadline = started + TimeUnit.SECONDS.toNanos(5)
         val timing = TypingTiming(started, deadline)
@@ -758,7 +762,7 @@ class NativeWorkspaceTest {
                 var ready = false
                 timing.constraintChecks++
                 scenario.onActivity { activity ->
-                    ready = typing.constraints.matches(requireNotNull(webView(activity.window.decorView)))
+                    ready = typingConstraints.matches(requireNotNull(webView(activity.window.decorView)))
                 }
                 if (ready) { timing.constraintsReady = System.nanoTime(); break }
                 Thread.sleep(25)
@@ -776,10 +780,21 @@ class NativeWorkspaceTest {
             // into the focused WebView, preserving normal browser input events.
             timing.phase = TypingPhase.NATIVE_INJECTION
             timing.injectionStarted = System.nanoTime()
-            onView(isAssignableFrom(WebView::class.java)).perform(typing)
+            // Give Chromium a renderer round trip between batches without refocusing or replaying input.
+            for (batch in keyEvents.asList().chunked(16)) {
+                assertTrue("Native key dispatch exhausted the shared budget for $selector", System.nanoTime() < deadline)
+                scenario.onActivity { activity ->
+                    val target = requireNotNull(webView(activity.window.decorView))
+                    assertTrue("Native WebView focus changed before typing", target.hasFocus())
+                    for (event in batch) target.dispatchKeyEvent(event)
+                }
+                val remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+                assertEquals("DOM input focus changed during native typing for $selector", "true", evaluate(scenario,
+                    "document.activeElement === document.querySelector(${JSONObject.quote(selector)})", remainingMillis))
+            }
             timing.injectionReturned = System.nanoTime()
             timing.phase = TypingPhase.SETTLING
-            // Espresso acknowledges key injection, not the separate WebView renderer.
+            // Android key dispatch does not acknowledge WebView renderer delivery.
             // Wait only for the exact result; never retype or assign the input value.
             val typed = "document.querySelector(${JSONObject.quote(selector)})?.value === ${JSONObject.quote(text)}"
             while (true) {
