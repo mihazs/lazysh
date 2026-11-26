@@ -28,7 +28,7 @@ on:
         options: [surface, "on", "off"]
 
 concurrency:
-  group: terminal-macos-surface-${{ github.ref }}
+  group: terminal-macos-surface-${{ github.ref }}-${{ inputs.package_engine || 'surface' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

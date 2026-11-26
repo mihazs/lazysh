@@ -94,7 +94,11 @@ test.each([['a missing arm64 library', () => apk(null), 'google', 'on'], ['a fil
 });
 
 test('macOS bundle rehearsal isolates the native and rollback build profiles', async () => {
-  const {jobs} = await document('.github/workflows/terminal-macos-surface.yml');
+  const {jobs, concurrency} = await document('.github/workflows/terminal-macos-surface.yml');
+  const group = (mode: string) => interpolate(concurrency.group, {
+    github: { ref: 'refs/heads/owned-rehearsal' }, inputs: { package_engine: mode },
+  });
+  expect(group('on')).not.toBe(group('off'));
   for (const mode of ['surface', 'on', 'off']) {
     const context = {github: {event_name: 'workflow_dispatch'}, inputs: {package_engine: mode}};
     expect(evaluate(jobs['terminal-macos-surface'].if, context)).toBe(mode === 'surface');
