@@ -770,8 +770,54 @@ pub async fn herdr_action(
         .await
 }
 
+#[cfg(all(test, unix))]
+pub(crate) fn isolate_test_socket(command: &mut std::process::Command, home: &std::path::Path) {
+    // Explicit sessions derive their socket from the isolated configuration directory.
+    command
+        .env("XDG_STATE_HOME", home)
+        .env("HERDR_SOCKET_PATH", home.join("herdr.sock"));
+    for name in [
+        "HERDR_CLIENT_SOCKET_PATH",
+        "HERDR_SESSION",
+        "HERDR_ENV",
+        "HERDR_PANE_ID",
+        "HERDR_TAB_ID",
+        "HERDR_WORKSPACE_ID",
+    ] {
+        command.env_remove(name);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn real_fixture_commands_override_the_inherited_herdr_socket() {
+        use std::{collections::HashMap, ffi::OsStr, path::Path};
+
+        let home = Path::new("/tmp/lazysh-owned-test");
+        let command = RealHerdr::configured(home, "herdr");
+        let overrides: HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            overrides[OsStr::new("HERDR_SOCKET_PATH")],
+            Some(home.join("herdr.sock").as_os_str()),
+        );
+        assert_eq!(
+            overrides[OsStr::new("XDG_STATE_HOME")],
+            Some(home.as_os_str())
+        );
+        for name in [
+            "HERDR_CLIENT_SOCKET_PATH",
+            "HERDR_SESSION",
+            "HERDR_ENV",
+            "HERDR_PANE_ID",
+            "HERDR_TAB_ID",
+            "HERDR_WORKSPACE_ID",
+        ] {
+            assert_eq!(overrides[OsStr::new(name)], None, "{name}");
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1302,7 +1348,7 @@ mod tests {
             .unwrap();
             let mut server = Self::configured(temp.path(), "herdr");
             let server = server
-                .arg("server")
+                .args(["--session", "default", "server"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
@@ -1311,7 +1357,7 @@ mod tests {
             let ready = (0..100).any(|_| {
                 let ready = herdr
                     .command("herdr")
-                    .args(["api", "snapshot"])
+                    .args(["--session", "default", "api", "snapshot"])
                     .output()
                     .unwrap()
                     .status
@@ -1339,9 +1385,8 @@ mod tests {
                 .env_remove("BASH_ENV")
                 .current_dir(home)
                 .env("XDG_CONFIG_HOME", home)
-                .env("HERDR_CONFIG_PATH", home.join("config.toml"))
-                .env_remove("HERDR_SOCKET_PATH")
-                .env_remove("HERDR_SESSION");
+                .env("HERDR_CONFIG_PATH", home.join("config.toml"));
+            isolate_test_socket(&mut command, home);
             command
         }
         fn command(&self, program: &str) -> std::process::Command {
