@@ -124,6 +124,16 @@ class TerminalImeEditorTest {
         assertEquals("there", editor.textAfterCursor(10))
     }
 
+    @Test fun largeKeyboardContextLengthsStayWithinTheEditor() {
+        editor.commitText("abc", 1)
+        editor.setSelection(1, 1)
+        assertEquals("bc", editor.textAfterCursor(Int.MAX_VALUE))
+        editor.deleteSurroundingText(0, Int.MAX_VALUE)
+        assertEquals("a", editor.text)
+        editor.deleteSurroundingTextInCodePoints(Int.MAX_VALUE, Int.MAX_VALUE)
+        assertEquals("", editor.text)
+    }
+
     @Test fun movingTheCaretSendsNothing() {
         batch { commitText("there", 1) }
         remote.sent.clear()
@@ -223,6 +233,15 @@ class TerminalImeEditorTest {
         assertEquals("one DEL from the key and one from the edit, not two each", listOf("ab", "<Backspace>", "\u007f"), remote.sent)
     }
 
+    @Test fun typingContinuesAfterAKeyboardEraseCrossesThePreviousOwnershipBoundary() {
+        editor.commitText("first second", 1)
+        editor.settleOwnership()
+        editor.deleteSurroundingText(1, 0)
+        editor.commitText("d", 1)
+        assertEquals(listOf("first second", "\u007f", "d"), remote.sent)
+        assertRemoteFollowsEditor()
+    }
+
     @Test fun backspaceOverAnEmptyEditorStillReachesTheTerminal() {
         editor.key(TerminalKey("Backspace", "Backspace"))
         assertEquals(listOf("<Backspace>"), remote.sent)
@@ -234,6 +253,24 @@ class TerminalImeEditorTest {
         editor.key(TerminalKey("Enter", "Enter", release = true))
         assertEquals(listOf("<Enter>"), remote.sent)
         assertEquals("ab", editor.composing)
+    }
+
+    @Test fun openingANewConnectionDoesNotInheritAnUnfinishedBatch() {
+        editor.commitText("first second ", 1)
+        assertTrue(editor.beginBatchEdit())
+        editor.connectionOpened()
+        batch { setComposingText("thir", 1); commitText("third", 1) }
+        editor.deleteSurroundingText(1, 0)
+        assertEquals("first second thir", remote.line)
+        assertEquals(listOf("first second ", "third", "\u007f"), remote.sent)
+    }
+
+    @Test fun reopeningTheEditorDeliversPendingCompositionOnce() {
+        editor.setComposingText("word", 1)
+        editor.connectionOpened()
+        editor.commitText(" next", 1)
+        assertEquals(listOf("word", " next"), remote.sent)
+        assertRemoteFollowsEditor()
     }
 
     @Test fun losingFocusDropsTheComposingTextAndDeliversNothing() {
@@ -322,6 +359,17 @@ class TerminalImeEditorTest {
     @Test fun anEmptyPasteSendsNothing() {
         assertTrue(editor.paste(""))
         assertEquals(emptyList<String>(), remote.sent)
+    }
+
+    @Test fun swiftKeyBackspaceErasesTheCommittedTailWhileRecomposingTheWord() {
+        editor.commitText("hello world ", 1)
+        batch { deleteSurroundingText(1, 0); setComposingRegion(6, 11) }
+        assertEquals("hello world", remote.line)
+        batch { setComposingText("worl", 1) }
+        assertEquals("hello worl", remote.line)
+        batch { setComposingText("world", 1); finishComposingText(); commitText(" ", 1) }
+        assertEquals(listOf("hello world ", "\u007f", "\u007f", "d "), remote.sent)
+        assertRemoteFollowsEditor()
     }
 
     /**

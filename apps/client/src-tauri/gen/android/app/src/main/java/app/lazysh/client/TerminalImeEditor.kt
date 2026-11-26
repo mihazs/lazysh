@@ -65,6 +65,7 @@ class TerminalImeEditor(
     private var owned = 0
     private var depth = 0
 
+    val inBatch: Boolean get() = depth > 0
     val text: String get() = value
     val selectionStart: Int get() = minOf(selStart, selEnd)
     val selectionEnd: Int get() = maxOf(selStart, selEnd)
@@ -100,6 +101,15 @@ class TerminalImeEditor(
         return true
     }
 
+    fun replaceText(start: Int, end: Int, text: CharSequence, newCursorPosition: Int): Boolean {
+        if (start < 0 || end < 0) return false
+        val from = minOf(start, end, value.length)
+        val to = minOf(maxOf(start, end), value.length)
+        replace(from, to, text, newCursorPosition, composing = false)
+        settle()
+        return true
+    }
+
     fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
         val (start, end) = region()
         replace(start, end, text, newCursorPosition, composing = true)
@@ -131,9 +141,9 @@ class TerminalImeEditor(
 
     fun deleteSurroundingTextInCodePoints(before: Int, after: Int): Boolean {
         var from = selectionStart
-        repeat(maxOf(before, 0)) { if (from > 0) from -= if (from >= 2 && value[from - 1].isLowSurrogate() && value[from - 2].isHighSurrogate()) 2 else 1 }
+        repeat(before.coerceIn(0, selectionStart)) { if (from > 0) from -= if (from >= 2 && value[from - 1].isLowSurrogate() && value[from - 2].isHighSurrogate()) 2 else 1 }
         var to = selectionEnd
-        repeat(maxOf(after, 0)) { if (to < value.length) to += if (to + 1 < value.length && value[to].isHighSurrogate() && value[to + 1].isLowSurrogate()) 2 else 1 }
+        repeat(after.coerceIn(0, value.length - selectionEnd)) { if (to < value.length) to += if (to + 1 < value.length && value[to].isHighSurrogate() && value[to + 1].isLowSurrogate()) 2 else 1 }
         delete(selectionStart - from, to - selectionEnd)
         settle()
         return true
@@ -149,7 +159,7 @@ class TerminalImeEditor(
 
     fun textBeforeCursor(length: Int): String = value.substring(maxOf(0, selectionStart - maxOf(length, 0)), selectionStart)
 
-    fun textAfterCursor(length: Int): String = value.substring(selectionEnd, minOf(value.length, selectionEnd + maxOf(length, 0)))
+    fun textAfterCursor(length: Int): String = value.substring(selectionEnd, selectionEnd + length.coerceIn(0, value.length - selectionEnd))
 
     fun selectedText(): String? = if (selectionStart == selectionEnd) null else value.substring(selectionStart, selectionEnd)
 
@@ -203,16 +213,18 @@ class TerminalImeEditor(
 
     /** The keyboard's connection closed while the view kept focus: what it was composing is committed as typed. */
     fun connectionClosed() {
+        depth = 0
         compStart = -1
         compEnd = -1
         flush()
     }
 
-    /** A new connection starts: the keyboard knows of no composition, and the text it reads is already delivered. */
+    /** The replacement keyboard starts from the text already delivered to the terminal. */
     fun connectionOpened() {
+        depth = 0
         compStart = -1
         compEnd = -1
-        previous = value
+        if (value != previous) flush()
         owned = value.length
     }
 
@@ -242,7 +254,7 @@ class TerminalImeEditor(
         val s = selectionStart
         val e = selectionEnd
         val from = maxOf(0, s - before)
-        val to = minOf(value.length, e + after)
+        val to = e + minOf(value.length - e, after)
         value = value.substring(0, from) + value.substring(s, e) + value.substring(to)
         fun remap(p: Int) = when {
             p <= from -> p
@@ -261,9 +273,10 @@ class TerminalImeEditor(
         selEnd = from + (e - s)
     }
 
-    /** Called after every operation: outside a batch and while nothing is composing, the change is delivered. */
     private fun settle() {
-        if (depth > 0 || compStart >= 0) return
+        if (depth > 0) return
+        // SwiftKey reopens the last word on Backspace. A pure tail erase must show while it composes.
+        if (compStart >= 0 && !asciiTailErase(previous, value)) return
         if (!deliver()) return
         if (value.length > MAX_CONTEXT) resetAndResync()
     }
@@ -274,6 +287,7 @@ class TerminalImeEditor(
         val delta = ownedDelta(previous, value, owned)
         if (delta == null) { stage(); return false }
         previous = value
+        owned = minOf(owned, value.length)
         // Enter typed as text is a carriage return, sent as it is in every keyboard mode (#1043); a line break inside
         // longer text goes as typed, like xterm.js. Either way what came before the break is no longer editable.
         if (delta.isNotEmpty()) {
@@ -299,6 +313,7 @@ class TerminalImeEditor(
     }
 
     private fun clear() {
+        depth = 0
         value = ""
         previous = ""
         selStart = 0; selEnd = 0
@@ -311,6 +326,10 @@ class TerminalImeEditor(
         const val MAX_CONTEXT = 65536
         private const val ERASE = "\u007f"
 
+        private fun asciiTailErase(previous: String, value: String): Boolean =
+            value.length < previous.length && previous.startsWith(value) &&
+                (value.length until previous.length).all { previous[it] in ' '..'~' }
+
         /**
          * The remote edit that turns [previous] into [value], or null when it cannot be made safely. Erasing the end
          * of the editor is a Backspace press even over text that a key made unowned since it was typed. Anything
@@ -319,7 +338,7 @@ class TerminalImeEditor(
          * (the peer owns erase units; rolling back committed Unicode is never guessed).
          */
         internal fun ownedDelta(previous: String, value: String, owned: Int): String? {
-            if (value.length < previous.length && previous.startsWith(value) && previous.substring(value.length).all { it in ' '..'~' })
+            if (asciiTailErase(previous, value))
                 return ERASE.repeat(previous.length - value.length)
             if (value.take(owned) != previous.take(owned)) return null
             val old = previous.substring(minOf(owned, previous.length)).codePoints().toArray()
