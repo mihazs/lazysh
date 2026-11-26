@@ -233,6 +233,31 @@ fn letters_digits_numpad_and_function_keys_map_to_their_physical_keys() {
     }
 }
 
+#[test]
+fn named_key_uses_the_layout_action_with_a_remapped_physical_code() {
+    let mut rt = runtime(20, 4);
+    for (code, key, expected) in [
+        ("Escape", "Enter", &b"\r"[..]),
+        ("Enter", "Escape", &b"\x1b"[..]),
+    ] {
+        let input = KeyInput::from_dom(DomKey {
+            code,
+            key,
+            ..DomKey::default()
+        });
+        assert_eq!(rt.encode_key(&input).unwrap(), expected, "{code} → {key}");
+    }
+    assert_eq!(
+        KeyInput::from_dom(DomKey {
+            code: "NumpadEnter",
+            key: "Enter",
+            ..DomKey::default()
+        })
+        .key,
+        ffi::GhosttyKey_GHOSTTY_KEY_NUMPAD_ENTER,
+    );
+}
+
 /// Android IMEs report no usable `code`: typed characters arrive as text and Enter or Backspace as named
 /// keys; dead keys, `Process` and a bare modifier carry nothing the terminal can use.
 #[test]
