@@ -203,7 +203,8 @@ test('the native iOS app runs the Metal probe on the same simulator after instal
   const fixtureBuild = terminal.findIndex(step => step.id === 'ios-terminal-fixture');
   const acceptance = terminal.findIndex(step => step.name === 'Exercise the installed iOS terminal with owned SSH');
   expect(fixtureBuild).toBeGreaterThan(install);
-  expect(terminal[fixtureBuild].run).toContain('--example terminal_ssh_fixture');
+  expect(terminal[fixtureBuild].run).toContain('-p lazysh-terminal-ssh-fixture');
+  expect(terminal[acceptance].run).toContain('/terminal-fixture-target/debug/lazysh-terminal-ssh-fixture');
   expect(acceptance).toBeGreaterThan(fixtureBuild);
   expect(terminal[acceptance].if).toContain("steps.ios-terminal-fixture.outcome == 'success'");
   const sshCase = 'LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalAttachesAndHandsBackAnOwnedSshSession';
