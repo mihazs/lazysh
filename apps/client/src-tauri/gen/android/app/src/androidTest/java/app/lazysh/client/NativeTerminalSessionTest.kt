@@ -574,10 +574,15 @@ class NativeTerminalSessionTest {
                 const canvas = window.__lz.find(${quoted(xtermRowsSelector)})?.closest('.terminal-canvas');
                 const screen = canvas?.querySelector('.xterm-screen');
                 if (!screen) return false;
-                if ($rows < $initialRows) canvas.style.maxHeight = (canvas.getBoundingClientRect().height * $rows / $initialRows) + 'px';
+                const available = canvas.getBoundingClientRect();
+                const grid = screen.getBoundingClientRect();
+                if ($rows < $initialRows) {
+                    const cell = grid.height / $initialRows;
+                    canvas.style.maxHeight = (available.height - cell * ($initialRows - $rows)) + 'px';
+                }
                 if ($columns < $initialColumns) {
-                    const cell = screen.getBoundingClientRect().width / $initialColumns;
-                    canvas.style.maxWidth = (canvas.getBoundingClientRect().width - cell * ($initialColumns - $columns)) + 'px';
+                    const cell = grid.width / $initialColumns;
+                    canvas.style.maxWidth = (available.width - cell * ($initialColumns - $columns)) + 'px';
                 }
                 return true;
             })()""", "cap the xterm benchmark pane to ${columns}×$rows")
