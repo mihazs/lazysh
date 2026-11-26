@@ -8,13 +8,39 @@ use russh::{
 use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 
-const INPUT: &[u8] = b"LAZYSH_IOS_INPUT";
+const NATIVE_INPUT: &[u8] = b"LAZYSH_IOS_NATIVE";
+const XTERM_INPUT: &[u8] = b"LAZYSH_IOS_XTERM";
+
+#[derive(Clone, Copy, Default)]
+enum InputStage {
+    #[default]
+    Native,
+    Xterm,
+    Complete,
+}
+
+impl InputStage {
+    fn acknowledge(&mut self, line: &[u8]) -> Option<(&'static str, &'static [u8])> {
+        match (*self, line) {
+            (Self::Native, NATIVE_INPUT) => {
+                *self = Self::Xterm;
+                Some(("native", b"LAZYSH_IOS_ACK_NATIVE\r\n"))
+            }
+            (Self::Xterm, XTERM_INPUT) => {
+                *self = Self::Complete;
+                Some(("xterm", b"LAZYSH_IOS_ACK_XTERM\r\n"))
+            }
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Peer {
     password: Arc<str>,
     pty: Option<ChannelId>,
     line: Vec<u8>,
+    input: InputStage,
 }
 
 impl Server for Peer {
@@ -96,12 +122,14 @@ impl server::Handler for Peer {
         }
         for &byte in data {
             if matches!(byte, b'\r' | b'\n') {
-                if self.line == INPUT {
-                    println!("terminal fixture received exact input");
-                    session.data(channel, b"LAZYSH_IOS_ACK\r\n".to_vec())?;
+                if let Some((engine, acknowledgement)) = self.input.acknowledge(&self.line) {
+                    println!("terminal fixture received exact {engine} input");
+                    session.data(channel, acknowledgement.to_vec())?;
+                } else if matches!(self.line.as_slice(), NATIVE_INPUT | XTERM_INPUT) {
+                    println!("terminal fixture rejected repeated or out-of-order input");
                 }
                 self.line.clear();
-            } else if self.line.len() <= INPUT.len() {
+            } else if self.line.len() <= NATIVE_INPUT.len().max(XTERM_INPUT.len()) {
                 self.line.push(byte);
             }
         }
@@ -128,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         password: password.into(),
         pty: None,
         line: Vec::new(),
+        input: InputStage::default(),
     };
     println!("{} {fingerprint}", listener.local_addr()?.port());
     tokio::time::timeout(
@@ -136,4 +165,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await??;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InputStage, NATIVE_INPUT, XTERM_INPUT};
+
+    #[test]
+    fn acknowledges_each_engine_once_and_in_order_on_one_channel() {
+        let mut stage = InputStage::default();
+        assert_eq!(stage.acknowledge(XTERM_INPUT), None);
+        assert_eq!(
+            stage.acknowledge(NATIVE_INPUT).map(|(kind, _)| kind),
+            Some("native")
+        );
+        assert_eq!(stage.acknowledge(NATIVE_INPUT), None);
+        assert_eq!(
+            stage.acknowledge(XTERM_INPUT).map(|(kind, _)| kind),
+            Some("xterm")
+        );
+        assert_eq!(stage.acknowledge(XTERM_INPUT), None);
+        assert_eq!(InputStage::default().acknowledge(XTERM_INPUT), None);
+    }
 }
