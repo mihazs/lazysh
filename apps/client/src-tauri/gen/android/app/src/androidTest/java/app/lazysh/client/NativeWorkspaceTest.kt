@@ -750,6 +750,10 @@ class NativeWorkspaceTest {
         val keyEvents = requireNotNull(KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD).getEvents(text.toCharArray())) {
             "Native typing fixture contains characters without virtual keyboard events"
         }
+        // Keep the event log limited to generated transcript paths. Record no key or input text.
+        val trace = text.startsWith("/tmp/lazysh-android-ssh-") && text.contains("/recorded-conversations/")
+        val unhandledDown = mutableListOf<Int>()
+        var dispatchIndex = 0
         val started = System.nanoTime()
         val deadline = started + TimeUnit.SECONDS.toNanos(5)
         val timing = TypingTiming(started, deadline)
@@ -774,6 +778,20 @@ class NativeWorkspaceTest {
                 "document.activeElement === document.querySelector(${JSONObject.quote(selector)})", focusRemainingMillis)
             timing.focusReturned = System.nanoTime()
             assertEquals("DOM input focus changed while awaiting native typing for $selector", "true", stillFocused)
+            if (trace) {
+                val traceBudget = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
+                assertEquals("Recorded fixture event trace did not attach", "true", evaluate(scenario, """(() => {
+                    const target = document.activeElement;
+                    const controller = new AbortController(), events = [];
+                    window.__lazyshFixtureTypingTrace = {controller, events};
+                    for (const [index, type] of ['keydown','beforeinput','input','keyup'].entries()) {
+                      target.addEventListener(type, event => {
+                        if (events.length < 512) events.push(index + ':' + target.value.length + (event.isTrusted ? '+' : '-'));
+                      }, {signal: controller.signal});
+                    }
+                    return true;
+                })()""", traceBudget))
+            }
             assertTrue("Native typing readiness exhausted the shared budget for $selector", System.nanoTime() < deadline)
             // Espresso webKeys uses JS value assignment. React tracks that setter,
             // so its later synthetic change can be ignored. Inject native keys once
@@ -786,7 +804,11 @@ class NativeWorkspaceTest {
                 scenario.onActivity { activity ->
                     val target = requireNotNull(webView(activity.window.decorView))
                     assertTrue("Native WebView focus changed before typing", target.hasFocus())
-                    for (event in batch) target.dispatchKeyEvent(event)
+                    for (event in batch) {
+                        val handled = target.dispatchKeyEvent(event)
+                        if (trace && !handled && event.action == KeyEvent.ACTION_DOWN) unhandledDown.add(dispatchIndex)
+                        dispatchIndex++
+                    }
                 }
                 val remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
                 assertEquals("DOM input focus changed during native typing for $selector", "true", evaluate(scenario,
@@ -829,7 +851,18 @@ class NativeWorkspaceTest {
         } catch (failure: Throwable) {
             // Metadata must never replace the original assertion/type/cause.
             runCatching { failure.addSuppressed(AssertionError("Native typing timing: ${timing.report(System.nanoTime())}")) }
+            if (trace) runCatching {
+                val events = evaluate(scenario, "window.__lazyshFixtureTypingTrace?.events.join(' ') ?? ''", 1_000)
+                failure.addSuppressed(AssertionError("Recorded fixture typing trace: dispatched=$dispatchIndex, unhandledDown=$unhandledDown, events (keydown/beforeinput/input/keyup, length, trusted + or -)=$events"))
+            }
             throw failure
+        } finally {
+            if (trace) runCatching {
+                evaluate(scenario, """(() => {
+                    window.__lazyshFixtureTypingTrace?.controller.abort();
+                    delete window.__lazyshFixtureTypingTrace;
+                })()""", 1_000)
+            }
         }
     }
 
