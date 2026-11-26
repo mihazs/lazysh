@@ -898,10 +898,16 @@ export default function TerminalPane({ session, active, swiping = false, typingA
 
   const [systemReader, setSystemReader] = useState(false);
   useEffect(() => {
-    let current = true;
-    void systemScreenReader().then(enabled => { if (current) setSystemReader(enabled); });
-    return () => { current = false; };
-  }, [session.adapter]);
+    let disposed = false, changed = false;
+    // VoiceOver can turn on after the registry has selected a backend.
+    const listening = native && isIosApp() ? listen<boolean>('ios-voice-over-changed', ({payload}) => {
+      if (!disposed) { changed = true; setSystemReader(payload); }
+    }).catch(() => undefined) : Promise.resolve(undefined);
+    void listening.then(systemScreenReader).then(enabled => {
+      if (!disposed && !changed) setSystemReader(enabled);
+    });
+    return () => { disposed = true; void listening.then(unlisten => unlisten?.()); };
+  }, [native, session.adapter]);
   const screenReader = preferences.screenReader || systemReader;
 
   useEffect(() => {
@@ -909,21 +915,6 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     if (active) requestAnimationFrame(() => fit.current?.());
   }, [preferences, fonts, session, active, screenReader]);
 
-  // VoiceOver can turn on after the registry has selected a backend. Make the live rows accessible in place.
-  const [voiceOver, setVoiceOver] = useState(false);
-  useEffect(() => {
-    if (!native || !isIosApp()) return;
-    let disposed = false, changed = false;
-    const listening = listen<boolean>('ios-voice-over-changed', ({payload}) => {
-      if (!disposed) { changed = true; setVoiceOver(payload); }
-    }).catch(() => undefined);
-    void listening.then(systemScreenReader).then(value => {
-      if (!disposed && !changed) setVoiceOver(value);
-    });
-    return () => { disposed = true; void listening.then(unlisten => unlisten?.()); };
-  }, [native]);
-
-  const screenReader = preferences.screenReader || voiceOver;
   useEffect(() => {
     const element = container.current;
     if (!element || !screenReader || !needsScreenReaderMirror(session.adapter)) return;
