@@ -369,6 +369,7 @@ async function runNative(serial: string, softwareGpu: boolean, mode: 'idle' | 's
       ...(display ? ['-e', 'lazyshStreamDisplayColor', String(rgbValue(streamDisplayColor))] : []),
       ...(mode === 'commit' || (mode === 'flood' && display) ? ['-e', 'lazyshShowBenchmarkKeyboard', 'true'] : []),
       '-e', 'lazyshBenchmarkRows', process.env.LAZYSH_BENCH_ROWS ?? '0',
+      '-e', 'lazyshBenchmarkColumns', process.env.LAZYSH_BENCH_COLUMNS ?? '0',
       ...(backgroundSessions ? ['-e', 'lazyshBackgroundSessions', String(backgroundSessions)] : []),
     ]), { stdout: 'pipe', stderr: 'inherit' });
     const deadline = setTimeout(() => tester.kill(), mode === 'memory' || backgroundSessions || ((mode === 'shell' || mode === 'flood') && display) ? 600_000 : 360_000);
@@ -454,6 +455,10 @@ if (import.meta.main) {
   if (process.env.LAZYSH_BENCH_ROWS !== undefined
     && ((mode !== 'commit' && !(mode === 'flood' && display) && !(xterm && (mode === 'streams' || mode === 'shell'))) || !/^[1-9][0-9]{0,2}$/.test(process.env.LAZYSH_BENCH_ROWS))) {
     throw new Error('LAZYSH_BENCH_ROWS requires --check-commit, --xterm-streams, --xterm-shell or a flood display run and a positive row count');
+  }
+  const columns = process.env.LAZYSH_BENCH_COLUMNS;
+  if (columns !== undefined && (!xterm || !['streams', 'shell', 'flood'].includes(mode) || !/^(?:[2-9][0-9]|1[0-9]{2}|200)$/.test(columns))) {
+    throw new Error('LAZYSH_BENCH_COLUMNS must be 20–200 and requires a packaged xterm stream, shell or flood run');
   }
   const startedAt = new Date().toISOString();
   const environment = guestEnvironment(adbFor(serial), serial, packageName);
