@@ -2820,10 +2820,10 @@ mod tests {
     /// with `--nocapture` to see the measured resident set.
     #[cfg(all(target_os = "linux", native_terminal_core))]
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)] // the guard only keeps other tests' renderer replacements away
+    #[allow(clippy::await_holding_lock)] // the guard keeps other tests' cores out of the global budget
     async fn a_hundred_terminals_open_and_close_without_growing_the_process_or_the_budget() {
         use crate::terminal_core;
-        let _kept = terminal_core::tests_keeping_cores().read();
+        let _exclusive = terminal_core::tests_keeping_cores().write().unwrap();
         fn resident_kib() -> usize {
             let statm = std::fs::read_to_string("/proc/self/statm").unwrap();
             statm
