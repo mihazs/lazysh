@@ -10,6 +10,45 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.102.0] - 2026-11-26
+
+### New
+
+- **usage:** enable agent background quota collection by default ([#2533](https://github.com/mihazs/lazysh/pull/2533))
+- **agents:** show the current Claude Code and Codex goals in Agent View ([#2549](https://github.com/mihazs/lazysh/pull/2549))
+- **terminal:** apply cursor style and blink from the first native frame ([#2527](https://github.com/mihazs/lazysh/pull/2527))
+- **terminal:** add an opt-in Direct3D 12 terminal surface on Windows ([#2650](https://github.com/mihazs/lazysh/pull/2650))
+- **terminal:** host native terminal rendering in feature-enabled macOS builds ([#2647](https://github.com/mihazs/lazysh/pull/2647))
+
+### Fixed
+
+- **bench:** measure Android xterm streams through the final render ([#2600](https://github.com/mihazs/lazysh/pull/2600))
+- **android:** clear native terminal input after Enter and avoid duplicate preedit text ([#2649](https://github.com/mihazs/lazysh/pull/2649))
+- **android:** hide the native terminal keyboard when scrolling down to the live screen ([#2563](https://github.com/mihazs/lazysh/pull/2563))
+- **bench:** read Android refresh rate from the active display mode ([#2631](https://github.com/mihazs/lazysh/pull/2631))
+- **bench:** exclude interrupted Android counter windows from engine comparisons ([#2586](https://github.com/mihazs/lazysh/pull/2586))
+- **terminal:** keep composer actions visible on compact phones ([#2646](https://github.com/mihazs/lazysh/pull/2646))
+- **ci:** run Android native tmux acceptance with its SSH fixture ([#2684](https://github.com/mihazs/lazysh/pull/2684))
+- **android:** keep native terminal keyboard edits on the active input connection ([#2655](https://github.com/mihazs/lazysh/pull/2655))
+- **agent:** read complete browser relay command records ([#2591](https://github.com/mihazs/lazysh/pull/2591))
+
+### Documentation
+
+- **readme:** add a 40-second walk-through of the app with zoom transitions to the top of the README ([#2513](https://github.com/mihazs/lazysh/pull/2513))
+
+### Under the hood
+
+- **android:** allow WebView rounding in keyboard viewport checks ([#2645](https://github.com/mihazs/lazysh/pull/2645))
+- **android:** verify native SSH output, input and multi-session lifecycle on the emulator ([#2609](https://github.com/mihazs/lazysh/pull/2609))
+- **android:** verify native terminal Unicode glyphs stay in their cells ([#2507](https://github.com/mihazs/lazysh/pull/2507))
+- **terminal:** isolate the native scrollback budget checks ([#2658](https://github.com/mihazs/lazysh/pull/2658))
+- **terminal:** verify Android returns new sessions to xterm.js with the native engine disabled ([#2641](https://github.com/mihazs/lazysh/pull/2641))
+- **android:** verify the native tmux viewport after clipboard consent ([#2684](https://github.com/mihazs/lazysh/pull/2684))
+- **desktop:** make the singleton directory smoke test submit the correct shell command ([#2640](https://github.com/mihazs/lazysh/pull/2640))
+- **terminal:** verify the Linux native-engine kill switch in the app ([#2648](https://github.com/mihazs/lazysh/pull/2648))
+- **android:** verify rmux SSH fixtures alongside tmux ([#2577](https://github.com/mihazs/lazysh/pull/2577))
+- **android:** verify the return from system notification settings ([#2642](https://github.com/mihazs/lazysh/pull/2642))
+
 ## [1.101.5] - 2026-11-25
 
 ### Fixed

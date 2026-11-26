@@ -1,5 +1,109 @@
 # @lazysh/client
 
+## 1.102.0
+
+### Minor Changes
+
+- feat(usage): enable agent background quota collection by default ([#2533](https://github.com/mihazs/lazysh/pull/2533))
+
+  <details><summary>Details</summary>
+
+  Managed companion setup provisions a supported user timer. Hosts can still disable collection or forbid provider quota reads.
+
+  </details>
+- feat(agents): show the current Claude Code and Codex goals in Agent View ([#2549](https://github.com/mihazs/lazysh/pull/2549))
+
+  <details><summary>Details</summary>
+
+  The goal and status follow the live session while reading its conversation. Codex also reports its recorded budget and elapsed time.
+
+  </details>
+
+### Patch Changes
+
+- feat(terminal): apply cursor style and blink from the first native frame ([#2527](https://github.com/mihazs/lazysh/pull/2527))
+
+  <details><summary>Details</summary>
+
+  Native sessions keep a program-selected cursor until the program resets it.
+
+  </details>
+- test(android): allow WebView rounding in keyboard viewport checks ([#2645](https://github.com/mihazs/lazysh/pull/2645))
+
+  <details><summary>Details</summary>
+
+  The instrumented check accepts numeric jitter at a visible edge and still rejects actual clipping.
+
+  </details>
+- feat(terminal): add an opt-in Direct3D 12 terminal surface on Windows ([#2650](https://github.com/mihazs/lazysh/pull/2650))
+- docs(readme): add a 40-second walk-through of the app with zoom transitions to the top of the README ([#2513](https://github.com/mihazs/lazysh/pull/2513))
+- test(android): verify native SSH output, input and multi-session lifecycle on the emulator ([#2609](https://github.com/mihazs/lazysh/pull/2609))
+- test(android): verify native terminal Unicode glyphs stay in their cells ([#2507](https://github.com/mihazs/lazysh/pull/2507))
+- test(terminal): isolate the native scrollback budget checks ([#2658](https://github.com/mihazs/lazysh/pull/2658))
+
+  <details><summary>Details</summary>
+
+  The renderer notification test releases its core, and the budget checks count only their own terminal sessions.
+
+  </details>
+- test(terminal): verify Android returns new sessions to xterm.js with the native engine disabled ([#2641](https://github.com/mihazs/lazysh/pull/2641))
+- test(android): verify the native tmux viewport after clipboard consent ([#2684](https://github.com/mihazs/lazysh/pull/2684))
+- fix(bench): measure Android xterm streams through the final render ([#2600](https://github.com/mihazs/lazysh/pull/2600))
+- feat(terminal): host native terminal rendering in feature-enabled macOS builds ([#2647](https://github.com/mihazs/lazysh/pull/2647))
+
+  <details><summary>Details</summary>
+
+  The macOS app can attach a Metal renderer beneath WKWebView. Platform acceptance will verify live composition and input before any default change.
+
+  </details>
+- fix(android): clear native terminal input after Enter and avoid duplicate preedit text ([#2649](https://github.com/mihazs/lazysh/pull/2649))
+- fix(android): hide the native terminal keyboard when scrolling down to the live screen ([#2563](https://github.com/mihazs/lazysh/pull/2563))
+- test(desktop): make the singleton directory smoke test submit the correct shell command ([#2640](https://github.com/mihazs/lazysh/pull/2640))
+- fix(bench): read Android refresh rate from the active display mode ([#2631](https://github.com/mihazs/lazysh/pull/2631))
+- fix(bench): exclude interrupted Android counter windows from engine comparisons ([#2586](https://github.com/mihazs/lazysh/pull/2586))
+
+  <details><summary>Details</summary>
+
+  Guest CPU, idle and frame counters are omitted when a counted process exits during the window. Independent throughput and latency samples remain available.
+
+  </details>
+- fix(terminal): keep composer actions visible on compact phones ([#2646](https://github.com/mihazs/lazysh/pull/2646))
+
+  <details><summary>Details</summary>
+
+  The terminal composer wraps its actions when they cannot fit on one row, keeping Send, Insert, and attachment controls inside the screen while the software keyboard is open.
+
+  </details>
+- test(terminal): verify the Linux native-engine kill switch in the app ([#2648](https://github.com/mihazs/lazysh/pull/2648))
+
+  <details><summary>Details</summary>
+
+  The release-profile GUI acceptance case checks that the build-time switch disables Native and a real local terminal still uses xterm.js.
+
+  </details>
+- test(android): verify rmux SSH fixtures alongside tmux ([#2577](https://github.com/mihazs/lazysh/pull/2577))
+
+  <details><summary>Details</summary>
+
+  Run the owned Android tmux job's host cases against the pinned rmux 0.10.0 release as well as tmux: the owned fixture serves a two-window rmux session, and the SSH detach and reattach, the control-client teardown through the server and the stalled-client retirement are checked for both. The job installs the checksum-verified rmux release for them.
+
+  </details>
+- test(android): verify the return from system notification settings ([#2642](https://github.com/mihazs/lazysh/pull/2642))
+
+  <details><summary>Details</summary>
+
+  Android SSH acceptance checks that Back closes system settings, returns to Preferences, and leaves the existing SSH session usable.
+
+  </details>
+- fix(ci): run Android native tmux acceptance with its SSH fixture ([#2684](https://github.com/mihazs/lazysh/pull/2684))
+- fix(android): keep native terminal keyboard edits on the active input connection ([#2655](https://github.com/mihazs/lazysh/pull/2655))
+
+  <details><summary>Details</summary>
+
+  Keep the keyboard's text snapshot in sync after a batch, reject edits from retired connections, and apply Android's explicit text corrections to the native terminal editor. Backspace stays visible when SwiftKey reopens the last word for composition.
+
+  </details>
+
 ## 1.101.5
 
 ### Patch Changes
