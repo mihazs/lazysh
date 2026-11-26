@@ -148,8 +148,8 @@ jobs:
           path: ${{ env.CARGO_TARGET_DIR }}/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 7
-      - name: Verify xterm.js in the installed kill-switch build
-        if: github.event_name == 'workflow_dispatch' && inputs.installer_engine == 'off'
+      - name: Verify xterm.js fallback in the installed build
+        if: github.event_name == 'workflow_dispatch' && inputs.installer_engine != 'skip'
         uses: ./.github/actions/windows-installed-gui
         env:
-          LAZYSH_NATIVE_TERMINAL: 'off'
+          LAZYSH_NATIVE_TERMINAL: ${{ inputs.installer_engine }}

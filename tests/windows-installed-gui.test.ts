@@ -22,7 +22,7 @@ test('Windows installer dispatches only build the requested profile', async () =
     ['pull_request', undefined, true, false, false],
     ['push', undefined, true, false, false],
     ['workflow_dispatch', 'skip', true, false, false],
-    ['workflow_dispatch', 'on', false, true, false],
+    ['workflow_dispatch', 'on', false, true, true],
     ['workflow_dispatch', 'off', false, true, true],
   ] as const) {
     const context = { github: { event_name }, inputs: { installer_engine } };
@@ -33,7 +33,7 @@ test('Windows installer dispatches only build the requested profile', async () =
     const build = steps.find(({ step }) => step.name === 'Build and verify the unsigned native terminal test installer');
     expect(Boolean(build)).toBe(installer);
     if (installer) expect(build?.step.run).toContain('await verifyWindowsTerminalEngine(binary, process.env.LAZYSH_NATIVE_TERMINAL)');
-    expect(names.includes('Verify xterm.js in the installed kill-switch build')).toBe(gui);
+    expect(names.includes('Verify xterm.js fallback in the installed build')).toBe(gui);
   }
 });
 
@@ -363,7 +363,8 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
   try {
     await withInstalledGui('singleton-dir', async ({ browser, app, secondary, connections, owned }) => {
       await until('application shell', () => browser.find('button.about-button'));
-      if (process.env.LAZYSH_NATIVE_TERMINAL === 'off') {
+      const engineBuild = process.env.LAZYSH_NATIVE_TERMINAL;
+      if (engineBuild === 'off' || engineBuild === 'on') {
         await browser.script(`
           localStorage.setItem('lazysh.preferences.v1', JSON.stringify({version: 1, terminalEngine: 'native'}));
           localStorage.setItem('lazysh.terminal.backend', 'native');
@@ -376,7 +377,10 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
           browser.find(".//button[normalize-space()='Preferences']", menu, 'xpath')));
         await browser.click(await until('Terminal and accessibility settings', () => browser.find('button[data-settings-target="terminal"]')));
         const reason = await until('disabled native engine reason', () => browser.find('#terminal-engine-native-off'));
-        expect(await browser.text(reason)).toContain('disabled in this build');
+        const refusal = await browser.text(reason);
+        if (engineBuild === 'off') expect(refusal).toContain('disabled in this build');
+        else expect(refusal).toMatch(/no hardware GPU, only a software rasterizer|no adapter the policy accepts could create a device/);
+        console.info(`Windows installed terminal rollback (${engineBuild}): ${refusal}`);
         const native = await until('Native engine radio', () => browser.find('input[name="terminal-engine"][value="native"]'));
         expect(await browser.property(native, 'checked')).toBe(true);
         expect(await browser.property(native, 'disabled')).toBe(true);
