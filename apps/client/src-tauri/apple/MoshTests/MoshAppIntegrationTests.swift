@@ -60,6 +60,34 @@ final class MoshAppIntegrationTests: XCTestCase {
     wait(for: [replied], timeout: 15)
   }
 
+  func testNativeTerminalBuildAdmitsTheMetalRenderer() throws {
+    let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+      guard let view = self.appWebView(), let url = view.url else { return false }
+      return url.scheme != "about" && !view.isLoading
+    }, object: nil)
+    XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 30), .completed)
+    let view = try XCTUnwrap(appWebView())
+    let replied = expectation(description: "Native terminal probe")
+    view.callAsyncJavaScript("""
+      const invoke = window.__TAURI_INTERNALS__.invoke;
+      const core = await invoke('terminal_core_available');
+      const probe = await invoke('native_terminal_probe');
+      return {core: core.available, admitted: probe.available, backend: probe.adapter?.backend ?? '', reason: probe.reason};
+      """, arguments: [:], in: nil, in: .page) { result in
+        defer { replied.fulfill() }
+        switch result {
+        case .success(let response):
+          let verdict = response as? [String: Any]
+          XCTAssertEqual(verdict?["core"] as? Bool, true)
+          XCTAssertEqual(verdict?["admitted"] as? Bool, true, verdict?["reason"] as? String ?? "Missing probe reply")
+          XCTAssertEqual(verdict?["backend"] as? String, "Metal")
+        case .failure(let error):
+          XCTFail("Native terminal capability IPC failed: \(error)")
+        }
+      }
+    wait(for: [replied], timeout: 15)
+  }
+
   private func resumeVisibility(_ view: WKWebView) -> String {
     // Traverse only native siblings, never the WKWebView or its accessibility contents.
     let allowed = [
