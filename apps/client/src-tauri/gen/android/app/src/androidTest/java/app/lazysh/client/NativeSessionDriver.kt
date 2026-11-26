@@ -131,11 +131,11 @@ internal class NativeSessionDriver {
         revealHosts()
         click("button[aria-label='Add host']")
         set("input[placeholder='Home workstation']", hostName)
-        set("input[placeholder='workstation.local']", "127.0.0.1")
+        val mosh = fixture.optBoolean("mosh", false)
+        set("input[placeholder='workstation.local']", if (mosh) "10.0.2.2" else "127.0.0.1")
         set("input[placeholder='Your SSH username']", fixture.getString("username"))
         set(".port-field input", fixture.getInt("port").toString())
-        // The default transport is Auto, which would try Mosh first; this case is about the native engine on the SSH route.
-        set("[role=dialog] select:has(option[value='ssh'])", "ssh")
+        set("[role=dialog] select:has(option[value='ssh'])", if (mosh) "mosh" else "ssh")
         click("button", "Save host")
         savingHost = true
         connectSavedHost(trustNewKey = true, ready = ready)
