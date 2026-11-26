@@ -2,6 +2,7 @@ package app.lazysh.client
 
 import android.text.InputType
 import android.view.KeyEvent
+import android.view.inputmethod.CorrectionInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -93,6 +94,20 @@ class NativeTerminalInputTest {
                 "text:\u007f\u007f\u007fan ", "text:\u007f", "text:web "),
             delivered,
         )
+    }
+
+    @Test fun swiftKeySpaceDoesNotReplaceTheTypedShellWord() = onMain {
+        val connection = connect(TerminalInputView(instrumentation.targetContext, sink))
+        connection.commitText("echo qwe", 1)
+        connection.beginBatchEdit()
+        connection.setComposingRegion(5, 8)
+        connection.commitCorrection(CorrectionInfo(5, "qwe", "awe"))
+        connection.commitText("awe", 1)
+        connection.commitText(" ", 1)
+        connection.endBatchEdit()
+
+        assertEquals("echo qwe ", connection.getTextBeforeCursor(32, 0).toString())
+        assertEquals(listOf("text:echo qwe", "text: "), delivered)
     }
 
     @Test fun theFrameworkReadsTheSameTextThroughGetSurroundingText() = onMain {
