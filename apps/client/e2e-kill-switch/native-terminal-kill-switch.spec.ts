@@ -19,7 +19,18 @@ for(const [name,ask,recorded] of asks)test(`a new session runs xterm.js in a bui
     if(preference)localStorage.setItem('lazysh.preferences.v1',JSON.stringify({version:1,terminalEngine:preference}));
     if(override)localStorage.setItem('lazysh.terminal.backend',override);
   },ask);
+  if (ask.preference === 'native' && !ask.override) await page.setViewportSize({width: 1028, height: 749});
   await page.goto('/');
+  if (ask.preference === 'native' && !ask.override) {
+    await page.locator('button.workspace-tools-trigger').click();
+    await page.locator('#workspace-tools-page-application').getByRole('button', {name: 'Preferences', exact: true}).click();
+    await page.getByRole('button', {name: 'Terminal and accessibility', exact: true}).click();
+    await expect(page.locator('#terminal-engine-native-off')).toContainText('disabled in this build');
+    const native = page.getByRole('radio', {name: 'Native', exact: true});
+    await expect(native).toBeChecked();
+    await expect(native).toBeDisabled();
+    await page.getByRole('button', {name: 'Close Preferences', exact: true}).click();
+  }
   await connectLocalTerminal(page);
   const {backend,selection}=await onEngine(page);
   expect(backend).toBe('xterm');
