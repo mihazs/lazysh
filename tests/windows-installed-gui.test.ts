@@ -27,10 +27,12 @@ test('Windows installer dispatches only build the requested profile', async () =
   ] as const) {
     const context = { github: { event_name }, inputs: { installer_engine } };
     expect(evaluate(job['timeout-minutes'], context)).toBe(installer ? 90 : 60);
-    const names = (await executedSteps(job.steps, context))
-      .map(({ step }) => step.name);
+    const steps = await executedSteps(job.steps, context);
+    const names = steps.map(({ step }) => step.name);
     expect(names.includes('Build the native-enabled app and run the Windows anchor test')).toBe(anchor);
-    expect(names.includes('Build and verify the unsigned native terminal test installer')).toBe(installer);
+    const build = steps.find(({ step }) => step.name === 'Build and verify the unsigned native terminal test installer');
+    expect(Boolean(build)).toBe(installer);
+    if (installer) expect(build?.step.run).toContain('await verifyWindowsTerminalEngine(binary, process.env.LAZYSH_NATIVE_TERMINAL)');
     expect(names.includes('Verify xterm.js in the installed kill-switch build')).toBe(gui);
   }
 });
