@@ -1,5 +1,8 @@
 import {expect,type Page,type BrowserContext} from '@playwright/test';
 import {test} from './fixtures/terminalBackend';
+import {requestedBackend} from '../src/e2eTerminalBackend';
+import {mountNativeSurface,nativeInput} from './fixtures/nativeSurfacePage';
+import {onAdapter} from './fixtures/terminalState';
 import type {mountTerminalImeHarness} from './fixtures/TerminalImeHarness';
 declare global {interface Window {ownedIme:ReturnType<typeof mountTerminalImeHarness>}}
 
@@ -10,11 +13,21 @@ async function commitNativeComposition(page:Page,context:BrowserContext,text:str
   await cdp.detach();
 }
 
-test.use({userAgent:'Mozilla/5.0 (Linux; Android 14; Owned IME fixture) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'});
-test.beforeEach(async({page})=>{
+const native=requestedBackend()==='native';
+test.use({syntheticBackend:true,userAgent:native?undefined:'Mozilla/5.0 (Linux; Android 14; Owned IME fixture) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'});
+test.beforeEach(async({page},info)=>{
+  const nativeOnly=info.tags.includes('@native-ime');
+  test.skip(nativeOnly&&!native,'Runs against the native DOM editor.');
+  if(native){
+    test.skip(!nativeOnly&&!info.tags.includes('@shared-ime'),'Exercises the xterm input observer or Android WebView trace.');
+    await mountNativeSurface(page,'native');
+    await onAdapter(page,adapter=>adapter.focus());
+    return;
+  }
   await page.goto('/');
   await page.evaluate(async()=>{const fixture=await import('/e2e/fixtures/TerminalImeHarness.ts');window.ownedIme=fixture.mountTerminalImeHarness();});
 });
+test.afterEach(async({page})=>{await page.evaluate(()=>{if(window.nativeSurface)window.nativeSurface.dispose();});});
 
 test('read-only IME idle admission rejects empty composing and deferred completion without flushing',async({page})=>{
   expect(await page.evaluate(()=>{
@@ -47,9 +60,9 @@ test('read-only IME idle admission rejects pending empty fallback and unsupporte
   })).toEqual({idle:false,writes:[]});
 });
 
-for(const text of ['你好','👩🏽‍💻'])test(`ordinary IME completion preserves repeated ${text} transactions`,async({page})=>{
-  const writes=await page.evaluate(async text=>{
-    const area=window.ownedIme.textarea;
+for(const text of ['你好','👩🏽‍💻'])test(`ordinary IME completion preserves repeated ${text} transactions`,{tag:'@shared-ime'},async({page})=>{
+  const writes=await page.evaluate(async({text,native})=>{
+    const area=native?window.nativeSurface.session.adapter.inputElement()!:window.ownedIme.textarea;
     for(let transaction=0;transaction<2;transaction++){
       const prefix=area.value;
       area.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,composed:true}));
@@ -59,15 +72,34 @@ for(const text of ['你好','👩🏽‍💻'])test(`ordinary IME completion pre
       area.dispatchEvent(new CompositionEvent('compositionend',{data:text,bubbles:true,composed:true}));
       await new Promise(resolve=>setTimeout(resolve,10));
     }
-    return window.ownedIme.writes;
-  },text);
+    return native?window.nativeSurface.core!.inputs.map(input=>input.data):window.ownedIme.writes;
+  },{text,native});
   expect(writes).toEqual([text,text]);
 });
 
-test('hardware input preserves identical consecutive commands',async({page})=>{
+test('hardware input preserves identical consecutive commands',{tag:'@shared-ime'},async({page})=>{
   await page.keyboard.type('owned');await page.keyboard.press('Enter');
   await page.keyboard.type('owned');await page.keyboard.press('Enter');
-  expect(await page.evaluate(()=>window.ownedIme.writes.join(''))).toBe('owned\rowned\r');
+  await expect.poll(()=>page.evaluate(native=>native
+    ?window.nativeSurface.core!.keys.filter(key=>!key.release).map(({key})=>key==='Enter'?'\r':key).join('')
+    :window.ownedIme.writes.join(''),native)).toBe('owned\rowned\r');
+});
+
+test('native composition canceled by blur cannot reappear when focus returns',{tag:'@native-ime'},async({page,context})=>{
+  await page.evaluate(async()=>{
+    const adapter=window.nativeSurface.session.adapter,area=adapter.inputElement()!;
+    area.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));
+    area.value='retired preedit';
+    adapter.blur();
+    adapter.focus();
+    // The old input method completes after a focus round trip.
+    area.value='retired preedit';
+    area.dispatchEvent(new CompositionEvent('compositionend',{data:area.value,bubbles:true}));
+    await new Promise(resolve=>setTimeout(resolve,20));
+  });
+  await commitNativeComposition(page,context,'fresh input');
+  await page.keyboard.press('Enter');
+  await expect.poll(()=>nativeInput(page)).toEqual({text:['fresh input'],keys:['Enter'],editor:''});
 });
 
 test('Android key229 autocorrection replaces the synthetic active word once',async({page})=>{

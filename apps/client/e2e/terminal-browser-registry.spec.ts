@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {expect} from '@playwright/test';
 import {requestedBackend} from '../src/e2eTerminalBackend';
-import {mountNativeSurface} from './fixtures/nativeSurfacePage';
+import {mountNativeSurface,nativeInput} from './fixtures/nativeSurfacePage';
 import {test} from './fixtures/terminalBackend';
 import {onAdapter,screenText,terminalCell} from './fixtures/terminalState';
 import {longPress} from './fixtures/terminalHistory';
@@ -30,10 +30,7 @@ for(const text of ['你好','👩🏽‍💻'])test(`native composition and Ente
       await keyboard.send('Input.imeSetComposition',{text,selectionStart:text.length,selectionEnd:text.length});
       await keyboard.send('Input.insertText',{text});
       await page.keyboard.press('Enter');
-      await expect.poll(()=>page.evaluate(()=>{
-        const {core,session}=window.nativeSurface;
-        return {text:core!.inputs.map(input=>input.data),keys:core!.keys.filter(input=>!input.release).map(input=>input.key),editor:session.adapter.inputElement()?.value};
-      })).toEqual({text:Array(count).fill(text),keys:Array(count).fill('Enter'),editor:''});
+      await expect.poll(()=>nativeInput(page)).toEqual({text:Array(count).fill(text),keys:Array(count).fill('Enter'),editor:''});
     }
   } finally {
     await keyboard.detach();

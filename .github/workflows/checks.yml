@@ -154,7 +154,7 @@ jobs:
         run: bunx moon run client:test-e2e
         env:
           LAZYSH_E2E_TERMINAL_BACKEND: xterm
-      # The native arm uses the synthetic browser registry for its dedicated cases, Herdr taps, selection and the App Mosh case.
+      # The native arm uses the synthetic browser registry for its dedicated cases, Herdr taps, selection, App Mosh and native DOM IME.
       # The clipboard spec uses the real core in herdr-native. The other legacy fixtures report refusal (#2123).
       - if: steps.e2e.outputs.client == 'true'
         run: bun run test:e2e:terminal
