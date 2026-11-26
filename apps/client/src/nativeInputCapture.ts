@@ -52,6 +52,7 @@ export class NativeInputCapture implements Disposable {
     anchor.append(element);
     for (const [name, listener] of this.listeners) element.addEventListener(name, listener as EventListener);
     anchor.addEventListener('pointerup', this.pointerup);
+    anchor.addEventListener('mousedown', this.mouseDown);
     this.cursor = adapter.subscribe(() => { if (this.composing) this.place(); }, ['output', 'viewport', 'geometry']);
   }
 
@@ -62,6 +63,7 @@ export class NativeInputCapture implements Disposable {
     clearTimeout(this.settling);
     this.cursor.dispose();
     this.anchor.removeEventListener('pointerup', this.pointerup);
+    this.anchor.removeEventListener('mousedown', this.mouseDown);
     this.element.remove(); this.mounted.restore();
   }
 
@@ -127,6 +129,11 @@ export class NativeInputCapture implements Disposable {
   };
 
   /** A mouse click gives the terminal focus; a finger's tap is the pane's gesture (it may open the soft keyboard). */
+  // The compatibility mouse event after a touch would blur the editor that the tap just focused.
+  private readonly mouseDown = (event: MouseEvent) => {
+    if (document.activeElement === this.element) event.preventDefault();
+  };
+
   private readonly pointerup = (event: PointerEvent) => { if (event.pointerType === 'mouse' && event.button === 0) this.focus(); };
 
   private readonly listeners = [
