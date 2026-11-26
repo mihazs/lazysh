@@ -128,27 +128,37 @@ export function compareRecords(records: EvidenceRecord[]): Verdict {
   const host = (adapter: string) => arm(adapter)?.host;
   const rows = native ? baselines.flatMap(b => rowsAgainst(b, native, measurements, arm(b), arm(native))) : [];
   for (const b of baselines) if (native && host(b) !== host(native)) caveats.push(`${b} ran in "${host(b)}" and ${native} in "${host(native)}": absolute PSS is not compared, only growth over one session.`);
+  const missing: string[] = [];
+  const missingKeys = new Set<string>();
+  for (const baseline of native ? baselines : []) {
+    const sameHost = host(baseline) === host(native);
+    const needs: typeof requiredMetrics = sameHost
+      ? [...requiredMetrics, ['W9', 'sessions-5', 'pssMiB'], ['W9', 'sessions-10', 'pssMiB']]
+      : requiredMetrics;
+    for (const [workload, variant, metric] of needs) {
+      if (rows.some(row => row.baseline === baseline && row.workload === workload && row.variant === variant && row.metric === metric)) continue;
+      missing.push(`${baseline}: missing paired ${workload}${variant ? ` ${variant}` : ''} ${metric}`);
+      if (METRICS[metric].key) missingKeys.add(baseline);
+    }
+  }
+  caveats.push(...missing);
   const wrong = native ? measurements.filter(m => m.correct === false) : [];
   const targets: Target[] = [{
     id: 'no-correctness-regression', gate: 'G14', statement: 'No correctness regression: every workload of every arm ends on the screen it expects.',
     outcome: !native ? 'not measured' : wrong.length ? 'not met' : 'met', evidence: wrong.map(m => `${m.adapter} ${m.workload}${m.variant ? ` ${m.variant}` : ''}: ended on a different screen`),
   }];
   for (const { id, gate, statement, check } of CHECKS) {
-    const per = baselines.map(b => ({ b, ...check(rows.filter(row => row.baseline === b)) }));
+    const per = baselines.map(b => {
+      const result = check(rows.filter(row => row.baseline === b));
+      return id === 'key-improvement' && result.outcome === 'not met' && missingKeys.has(b)
+        ? { ...result, outcome: 'not measured' as const } : result;
+    });
     targets.push({
       id, gate, statement, evidence: per.flatMap(r => r.evidence),
       outcome: per.some(r => r.outcome === 'not met') ? 'not met' : !native || per.length === 0 || per.some(r => r.outcome === 'not measured') ? 'not measured' : 'met',
     });
   }
-  // A loss is known even when something else is missing; a missing native arm or measurement is never reported as a pass.
-  const missing: string[] = [];
-  for (const baseline of native ? baselines : []) {
-    for (const [workload, variant, metric] of requiredMetrics) {
-      if (!rows.some(row => row.baseline === baseline && row.workload === workload && row.variant === variant && row.metric === metric))
-        missing.push(`${baseline}: missing paired ${workload}${variant ? ` ${variant}` : ''} ${metric}`);
-    }
-  }
-  caveats.push(...missing);
+  // A measured regression still fails when other comparisons are missing.
   const status = targets.some(t => t.outcome === 'not met') ? 'targets not met' : missing.length === 0 && targets.every(t => t.outcome === 'met') ? 'targets met' : 'incomplete';
   return { runId, device, native, baselines, status, targets, rows, caveats };
 }

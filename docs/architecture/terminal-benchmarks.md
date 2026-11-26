@@ -662,6 +662,8 @@ A passing verdict requires paired decision metrics for every workload and varian
 
 **The rules** (`apps/client/bench/androidCompare.ts`, `RULES`). A difference between native and an xterm.js arm is noise when it is smaller than 10 % or than the run-to-run spread of either number, whichever is larger; beyond that it is a win or a regression. Each target is judged against every xterm.js arm in the run, and is met only if it is met against all of them.
 
+For engines running in the same host app, a pass also requires paired absolute PSS at five and ten sessions. If a required key latency or CPU metric is missing, the key-improvement target stays unmeasured unless another key metric already meets it.
+
 | Target (PRD) | Met when |
 | --- | --- |
 | No correctness regression | every workload of every arm ends on its expected screen |

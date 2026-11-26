@@ -44,6 +44,7 @@ const tie: Spec[] = [
   ...['sessions-5', 'sessions-10'].flatMap(variant => [
     { workload: 'W9', variant, metric: 'inputLatencyMs' as const, values: [30, 30, 30], p95: 60 },
     { workload: 'W9', variant, metric: 'jankyFramePercent' as const, values: [1, 1, 1] },
+    { workload: 'W9', variant, metric: 'pssMiB' as const, values: [300, 300, 300] },
   ]),
   { workload: 'W9', variant: 'churn', metric: 'pssChurnDriftMiB', values: [1] },
 ];
@@ -154,6 +155,21 @@ describe('what the comparison refuses to say', () => {
     expect(verdict.status).toBe('incomplete');
     expect(exitCode(verdict)).toBe(3);
     expect(new Set(verdict.targets.map(t => t.outcome))).toEqual(new Set(['not measured']));
+  });
+
+  it('requires absolute PSS for a shared host but allows growth alone across host apps', () => {
+    const faster = { metric: 'inputLatencyMs' as const, variant: 'keys-idle', values: [6, 6, 6], p95: 12 };
+    const natives = tie.filter(spec => spec.metric !== 'pssMiB');
+    const same = run([faster], { natives });
+    expect(same.status).toBe('incomplete');
+    expect(same.caveats).toContain('xterm-dom: missing paired W9 sessions-10 pssMiB');
+    expect(run([faster], { natives, hosts: ['shell A', 'shell B'] }).status).toBe('targets met');
+  });
+
+  it('keeps the improvement target undecided if an unmeasured key metric could still meet it', () => {
+    const verdict = run([], { natives: tie.filter(spec => spec.workload !== 'W1') });
+    expect(target(verdict, 'key-improvement').outcome).toBe('not measured');
+    expect(verdict.status).toBe('incomplete');
   });
 
   it('refuses to pass when a required heavy-output variant is missing', () => {
