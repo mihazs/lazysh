@@ -184,6 +184,7 @@
     "allow-herdr-agent-screen",
     "allow-agent-snapshot",
     "allow-agent-reported-history",
+    "allow-agent-relay-resolve",
     "allow-install-companion",
     "allow-install-companion-from-device",
     "allow-check-companion-update",

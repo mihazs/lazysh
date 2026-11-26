@@ -282,6 +282,7 @@ fn main() {
         "attach_tmux",
         "agent_snapshot",
         "agent_reported_history",
+        "agent_relay_resolve",
         "install_companion",
         "install_companion_from_device",
         "check_companion_update",
