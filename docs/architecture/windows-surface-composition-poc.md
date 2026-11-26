@@ -60,6 +60,8 @@ The feature-enabled Windows app hosts a D3D12 renderer in a child HWND below Web
 
 The Windows probe workflow also compiles the feature-enabled app and tests fractional and high-DPI anchor conversion. Real app capture, per-monitor DPI transitions, input, accessibility, device recovery and rollback still need their own acceptance evidence for [#1332](https://github.com/mihazs/lazysh/issues/1332).
 
+The workflow's manual `installer_engine` input builds an unsigned release-profile NSIS test installer with the native engine enabled or disabled. It checks that the installer can install, repair, and uninstall the exact app binary on an owned Windows runner. The test package omits the bundled companion. Launching the installed terminal and verifying renderer selection or fallback are separate acceptance steps.
+
 ## What this does not establish
 
 - **No hardware.** A hosted runner has no GPU (Direct3D 12 is WARP) and no physical display: a real driver's swapchain, its DirectFlip and independent flip paths, and multiple monitors are not measured. **Accepted risk, not measured.**
