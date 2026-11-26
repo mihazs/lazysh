@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { document, interpolate } from './support/workflowGraph';
+import { document, evaluate, executedSteps, interpolate } from './support/workflowGraph';
 import { project, spawnText } from './support/gitFixture';
 
 const temporary: string[] = [];
@@ -91,4 +91,29 @@ test.each([['a missing arm64 library', () => apk(null), 'google', 'on'], ['a fil
   const result = await check(await path(), flavor, killSwitch);
   expect(result.code).toBe(2);
   expect(result.stdout).toBe('');
+});
+
+test('macOS bundle rehearsal isolates the native and rollback build profiles', async () => {
+  const {jobs} = await document('.github/workflows/terminal-macos-surface.yml');
+  for (const mode of ['surface', 'on', 'off']) {
+    const context = {github: {event_name: 'workflow_dispatch'}, inputs: {package_engine: mode}};
+    expect(evaluate(jobs['terminal-macos-surface'].if, context)).toBe(mode === 'surface');
+    const entries = await executedSteps(jobs['terminal-macos-app-host'].steps, context);
+    const named = (name: string) => entries.find(({step}) => step.name === name);
+    expect(Boolean(named('Read the running Lazysh window'))).toBe(mode === 'surface');
+    expect(entries.some(({step}) => step.uses === './.github/actions/ghostty-zig')).toBe(mode !== 'off');
+    const bundle = named('Build and verify an ad-hoc macOS release app');
+    expect(Boolean(bundle)).toBe(mode !== 'surface');
+    if (!bundle) continue;
+    const script = bundle.step.run.split('\napp=')[0];
+    const run = await spawnText(project, ['bash', '-e', '-c', ['bun() { printf "%s\\n" "$@"; }', script].join('\n')], {
+      ...process.env, LAZYSH_NATIVE_TERMINAL: mode,
+    });
+    expect(run.code).toBe(0);
+    const args = run.stdout.trim().split('\n');
+    expect(args.includes('native-terminal')).toBe(mode === 'on');
+    expect(args.at(-1)).toBe('--locked');
+    expect(interpolate(named('Retain the signed rehearsal bundle and receipt')!.step.with.name, context))
+      .toBe('lazysh-macos-native-package-' + mode);
+  }
 });
