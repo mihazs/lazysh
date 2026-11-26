@@ -288,7 +288,7 @@ async fn through_mosh_into_real_core(app: &App, parent: &str) {
         .unwrap()
         .into_inner()
         .unwrap();
-    let (id, _session) = start_mosh(app, parent, events).await;
+    let (id, session) = start_mosh(app, parent, events).await;
     write(app, &id, command_line("echo FIN_$(echo OK)".into())).await;
     let until = |size: (u64, u64)| {
         let id = id.clone();
@@ -320,7 +320,8 @@ async fn through_mosh_into_real_core(app: &App, parent: &str) {
         );
     }
     eprintln!("real Mosh into the real core: the grid followed the server to 100x30 with {MARKER} on screen");
-    terminal_core::close(&id);
+    verify_live_handback(app, &id, &session, "MOSH", 100, 30).await;
+    disconnect(app.state(), id).await.unwrap();
 }
 
 /// The bytes of `seen` between the first `begin` and the first `end` after it.
@@ -328,6 +329,29 @@ async fn through_mosh_into_real_core(app: &App, parent: &str) {
 fn between<'a>(seen: &'a [u8], begin: &[u8], end: &[u8]) -> Option<&'a [u8]> {
     let start = find(seen, begin, 0)? + begin.len();
     Some(&seen[start..find(seen, end, start)?])
+}
+
+#[cfg(target_os = "linux")]
+async fn start_et(
+    app: &App,
+    parent: &str,
+    server: &crate::et::tests::Server,
+    events: Channel<SshEvent>,
+) -> (String, Arc<Session>) {
+    attached(
+        app,
+        crate::et::connect_et_inner(
+            None,
+            access_lease(),
+            app.state(),
+            parent.into(),
+            server.options(),
+            80,
+            24,
+            events,
+        ),
+    )
+    .await
 }
 
 /// A real ET session whose output goes to a core. ET carries the PTY's byte stream, so what the
@@ -340,17 +364,7 @@ async fn check_et(app: &App, parent: &str, directory: &std::path::Path) {
     let (core, prepared) = ChecksumCore::prepared();
     let (events, data_messages) = data_counting_events();
     terminal_core::offer(&events, Box::new(move || Ok(prepared)));
-    let connecting = crate::et::connect_et_inner(
-        None,
-        access_lease(),
-        app.state(),
-        parent.into(),
-        server.options(),
-        80,
-        24,
-        events,
-    );
-    let (id, session) = attached(app, connecting).await;
+    let (id, session) = start_et(app, parent, &server, events).await;
     let marker = |name: &str| format!("printf '{name}_%d\\n' $((40 + 2))");
     let workload = format!(
         "{}; {}; {}",
@@ -382,6 +396,100 @@ async fn check_et(app: &App, parent: &str, directory: &std::path::Path) {
     );
     terminal_core::close(&id);
     disconnect(app.state(), id).await.unwrap();
+    #[cfg(native_terminal_core)]
+    hand_back_live_et(app, parent, &server).await;
+}
+
+#[cfg(all(target_os = "linux", native_terminal_core))]
+async fn hand_back_live_et(app: &App, parent: &str, server: &crate::et::tests::Server) {
+    let (events, _native) = json_events();
+    terminal_core::terminal_core_open(access_lease(), events.clone(), 80, 24, None, None)
+        .await
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    let (id, session) = start_et(app, parent, server, events).await;
+    verify_live_handback(app, &id, &session, "ET", 80, 24).await;
+    disconnect(app.state(), id).await.unwrap();
+}
+
+#[cfg(native_terminal_core)]
+async fn verify_live_handback(
+    app: &App,
+    id: &str,
+    session: &Session,
+    label: &str,
+    columns: u16,
+    rows: u16,
+) {
+    use tauri::ipc::IpcResponse;
+
+    write(
+        app,
+        id,
+        command_line(format!(r#"printf '{label}_BEFORE_%s\n' "$$""#)),
+    )
+    .await;
+    let prefix = format!("{label}_BEFORE_");
+    let shell_pid = timeout(Duration::from_secs(12), async {
+        loop {
+            let (_, rows) = core_screen(id).await;
+            if let Some(pid) = rows
+                .iter()
+                .find_map(|row| row.strip_prefix(&prefix)?.trim().parse::<u32>().ok())
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the native viewport contains the original shell PID");
+    let (events, mut web) = json_events();
+    let snapshot = terminal_core::terminal_core_release(access_lease(), id.into(), events)
+        .await
+        .unwrap()
+        .body()
+        .unwrap()
+        .deserialize::<serde_json::Value>()
+        .unwrap();
+    let ansi = snapshot["ansi"]
+        .as_str()
+        .expect("handback returns a visible ANSI snapshot");
+    assert!(ansi.contains(&format!("{prefix}{shell_pid}")));
+    assert_eq!(snapshot["columns"], columns);
+    assert_eq!(snapshot["rows"], rows);
+    assert!(!session.core.is_attached());
+    write(
+        app,
+        id,
+        command_line(format!(r#"printf '{label}_AFTER_%s\n' "$$""#)),
+    )
+    .await;
+    let marker = format!("{label}_AFTER_{shell_pid}");
+    let mut output = Vec::new();
+    let reply = timeout(Duration::from_secs(12), async {
+        while let Some(event) = web.recv().await {
+            assert_ne!(event["type"], "closed");
+            if let Some(data) = event["data"].as_array() {
+                output.extend(data.iter().map(|byte| byte.as_u64().unwrap() as u8));
+                ack_output(app.state(), id.into(), data.len() as u32)
+                    .await
+                    .unwrap();
+            }
+            assert!(output.len() < 64 * 1024);
+            if find(&output, marker.as_bytes(), 0).is_some() {
+                return;
+            }
+        }
+        panic!("the WebView route closed before the shell replied");
+    })
+    .await;
+    assert!(
+        reply.is_ok(),
+        "expected {marker:?} after {label} handback, received {:?}",
+        String::from_utf8_lossy(&output)
+    );
 }
 
 async fn check(app: &App, id: &str) {

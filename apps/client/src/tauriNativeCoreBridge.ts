@@ -5,7 +5,7 @@
  * while locked, like a disconnect, and so are the probe's `terminal_core_available` and `native_terminal_probe`, which read the build and the device, nothing of the user's.
  */
 import {Channel, invoke as unguardedInvoke, isTauri} from '@tauri-apps/api/core';
-import {isAccessReady, protectedInvoke, channelSessionOutput, subscribeAccess} from './access';
+import {channelSessionOutput, isAccessReady, protectedInvoke, subscribeAccess, type AccessLease} from './access';
 import type {SshEvent} from './bridge';
 import type {NativeCoreAnswer, NativeCoreBridge, NativeCoreEvent, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 import {NativeTerminalAdapter, type NativeAdapterOptions} from './nativeTerminalAdapter';
@@ -169,4 +169,9 @@ export async function createNativeTerminalAdapter(options: NativeTerminalOptions
  * `events`, and the answer is the ANSI snapshot of the screen the program had until then, which a fresh terminal of the same size
  * replays first. The core is freed. Under the lease of this call, like every command of the core.
  */
-export const releaseNativeCore = (sessionId: string, events: Channel<SshEvent>) => protectedInvoke<string>('terminal_core_release', {sessionId, events});
+export async function releaseNativeCore(lease: AccessLease, sessionId: string, events: Channel<SshEvent>) {
+  lease.assert();
+  // Wait for the ownership receipt even if access changes. Native redacts stale snapshots.
+  const snapshot = await unguardedInvoke<{ansi: string; columns: number; rows: number} | null>('terminal_core_release', {sessionId, events}, {headers: lease.headers});
+  return lease.current() ? snapshot : null;
+}

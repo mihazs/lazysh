@@ -233,8 +233,7 @@ async function prepareSession(
     // The core applies Mosh's frames itself, so the data handler's failure check never runs: its refusal of one arrives as the adapter's event.
     adapter.subscribe(failDisplay, ['failure']);
     let leaving: Promise<boolean> | undefined;
-    // shortcut: a Mosh session cannot leave the native engine, because the xterm.js terminal would need the canonical-resize controller the native adapter holds; move it with the terminal if that is asked for.
-    if (!mosh) session.leaveNative = failure => leaving ??= (async () => {
+    session.leaveNative = failure => leaving ??= (async () => {
       // The device remembers a failure whether or not this session could move.
       const recorded = failure === undefined ? undefined : recordNativeFailure(failure);
       const { handBackToXterm } = await import("./nativeHandback");

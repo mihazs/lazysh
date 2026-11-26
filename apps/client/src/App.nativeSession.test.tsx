@@ -66,8 +66,7 @@ it('starts a Mosh session on the native engine: the core opens for Mosh frames, 
   expect(session.moshResize!.failure).toBe('invalid-frame');
   expect(session.connected).toBe(false);
   await waitFor(() => expect(mocks.api.disconnect).toHaveBeenCalledWith('core-mosh'));
-  // A Mosh session cannot leave the native engine yet: the xterm.js terminal would need its canonical-resize controller.
-  expect(session.leaveNative).toBeUndefined();
+  expect(session.leaveNative).toBeTypeOf('function');
 });
 
 it('starts the session on xterm.js when the core cannot be opened, says why, and remembers the failure on the device', async () => {
@@ -82,7 +81,7 @@ it('starts the session on xterm.js when the core cannot be opened, says why, and
 
 it('moves a live native session to xterm.js: the snapshot first, then the new Channel\'s output, acknowledged through the normal path', async () => {
   let handed: {onmessage?: (event: unknown) => void} | undefined;
-  withCore((command, args) => command === 'terminal_core_release' ? (handed = args.events as typeof handed, 'SNAPSHOT') : undefined);
+  withCore((command, args) => command === 'terminal_core_release' ? (handed = args.events as typeof handed, {ansi: 'SNAPSHOT', columns: 80, rows: 24}) : undefined);
   // The page's xterm.js terminal here is a stand-in that applies a write at once.
   Object.assign(mocks.terminal, {resize: vi.fn()});
   mocks.terminal.write.mockImplementation((_bytes: Uint8Array, applied?: () => void) => applied?.());
@@ -107,7 +106,7 @@ it('moves a live native session to xterm.js: the snapshot first, then the new Ch
 const statusBar = () => document.querySelector('.workspace-footer')!.textContent;
 
 it('names the engine of the session in the status bar next to the terminal type, and follows the session when it moves to xterm.js', async () => {
-  withCore(command => command === 'terminal_core_release' ? 'SNAPSHOT' : undefined);
+  withCore(command => command === 'terminal_core_release' ? {ansi: 'SNAPSHOT', columns: 80, rows: 24} : undefined);
   Object.assign(mocks.terminal, {resize: vi.fn()});
   mocks.terminal.write.mockImplementation((_bytes: Uint8Array, applied?: () => void) => applied?.());
   const {session, onEvent} = await connectNative('bar-session');
