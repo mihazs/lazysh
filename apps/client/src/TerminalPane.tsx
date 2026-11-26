@@ -952,18 +952,30 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     if (document.hidden) {clearModifiers(); repeated.current = true; return false;}
     imeInput.current?.flush();
     if (!current() || document.hidden) return false;
-    const state = modifierState.current;
-    const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${((repeatShift.current ?? state.shift) && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
+    const adapter = session.adapter;
+    const heldShift = repeatShift.current;
+    const dispatch = () => {
+      if (session.adapter !== adapter || !current() || document.hidden) return;
+      const state = modifierState.current;
+      const prefix = `${state.ctrl || physical?.ctrlKey ? "Ctrl+" : ""}${state.meta || physical?.altKey ? "Alt+" : ""}${((heldShift ?? state.shift) && key.length > 1) || physical?.shiftKey ? "Shift+" : ""}`;
+      try {
+        const sequence = key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`);
+        // Application cursor-key mode (DECCKM) sends the unmodified cursor keys as SS3 sequences, as xterm does.
+        const input = adapter.modes().applicationCursorKeys ? sequence.replace(/^\x1b\[([ABCDHF])$/, "\x1bO$1") : sequence;
+        const pending = writeInput('named-key', input, expectedOwner).catch(error => reportError(captureUiError(error)));
+        followLive();
+        consumeModifiers();
+        focusTerminal();
+        return pending;
+      } catch (error) {reportError(error instanceof LocalUiError ? error : String(error));}
+    };
     try {
-      const sequence = key.length === 1 ? modifiedTerminalText(key, state.ctrl || !!physical?.ctrlKey, state.meta || !!physical?.altKey) : parseChord(`${prefix}${key}`);
-      // Application cursor-key mode (DECCKM) sends the unmodified cursor keys as SS3 sequences, as xterm does.
-      const input = session.adapter.modes().applicationCursorKeys ? sequence.replace(/^\x1b\[([ABCDHF])$/, "\x1bO$1") : sequence;
-      void writeInput('named-key', input,expectedOwner).catch(error => reportError(captureUiError(error)));
+      if (adapter.afterSurfaceInput?.(async () => { await dispatch(); })) return true;
+    } catch (error) {
+      reportError(captureUiError(error));
+      return false;
     }
-    catch (error) {reportError(error instanceof LocalUiError ? error : String(error)); return false;}
-    followLive();
-    consumeModifiers();
-    focusTerminal();return true;
+    return !!dispatch();
   }
   sendNamedRef.current = sendNamed;
   function sendKey(key: string) {
@@ -1189,7 +1201,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const modifier = key === "ctrl" || key === "meta" || key === "altgr" || key === "shift";
     const locked = key === "ctrl" ? ctrlLocked : key === "meta" ? metaLocked : key === "altgr" ? ctrlLocked && metaLocked : false;
     const pressed = key === "ctrl" ? ctrl : key === "meta" ? meta : key === "shift" ? shift : key === "altgr" ? ctrl && meta : key === "dpad" ? dpadOpen : key === "keyboard" ? softKeyboard.open ?? undefined : undefined;
-    const action = () => {
+    const actOnKey = () => {
       if (modifier) {
         if (!activeRef.current || !session.connected || !mounted.current || !access.current() || document.hidden) return;
         if (key === "shift" && modifierState.current.shift) {modifierState.current.shift = false; setShift(false); return;}
@@ -1197,7 +1209,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       }
       if (key === "ctrl" || key === "meta") cycleModifier(key);
       else if (key === "altgr") {const both = modifierState.current.ctrl && modifierState.current.meta; if (both || !modifierState.current.ctrl) cycleModifier("ctrl"); if (both || !modifierState.current.meta) cycleModifier("meta");}
-      else if (key === "shift") {modifierState.current.shift = !shift; setShift(!shift);}
+      else if (key === "shift") {modifierState.current.shift = true; setShift(true);}
       else if (key === "paste") {if (clipboardPlatform.phase === "ready") void paste(); else if (active && mounted.current && access.current()) void clipboardPlatform.retry();}
       else if (key === "attach") {if (activeRef.current && session.connected && access.current()) onOpenAttachments?.();}
       else if (key === "keyboard") toggleKeyboard();
@@ -1205,6 +1217,13 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       else if (key === "agents" || key === "workspaces") runGesture(toolbarNavigationActions[key]);
       else sendKey(sequences[key] ?? key);
       if (modifier) focusTerminal();
+    };
+    const action = () => {
+      const adapter = session.adapter;
+      try {
+        if (modifier && adapter.afterSurfaceInput?.(async () => { if (session.adapter === adapter) actOnKey(); })) return;
+        actOnKey();
+      } catch (error) { reportError(captureUiError(error)); }
     };
     const alternate = toolbarKeyHasAlternate(key) ? preferences.toolbarAlternates?.[key] : undefined;
     const repeatable = !alternate && !modifier && key !== "paste" && key !== "attach" && key !== "keyboard" && key !== "dpad" && !Object.hasOwn(toolbarNavigationActions, key);

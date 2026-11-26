@@ -45,20 +45,22 @@ class NativeTerminalInputTest {
         val info = EditorInfo()
         connect(TerminalInputView(instrumentation.targetContext, sink), info)
         assertEquals(InputType.TYPE_CLASS_TEXT, info.inputType and InputType.TYPE_MASK_CLASS)
+        assertEquals(InputType.TYPE_TEXT_VARIATION_WEB_EDIT_TEXT, info.inputType and InputType.TYPE_MASK_VARIATION)
         assertEquals("the text editor is multi-line so Enter is a line break", InputType.TYPE_TEXT_FLAG_MULTI_LINE, info.inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE)
         assertEquals("no autocorrect, as the page's terminal editor", 0, info.inputType and InputType.TYPE_TEXT_FLAG_AUTO_CORRECT)
+        assertTrue("the keyboard must never replace a terminal word on Enter", info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0)
         assertEquals(EditorInfo.IME_ACTION_NONE, info.imeOptions and EditorInfo.IME_MASK_ACTION)
         assertTrue(info.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0)
     }
 
     @Test fun privateKeyboardAsksForAVisiblePasswordWithNoSuggestionsAndNoLearning() = onMain {
-        PrivateKeyboard.set(true)
+        PrivateKeyboard.set(active = false, enabled = true, nativeEditor = null)
         try {
             val info = EditorInfo()
             connect(TerminalInputView(instrumentation.targetContext, sink), info)
             assertEquals(PrivateKeyboard.INPUT_TYPE, info.inputType)
             assertTrue(info.imeOptions and androidx.core.view.inputmethod.EditorInfoCompat.IME_FLAG_NO_PERSONALIZED_LEARNING != 0)
-        } finally { PrivateKeyboard.set(false) }
+        } finally { PrivateKeyboard.set(active = false, enabled = false, nativeEditor = null) }
     }
 
     @Test fun theFixedKeyboardTransactionsAreTypedOnceAndReadBackAsTheFixtureExpects() = onMain {
@@ -127,6 +129,28 @@ class NativeTerminalInputTest {
         assertFalse("Back stays with the system", key(view, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
         assertFalse("volume stays with the system", key(view, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_VOLUME_UP))
         assertEquals(emptyList<String>(), delivered)
+    }
+
+    @Test fun bothAndroidKeyRoutesKeepTheCharacterProducedByRightAlt() = onMain {
+        val received = mutableListOf<TerminalKey>()
+        val recorder = object : TerminalInputSink by sink {
+            override fun key(key: TerminalKey) { received += key }
+        }
+        val view = TerminalInputView(instrumentation.targetContext, recorder)
+        val connection = connect(view)
+        val rightAlt = KeyEvent.META_ALT_ON or KeyEvent.META_ALT_RIGHT_ON
+        fun keyEvent(action: Int) = object : KeyEvent(0, 0, action, KeyEvent.KEYCODE_Q, 0, rightAlt) {
+            // A third-level keyboard layout returns a different printable character with right Alt held.
+            override fun getUnicodeChar(metaState: Int) =
+                if (metaState and KeyEvent.META_ALT_RIGHT_ON != 0) '@'.code else 'q'.code
+        }
+        for (send in listOf(view::dispatchKeyEvent, connection::sendKeyEvent)) {
+            assertTrue(send(keyEvent(KeyEvent.ACTION_DOWN)))
+            assertTrue(send(keyEvent(KeyEvent.ACTION_UP)))
+        }
+        val press = TerminalKey("KeyQ", "@")
+        val release = press.copy(release = true)
+        assertEquals(listOf(press, release, press, release), received)
     }
 
     @Test fun aHardwareKeyDeliversThePreeditTheKeyboardWasComposing() = onMain {

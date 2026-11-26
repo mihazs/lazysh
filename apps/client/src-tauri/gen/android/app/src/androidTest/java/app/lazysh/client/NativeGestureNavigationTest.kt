@@ -254,12 +254,12 @@ class NativeGestureNavigationTest {
         val keyboard = outcome("the soft keyboard status")
         assertFalse("the soft keyboard plugin sees the activity in front: $keyboard", keyboard.startsWith("error"))
         try {
-            invokeFromPage("terminal_private_keyboard", "{active:true}")
+            invokeFromPage("terminal_private_keyboard", "{active:true,enabled:true}")
             val privateKeyboard = outcome("the private keyboard mode")
             assertFalse("the private keyboard plugin accepts the command: $privateKeyboard", privateKeyboard.startsWith("error"))
             poll("the private keyboard mode to be on") { PrivateKeyboard.active.takeIf { it } }
         } finally {
-            invokeFromPage("terminal_private_keyboard", "{active:false}")
+            invokeFromPage("terminal_private_keyboard", "{active:false,enabled:false}")
             outcome("the private keyboard mode is off again")
         }
         assertFalse("the private keyboard mode follows the command back off", PrivateKeyboard.active)

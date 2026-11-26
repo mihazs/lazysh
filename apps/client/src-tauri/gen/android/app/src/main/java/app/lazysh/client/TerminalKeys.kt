@@ -77,24 +77,34 @@ object TerminalKeys {
         else -> named[keyCode]?.first ?: characters[keyCode]
     }
 
+    fun key(event: KeyEvent, release: Boolean): TerminalKey? {
+        val meta = event.metaState
+        return key(event.keyCode, meta, event.getUnicodeChar(meta and NON_TEXT_META.inv()),
+            event.repeatCount > 0, release, event.getUnicodeChar(meta))
+    }
+
     /**
      * The key for an Android key event, or null when the key is not the terminal's and must stay with the system.
      * [unicode] is `KeyEvent.getUnicodeChar` computed with Shift and Caps Lock only: with Ctrl or Alt held it would be
      * a control character or an accented one, while the DOM `key` of Ctrl+C is `c`.
      */
-    fun key(keyCode: Int, metaState: Int, unicode: Int, repeat: Boolean, release: Boolean): TerminalKey? {
+    fun key(keyCode: Int, metaState: Int, unicode: Int, repeat: Boolean, release: Boolean, modifiedUnicode: Int = unicode): TerminalKey? {
+        val altGr = metaState and KeyEvent.META_ALT_RIGHT_ON != 0 &&
+            metaState and (KeyEvent.META_CTRL_MASK or KeyEvent.META_META_MASK) == 0 &&
+            modifiedUnicode > 0 && modifiedUnicode != unicode && !Character.isISOControl(modifiedUnicode)
+        val text = if (altGr) modifiedUnicode else unicode
         val code = code(keyCode) ?: return null
         val name = named[keyCode]?.second
             ?: if (keyCode in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12) code
-            else if (unicode and DEAD != 0) "Dead"
-            else if (unicode > 0) String(Character.toChars(unicode))
+            else if (text and DEAD != 0) "Dead"
+            else if (text > 0) String(Character.toChars(text))
             else "Unidentified"
         return TerminalKey(
             code = code,
             key = name,
             shift = metaState and KeyEvent.META_SHIFT_ON != 0,
             ctrl = metaState and KeyEvent.META_CTRL_ON != 0,
-            alt = metaState and KeyEvent.META_ALT_ON != 0,
+            alt = !altGr && metaState and KeyEvent.META_ALT_ON != 0,
             meta = metaState and KeyEvent.META_META_ON != 0,
             repeat = repeat,
             release = release,
@@ -102,7 +112,7 @@ object TerminalKeys {
     }
 
     /** The modifiers whose presence turns a character key into something other than the text on its cap. */
-    const val NON_TEXT_META = KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK or KeyEvent.META_META_MASK
+    private const val NON_TEXT_META = KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK or KeyEvent.META_META_MASK
 
     private const val DEAD = Int.MIN_VALUE
 }

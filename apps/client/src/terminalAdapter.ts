@@ -171,6 +171,8 @@ export interface TerminalAdapter {
   write?(bytes: Uint8Array, onApplied?: () => void): Promise<void>;
   /** Inject input as if it were typed; it reaches the observer like keyboard input. */
   sendInput(data: string | Uint8Array, origin: TerminalInputOrigin): void;
+  /** Queues a toolbar action behind native keyboard events already delivered by the surface. */
+  afterSurfaceInput?(action: () => Promise<void>): boolean;
   /** Present when the adapter delivers typed text itself (a native Android surface): the pane's virtual Ctrl, Alt and Shift are applied to it, once, by this function, which returns what is sent. */
   setInputModifier?(modifier: ((typed: string) => string) | undefined): void;
   /** Present with the `ime` capability. */

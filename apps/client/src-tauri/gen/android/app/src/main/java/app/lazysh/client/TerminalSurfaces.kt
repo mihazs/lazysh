@@ -198,6 +198,11 @@ internal object TerminalSurfaces {
         if (entries.values.none { it.host?.web === host.web }) SeeThrough.set(host.web, false)
     }
 
+    /** Shares the UI thread and relay with InputConnection commits. */
+    fun markInput(id: String, ticket: Int) {
+        (entries[id] ?: throw SurfaceUnavailable("native_surface_session")).relay.mark(ticket)
+    }
+
     /** What the keyboard typed since the last call, once, in order; waits for the next input when there is none. */
     fun takeInput(id: String, deliver: (List<SurfaceInput>) -> Unit) {
         (entries[id] ?: throw SurfaceUnavailable("native_surface_session")).relay.take(deliver)

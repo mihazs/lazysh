@@ -252,6 +252,49 @@ class NativeTerminalSessionTest {
         return session()
     }
 
+    @Test fun ownedSwiftKeyHistorySuggestion() {
+        val arguments = InstrumentationRegistry.getArguments()
+        val x = arguments.getString("lazyshSwiftKeyTapX")?.toIntOrNull()
+        val y = arguments.getString("lazyshSwiftKeyTapY")?.toIntOrNull()
+        org.junit.Assume.assumeTrue("An owned SwiftKey key position is required", x != null && y != null)
+        val selected = android.provider.Settings.Secure.getString(
+            instrumentation.targetContext.contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD
+        )
+        assertTrue("The owned device is using SwiftKey", selected?.startsWith("com.touchtype.swiftkey/") == true)
+        val id = startNativeSession()
+        fun cursorRow(): String {
+            val snapshot = JSONObject(PageDriver.invoke("terminal_core_snapshot", "{sessionId:${quoted(id)},window:100}"))
+            val state = snapshot.getJSONObject("state")
+            val rows = snapshot.getJSONObject("window")
+            val index = state.getJSONObject("viewport").getInt("top") + state.getJSONObject("cursor").getInt("y") - rows.getInt("first")
+            return rows.getJSONArray("rows").getString(index).trim()
+        }
+        val prompt = "probe>"
+        val command = "printf 'SWIFTKEY_%s\\n' HISTORY"
+        typeIntoTheSurface("exec env ZDOTDIR=. zsh -i")
+        PageDriver.poll("the owned zsh prompt", 30) { cursorRow().takeIf { it == prompt } }
+        typeIntoTheSurface(command)
+        PageDriver.poll("the history seed and fresh prompt", 30) {
+            true.takeIf { cursorRow() == prompt && coreText(id).lines().any { it.trim() == "SWIFTKEY_HISTORY" } }
+        }
+        if (!ui { SoftKeyboard.visible(it.window) }) click("button[aria-label='Show keyboard'], button[aria-label='Toggle keyboard']")
+        PageDriver.poll("the SwiftKey keyboard", 15) { ui { SoftKeyboard.visible(it.window) }.takeIf { it } }
+        val device = UiDevice.getInstance(instrumentation)
+        val tapX = checkNotNull(x)
+        val tapY = checkNotNull(y)
+        assertTrue("The configured SwiftKey position is inside the owned display",
+            tapX in 0 until device.displayWidth && tapY in 0 until device.displayHeight)
+        assertTrue(device.click(tapX, tapY))
+        PageDriver.poll("the inline history suggestion from a real SwiftKey p tap", 15) {
+            cursorRow().takeIf { it == "$prompt $command" }
+        }
+        assertTrue(device.pressDPadRight())
+        assertTrue(device.pressEnter())
+        PageDriver.poll("the accepted history command output and fresh prompt", 15) {
+            true.takeIf { cursorRow() == prompt && coreText(id).lines().count { it.trim() == "SWIFTKEY_HISTORY" } == 2 }
+        }
+    }
+
     /**
      * Who owns the keyboard (#2489, #2490): the terminal's editor takes Android's view focus when the page asks for it and the keyboard
      * is served to it, a field of the page that takes DOM focus gets the keys instead (the editor lets go), and the terminal gets them
@@ -346,15 +389,28 @@ class NativeTerminalSessionTest {
         for (key in listOf("esc", "tab", "Home", "End")) click("button", key)
         click("button", "Shift")
         click("button", "tab")
-        click("button", "ctrl")
-        // The IME queues the letter and Enter together so Enter cannot consume the sticky Ctrl first.
-        typeIntoTheSurface("a")
+        armModifier("ctrl")
+        typeIntoTheSurface("a", enter = false)
+        click("button", "enter")
         try { awaitRow(id, "cat -vT's caret notation of the toolbar's keys", { it == "^[^I^[[H^[[F^[[Z^A" }) }
         catch (error: AssertionError) { throw AssertionError("${error.message}; the screen held:\n${coreText(id)}", error) }
+        armModifier("Alt")
+        typeIntoTheSurface("a", enter = false)
+        click("button", "enter")
+        awaitRow(id, "cat to receive the Alt-modified IME commit before Enter", { it == "^[a" })
         click("button", "ctrl")
         click("button", "d")
         awaitRow(id, "the prompt after cat ended", { it == fixture.getString("prompt").trim() })
         evidence.put("toolbarKeysThroughCatV", true)
+    }
+
+
+    private fun armModifier(label: String) {
+        click("button", label)
+        PageDriver.poll("the $label toolbar modifier to arm", 15) {
+            js("window.__lz.find('button', ${quoted(label)})?.getAttribute('aria-pressed') === 'true'")
+                .takeIf { it == "true" }
+        }
     }
 
     /**

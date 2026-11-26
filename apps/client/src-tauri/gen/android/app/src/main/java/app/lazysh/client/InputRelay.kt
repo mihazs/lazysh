@@ -5,6 +5,7 @@ sealed interface SurfaceInput {
     data class Text(val text: String) : SurfaceInput
     data class Key(val key: TerminalKey) : SurfaceInput
     data class Paste(val text: String) : SurfaceInput
+    data class Barrier(val ticket: Int) : SurfaceInput
 
     /** The text the keyboard is composing (null: none), which the page draws at the cursor until it is committed or dropped. */
     data class Preedit(val text: String?) : SurfaceInput
@@ -32,6 +33,8 @@ class InputRelay : TerminalInputSink {
         preedit = text
         push(SurfaceInput.Preedit(text))
     }
+
+    fun mark(ticket: Int) = push(SurfaceInput.Barrier(ticket))
 
     fun take(deliver: (List<SurfaceInput>) -> Unit) {
         waiter?.invoke(emptyList())

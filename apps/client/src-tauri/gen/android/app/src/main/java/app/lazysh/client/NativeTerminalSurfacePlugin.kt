@@ -17,19 +17,24 @@ import org.json.JSONObject
 @TauriPlugin
 class NativeTerminalSurfacePlugin(private val owner: Activity) : Plugin(owner) {
     /** Runs on the UI thread against the activity in front, which is not the one Tauri built this plugin with after a recreation (#1462). */
-    private fun onUi(invoke: Invoke, block: (Activity, String, JSObject) -> SurfaceState?) {
+    private fun dispatchOnUi(invoke: Invoke, block: (Activity, String, JSObject) -> Unit) {
         val activity = currentActivity(owner)
         activity.runOnUiThread {
             try {
                 val args = invoke.getArgs()
                 val id = args.getString("session")
                 if (id.isEmpty() || id.length > 64) throw SurfaceUnavailable("native_surface_session")
-                val state = block(activity, id, args)
-                if (state == null) invoke.resolve() else invoke.resolve(json(state))
+                block(activity, id, args)
             } catch (error: SurfaceUnavailable) { invoke.reject(error.message)
             } catch (_: JSONException) { invoke.reject("native_surface_arguments") }
         }
     }
+
+    private fun onUi(invoke: Invoke, block: (Activity, String, JSObject) -> SurfaceState?) =
+        dispatchOnUi(invoke) { activity, id, args ->
+            val state = block(activity, id, args)
+            if (state == null) invoke.resolve() else invoke.resolve(json(state))
+        }
 
     private fun json(state: SurfaceState) = JSObject().apply {
         put("placed", state.placed); put("ready", state.ready); put("generation", state.generation)
@@ -47,15 +52,12 @@ class NativeTerminalSurfacePlugin(private val owner: Activity) : Plugin(owner) {
     @Command fun remove(invoke: Invoke) = onUi(invoke) { _, id, _ -> TerminalSurfaces.remove(id); null }
 
     /** Long poll: resolves with what the keyboard typed since the last call (a list of `text`, `key` and `preedit` events), once each. */
-    @Command fun input(invoke: Invoke) {
-        val activity = currentActivity(owner)
-        activity.runOnUiThread {
-            try {
-                val id = invoke.getArgs().getString("session")
-                if (id.isEmpty() || id.length > 64) throw SurfaceUnavailable("native_surface_session")
-                TerminalSurfaces.takeInput(id) { events -> invoke.resolve(JSObject().apply { put("events", JSONArray(events.map(::eventJson))) }) }
-            } catch (error: SurfaceUnavailable) { invoke.reject(error.message)
-            } catch (_: JSONException) { invoke.reject("native_surface_arguments") }
+    @Command fun input(invoke: Invoke) = dispatchOnUi(invoke) { _, id, args ->
+        if (args.isNull("barrier")) {
+            TerminalSurfaces.takeInput(id) { events -> invoke.resolve(JSObject().apply { put("events", JSONArray(events.map(::eventJson))) }) }
+        } else {
+            TerminalSurfaces.markInput(id, args.getInt("barrier"))
+            invoke.resolve()
         }
     }
 
@@ -70,6 +72,7 @@ class NativeTerminalSurfacePlugin(private val owner: Activity) : Plugin(owner) {
 /** The page's `CoreKeyInput` for a key, so it goes to the core as it is. */
 internal fun eventJson(event: SurfaceInput): JSONObject = when (event) {
     is SurfaceInput.Text -> JSONObject().put("type", "text").put("text", event.text)
+    is SurfaceInput.Barrier -> JSONObject().put("type", "barrier").put("ticket", event.ticket)
     is SurfaceInput.Paste -> JSONObject().put("type", "paste").put("text", event.text)
     is SurfaceInput.Preedit -> JSONObject().put("type", "preedit").put("text", event.text ?: JSONObject.NULL)
     is SurfaceInput.Key -> with(event.key) {
