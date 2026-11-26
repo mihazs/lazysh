@@ -2,8 +2,7 @@
 //! the client's registry refuses it for a new session while this says yes, whether or not the user also turned on the in-app
 //! Screen reader announcements. The Kotlin plugin (`ScreenReaderPlugin.kt`) asks Android's accessibility manager: touch
 //! exploration, which TalkBack and its kin turn on, or an enabled service that speaks or brailles the screen. Linux
-//! asks AT-SPI whether desktop accessibility is enabled. Windows checks for a UI Automation subscriber or the
-//! legacy screen-reader flag.
+//! asks AT-SPI whether desktop accessibility is enabled. Windows checks the legacy screen-reader flag and Narrator's running state.
 use tauri::AppHandle;
 #[cfg(target_os = "android")]
 use tauri::Manager;
@@ -62,17 +61,18 @@ fn linux_accessibility_active() -> Result<bool, String> {
 
 #[cfg(all(target_os = "windows", native_terminal_core))]
 fn windows_accessibility_active() -> Result<bool, String> {
-    use windows_sys::Win32::UI::{
-        Accessibility::UiaClientsAreListening,
-        WindowsAndMessaging::{SystemParametersInfoW, SPI_GETSCREENREADER},
+    use windows_sys::{
+        w,
+        Win32::{
+            Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS},
+            System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD},
+            UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETSCREENREADER},
+        },
     };
 
     let mut screen_reader: windows_sys::core::BOOL = 0;
-    // SAFETY: The legacy query writes one BOOL to the stack; neither query changes system settings.
+    // SAFETY: The legacy query writes one BOOL to the supplied stack slot.
     unsafe {
-        if UiaClientsAreListening() != 0 {
-            return Ok(true);
-        }
         if SystemParametersInfoW(
             SPI_GETSCREENREADER,
             0,
@@ -83,7 +83,30 @@ fn windows_accessibility_active() -> Result<bool, String> {
             return Err("The Windows accessibility status is unavailable".into());
         }
     }
-    Ok(screen_reader != 0)
+    if screen_reader != 0 {
+        return Ok(true);
+    }
+
+    // Narrator does not set SPI_GETSCREENREADER. A UI Automation listener can be any application.
+    let mut running = 0u32;
+    let mut bytes = size_of::<u32>() as u32;
+    // SAFETY: RegGetValueW reads the current user's DWORD into a bounded stack slot.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Narrator\NoRoam"),
+            w!("RunningState"),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut running as *mut u32).cast(),
+            &mut bytes,
+        )
+    };
+    match status {
+        ERROR_SUCCESS => Ok(running != 0),
+        ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(false),
+        _ => Err("The Windows Narrator status is unavailable".into()),
+    }
 }
 
 /// Whether a screen reader is on. Like the probe it reads the device and nothing of the user's, so a locked app may ask: the
