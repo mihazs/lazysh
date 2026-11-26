@@ -12,14 +12,24 @@ let workspace = NSWorkspace.shared
 guard !workspace.isVoiceOverEnabled else { fatalError("VoiceOver is already enabled") }
 guard CGPreflightPostEventAccess() else { fatalError("The runner cannot post the VoiceOver shortcut") }
 
-func key(_ code: Int, flags: CGEventFlags = []) {
-    for down in [true, false] {
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: down) else {
-            fatalError("Could not create a keyboard event")
-        }
-        event.flags = flags
-        event.post(tap: .cghidEventTap)
+func postKey(_ code: Int, down: Bool, flags: CGEventFlags = []) {
+    guard let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: down) else {
+        fatalError("Could not create a keyboard event")
     }
+    event.flags = flags
+    event.post(tap: .cghidEventTap)
+}
+
+func toggleVoiceOver() {
+    postKey(kVK_Command, down: true, flags: .maskCommand)
+    for down in [true, false] {
+        postKey(kVK_F5, down: down, flags: .maskCommand)
+    }
+    postKey(kVK_Command, down: false)
+}
+
+func diagnostic(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
 }
 
 func waitForVoiceOver(_ state: Bool) -> Bool {
@@ -31,25 +41,33 @@ func waitForVoiceOver(_ state: Bool) -> Bool {
 }
 
 func probe() -> Bool {
-    print("VoiceOver before: false")
+    diagnostic("VoiceOver before: false")
     defer {
         if workspace.isVoiceOverEnabled {
-            key(kVK_F5, flags: .maskCommand)
-            if !waitForVoiceOver(false) { print("VoiceOver cleanup did not finish") }
+            toggleVoiceOver()
+            if !waitForVoiceOver(false) { diagnostic("VoiceOver cleanup did not finish") }
         }
     }
-    key(kVK_F5, flags: .maskCommand)
+    toggleVoiceOver()
     if !waitForVoiceOver(true) {
-        if workspace.frontmostApplication?.bundleIdentifier?.hasPrefix("com.apple.VoiceOver") == true {
-            key(kVK_Return)
+        let welcomeVisible = workspace.frontmostApplication?.bundleIdentifier?.hasPrefix("com.apple.VoiceOver") == true
+        diagnostic("VoiceOver welcome app in foreground: \(welcomeVisible)")
+        if welcomeVisible {
+            for down in [true, false] { postKey(kVK_Return, down: down) }
         }
-        guard waitForVoiceOver(true) else { return false }
+        guard waitForVoiceOver(true) else {
+            diagnostic("VoiceOver did not turn on")
+            return false
+        }
     }
-    print("VoiceOver active: true")
-    key(kVK_F5, flags: .maskCommand)
-    guard waitForVoiceOver(false) else { return false }
-    print("VoiceOver after: false")
+    diagnostic("VoiceOver active: true")
+    toggleVoiceOver()
+    guard waitForVoiceOver(false) else {
+        diagnostic("VoiceOver did not turn off")
+        return false
+    }
+    diagnostic("VoiceOver after: false")
     return true
 }
 
-guard probe() else { fatalError("VoiceOver did not follow the expected state transitions") }
+if !probe() { exit(1) }
