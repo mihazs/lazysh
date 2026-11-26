@@ -129,3 +129,84 @@ mod tests {
         ));
     }
 }
+
+#[cfg(all(test, target_os = "windows", native_terminal_core))]
+mod windows_tests {
+    use super::windows_accessibility_active;
+    use std::{
+        process::{Command, Stdio},
+        thread::sleep,
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    #[ignore = "requires an isolated interactive Windows runner"]
+    fn the_windows_reader_probe_tracks_an_owned_uia_subscription() {
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        assert_eq!(
+            std::env::var("RUNNER_ENVIRONMENT").as_deref(),
+            Ok("github-hosted")
+        );
+        assert_eq!(windows_accessibility_active(), Ok(false));
+
+        let mut reader = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-MTA",
+                "-Command",
+                r#"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type -ReferencedAssemblies UIAutomationClient, UIAutomationTypes -TypeDefinition @'
+using System.Windows.Automation;
+public static class OwnedAutomationSubscriber {
+    public static readonly AutomationFocusChangedEventHandler Handler = delegate { };
+}
+'@
+$handler = [OwnedAutomationSubscriber]::Handler
+[System.Windows.Automation.Automation]::AddFocusChangedEventHandler($handler)
+try { $null = [Console]::ReadLine() }
+finally { [System.Windows.Automation.Automation]::RemoveFocusChangedEventHandler($handler) }
+"#,
+            ])
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("start an owned UI Automation client");
+        let wait_until = |expected| {
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(10) {
+                if windows_accessibility_active() == Ok(expected) {
+                    return true;
+                }
+                sleep(Duration::from_millis(50));
+            }
+            false
+        };
+        let detected = wait_until(true);
+        drop(reader.stdin.take());
+        let shutdown = Instant::now();
+        let status = loop {
+            if let Some(status) = reader.try_wait().unwrap() {
+                break status;
+            }
+            if shutdown.elapsed() >= Duration::from_secs(5) {
+                reader.kill().unwrap();
+                break reader.wait().unwrap();
+            }
+            sleep(Duration::from_millis(50));
+        };
+        assert!(
+            status.success(),
+            "the UI Automation client exited with {status}"
+        );
+        assert!(
+            detected,
+            "the subscription never triggered the Windows probe"
+        );
+        assert!(
+            wait_until(false),
+            "the Windows probe retained the closed subscriber"
+        );
+    }
+}
