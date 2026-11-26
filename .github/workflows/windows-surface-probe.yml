@@ -87,7 +87,7 @@ jobs:
 
   terminal-windows-app-host:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.installer_engine != 'skip' && 90 || 60 }}
     defaults:
       run:
         shell: bash
@@ -112,6 +112,7 @@ jobs:
             echo "CARGO_TARGET_DIR=$root/target"
           } >> "$GITHUB_ENV"
       - name: Build the native-enabled app and run the Windows anchor test
+        if: github.event_name != 'workflow_dispatch' || inputs.installer_engine == 'skip'
         run: |
           args=(--manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib)
           case_name=native_terminal_surface::windows::tests::anchor_edges_map_to_physical_client_pixels
