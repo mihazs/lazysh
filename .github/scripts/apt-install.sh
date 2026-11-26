@@ -44,7 +44,13 @@ fallback() {
   done
 }
 
-if [ -n "$refresh" ]; then until update; do rc=$?; fallback 'apt-get update' || exit "$rc"; done; fi
+if [ -n "$refresh" ]; then
+  # The runner's Microsoft feed is unrelated to these Ubuntu dependencies and can block apt update.
+  for file in "$etc/sources.list.d/microsoft-prod.list" "$etc/sources.list.d/microsoft-prod.sources"; do
+    [ ! -f "$file" ] || mv "$file" "$file.disabled" || exit
+  done
+  until update; do rc=$?; fallback 'apt-get update' || exit "$rc"; done
+fi
 [ "$#" -gt 0 ] || exit 0
 install "$@" && exit 0
 rc=$?

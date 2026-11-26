@@ -12,6 +12,7 @@ afterAll(() => Promise.all(temporary.map(path => rm(path, { recursive: true, for
 const config = 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::ftp::Timeout "30";\nAcquire::Retries "5";\n';
 const oneLine = 'deb http://azure.archive.ubuntu.com/ubuntu/ jammy main\ndeb http://security.ubuntu.com/ubuntu jammy-security main\ndeb http://ports.ubuntu.com/ubuntu-ports/ jammy main\n';
 const deb822 = 'Types: deb\nURIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\nComponents: main universe\n';
+const microsoft = 'deb https://packages.microsoft.com/ubuntu/24.04/prod noble main\n';
 const mirrors = 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://archive.ubuntu.com/ubuntu/\tpriority:3\n';
 const mirrored = (text: string) => archived(text).replaceAll('https://archive.ubuntu.com/ubuntu/', 'https://mirrors.mit.edu/ubuntu/')
   .replaceAll('http://security.ubuntu.com/ubuntu', 'https://mirrors.mit.edu/ubuntu/').replaceAll('http://ports.ubuntu.com/ubuntu-ports/', 'https://mirrors.mit.edu/ubuntu-ports/');
@@ -31,6 +32,7 @@ async function aptRoot(mirrorList = mirrors, overrides: Record<string, string | 
   await mkdir(join(etc, 'sources.list.d'), { recursive: true });
   await writeFile(join(etc, 'sources.list'), oneLine);
   await writeFile(join(etc, 'sources.list.d', 'ubuntu.sources'), deb822);
+  await writeFile(join(etc, 'sources.list.d', 'microsoft-prod.list'), microsoft);
   await writeFile(join(etc, 'apt-mirrors.txt'), mirrorList);
   // With BOUNDS set, a recording `timeout` that runs the command at once: the bound it was given is the observable.
   if (overrides.BOUNDS) await writeFile(join(bin, 'timeout'), '#!/bin/sh\necho "bound $2" >> "$BOUNDS"\nshift 2\nexec "$@"\n', { mode: 0o700 });
@@ -44,6 +46,7 @@ case $APT_BEHAVIOUR:$1 in
   regional:install) if grep -qr 'ec2\.archive' "$LAZYSH_APT_ROOT/etc/apt"; then sleep 60; fi ;;
   stall:*) sleep 60 ;;
   canonical:*) if grep -qr 'ubuntu\.com' "$LAZYSH_APT_ROOT/etc/apt"; then exit 100; fi ;;
+  microsoft-403:update) [ ! -f "$LAZYSH_APT_ROOT/etc/apt/sources.list.d/microsoft-prod.list" ] || exit 100 ;;
   fail:* | fail-install:install) exit 100 ;;
   fail-install-once:install | fail-dpkg:install | stall-dpkg:install) [ "$(grep -c '^install' "$CALLS")" -gt 1 ] || exit 100 ;;
 esac
@@ -58,7 +61,9 @@ esac
     const [stdout, exit] = await Promise.all([new Response(child.stdout).text(), child.exited]);
     const calls = (await readFile(join(root, 'calls'), 'utf8').catch(() => '')).split('\n').filter(Boolean);
     return { exit, stdout, calls, seconds: (performance.now() - started) / 1000, config: await read('apt.conf.d/99lazysh-bounded-network'),
-      sources: [await read('sources.list'), await read('sources.list.d/ubuntu.sources'), await read('apt-mirrors.txt')] };
+      sources: [await read('sources.list'), await read('sources.list.d/ubuntu.sources'), await read('apt-mirrors.txt')],
+      microsoftSource: await read('sources.list.d/microsoft-prod.list'),
+      disabledMicrosoftSource: await read('sources.list.d/microsoft-prod.list.disabled') };
   };
   return run;
 }
@@ -70,6 +75,13 @@ describe.skipIf(process.platform !== 'linux')('bounded apt installer', () => {
   test('writes network timeouts, then updates and installs the exact packages from the configured mirror', async () => {
     const result = await install(['libssl-dev', 'pkg-config']);
     expect(result).toMatchObject({ exit: 0, config, calls: ['update', 'install -y libssl-dev pkg-config'], sources: [oneLine, deb822, mirrors] });
+  });
+
+  test('an unavailable Microsoft prod feed cannot block Ubuntu dependency installs', async () => {
+    expect(await install(['tmux'], 'microsoft-403')).toMatchObject({
+      exit: 0, calls: ['update', 'install -y tmux'], sources: [oneLine, deb822, mirrors],
+      microsoftSource: undefined, disabledMicrosoftSource: microsoft,
+    });
   });
 
   test('a stalled update is killed and retried against archive.ubuntu.com in both source formats', async () => {
@@ -134,7 +146,7 @@ describe.skipIf(process.platform !== 'linux')('bounded apt installer', () => {
 
   test('--no-update installs from the current lists, and alone only writes the configuration', async () => {
     expect(await install(['--no-update', 'tmux', 'bison'])).toMatchObject({ exit: 0, config, calls: ['install -y tmux bison'] });
-    expect(await install(['--no-update'])).toMatchObject({ exit: 0, config, calls: [], sources: [oneLine, deb822, mirrors] });
+    expect(await install(['--no-update'])).toMatchObject({ exit: 0, config, calls: [], sources: [oneLine, deb822, mirrors], microsoftSource: microsoft });
     expect(await install([])).toMatchObject({ exit: 0, config, calls: ['update'] });
   });
 

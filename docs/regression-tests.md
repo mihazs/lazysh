@@ -119,6 +119,7 @@ or `n/a` with a reason. Rows below were read from the fixing commits; a test not
 | [#2606](https://github.com/mihazs/lazysh/issues/2606) | The Android flood benchmark could dispatch a key before the owned PTY started writing output | this change | `apps/client/bench/nativePtyFlood.test.ts` waits for the first-chunk receipt before sending a key, then verifies the marked output and exact echo offset | n/a |
 | [#2503](https://github.com/mihazs/lazysh/issues/2503) | A touch bound to opening the keyboard also opened it over Herdr navigation in a native pane | this change | unit `apps/client/src/TerminalPane.test.tsx`, `keeps Herdr navigation taps from opening the keyboard on a native pane` | n/a, the pane gesture reproduces in Vitest |
 | [#2503](https://github.com/mihazs/lazysh/issues/2503) | A touch bound to opening the keyboard also opened it over Herdr navigation in a native pane | this change | unit `apps/client/src/TerminalPane.test.tsx`, `keeps a delayed Herdr navigation tap from opening the keyboard after the pane redraws` | n/a, the pane gesture reproduces in Vitest |
+| [#2756](https://github.com/mihazs/lazysh/issues/2756) | The hosted runner Microsoft prod feed returned HTTP 403 and blocked Ubuntu dependency installs through every mirror | Disable the unused runner feed before refreshing Ubuntu sources and preserve its source file | Bun: `tests/apt-install.test.ts` reproduces the 403 and checks feed preservation, package installation, and the no-update mode | Hosted Linux client checks |
 
 ## Adding a row
 
