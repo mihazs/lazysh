@@ -1,3 +1,4 @@
+import {systemScreenReader} from './androidScreenReader';
 import {t,useUi,formatNumber} from './i18n/core';
 import {captureUiError,LocalUiError,type UiErrorCause} from './i18n/localError';
 import { checkPasteSize, readClipboardText, useClipboardPlatform } from './deviceClipboard';
@@ -781,7 +782,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       return true;
     });
     void adapter.attach(native ? {kind: "native", anchorId: element.id, surface: session.id} : {kind: "dom", element}).catch(error => reportError(String(error)));
-    try {adapter.applyPreferences(terminalPreferences(preferences, fontFamilyFor(preferences, fonts)));} catch (error) {reportError(String(error));}
+    try {adapter.applyPreferences({...terminalPreferences(preferences, fontFamilyFor(preferences, fonts)), screenReader});} catch (error) {reportError(String(error));}
     const keyboardLane = (event: Event) => {if (event.target === adapter.inputElement()) {inputLane.current = "keyboard"; keyboardInputEvent.current = event;}};
     const literalLane = () => {inputLane.current = "literal";};
     const pointerLane = (event: Event) => {pointerInputEvent.current = event;};
@@ -888,18 +889,26 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     return () => void tracker.stop();
   }, [surface, session.id]);
 
+  const [systemReader, setSystemReader] = useState(false);
   useEffect(() => {
-    try {session.adapter.applyPreferences(terminalPreferences(preferences, fontFamilyFor(preferences, fonts)));} catch (error) {reportError(String(error));}
+    let current = true;
+    void systemScreenReader().then(enabled => { if (current) setSystemReader(enabled); });
+    return () => { current = false; };
+  }, [session.adapter]);
+  const screenReader = preferences.screenReader || systemReader;
+
+  useEffect(() => {
+    try {session.adapter.applyPreferences({...terminalPreferences(preferences, fontFamilyFor(preferences, fonts)), screenReader});} catch (error) {reportError(String(error));}
     if (active) requestAnimationFrame(() => fit.current?.());
-  }, [preferences, fonts, session, active]);
+  }, [preferences, fonts, session, active, screenReader]);
 
   // A native surface has no text a screen reader can reach: while that preference is on, the rows are mirrored into the container (#1329).
   useEffect(() => {
     const element = container.current;
-    if (!element || !preferences.screenReader || !needsScreenReaderMirror(session.adapter)) return;
+    if (!element || !screenReader || !needsScreenReaderMirror(session.adapter)) return;
     const mirror = mountScreenReaderMirror(session.adapter, element);
     return () => mirror.dispose();
-  }, [session.adapter, preferences.screenReader]);
+  }, [session.adapter, screenReader]);
 
   // Covered output keeps its size and session but leaves focus and the accessibility tree.
   useEffect(() => {container.current?.toggleAttribute('inert', composing && !floatingComposer);}, [composing, floatingComposer]);
