@@ -98,7 +98,7 @@ class NativeTerminalSessionTest {
             revealHosts()
             if (js("window.__lz.click(\"button[aria-label='Delete $hostName']\")") == "true") click("[role=dialog] button", "Delete host")
         }
-        runCatching { openEngineSettings(); choose("input[name='terminal-engine'][value='auto']"); act("window.__lz.click(\"button[aria-label='Close Preferences']\")") }
+        runCatching { openTerminalSettings(); choose("input[name='terminal-engine'][value='auto']"); act("window.__lz.click(\"button[aria-label='Close Preferences']\")") }
         runCatching { scenario.moveToState(Lifecycle.State.RESUMED) }
         previousSoftwareGpu?.let { NativeSoftwareGpu.swap(it) }
     }
@@ -117,13 +117,12 @@ class NativeTerminalSessionTest {
 
     private fun <T> ui(block: (MainActivity) -> T) = PageDriver.onActivity(block)
 
-    /** The Preferences page, Terminal and accessibility, where the engine for new sessions is chosen. */
-    private fun openEngineSettings() {
+    private fun openTerminalSettings(category: String = "Terminal and accessibility") {
         PageDriver.poll("the Preferences page", 60) {
             if (js("window.__lz.click(\"button[aria-label='Preferences']\") || window.__lz.click(\".dialog button\", \"Preferences\")") == "true") true
             else { js("window.__lz.click('button.mobile-tools') || window.__lz.click(\"button[aria-label='Workspace tools']\")"); null }
         }
-        click(".settings-navigation button", "Terminal and accessibility")
+        click(".settings-navigation button", category)
     }
 
     private fun revealHosts() = PageDriver.poll("the hosts list", 60) {
@@ -132,7 +131,7 @@ class NativeTerminalSessionTest {
     }
 
     private fun chooseNative() {
-        openEngineSettings()
+        openTerminalSettings()
         try { until("the Native engine offered", 60, "(() => { const r = document.querySelector(${quoted(native)}); return !!r && !r.disabled; })()") }
         catch (error: AssertionError) { throw AssertionError("${error.message}: ${text("#terminal-engine-native-off")}", error) }
         choose(native)
@@ -1123,7 +1122,7 @@ class NativeTerminalSessionTest {
 
     private fun checkXtermSshEcho() {
         val choice = "input[name='terminal-engine'][value='xterm']"
-        openEngineSettings()
+        openTerminalSettings()
         choose(choice)
         until("xterm chosen", 30, "document.querySelector(${quoted(choice)}).checked")
         click("button[aria-label='Close Preferences']")
@@ -1343,7 +1342,7 @@ class NativeTerminalSessionTest {
             assertEquals("the app build cannot offer the native core", false, probe.getBoolean("available"))
             val cell = PageDriver.invoke("native_terminal_surface_cell", "{fontSize:14,dpr:1}")
             assertEquals("the surface command reports the build-time switch", "error The native terminal is disabled in this build", cell)
-            openEngineSettings()
+            openTerminalSettings()
             until("Native disabled in Preferences", 30, "document.querySelector(${quoted(native)})?.disabled === true")
             click("button[aria-label='Close Preferences']")
             val prompt = quoted(fixture.getString("prompt").trim())
@@ -1445,6 +1444,8 @@ class NativeTerminalSessionTest {
             // Every toolbar key writes what the shell expects; the modifiers apply to the soft keyboard's next character.
             toolbarKeys(id)
             verifySelectionCopy(id)
+            // Unicode text in its cells with the device's fonts (#2507).
+            unicodeInTheirCells(id)
             // The pane follows a rotation, the keyboard and a recreated Activity (#2502).
             val fresh = followsTheDevice(id)
 
@@ -1622,6 +1623,139 @@ class NativeTerminalSessionTest {
         } finally {
             runCatching { device.setOrientationNatural(); device.unfreezeRotation() }
             runCatching { shell("settings ${if (previousIme == "null") "delete secure $imeSetting" else "put secure $imeSetting $previousIme"}") }
+        }
+    }
+
+    /** The pixels of `columns` cells starting at `column` of screen row `row` that are not the pane's background. */
+    private fun cellInk(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int = 1): Int {
+        val background = bitmap.getPixel(bitmap.width - 1, bitmap.height - 1)
+        var count = 0
+        for (y in row * cell.second until minOf(bitmap.height, (row + 1) * cell.second))
+            for (x in column * cell.first until minOf(bitmap.width, (column + columns) * cell.first)) if (bitmap.getPixel(x, y) != background) count++
+        return count
+    }
+
+    /** The picture of `columns` cells of a row, to tell two glyphs from each other (a missing glyph's box is the same for every character). */
+    private fun cellPicture(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int): Int {
+        val pixels = IntArray(cell.first * columns * cell.second)
+        bitmap.getPixels(pixels, 0, cell.first * columns, column * cell.first, row * cell.second, cell.first * columns, cell.second)
+        return pixels.contentHashCode()
+    }
+
+    /** Whether some pixel of the cells is a colour and not a grey of the text colour: an emoji is drawn as it is. */
+    private fun hasColour(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int): Boolean {
+        for (y in row * cell.second until minOf(bitmap.height, (row + 1) * cell.second))
+            for (x in column * cell.first until minOf(bitmap.width, (column + columns) * cell.first)) {
+                val p = bitmap.getPixel(x, y)
+                val channels = intArrayOf((p shr 16) and 0xff, (p shr 8) and 0xff, p and 0xff)
+                if (channels.max() - channels.min() > 60) return true
+            }
+        return false
+    }
+
+    /**
+     * Unicode on the real renderer with the device's fonts (#2507): the owned shell prints a CJK line, an emoji line, a combining-mark line and a
+     * ZWJ family, each ended by a bar, and the surface's pixels are read cell by cell. Wide characters fill two cells, a combining mark and a ZWJ
+     * sequence stay in their cells (the bar after them is where the core's widths put it, and nothing is drawn past it), and the CJK and emoji
+     * glyphs are drawn with fallback fonts the device has (not a missing-glyph box, which is one picture for every character). The widths are the
+     * core's (emoji two cells, a documented difference from xterm.js 5.5.0: `fixtures/divergences.json`, `emoji-presentation`). A step of the one
+     * session case (a second case would start from the page the first leaves).
+     */
+    private fun unicodeInTheirCells(id: String) {
+        run {
+            evidence.put("systemFonts", shell("ls /system/fonts").decodeToString().lines().filter { it.isNotBlank() }.take(200).joinToString(" "))
+            typeIntoTheSurface(
+                "printf '\\ncjk:\\xe6\\x97\\xa5\\xe6\\x9c\\xac\\xe8\\xaa\\x9e|\\nemo:\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x9a\\x80|\\ncmb:e\\xcc\\x81a\\xcc\\x88|\\nzwj:\\xf0\\x9f\\x91\\xa8\\xe2\\x80\\x8d\\xf0\\x9f\\x91\\xa9|\\nend:|\\n'"
+            )
+            awaitRow(id, "the last printed line", { it == "end:|" })
+            // Plain-text output joins wrapped lines. Search gives the current physical screen row.
+            fun rowOf(prefix: String): Int {
+                val state = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
+                val top = state.getJSONObject("viewport").getInt("top")
+                val rowCount = state.getInt("rows")
+                val args = JSONObject().put("sessionId", id).put("query", prefix)
+                    .put("direction", "backward").put("from", top + rowCount)
+                val hit = JSONObject(PageDriver.invoke("terminal_core_search", args.toString()))
+                return (hit.getInt("row") - top).also {
+                    assertTrue("a visible screen row starting $prefix: $it", it in 0 until rowCount)
+                }
+            }
+            val (cjk, emo, cmb, zwj) = listOf("cjk:", "emo:", "cmb:", "zwj:").map(::rowOf)
+            val cell = cellOfTheSession()
+            evidence.put("cellWidthPx", cell.first).put("cellHeightPx", cell.second)
+            val bitmap = try {
+                settled("the printed lines") { cellInk(it, cell, cjk, 10) > 0 && cellInk(it, cell, zwj, 6) > 0 }
+            } catch (error: AssertionError) {
+                runCatching {
+                    val latest = surfacePixels()
+                    Evidence.recordPicture("native-session-surface-unicode-timeout", latest)
+                    evidence.put("unicodeSurfacePx", "${latest.width}x${latest.height}")
+                    evidence.put("unicodeRows", JSONObject().put("cjk", cjk).put("emoji", emo).put("combining", cmb).put("zwj", zwj))
+                    evidence.put("unicodeBars", JSONObject().put("cjk", cellInk(latest, cell, cjk, 10)).put("zwj", cellInk(latest, cell, zwj, 6)))
+                    evidence.put("unicodeCoreText", coreText(id))
+                }.onFailure(error::addSuppressed)
+                throw error
+            }
+            Evidence.recordPicture("native-session-surface-unicode", bitmap)
+            fun inked(row: Int, from: Int, count: Int) = (from until from + count).map { cellInk(bitmap, cell, row, it) }
+            fun assertCells(what: String, row: Int, from: Int, count: Int, barAt: Int) {
+                assertTrue("$what: every cell of the glyphs has ink ${inked(row, from, count)}", inked(row, from, count).all { it > 0 })
+                assertTrue("$what: the bar is in column $barAt, where the core put it ${inked(row, barAt, 1)}", cellInk(bitmap, cell, row, barAt) > 0)
+                assertEquals("$what: nothing is drawn past the bar", 0, cellInk(bitmap, cell, row, barAt + 1, 6))
+            }
+            // CJK: three ideographs in six cells, each pair its own picture (not one missing-glyph box three times).
+            assertCells("CJK", cjk, 4, 6, 10)
+            val pictures = (0 until 3).map { cellPicture(bitmap, cell, cjk, 4 + 2 * it, 2) }
+            evidence.put("cjkPictures", pictures.joinToString(","))
+            assertEquals("three different ideographs are three different pictures", 3, pictures.toSet().size)
+            assertTrue("the ideograph spans past its first cell", cellInk(bitmap, cell, cjk, 5) > 0)
+            // Emoji: two cells each, drawn in colour.
+            assertCells("emoji", emo, 4, 4, 8)
+            assertTrue("the grinning face is a colour glyph", hasColour(bitmap, cell, emo, 4, 2))
+            assertTrue("the rocket is a colour glyph", hasColour(bitmap, cell, emo, 6, 2))
+            assertTrue("the two emoji are two pictures", cellPicture(bitmap, cell, emo, 4, 2) != cellPicture(bitmap, cell, emo, 6, 2))
+            // Combining marks stay in their one cell.
+            assertCells("combining", cmb, 4, 2, 6)
+            // A ZWJ family is one glyph of two cells, not its members side by side.
+            assertCells("ZWJ", zwj, 4, 2, 6)
+            if (evidence.getString("systemFonts").contains("NotoSerifCJK-Regular.ttc")) {
+                fun selectFallback(family: String) {
+                    openTerminalSettings("Appearance and fonts")
+                    act(
+                        """(() => {
+                            const label = [...document.querySelectorAll('label')].find(node => node.textContent.trim() === 'CJK fallback families');
+                            const field = label?.querySelector('input');
+                            if (!field) return false;
+                            field.id = 'lz-cjk-fallback';
+                            return true;
+                        })()""".trimIndent(),
+                        "the CJK fallback preference"
+                    )
+                    set("#lz-cjk-fallback", family)
+                    click("button[aria-label='Close Preferences']")
+                    assertEquals("the same native session after changing fonts", id, session())
+                }
+
+                fun captureFallback(what: String, match: (List<Int>) -> Boolean): List<Int> {
+                    val row = rowOf("cjk:")
+                    fun glyphs(image: Bitmap) = (0 until 3).map { cellPicture(image, cell, row, 4 + 2 * it, 2) }
+                    val image = settled(what) {
+                        cellInk(it, cell, row, 10) > 0 && match(glyphs(it))
+                    }
+                    Evidence.recordPicture("native-session-surface-$what", image)
+                    return glyphs(image)
+                }
+
+                selectFallback("Noto Serif CJK JP")
+                val serif = captureFallback("cjk-serif") { glyphs ->
+                    glyphs.toSet().size == 3 && glyphs.zip(pictures).all { (after, before) -> after != before }
+                }
+                evidence.put("cjkSerifPictures", serif.joinToString(","))
+                selectFallback("Noto Sans CJK SC")
+                captureFallback("cjk-sans") { it == pictures }
+            } else {
+                evidence.put("cjkFallbackPreference", "Noto Serif CJK unavailable on this image")
+            }
         }
     }
 }
