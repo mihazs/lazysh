@@ -32,6 +32,7 @@ Layers and where they run:
 | --- | --- | --- | --- |
 | Adapter contract: bytes in order, modes, scroll, selection, search, OSC 7 and OSC 52 events, active switching, disposal | `terminalAdapter.contract.ts` run by `terminalBackends.contract.test.ts` | Vitest | `client` |
 | The same contract over the real core | `nativeTerminalAdapter.realCore.test.ts` | Vitest over the real core | `herdr-native` |
+| Mosh keyboard viewport | `e2e/mosh-keyboard.spec.ts` exercises the actual workspace with canonical frames from a synthetic host on both browser engines. It checks remote grid intents, prompt rows above the toolbar and one typed answer during viewport shrink. Native uses the adapter grid and cell bounds, while xterm.js measures DOM rows. | Playwright | `client` |
 | Adapter semantics: window of rows, paste bracketing, wheel, search, canonical Mosh resize, input order | `nativeTerminalAdapter.test.ts` | Vitest | `client` |
 | Renderer look (theme, font, cursor, bold) sent once per change | `nativeTerminalAdapter.look.test.ts`; `panes.rs` host tests | Vitest; Rust | `client`; `native-terminal-bridge` |
 | Saved toolbar actions | `TerminalPane.test.tsx` runs a saved chord and a held alternate over a native session. It checks the exact transport bytes, suppresses the duplicate menu and click events, and inserts the edited snippet through the native adapter without submitting it. | Vitest | `client` |

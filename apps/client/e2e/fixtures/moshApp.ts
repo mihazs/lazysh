@@ -1,10 +1,11 @@
 import type {Page} from '@playwright/test';
 import type {CoreMouseInput} from '../../src/nativeCoreBridge';
 import type {TerminalBackendId} from '../../src/terminalAdapter';
+import type {CoreKeyInput} from '../../src/terminalPlatformKeys';
 import type {HeadlessCore} from '../../src/xterm/nativeCoreHeadless';
 import {installNativeBridge} from './nativeBridge';
 
-export type MoshAppState={resizes:{cols:number;rows:number}[];writes:string[];acknowledged:number;nativeBytes:number;nativeMouse:CoreMouseInput[];emit:(bytes:number[])=>void;closed:()=>void};
+export type MoshAppState={resizes:{cols:number;rows:number}[];writes:string[];acknowledged:number;nativeBytes:number;nativeMouse:CoreMouseInput[];nativeKeys:CoreKeyInput[];emit:(bytes:number[])=>void;closed:()=>void};
 declare global {interface Window {nativeMoshApp:MoshAppState;nativeMoshAnswer?:(cols:number,rows:number)=>Promise<number[]>}}
 
 /** Opens the actual workspace on a synthetic Mosh host whose session starts with `first`; `answer` is the remote's frame for each resize. */
@@ -12,7 +13,7 @@ export async function openMoshApp(page:Page,host:string,first:number[],answer?:(
   if(answer)await page.exposeFunction('nativeMoshAnswer',answer);
   await installNativeBridge(page,Object.assign({reason:'Synthetic Mosh rendering fixture',generation:'1'},{supported:true,enabled:true,nonce:'b'.repeat(64)}));
   await page.addInitScript(({first,host,engine})=>{
-    const state:MoshAppState={resizes:[],writes:[],acknowledged:0,nativeBytes:0,nativeMouse:[],emit:()=>{},closed:()=>{}};
+    const state:MoshAppState={resizes:[],writes:[],acknowledged:0,nativeBytes:0,nativeMouse:[],nativeKeys:[],emit:()=>{},closed:()=>{}};
     Object.assign(window,{nativeMoshApp:state});
     let core:HeadlessCore|undefined;
     let output=Promise.resolve();
@@ -34,8 +35,9 @@ export async function openMoshApp(page:Page,host:string,first:number[],answer?:(
       }
       if(native&&command==='terminal_core_snapshot'){await output;return core!.snapshot();}
       if(native&&command==='terminal_core_input'){
-        const event=args.input as CoreMouseInput;
+        const event=args.input as CoreMouseInput|CoreKeyInput;
         if(event.type==='mouse')state.nativeMouse.push(event);
+        else if(event.type==='key')state.nativeKeys.push(event);
         else throw new Error('Unexpected native Mosh fixture input');
         return;
       }
