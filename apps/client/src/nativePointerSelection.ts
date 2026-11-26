@@ -72,8 +72,6 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
       if (event.button !== 0) return;
       const cell = adapter.cellAt(event.clientX, event.clientY);
       if (!cell) return;
-      if (event.detail >= 3) { adapter.select(adapter.selectLineAt(cell.y)); drag = undefined; return; }
-      if (event.detail === 2) { adapter.select(adapter.selectWordAt(cell)); drag = undefined; return; }
       const current = adapter.selectionRange();
       if (event.shiftKey && current) {
         // The end farther from the click stays fixed.
@@ -86,6 +84,15 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
     cancelHold();
     const pending = {x: event.clientX, y: event.clientY, ready: false, timer: setTimeout(() => { pending.ready = true; }, TOUCH_SELECTION_DELAY)};
     hold = pending;
+  };
+
+  // Pointer events carry zero detail in Chromium. The matching mouse event has the click count.
+  const mouseDown = (event: MouseEvent) => {
+    if (!drag || event.detail < 2 || event.button !== 0) return;
+    const cell = adapter.cellAt(event.clientX, event.clientY);
+    if (!cell) return;
+    adapter.select(event.detail === 2 ? adapter.selectWordAt(cell) : adapter.selectLineAt(cell.y));
+    drag = undefined;
   };
 
   const move = (event: PointerEvent) => {
@@ -118,7 +125,7 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
 
   // The platform's long-press menu would compete with the selection.
   const menu = (event: Event) => { if (hold) event.preventDefault(); };
-  const listeners: [string, (event: never) => void][] = [['pointerdown', down], ['pointermove', move], ['pointerup', up], ['pointercancel', up], ['contextmenu', menu]];
+  const listeners: [string, (event: never) => void][] = [['pointerdown', down], ['mousedown', mouseDown], ['pointermove', move], ['pointerup', up], ['pointercancel', up], ['contextmenu', menu]];
   for (const [type, listener] of listeners) anchor.addEventListener(type, listener as EventListener);
   return {dispose: () => { cancelHold(); stopEdge(); for (const [type, listener] of listeners) anchor.removeEventListener(type, listener as EventListener); }};
 }

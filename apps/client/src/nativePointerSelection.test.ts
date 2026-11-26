@@ -17,9 +17,12 @@ async function mounted(output = 'hello world\r\nsecond line here') {
   await adapter.write!(new TextEncoder().encode(output));
   await adapter.attach({kind: 'native', anchorId: element.id});
   const fire = (type: string, x: number, y: number, init: {detail?: number; shiftKey?: boolean; pointerType?: string} = {}) => {
-    const event = new MouseEvent(type, {clientX: x, clientY: y, detail: init.detail ?? 1, shiftKey: init.shiftKey, button: 0, bubbles: true, cancelable: true});
+    const detail = init.detail ?? 1;
+    const options = {clientX: x, clientY: y, shiftKey: init.shiftKey, button: 0, bubbles: true, cancelable: true};
+    const event = new MouseEvent(type, {...options, detail: 0});
     Object.defineProperty(event, 'pointerType', {value: init.pointerType ?? 'mouse'});
     element.dispatchEvent(event);
+    if (type === 'pointerdown' && detail > 1) element.dispatchEvent(new MouseEvent('mousedown', {...options, detail}));
     return event;
   };
   return {adapter, fire, core};
