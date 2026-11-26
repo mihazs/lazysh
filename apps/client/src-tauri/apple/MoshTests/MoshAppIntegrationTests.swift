@@ -161,7 +161,8 @@ final class MoshAppIntegrationTests: XCTestCase {
         });
         stage = 'release native transport';
         const snapshot = await invoke('terminal_core_release', {sessionId, events: fallbackEvents});
-        if (typeof snapshot !== 'string' || !snapshot.includes('LAZYSH_IOS_ACK'))
+        const ansi = typeof snapshot === 'string' ? snapshot : snapshot?.ansi;
+        if (typeof ansi !== 'string' || !ansi.includes('LAZYSH_IOS_ACK'))
           throw new Error('The native snapshot lost the input acknowledgement');
         await invoke('native_terminal_surface_remove', {session: sessionId});
         stage = 'send fallback input';
