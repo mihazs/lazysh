@@ -12,7 +12,7 @@ function measure(adapter: string, { workload = 'W12', variant = null, metric, va
   const base = { adapter, workload, variant, metric, correct };
   return (p95 === undefined ? perRun(base, values) : perRunSummaries(base, values.map(p50 => ({ p50, p95, n: 100 }))))!;
 }
-const stream = { cols: 49, rows: 15, fixtures: { W2: 'a'.repeat(64) } };
+const stream = { cols: 49, rows: 15, fixtures: { W2: 'a'.repeat(64), W3: 'b'.repeat(64), W4: 'c'.repeat(64) } };
 const arm = (adapter: string, host = 'bench host'): Arm => ({ adapter, engine: adapter, host, gpu: null, page: null, notes: '', stream });
 const record = (arms: Arm[], measurements: Measurement[], overrides: Partial<EvidenceRecord> = {}): EvidenceRecord => ({
   schema: 1, kind: 'android-engine-comparison', runId: 'engine-20261122T200000Z', label: null, startedAt: '', finishedAt: '', source: { commit: null, dirty: null },
