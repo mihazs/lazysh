@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { copyFile, lstat, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { artifactTargets, buildIdentity, companionMaximumBytes, digestFile, stagePackages, type ArtifactTarget } from './release-artifacts';
 import { publishedCompanion, requireBundled, requireBundledImage, type DesktopTarget, type PublishedCompanion } from './release-bundle';
@@ -289,12 +289,39 @@ export const debCompanion = (deb: string, published: PublishedCompanion) => unpa
   requirePlatform((await lstat(installed)).mode & 0o111, 'Debian package lazysh-agent is not executable');
 });
 /** The AppImage carries it in its own `usr/bin`, with the dynamic section linuxdeploy rewrote; extraction needs neither FUSE nor a display. */
-export const appImageCompanion = (image: string, published: PublishedCompanion) => unpacked(async directory => {
+export const appImageCompanion = (image: string, published: PublishedCompanion, version?: string) => unpacked(async directory => {
   await native(resolve(image), ['--appimage-extract'], process.env, 180_000, undefined, directory);
   const installed = join(directory, 'squashfs-root/usr/bin/lazysh-agent');
-  await requireBundledImage(installed, published, 'AppImage');
+  if (version === undefined) await requireBundledImage(installed, published, 'AppImage');
+  else await requireBundled(installed, published, 'AppImage');
   requirePlatform((await lstat(installed)).mode & 0o111, 'AppImage lazysh-agent is not executable');
+  if (version !== undefined) {
+    const actual = await native(installed, ['--version'], { HOME: directory, XDG_CONFIG_HOME: directory }, 10_000);
+    requirePlatform(actual === `lazysh-agent ${version}`, 'AppImage companion version mismatch');
+  }
 });
+
+export async function restoreAppImageCompanion(image: string, published: PublishedCompanion, version: string) {
+  const directory = await mkdtemp(join(dirname(resolve(image)), '.lazysh-appimage-'));
+  try {
+    await native(resolve(image), ['--appimage-extract'], process.env, 180_000, undefined, directory);
+    const appDir = join(directory, 'squashfs-root');
+    const installed = join(appDir, 'usr/bin/lazysh-agent');
+    await requireBundledImage(installed, published, 'AppImage');
+    // linuxdeploy's RUNPATH rewrite can break the static PIE even when its code sections match.
+    await copyFile(published.file, installed);
+    const cache = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
+    const packer = join(cache, 'tauri/linuxdeploy-plugin-appimage.AppImage');
+    const candidate = join(directory, 'restored.AppImage');
+    await native(packer, ['--appdir', appDir], {
+      ...process.env, APPIMAGE_EXTRACT_AND_RUN: '1', ARCH: 'x86_64', OUTPUT: candidate,
+    }, 240_000, undefined, directory);
+    await appImageCompanion(candidate, published, version);
+    await rename(candidate, resolve(image));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
 /** The bundler signs everything in the app, so an app's copy is the published one once both signatures are removed. */
 export const macosCompanion = (app: string, published: PublishedCompanion, where: string) => unpacked(async directory => {
   const stripped = async (source: string, name: string) => {
@@ -324,7 +351,7 @@ async function desktop(target: ArtifactTarget, root: string, output: string) {
     requirePlatform(await native('dpkg-deb', ['--field', deb, 'Architecture']) === 'amd64', 'Debian architecture mismatch');
     const image = await exactlyOne('appimage/*.AppImage', bundle);
     await debCompanion(deb, published);
-    await appImageCompanion(image, published);
+    await restoreAppImageCompanion(image, published, identity.version);
     sources.push(deb, image);
   } else if (target === 'windows-x64') {
     const installer = await exactlyOne('nsis/*.exe', bundle);

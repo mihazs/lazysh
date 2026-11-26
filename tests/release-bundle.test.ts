@@ -145,3 +145,19 @@ test.skipIf(process.platform !== 'linux' || !objcopy)('an AppImage must carry th
   await writeFile(join(root, 'text'), 'a script is no executable image');
   await expect(appImageCompanion(await appImageWith(root, 'script', join(root, 'text')), published)).rejects.toThrow('not an ELF64 image');
 }));
+
+test.skipIf(process.platform !== 'linux')('the final AppImage companion must execute and report the release version', () => owned(async root => {
+  const published = async (script: string) => {
+    const directory = await stagedCompanion(root, 'linux-agent-x64', Buffer.from(script));
+    return publishedCompanion(identity, 'linux-x64', directory);
+  };
+
+  const broken = await published('#!/bin/sh\nexit 139\n');
+  await expect(appImageCompanion(await appImageWith(root, 'crashes', broken.file), broken, identity.version))
+    .rejects.toThrow('Release validation failed: lazysh-agent');
+
+  const working = await published('#!/bin/sh\nprintf "lazysh-agent 0.23.0\\n"\n');
+  const image = await appImageWith(root, 'working', working.file);
+  await appImageCompanion(image, working, identity.version);
+  await expect(appImageCompanion(image, working, '0.23.1')).rejects.toThrow('AppImage companion version mismatch');
+}));
