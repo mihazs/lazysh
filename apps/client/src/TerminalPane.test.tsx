@@ -165,6 +165,36 @@ describe('toolbar keys on a native session (#2493)',()=>{
     adapter.paste('c');
     await waitFor(() => expect(core.inputs.map(({data}) => data)).toEqual(['\x03', 'c', 'c']));
   });
+
+  it('runs saved chords and long-press alternatives once, and keeps snippets editable on native', async () => {
+    mocks.invoke.mockResolvedValue({});
+    savePreferences({...defaults,toolbar:['enter'],toolbarAlternates:{enter:{action:'custom',keys:'Escape'}},
+      chords:[{label:'Interrupt process',keys:'Ctrl+C'}],snippets:[{label:'Open project',text:'cd project'}]});
+    const core = createHeadlessCore({rows:4,columns:20,feed:true});
+    const adapter = await openNativeTerminalAdapter(core);
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+
+    pressMore('Interrupt process');
+    const enter = screen.getByRole('button',{name:'enter'});
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(enter,{pointerId:1,pointerType:'touch',button:0});
+      act(()=>vi.advanceTimersByTime(550));
+      fireEvent.contextMenu(enter);
+      fireEvent.pointerUp(enter,{pointerId:1,pointerType:'touch'});
+      fireEvent.click(enter,{detail:1});
+    } finally { vi.useRealTimers(); }
+    expect(mocks.writeSequence.mock.calls.map(call=>call[1])).toEqual([['\x03'],['\x1b']]);
+    expect(mocks.write).not.toHaveBeenCalled();
+
+    pressMore('Open project');
+    const editor = screen.getByRole<HTMLTextAreaElement>('textbox',{name:'Compose text'});
+    expect(editor.value).toBe('cd project');
+    expect(core.inputs).toEqual([]);
+    fireEvent.change(editor,{target:{value:'cd other'}});
+    fireEvent.click(screen.getByRole('button',{name:'Insert'}));
+    await waitFor(()=>expect(core.inputs.map(({data})=>data)).toEqual(['cd other']));
+  });
 });
 describe('selection on a native session',()=>{
   async function nativePane(output:string) {
@@ -570,7 +600,10 @@ it('still revokes an unfocused keyboard editor when a toolbar modifier is armed'
 
 function dpadFixture(initial="") {
   vi.useFakeTimers();savePreferences({...defaults,toolbar:['dpad','ctrl','meta','shift']});
-  const owner=mountInputOwner(initial);fireEvent.click(screen.getByRole('button',{name:'dpad'}));
+  return {...mountInputOwner(initial),...dpadControls()};
+}
+function dpadControls() {
+  fireEvent.click(screen.getByRole('button',{name:'dpad'}));
   const pad=screen.getByRole('group',{name:'Terminal D-pad'});
   pad.setPointerCapture=vi.fn();
   const arrow=(direction:string)=>within(pad).getByRole('button',{name:`D-pad ${direction}`,hidden:true});
@@ -580,9 +613,28 @@ function dpadFixture(initial="") {
   const up=()=>fireEvent.pointerUp(pad,point);
   const advance=(milliseconds:number)=>act(()=>vi.advanceTimersByTime(milliseconds));
   const bytes=()=>mocks.write.mock.calls.map(call=>call[1]);
-  return {...owner,pad,arrow,point,down,move,up,advance,bytes};
+  return {pad,arrow,point,down,move,up,advance,bytes};
 }
 describe('expanded D-pad pointer ownership',()=>{
+  it('repeats a shifted native D-pad hold and resets the modifier on release',async()=>{
+    mocks.invoke.mockResolvedValue({});
+    savePreferences({...defaults,toolbar:['dpad','shift']});
+    const adapter=await openNativeTerminalAdapter(createHeadlessCore({rows:4,columns:20,feed:true}));
+    render(<TerminalPane session={{id:'ssh',name:'Host',connected:true,adapter} as unknown as LiveSession} active reportError={vi.fn()} />);
+    vi.useFakeTimers();
+    try {
+      const pad=dpadControls();
+      fireEvent.click(screen.getByRole('button',{name:'Shift'}));
+      pad.down();pad.advance(480);pad.move(-24,0);pad.advance(160);pad.up();
+      fireEvent.click(pad.arrow('up'),{detail:1});
+      pad.advance(800);
+      const shifted = ['\x1b[1;2A','\x1b[1;2A','\x1b[1;2D','\x1b[1;2D'];
+      expect(pad.bytes()).toEqual(shifted);
+      fireEvent.click(pad.arrow('right'),{detail:0});
+      expect(pad.bytes()).toEqual([...shifted,'\x1b[C']);
+    } finally { vi.useRealTimers(); }
+  });
+
   function touchStart(target:Element,count=1) {
     const event=new Event('touchstart',{bubbles:true,cancelable:true});
     Object.defineProperty(event,'touches',{value:Array.from({length:count},(_,identifier)=>({identifier}))});
