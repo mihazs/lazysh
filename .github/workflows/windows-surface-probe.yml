@@ -30,12 +30,19 @@ on:
           - windows-2025
           - windows-2022
         default: windows-2025
+      reader_case:
+        description: Screen-reader rehearsal
+        type: choice
+        options:
+          - uia
+          - narrator
+        default: uia
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.reader_runner || 'default' }}-${{ inputs.reader_case || 'default' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -121,9 +128,13 @@ jobs:
           cargo test "${args[@]}" -- --list --exact "$case_name" | grep -Fx "$case_name: test"
           cargo test "${args[@]}" -- --exact "$case_name"
       - name: Verify Windows screen reader detection with an owned UI Automation client
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.reader_case == 'uia'
         run: |
           args=(--manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib)
           case_name=screen_reader::windows_tests::the_windows_reader_probe_tracks_an_owned_uia_subscription
           cargo test "${args[@]}" -- --list --ignored --exact "$case_name" | grep -Fx "$case_name: test"
           cargo test "${args[@]}" -- --ignored --exact "$case_name"
+      - name: Observe the running state of a task-owned Narrator
+        if: github.event_name == 'workflow_dispatch' && inputs.reader_case == 'narrator'
+        shell: pwsh
+        run: ./.github/scripts/windows-narrator-probe.ps1
