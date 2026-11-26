@@ -1,13 +1,12 @@
 //! The Win32 child surface below the app's transparent WebView2 (#1332).
+use super::desktop::{display, drawing, on_main, Pane, PANES};
 use super::{panes::look, Anchor, SurfaceState};
-use crate::native_renderer::{policy, Host, Look};
+use crate::native_renderer::{policy, Host};
 use lazysh_terminal_renderer_wgpu::{Target, Window};
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle,
 };
-use std::{
-    cell::RefCell, collections::HashMap, io, num::NonZeroIsize, ptr::null_mut, sync::OnceLock,
-};
+use std::{io, num::NonZeroIsize, ptr::null_mut, sync::OnceLock};
 use tauri::{AppHandle, Manager};
 use windows_sys::Win32::{
     Foundation::HWND,
@@ -18,19 +17,15 @@ use windows_sys::Win32::{
     },
 };
 
-thread_local! {
-    static PANES: RefCell<HashMap<String, Pane>> = RefCell::new(HashMap::new());
-}
-
 const CLASS: *const u16 = windows_sys::w!("LazyshNativeTerminalSurface");
 
 fn win32_error() -> String {
     io::Error::last_os_error().to_string()
 }
 
-struct Child(HWND);
+pub(super) struct Surface(HWND);
 
-impl Child {
+impl Surface {
     fn new(parent: HWND) -> Result<Self, String> {
         static REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
         REGISTERED
@@ -83,7 +78,7 @@ impl Child {
     }
 }
 
-impl Drop for Child {
+impl Drop for Surface {
     fn drop(&mut self) {
         // SAFETY: The owner thread destroys its child once after the renderer has stopped.
         unsafe { DestroyWindow(self.0) };
@@ -102,158 +97,50 @@ fn pixels(anchor: Anchor) -> (i32, i32, i32, i32) {
     )
 }
 
-struct Pane {
-    // Field drop order keeps the HWND live until the renderer has stopped.
-    renderer: Host,
-    child: Child,
-    state: SurfaceState,
-    look: Look,
-    scale: f32,
-    background: u32,
-}
+pub(super) const DISPLAY_UNAVAILABLE: &str = "The WebView2 surface is unavailable";
 
-static DISPLAY: OnceLock<Result<(), String>> = OnceLock::new();
-
-pub(crate) fn install(app: &tauri::App) {
-    let _ = DISPLAY.set((|| {
-        let window = app
-            .get_webview_window("main")
-            .ok_or("The app window is gone")?;
-        window
-            .as_ref()
-            .set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)))
-            .map_err(|error| error.to_string())?;
-        window.on_window_event(|event| {
-            if matches!(
-                event,
-                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
-            ) {
-                PANES.with_borrow_mut(HashMap::clear);
-            }
-        });
-        Ok(())
-    })());
-}
-
-pub(crate) fn display() -> Result<(), String> {
-    DISPLAY
-        .get()
-        .cloned()
-        .unwrap_or_else(|| Err("The WebView2 surface is unavailable".into()))
-}
-
-async fn on_main<T: Send + 'static>(
-    app: &AppHandle,
-    work: impl FnOnce(&AppHandle, &mut HashMap<String, Pane>) -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    let (reply, answer) = tokio::sync::oneshot::channel();
-    let handle = app.clone();
-    app.run_on_main_thread(move || {
-        let _ = reply.send(PANES.with_borrow_mut(|panes| work(&handle, panes)));
-    })
-    .map_err(|error| error.to_string())?;
-    answer.await.map_err(|error| error.to_string())?
-}
-
-pub(super) async fn place(
+pub(crate) async fn place(
     app: &AppHandle,
     session: String,
     anchor: Anchor,
     background: u32,
 ) -> Result<SurfaceState, String> {
     display()?;
-    on_main(app, move |app, panes| {
-        let scale = anchor.dpr as f32;
-        let wanted = look(&session, scale, background);
-        if let Some(pane) = panes.get_mut(&session) {
-            let (width, height) = pane.child.position(anchor)?;
-            if (pane.state.width, pane.state.height) != (width, height) {
-                pane.renderer.resize(width, height)?;
-                (pane.state.width, pane.state.height) = (width, height);
+    let handle = app.clone();
+    on_main(app, move || {
+        PANES.with_borrow_mut(|panes| {
+            let scale = anchor.dpr as f32;
+            let wanted = look(&session, scale, background);
+            if let Some(pane) = panes.get_mut(&session) {
+                let (width, height) = pane.surface.position(anchor)?;
+                return pane.update(width, height, wanted, anchor, background);
             }
-            if pane.look != wanted {
-                pane.renderer.set_look(wanted.clone())?;
-                pane.look = wanted;
-            }
-            (pane.scale, pane.background) = (scale, background);
-            return Ok(pane.state.clone());
-        }
-        let (core, inbox) = crate::terminal_core::live(&session)
-            .ok()
-            .and_then(|core| core.drawing())
-            .ok_or("The session has no native core to draw")?;
-        let window = app
-            .get_webview_window("main")
-            .ok_or("The app window is gone")?;
-        let parent = window.hwnd().map_err(|error| error.to_string())?.0;
-        let child = Child::new(parent)?;
-        let (width, height) = child.position(anchor)?;
-        let hwnd =
-            NonZeroIsize::new(child.0 as isize).ok_or("The terminal child window is gone")?;
-        // SAFETY: The Pane drops the renderer before destroying its child window.
-        let drawable = unsafe {
-            Window::new(
-                RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
-                RawWindowHandle::Win32(Win32WindowHandle::new(hwnd)),
-            )
-        };
-        let mut policy = policy();
-        // Direct3D 12 is the Windows policy’s first backend and the one with composition evidence.
-        policy.backends.truncate(1);
-        let target = Target::on_window(drawable, width, height).with_policy(policy);
-        let renderer = Host::attach(core, inbox, target, 1, wanted.clone())?;
-        let state = SurfaceState {
-            placed: true,
-            ready: true,
-            generation: 1,
-            width,
-            height,
-            ..SurfaceState::default()
-        };
-        panes.insert(
-            session,
-            Pane {
-                renderer,
-                child,
-                state: state.clone(),
-                look: wanted,
-                scale,
-                background,
-            },
-        );
-        Ok(state)
-    })
-    .await
-}
-
-pub(super) async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
-    on_main(app, move |_, panes| {
-        if let Some(pane) = panes.get_mut(&session) {
-            let wanted = look(&session, pane.scale, pane.background);
-            if pane.look != wanted {
-                pane.renderer.set_look(wanted.clone())?;
-                pane.look = wanted;
-            }
-        }
-        Ok(())
-    })
-    .await
-}
-
-pub(super) async fn remove(app: &AppHandle, session: String) -> Result<(), String> {
-    on_main(app, move |_, panes| {
-        panes.remove(&session);
-        Ok(())
-    })
-    .await
-}
-
-pub(super) async fn state(app: &AppHandle, session: String) -> Result<SurfaceState, String> {
-    on_main(app, move |_, panes| {
-        Ok(panes
-            .get(&session)
-            .map(|pane| pane.state.clone())
-            .unwrap_or_default())
+            let (core, inbox) = drawing(&session)?;
+            let window = handle
+                .get_webview_window("main")
+                .ok_or("The app window is gone")?;
+            let parent = window.hwnd().map_err(|error| error.to_string())?.0;
+            let child = Surface::new(parent)?;
+            let (width, height) = child.position(anchor)?;
+            let hwnd =
+                NonZeroIsize::new(child.0 as isize).ok_or("The terminal child window is gone")?;
+            // SAFETY: The Pane drops the renderer before destroying its child window.
+            let drawable = unsafe {
+                Window::new(
+                    RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
+                    RawWindowHandle::Win32(Win32WindowHandle::new(hwnd)),
+                )
+            };
+            let mut policy = policy();
+            // Direct3D 12 is the Windows policy’s first backend and the one with composition evidence.
+            policy.backends.truncate(1);
+            let target = Target::on_window(drawable, width, height).with_policy(policy);
+            let renderer = Host::attach(core, inbox, target, 1, wanted.clone())?;
+            let pane = Pane::new(renderer, child, width, height, wanted, anchor, background);
+            let state = pane.state();
+            panes.insert(session, pane);
+            Ok(state)
+        })
     })
     .await
 }

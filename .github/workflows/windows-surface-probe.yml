@@ -16,6 +16,7 @@ on:
       - .github/scripts/windows-terminal-zig.sh
       - apps/client/src-tauri/src/native_terminal_surface.rs
       - apps/client/src-tauri/src/native_terminal_surface/windows.rs
+      - apps/client/src-tauri/src/native_terminal_surface/desktop.rs
       - packages/terminal-renderer-wgpu/src/adapter.rs
   push:
     branches: [main]

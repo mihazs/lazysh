@@ -15,10 +15,29 @@ use tauri::Manager;
 mod android;
 #[cfg(all(target_os = "linux", native_terminal_core))]
 pub(crate) mod linux;
+#[cfg(all(target_os = "macos", native_terminal_core))]
+mod macos;
 #[cfg(native_terminal_core)]
 pub(crate) mod panes;
 #[cfg(all(target_os = "windows", native_terminal_core))]
-pub(crate) mod windows;
+mod windows;
+
+#[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
+pub(crate) mod desktop;
+#[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
+use desktop as desktop_platform;
+#[cfg(all(target_os = "linux", native_terminal_core))]
+use linux as desktop_platform;
+
+#[cfg(not(target_os = "android"))]
+macro_rules! desktop_surface {
+    ($method:ident($($arg:expr),*), $fallback:expr) => {{
+        #[cfg(all(any(target_os = "linux", target_os = "macos", target_os = "windows"), native_terminal_core))]
+        { desktop_platform::$method($($arg),*).await }
+        #[cfg(not(all(any(target_os = "linux", target_os = "macos", target_os = "windows"), native_terminal_core)))]
+        { $fallback }
+    }};
+}
 
 /// Longest session id the shell accepts; the renderer's ids are UUIDs, a local terminal's `local:` and a UUID.
 const MAX_SESSION_LEN: usize = 64;
@@ -207,22 +226,11 @@ pub async fn native_terminal_surface_place(
         }))
         .await
     }
-    #[cfg(all(target_os = "linux", native_terminal_core))]
-    {
-        linux::place(&app, session, anchor, background).await
-    }
-    #[cfg(all(target_os = "windows", native_terminal_core))]
-    {
-        windows::place(&app, session, anchor, background).await
-    }
-    #[cfg(not(any(
-        target_os = "android",
-        all(any(target_os = "linux", target_os = "windows"), native_terminal_core)
-    )))]
-    {
+    #[cfg(not(target_os = "android"))]
+    desktop_surface!(place(&app, session, anchor, background), {
         let _ = app;
         Err(unavailable())
-    }
+    })
 }
 
 /// Tells the renderer how the session looks (the preferences the page applies): from its next surface on, and
@@ -259,14 +267,19 @@ async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
     linux::relook(app, session).await
 }
 
-#[cfg(all(target_os = "windows", native_terminal_core))]
+#[cfg(all(any(target_os = "macos", target_os = "windows"), native_terminal_core))]
 async fn relook(app: &AppHandle, session: String) -> Result<(), String> {
-    windows::relook(app, session).await
+    desktop::relook(app, session).await
 }
 
 #[cfg(all(
     native_terminal_core,
-    not(any(target_os = "android", target_os = "linux", target_os = "windows"))
+    not(any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ))
 ))]
 async fn relook(_: &AppHandle, _: String) -> Result<(), String> {
     Err(unavailable())
@@ -316,22 +329,11 @@ pub async fn native_terminal_surface_remove(app: AppHandle, session: String) -> 
     {
         call::<()>(&app, "remove", serde_json::json!({ "session": session })).await
     }
-    #[cfg(all(target_os = "linux", native_terminal_core))]
-    {
-        linux::remove(&app, session).await
-    }
-    #[cfg(all(target_os = "windows", native_terminal_core))]
-    {
-        windows::remove(&app, session).await
-    }
-    #[cfg(not(any(
-        target_os = "android",
-        all(any(target_os = "linux", target_os = "windows"), native_terminal_core)
-    )))]
-    {
+    #[cfg(not(target_os = "android"))]
+    desktop_surface!(remove(&app, session), {
         let _ = app;
         Ok(())
-    }
+    })
 }
 
 /// The session's surface as it is now.
@@ -346,22 +348,11 @@ pub async fn native_terminal_surface_state(
     {
         call(&app, "state", serde_json::json!({ "session": session })).await
     }
-    #[cfg(all(target_os = "linux", native_terminal_core))]
-    {
-        linux::state(&app, session).await
-    }
-    #[cfg(all(target_os = "windows", native_terminal_core))]
-    {
-        windows::state(&app, session).await
-    }
-    #[cfg(not(any(
-        target_os = "android",
-        all(any(target_os = "linux", target_os = "windows"), native_terminal_core)
-    )))]
-    {
+    #[cfg(not(target_os = "android"))]
+    desktop_surface!(state(&app, session), {
         let _ = app;
         Err(unavailable())
-    }
+    })
 }
 
 /// What the surface's keyboard editor delivered since the last call, once and in order: committed text, keys (as the core takes them)
@@ -412,7 +403,10 @@ pub async fn native_terminal_surface_focus(
 
 #[cfg(not(any(
     target_os = "android",
-    all(any(target_os = "linux", target_os = "windows"), native_terminal_core)
+    all(
+        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        native_terminal_core
+    )
 )))]
 fn unavailable() -> String {
     "This build has no native terminal surface.".into()
@@ -642,7 +636,12 @@ mod tests {
 
     #[test]
     fn only_the_plugins_stable_code_reaches_the_page() {
-        assert_eq!(rejection("InvokeRejected(ErrorResponse { code: None, message: Some(\"native_surface_disabled\") })"), "native_surface_disabled");
+        assert_eq!(
+            rejection(
+                "InvokeRejected(ErrorResponse { code: None, message: Some(\"native_surface_disabled\") })"
+            ),
+            "native_surface_disabled"
+        );
         assert_eq!(rejection("native_surface_anchor"), "native_surface_anchor");
         assert_eq!(
             rejection("java.lang.IllegalStateException: surface at /data/user/0/app.lazysh.client"),
