@@ -60,13 +60,17 @@ final class MoshAppIntegrationTests: XCTestCase {
     wait(for: [replied], timeout: 15)
   }
 
-  func testNativeTerminalBuildAdmitsTheMetalRenderer() throws {
+  private func loadedTerminalWebView() throws -> WKWebView {
     let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
       guard let view = self.appWebView(), let url = view.url else { return false }
       return url.scheme != "about" && !view.isLoading
     }, object: nil)
     XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 30), .completed)
-    let view = try XCTUnwrap(appWebView())
+    return try XCTUnwrap(appWebView())
+  }
+
+  func testNativeTerminalBuildAdmitsTheMetalRenderer() throws {
+    let view = try loadedTerminalWebView()
     let replied = expectation(description: "Native terminal probe")
     view.callAsyncJavaScript("""
       const invoke = window.__TAURI_INTERNALS__.invoke;
@@ -86,6 +90,89 @@ final class MoshAppIntegrationTests: XCTestCase {
         }
       }
     wait(for: [replied], timeout: 15)
+  }
+
+  func testNativeTerminalAttachesAndHandsBackAnOwnedSshSession() throws {
+    let environment = ProcessInfo.processInfo.environment
+    let port = try XCTUnwrap(environment["LAZYSH_TERMINAL_FIXTURE_PORT"].flatMap(Int.init))
+    let fingerprint = try XCTUnwrap(environment["LAZYSH_TERMINAL_FIXTURE_FINGERPRINT"])
+    let password = try XCTUnwrap(environment["LAZYSH_TERMINAL_FIXTURE_PASSWORD"])
+    let view = try loadedTerminalWebView()
+    let completed = expectation(description: "Owned SSH Native terminal and handback")
+    view.callAsyncJavaScript("""
+      const ipc = window.__TAURI_INTERNALS__;
+      const waitFor = async (label, read) => {
+        for (let attempt = 0; attempt < 120; ++attempt) {
+          const value = await read();
+          if (value) return value;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw new Error('Timed out waiting for ' + label);
+      };
+      const access = await waitFor('app access', async () => {
+        const status = await ipc.invoke('app_lock_status');
+        return status.initialized && !status.locked && status.nonce ? status : null;
+      });
+      const invoke = (command, args) => ipc.invoke(command, args, {headers: {'X-Lazysh-Access': access.nonce}});
+      const channel = receive => '__CHANNEL__:' + ipc.transformCallback(event => {
+        if (event.message) receive(event.message);
+      });
+      const hostId = 'ios-terminal-fixture';
+      let sessionId;
+      try {
+        await invoke('save_host', {host: {id: hostId, name: 'Owned iOS fixture', hostname: '127.0.0.1',
+          port, username: 'terminal-fixture', transport: 'ssh'}});
+        const options = {hostId, password, cols: 40, rows: 12};
+        try {
+          const unexpected = await invoke('connect', {...options, events: channel(() => {})});
+          sessionId = unexpected.sessionId;
+          throw new Error('The fixture did not require host key pinning');
+        } catch (error) {
+          if (error.kind !== 'unknown_host_key' || error.fingerprint !== fingerprint) throw error;
+        }
+        await invoke('trust_host_key', {hostId, fingerprint});
+        const events = channel(() => {});
+        await invoke('terminal_core_open', {events, cols: options.cols, rows: options.rows});
+        sessionId = (await invoke('connect', {...options, events})).sessionId;
+        const text = () => invoke('terminal_core_text', {sessionId});
+        await waitFor('native frame text', async () => (await text()).includes('LAZYSH_IOS_FRAME'));
+        const anchor = {x: 16, y: 180, width: 260, height: 180, dpr: devicePixelRatio};
+        const surface = await invoke('native_terminal_surface_place', {session: sessionId, anchor, background: 0});
+        if (!surface.placed || !surface.ready || surface.width <= 0 || surface.height <= 0)
+          throw new Error('Native terminal did not create its Metal surface');
+        await invoke('terminal_core_input', {sessionId, input: {type: 'text', text: 'LAZYSH_IOS_INPUT'}});
+        await invoke('terminal_core_input', {sessionId, input: {type: 'key', code: 'Enter', key: 'Enter'}});
+        await waitFor('native input acknowledgement', async () => (await text()).includes('LAZYSH_IOS_ACK'));
+
+        let output = '';
+        const decoder = new TextDecoder();
+        const fallbackEvents = channel(event => {
+          if (event.type === 'data') output += decoder.decode(Uint8Array.from(event.data), {stream: true});
+        });
+        const snapshot = await invoke('terminal_core_release', {sessionId, events: fallbackEvents});
+        if (typeof snapshot !== 'string' || !snapshot.includes('LAZYSH_IOS_ACK'))
+          throw new Error('The native snapshot lost the input acknowledgement');
+        await invoke('native_terminal_surface_remove', {session: sessionId});
+        await invoke('write_stdin', {sessionId, data: 'LAZYSH_IOS_INPUT' + String.fromCharCode(13)});
+        await waitFor('WebView output after native handback', () => output.includes('LAZYSH_IOS_ACK'));
+        return true;
+      } finally {
+        if (sessionId) {
+          await invoke('native_terminal_surface_remove', {session: sessionId});
+          await invoke('disconnect', {sessionId});
+        }
+        await invoke('delete_host', {hostId});
+      }
+      """, arguments: ["port": port, "password": password, "fingerprint": fingerprint], in: nil, in: .page) { result in
+      defer { completed.fulfill() }
+      switch result {
+      case .success(let value):
+        XCTAssertEqual(value as? Bool, true)
+      case .failure(let error):
+        XCTFail("Owned iOS terminal failed: \(error.localizedDescription)")
+      }
+    }
+    wait(for: [completed], timeout: 65)
   }
 
   private func resumeVisibility(_ view: WKWebView) -> String {
