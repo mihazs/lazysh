@@ -898,7 +898,8 @@ jobs:
           export npm_execpath="$(command -v bun)" npm_lifecycle_event=tauri
           ../../../node_modules/.bin/tauri ios init --ci
           sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" ../../../node_modules/.bin/tauri ios build --target aarch64-sim --debug --ci --features native-terminal
-      - name: Install and launch the native-enabled app in the simulator
+      - name: Install the native-enabled app in the simulator
+        id: ios-terminal-install
         if: ${{ !cancelled() && steps.ios-terminal-app.outcome == 'success' }}
         timeout-minutes: 5
         run: |
@@ -906,7 +907,16 @@ jobs:
           executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")"
           xcrun vtool -show-build "$app/$executable" | grep -Eq '^ *platform IOSSIMULATOR$'
           xcrun simctl install "$LAZYSH_IOS_SIMULATOR_ID" "$app"
-          xcrun simctl launch "$LAZYSH_IOS_SIMULATOR_ID" app.lazysh.client
+      - name: Verify the installed iOS app admits the native Metal renderer
+        if: ${{ !cancelled() && steps.ios-terminal-install.outcome == 'success' }}
+        timeout-minutes: 8
+        run: |
+          xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests \
+            -configuration debug -destination "platform=iOS Simulator,id=$LAZYSH_IOS_SIMULATOR_ID" \
+            -only-testing:LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalBuildAdmitsTheMetalRenderer \
+            -resultBundlePath "$RUNNER_TEMP/native-terminal-ios.xcresult" \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 120 \
+            test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
       - name: Delete the simulator
         if: ${{ always() && env.LAZYSH_IOS_SIMULATOR_ID != '' }}
         run: xcrun simctl delete "$LAZYSH_IOS_SIMULATOR_ID"
@@ -2824,7 +2834,7 @@ jobs:
         id: ios-mosh-app
         timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
-        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
+        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -skip-testing:LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalBuildAdmitsTheMetalRenderer -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
       - name: Run native workspace Save, relaunch, and Delete acceptance
         id: ios-workspace
         timeout-minutes: 8
