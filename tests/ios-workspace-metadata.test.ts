@@ -211,4 +211,9 @@ test('the native iOS app runs the Metal probe on the same simulator after instal
   expect(terminal[acceptance].run).toContain("grep -cFx 'terminal fixture received exact input'");
   expect(steps.find(step => step.id === 'ios-mosh-app')?.run).toContain('-skip-testing:' + sshCase);
   expect(fixture).toContain('func testNativeTerminalAttachesAndHandsBackAnOwnedSshSession()');
+  const report = terminal.findIndex(step => step.name === 'Upload failed native iOS terminal SSH result');
+  expect(report).toBeGreaterThan(acceptance);
+  expect(report).toBeLessThan(terminal.findIndex(step => step.name === 'Delete the simulator'));
+  expect(terminal[report].if).toContain("steps.ios-terminal-ssh.outcome == 'failure'");
+  expect(terminal[report].with?.path).toContain('native-terminal-session-ios.xcresult');
 });
