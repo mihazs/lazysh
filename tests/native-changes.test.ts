@@ -14,7 +14,7 @@ const roots = gitFixtureRoots('lazysh-native-changes-test-');
 afterAll(() => roots.cleanup());
 
 type Outputs = Record<string, string>;
-const jobOutputs = ['companion', 'herdr', 'terminal_runtime', 'terminal_bridge', 'terminal_windows', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_terminal_core', 'android_terminal_session', 'android_mosh',
+const jobOutputs = ['client', 'companion', 'herdr', 'terminal_runtime', 'terminal_bridge', 'terminal_windows', 'linux', 'linux_runtimes', 'desktop', 'android', 'android_runtime', 'android_terminal_core', 'android_terminal_session', 'android_mosh',
   'android_herdr', 'android_appium', 'android_auxiliary', 'android_ntfy', 'android_gotify', 'ios', 'terminal_perf', 'terminal_macos', 'linux_surface', 'terminal_ios'];
 // The quarantine job needs a quarantined (@flaky) Appium spec; the fixture repositories have none unless a test seeds one.
 const everything: Outputs = { ...Object.fromEntries(jobOutputs.map(name => [name, 'true'])), android_appium_quarantine: 'false', android_release_native: 'false',
@@ -303,6 +303,35 @@ test('quarantined Appium specs get their own job on main and the nightly, never 
   expect((await classify([spec], { event: 'push' })).android_appium_quarantine).toBe('false');
   // Only a spec file counts: the tag in a document is just a word.
   expect((await classify(['docs/regression-tests.md'], { event: 'push', contents: { 'docs/regression-tests.md': '@flaky' } })).android_appium_quarantine).toBe('false');
+});
+
+// The client job's browser suites (about 50 of its 52 minutes) follow the same classification as the native jobs.
+test.each([
+  ['documentation', ['docs/connections.md'], 'false'],
+  ['the companion', ['apps/agent/src/main.rs'], 'false'],
+  ['the Android project', ['apps/client/src-tauri/gen/android/app/build.gradle.kts'], 'false'],
+  ['the client UI', ['apps/client/src/App.tsx'], 'true'],
+  ['a browser spec', ['apps/client/e2e/workspace.spec.ts'], 'true'],
+  ['the client native crate', ['apps/client/src-tauri/src/ssh.rs'], 'true'],
+  ['a workflow', ['.github/workflows/checks.yml'], 'true'],
+  ['an unrecognised root file', ['unknown.cfg'], 'true'],
+] as const)('the client browser suites on a pull request touching %s: %s', async (_name, paths, expected) => {
+  expect((await classify([...paths])).client).toBe(expected);
+});
+
+test('the client browser suites always run on pushes and for an unreadable range', async () => {
+  expect((await classify(['docs/connections.md'], { event: 'push' })).client).toBe('true');
+  const { root, env } = await roots.create();
+  const result = await run(root, ['sh', script], { ...env, EVENT: 'pull_request', BASE: 'deadbeef', HEAD: 'feedface' });
+  expect(parse(result.stdout).client).toBe('true');
+});
+
+test('the client job gates exactly its browser suites on its own classification of the range', () => {
+  const steps = checks.jobs.client.steps as any[];
+  const select = steps.find(step => step.id === 'e2e');
+  expect(select.env).toEqual({ EVENT: '${{ github.event_name }}', BASE: '${{ github.event.pull_request.base.sha }}', HEAD: '${{ github.event.pull_request.head.sha }}' });
+  const gated = steps.filter(step => step.if === "steps.e2e.outputs.client == 'true'").map(step => step.run);
+  expect(gated).toEqual(['bunx moon run client:test-e2e', 'bun run test:e2e:terminal', 'bun run test:e2e:kill-switch']);
 });
 
 test('renaming a source file into documentation still selects the source jobs', async () => {

@@ -68,7 +68,9 @@ The tables are in the [moon task reference](docs/reference/moon-tasks.md) and th
 
 ### Which CI jobs a pull request runs
 
-`client` and `agent` always run. On a pull request, the `changes` job runs
+`client` and `agent` always run, but the `client` job runs its three Playwright suites (about 50 of its 52
+minutes) only when the same classification selects the `client` area (documentation, release, companion-only and
+Android-only pull requests skip them; an unreadable range or a push runs them). On a pull request, the `changes` job runs
 `.github/scripts/native-changes.sh` over the PR range and then a fast gate (rustfmt,
 hook and CI structure tests, client type check); every native job waits for it, so a
 PR that fails the gate never queues emulator, macOS or Windows work. Pushes to `main`

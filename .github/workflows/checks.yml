@@ -41,6 +41,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
+      client: ${{ steps.paths.outputs.client }}
       companion: ${{ steps.paths.outputs.companion }}
       herdr: ${{ steps.paths.outputs.herdr }}
       terminal_runtime: ${{ steps.paths.outputs.terminal_runtime }}
@@ -127,6 +128,16 @@ jobs:
             moon-client-${{ runner.os }}-${{ hashFiles('bun.lock', 'Cargo.lock', '.moon/*.yml', '.moon/tasks/*.yml') }}-
             moon-client-${{ runner.os }}-
       - run: bun install --frozen-lockfile
+      # The same classification the `changes` job makes. The client job has no `needs` so it never waits for it, and the browser
+      # suites below (about 50 of this job's 52 minutes) run only when the diff can reach the client: a documentation, release,
+      # companion-only or Android-only pull request keeps the job, and so the required check, without them. An unreadable range selects them.
+      - name: Select the browser end-to-end suites
+        id: e2e
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: echo "client=$(sh .github/scripts/native-changes.sh | sed -n 's/^client=//p' | grep -x -e true -e false || echo true)" >> "$GITHUB_OUTPUT"
       - run: bun run test:hooks
       - run: bun run test:ci
       # Pull requests run only the tasks the diff can affect, followed through project relations
@@ -160,16 +171,19 @@ jobs:
         working-directory: apps/client
       # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six named terminal specs ask
       # for xterm.js through the developer override, and a terminal of another backend fails them.
-      - run: bunx moon run client:test-e2e
+      - if: steps.e2e.outputs.client == 'true'
+        run: bunx moon run client:test-e2e
         env:
           LAZYSH_E2E_TERMINAL_BACKEND: xterm
       # The native arm: skipped, with the backend registry's reason in the log, until the native backend is registered; then it runs.
-      - run: bun run test:e2e:terminal
+      - if: steps.e2e.outputs.client == 'true'
+        run: bun run test:e2e:terminal
         working-directory: apps/client
         env:
           LAZYSH_E2E_TERMINAL_BACKEND: native
       # The kill switch (#1342): a production bundle built with LAZYSH_NATIVE_TERMINAL=off keeps every new session on xterm.js.
-      - run: bun run test:e2e:kill-switch
+      - if: steps.e2e.outputs.client == 'true'
+        run: bun run test:e2e:kill-switch
         working-directory: apps/client
       - name: Save the moon cache from main
         if: github.ref == 'refs/heads/main'
