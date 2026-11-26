@@ -102,7 +102,7 @@ final class MoshAppIntegrationTests: XCTestCase {
     view.callAsyncJavaScript("""
       const ipc = window.__TAURI_INTERNALS__;
       const waitFor = async (label, read) => {
-        for (let attempt = 0; attempt < 120; ++attempt) {
+        for (let attempt = 0; attempt < 160; ++attempt) {
           const value = await read();
           if (value) return value;
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -115,70 +115,97 @@ final class MoshAppIntegrationTests: XCTestCase {
       }).catch(() => null);
       if (!access) return {passed: false, stage: 'initialize app access', type: 'unavailable'};
       const invoke = (command, args) => ipc.invoke(command, args, {headers: {'X-Lazysh-Access': access.nonce ?? ''}});
-      const channel = receive => '__CHANNEL__:' + ipc.transformCallback(event => {
-        if (event.message) receive(event.message);
-      });
-      const hostId = 'ios-terminal-fixture';
-      let sessionId;
-      let stage = 'save fixture host';
+      const host = 'Owned iOS terminal UI ' + port;
+      const engineKey = 'lazysh.terminal.backend';
+      const topBarKey = 'lazysh.show-top-bar.v1';
+      const previousEngine = localStorage.getItem(engineKey);
+      const previousTopBar = localStorage.getItem(topBarKey);
+      const restore = (key, value) => {
+        if (value === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+      };
+      const visible = element => element.getClientRects().length && !element.closest('[aria-hidden=true]');
+      const button = (scope, label) => [...scope.querySelectorAll('button')].find(element =>
+        visible(element) && !element.disabled && (element.getAttribute('aria-label') || element.textContent.trim()) === label);
+      const click = async (label, scope = document) => (await waitFor(label, () => button(scope, label))).click();
+      const setField = async (selector, value) => {
+        const input = await waitFor(selector, () => document.querySelector(selector));
+        Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value').set.call(input, value);
+        input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', {bubbles: true}));
+      };
+      const surface = () => document.querySelector('[data-terminal-surface=native]');
+      const rows = () => [...document.querySelectorAll('.terminal-canvas .xterm-rows > div')].map(row => row.textContent);
+      const sendInput = async selector => {
+        const editor = await waitFor('terminal editor', () => document.querySelector(selector));
+        editor.focus();
+        const data = 'LAZYSH_IOS_INPUT';
+        editor.value = data;
+        editor.dispatchEvent(new InputEvent('input', {bubbles: true, data, inputType: 'insertText'}));
+        const enter = {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true};
+        editor.dispatchEvent(new KeyboardEvent('keydown', enter));
+        editor.dispatchEvent(new KeyboardEvent('keyup', enter));
+      };
+      let stage = 'open add-host form';
       try {
-        await invoke('save_host', {host: {id: hostId, name: 'Owned iOS fixture', hostname: '127.0.0.1',
-          port, username: 'terminal-fixture', transport: 'ssh'}});
-        const options = {hostId, password, cols: 40, rows: 12};
-        stage = 'verify host key pinning';
-        try {
-          const unexpected = await invoke('connect', {...options, events: channel(() => {})});
-          sessionId = unexpected.sessionId;
-          throw new Error('The fixture did not require host key pinning');
-        } catch (error) {
-          if (error.kind !== 'unknown_host_key' || error.fingerprint !== fingerprint) throw error;
-        }
-        stage = 'trust fixture key';
-        await invoke('trust_host_key', {hostId, fingerprint});
-        stage = 'open native core';
-        const events = channel(() => {});
-        await invoke('terminal_core_open', {events, cols: options.cols, rows: options.rows});
-        stage = 'connect native SSH';
-        sessionId = (await invoke('connect', {...options, events})).sessionId;
-        const text = () => invoke('terminal_core_text', {sessionId});
-        stage = 'read native frame';
-        await waitFor('native frame text', async () => (await text()).includes('LAZYSH_IOS_FRAME'));
-        const anchor = {x: 16, y: 180, width: 260, height: 180, dpr: devicePixelRatio};
-        stage = 'place native surface';
-        const surface = await invoke('native_terminal_surface_place', {session: sessionId, anchor, background: 0});
-        if (!surface.placed || !surface.ready || surface.width <= 0 || surface.height <= 0)
-          throw new Error('Native terminal did not create its Metal surface');
-        stage = 'send native input';
-        await invoke('terminal_core_input', {sessionId, input: {type: 'text', text: 'LAZYSH_IOS_INPUT'}});
-        await invoke('terminal_core_input', {sessionId, input: {type: 'key', code: 'Enter', key: 'Enter'}});
-        stage = 'read native acknowledgement';
-        await waitFor('native input acknowledgement', async () => (await text()).includes('LAZYSH_IOS_ACK'));
-
-        let output = '';
-        const decoder = new TextDecoder();
-        const fallbackEvents = channel(event => {
-          if (event.type === 'data') output += decoder.decode(Uint8Array.from(event.data), {stream: true});
-        });
-        stage = 'release native transport';
-        const snapshot = await invoke('terminal_core_release', {sessionId, events: fallbackEvents});
-        const ansi = typeof snapshot === 'string' ? snapshot : snapshot?.ansi;
-        if (typeof ansi !== 'string' || !ansi.includes('LAZYSH_IOS_ACK'))
-          throw new Error('The native snapshot lost the input acknowledgement');
-        await invoke('native_terminal_surface_remove', {session: sessionId});
-        stage = 'send fallback input';
-        await invoke('write_stdin', {sessionId, data: 'LAZYSH_IOS_INPUT' + String.fromCharCode(13)});
-        stage = 'read fallback acknowledgement';
-        await waitFor('WebView output after native handback', () => output.includes('LAZYSH_IOS_ACK'));
+        localStorage.setItem(engineKey, 'native');
+        localStorage.setItem(topBarKey, 'true');
+        window.dispatchEvent(new Event('lazysh-show-top-bar'));
+        button(document, 'Open hosts')?.click();
+        await click('Add host');
+        stage = 'save fixture host';
+        await setField("input[placeholder='Home workstation']", host);
+        await setField("input[placeholder='workstation.local']", '127.0.0.1');
+        await setField("input[placeholder='Your SSH username']", 'terminal-fixture');
+        await setField('.port-field input', String(port));
+        await setField("[role=dialog] select:has(option[value='ssh'])", 'ssh');
+        await click('Save host');
+        stage = 'connect and verify host key';
+        await click('Connect to ' + host);
+        await setField("[role=dialog] input[type=password]", password);
+        await click('Connect');
+        await waitFor('the pinned host key', () => document.querySelector('.fingerprint code')?.textContent === fingerprint);
+        await click('Trust key and connect');
+        stage = 'show native terminal';
+        await waitFor('the native terminal surface', surface);
+        button(document, 'Skip')?.click();
+        stage = 'type through native editor';
+        await sendInput('[data-terminal-editor]');
+        stage = 'switch engines through workspace tools';
+        await click('Workspace tools');
+        const tools = await waitFor('workspace tools', () => document.querySelector('[role=dialog]:has(.workspace-tools-content)'));
+        const action = 'Switch this session to xterm.js';
+        const control = await waitFor(action, () => [...tools.querySelectorAll('.workspace-tools-page button')].find(element => element.textContent.trim() === action));
+        const page = control.closest('.workspace-tools-page');
+        const tab = [...tools.querySelectorAll('[role=tab]')].find(item => item.getAttribute('aria-controls') === page.id);
+        if (tab?.getAttribute('aria-selected') === 'false') tab.click();
+        await click(action, tools);
+        stage = 'verify replayed screen and native input';
+        await waitFor('replayed frame and native input acknowledgement', () =>
+          !surface() && rows().some(row => row.includes('LAZYSH_IOS_FRAME')) &&
+          rows().filter(row => row.includes('LAZYSH_IOS_ACK')).length === 1);
+        stage = 'type through the xterm.js editor';
+        await sendInput('.xterm-helper-textarea');
+        await waitFor('second acknowledgement over the same session', () =>
+          rows().filter(row => row.includes('LAZYSH_IOS_ACK')).length === 2);
+        stage = 'read the visible fallback reason';
+        await click('Workspace tools');
+        const note = await waitFor('engine switch reason', () => [...document.querySelectorAll('[role=note]')].find(note =>
+          note.textContent.includes('xterm.js: you switched this session from the native engine')));
+        const notePage = note.closest('.workspace-tools-page');
+        const noteTab = [...document.querySelectorAll('[role=tab]')].find(item => item.getAttribute('aria-controls') === notePage?.id);
+        if (noteTab?.getAttribute('aria-selected') === 'false') noteTab.click();
+        await waitFor('visible engine switch reason', () => visible(note));
         return {passed: true};
       } catch (error) {
-        return {passed: false, stage,
-          type: error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : typeof error};
+        return {passed: false, stage, type: error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : typeof error};
       } finally {
-        if (sessionId) {
-          await invoke('native_terminal_surface_remove', {session: sessionId});
-          await invoke('disconnect', {sessionId});
-        }
-        await invoke('delete_host', {hostId});
+        restore(engineKey, previousEngine);
+        restore(topBarKey, previousTopBar);
+        window.dispatchEvent(new Event('lazysh-show-top-bar'));
+        button(document, 'Close Workspace tools')?.click();
+        button(document, 'Disconnect ' + host)?.click();
+        const saved = (await invoke('list_hosts')).find(entry => entry.name === host);
+        if (saved) await invoke('delete_host', {hostId: saved.id});
       }
       """, arguments: ["port": port, "password": password, "fingerprint": fingerprint], in: nil, in: .page) { result in
       defer { completed.fulfill() }
