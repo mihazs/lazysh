@@ -179,9 +179,13 @@ final class MoshAppIntegrationTests: XCTestCase {
         const tab = [...tools.querySelectorAll('[role=tab]')].find(item => item.getAttribute('aria-controls') === page.id);
         if (tab?.getAttribute('aria-selected') === 'false') tab.click();
         await click(action, tools);
-        stage = 'verify replayed screen and native input';
-        await waitFor('replayed frame and native input acknowledgement', () =>
-          !surface() && rows().some(row => row.includes('LAZYSH_IOS_FRAME')) &&
+        stage = 'show xterm.js after switching';
+        await waitFor('native surface removed and xterm editor present', () =>
+          !surface() && document.querySelector('.terminal-canvas .xterm-helper-textarea'));
+        stage = 'read the replayed native frame';
+        await waitFor('replayed frame', () => rows().some(row => row.includes('LAZYSH_IOS_FRAME')));
+        stage = 'read the native input acknowledgement after switching';
+        await waitFor('one replayed native input acknowledgement', () =>
           rows().filter(row => row.includes('LAZYSH_IOS_ACK')).length === 1);
         stage = 'type through the xterm.js editor';
         await sendInput('.xterm-helper-textarea');

@@ -928,13 +928,20 @@ jobs:
           export TEST_RUNNER_LAZYSH_TERMINAL_FIXTURE_PORT="$port"
           export TEST_RUNNER_LAZYSH_TERMINAL_FIXTURE_FINGERPRINT="$fingerprint"
           export TEST_RUNNER_LAZYSH_TERMINAL_FIXTURE_PASSWORD="$LAZYSH_TERMINAL_FIXTURE_PASSWORD"
+          result=0
           xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests \
             -configuration debug -destination "platform=iOS Simulator,id=$LAZYSH_IOS_SIMULATOR_ID" \
             -only-testing:LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalAttachesAndHandsBackAnOwnedSshSession \
             -resultBundlePath "$RUNNER_TEMP/native-terminal-session-ios.xcresult" \
             -test-timeouts-enabled YES -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 120 \
-            test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
-          test "$(grep -cFx 'terminal fixture received exact input' "$fixture_log")" = 2
+            test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim" || result=$?
+          received="$(grep -cFx 'terminal fixture received exact input' "$fixture_log" || true)"
+          echo "Owned SSH fixture received $received exact terminal inputs."
+          if [ "$result" != 0 ]; then
+            xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/native-terminal-session-ios.xcresult" || true
+            exit "$result"
+          fi
+          test "$received" = 2
       - name: Upload failed native iOS terminal SSH result
         if: ${{ !cancelled() && steps.ios-terminal-ssh.outcome == 'failure' }}
         uses: actions/upload-artifact@v4
