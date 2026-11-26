@@ -97,6 +97,9 @@ export class XtermTerminalAdapter implements TerminalAdapter {
     this.events.clear();
     const error = new Error('This terminal was disposed before the bytes were applied.');
     this.pending.forEach(reject => reject(error)); this.pending.clear();
+    // xterm 5.5 creates its display-scale monitor outside the browser service's disposable store.
+    const { _core } = this.xterm as unknown as {_core?: {_coreBrowserService?: {_screenDprMonitor?: Disposable}}};
+    _core?._coreBrowserService?._screenDprMonitor?.dispose();
     this.xterm.dispose();
     return this.disposed = Promise.resolve();
   }
