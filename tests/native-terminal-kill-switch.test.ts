@@ -71,7 +71,8 @@ const withEngine = `\n${jni}\nabc\n${renderer}\n${renderer}\n`, withoutEngine = 
 test.each([
   ['google', 'on', withEngine, 0], ['google', undefined, withEngine, 0], ['google', 'on', withoutEngine, 1], ['google', 'on', half, 1],
   ['google', 'off', withoutEngine, 0], ['google', 'off', withEngine, 1], ['google', 'off', half, 1],
-  ['foss', 'on', withoutEngine, 0], ['foss', 'off', withoutEngine, 0], ['foss', undefined, withEngine, 1], ['foss', 'on', half, 1],
+  ['foss', 'on', withEngine, 0], ['foss', undefined, withEngine, 0], ['foss', 'on', withoutEngine, 1], ['foss', 'on', half, 1],
+  ['foss', 'off', withoutEngine, 0], ['foss', 'off', withEngine, 1], ['foss', 'off', half, 1],
 ] as const)('the %s APK built with the kill switch %s and a library %#: exit %i', async (flavor, killSwitch, library, code) => {
   const result = await check(await apk(library), flavor, killSwitch);
   expect(result.code, result.stdout + result.stderr).toBe(code);

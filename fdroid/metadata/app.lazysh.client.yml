@@ -9,9 +9,9 @@ RepoType: git
 Repo: https://github.com/mihazs/lazysh.git
 
 Builds:
-  - versionName: 0.22.0
-    versionCode: 22000
-    commit: 3dc44f47dac1c5fa29a8e3220ee82efd46484f4d
+  - versionName: 1.101.5
+    versionCode: 1101005
+    commit: f4e5e4014d8da10a587db032393c3264383ab21b
     sudo:
       - apt-get update
       - apt-get install -y rustup nodejs golang-go build-essential cmake ninja-build
@@ -37,6 +37,13 @@ Builds:
       - bun install --frozen-lockfile --ignore-scripts --omit=optional
       # Desktop browser acceptance assets are not an application build input.
       - rm -rf node_modules/playwright-core node_modules/@zip.js/zip.js
+      - RUNNER_TEMP="$HOME/.local/share/lazysh-fdroid" LAZYSH_RESUME_PINNED_DOWNLOAD=1 sh .github/scripts/pinned-download.sh
+        70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+        "$HOME/.local/share/lazysh-fdroid/zig.tar.xz"
+        --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 720
+        https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+      - tar -xJf "$HOME/.local/share/lazysh-fdroid/zig.tar.xz" -C "$HOME/.local/share/lazysh-fdroid"
+      - test "$("$HOME/.local/share/lazysh-fdroid/zig-x86_64-linux-0.16.0/zig" version)" = 0.16.0
       - cargo fetch --locked --target aarch64-linux-android
       - cargo fetch --locked --manifest-path $$rollup$$/rust/Cargo.toml
       # Gradle's native callback must invoke the source-built Cargo CLI too.
@@ -51,12 +58,13 @@ Builds:
       # fdroidserver removes the upstream wrapper before scanning. Use its launcher.
       - ln -s "$(command -v gradlew-fdroid)" apps/client/src-tauri/gen/android/gradlew
       - export NDK_HOME="$$NDK$$" CMAKE_ANDROID_NDK="$$NDK$$" WHISPER_DONT_GENERATE_BINDINGS=1 ESBUILD_BINARY_PATH="$$esbuild$$/esbuild"
+      - export ZIG="$HOME/.local/share/lazysh-fdroid/zig-x86_64-linux-0.16.0/zig" ANDROID_NDK_HOME="$$NDK$$"
       - cd apps/client
-      - cargo tauri android build --target aarch64 --apk --ci --features fdroid -- --locked
+      - cargo tauri android build --target aarch64 --apk --ci --features fdroid,native-terminal -- --locked
     output: apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
 
 # Initial recipe validation only; tagging and automatic publishing are separate gates.
 AutoUpdateMode: None
 UpdateCheckMode: None
-CurrentVersion: 0.22.0
-CurrentVersionCode: 22000
+CurrentVersion: 1.101.5
+CurrentVersionCode: 1101005

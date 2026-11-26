@@ -139,7 +139,7 @@ No F-Droid.org listing or automatic update is claimed at present; see #333/#424.
 
 ### Maintainers: a release without the native terminal engine
 
-The Google APK carries the native terminal engine; the F-Droid-style APK (`foss` in the release assets) never does. If a release must
+Both Android APKs published on GitHub (Google and FOSS) carry the native terminal engine. If a release must
 stop users reaching the engine, build the next one with the kill switch ([#1342](https://github.com/mihazs/lazysh/issues/1342)),
 which needs no code change. The release builds then refuse the engine in the client and leave it out of the Android app: Native shows as
 disabled ("the native engine is disabled in this build") in Settings, Terminal engine, and every new session runs xterm.js whatever a user chose.
