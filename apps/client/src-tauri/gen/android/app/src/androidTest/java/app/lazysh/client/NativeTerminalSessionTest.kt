@@ -397,6 +397,46 @@ class NativeTerminalSessionTest {
         fun expectCopy(expected: String) = PageDriver.poll("exact text on the Android clipboard", 15) {
             clipboardText()?.takeIf { it == expected }
         }
+        fun copySelection(expected: String) {
+            js("""
+                (() => {
+                    const events = [], observer = new AbortController();
+                    window.__lz.copyTouch = {events, observer};
+                    for (const type of ['pointerdown', 'click']) document.addEventListener(type, event => {
+                        if (events.length < 8) events.push({
+                            type,
+                            selectionButton: Boolean(event.target.closest?.('.terminal-selection-tools button')),
+                            trusted: event.isTrusted,
+                        });
+                    }, {capture: true, signal: observer.signal});
+                    return true;
+                })()
+            """.trimIndent())
+            try {
+                tap(".terminal-selection-tools button", "Copy")
+                expectCopy(expected)
+            } catch (failure: AssertionError) {
+                runCatching {
+                    val touch = JSONObject(js("""
+                        ({
+                            events: window.__lz.copyTouch.events,
+                            toolbarVisible: Boolean(document.querySelector('.terminal-selection-tools')),
+                            documentFocused: document.hasFocus(),
+                        })
+                    """.trimIndent()))
+                    val observed = clipboardText()
+                    touch.put("clipboard", when (observed) {
+                        null -> "absent"
+                        expected -> "expected"
+                        else -> "different"
+                    })
+                    evidence.put("nativeSelectionCopyFailure", touch)
+                }
+                throw failure
+            } finally {
+                runCatching { js("window.__lz.copyTouch.observer.abort(); delete window.__lz.copyTouch; true") }
+            }
+        }
         fun printAtTop(text: String): Triple<Int, Int, Double> {
             typeIntoTheSurface("printf '\\033[2J\\033[H%s\\n' '$text'")
             awaitRow(id, "the marker on the first row", { it == text })
@@ -413,8 +453,7 @@ class NativeTerminalSessionTest {
                 until("both native selection handles", 15, "document.querySelectorAll('[data-selection-handle]').length === 2")
             }
             selectWord()
-            tap(".terminal-selection-tools button", "Copy")
-            expectCopy(marker)
+            copySelection(marker)
             evidence.put("nativeWordCopy", true)
             until("the copied selection to close", 15, "!document.querySelector('.terminal-selection-tools')")
             selectWord()
@@ -423,8 +462,7 @@ class NativeTerminalSessionTest {
                 device.swipe(handleX, handleY, handleX + ((line.length - marker.length) * width).roundToInt(), handleY, 20))
             // Let WebView settle the drag before starting the next, separate tap.
             device.waitForIdle()
-            tap(".terminal-selection-tools button", "Copy")
-            expectCopy(line)
+            copySelection(line)
             evidence.put("nativeSelectionHandleCopy", true)
 
             val url = "https://example.com/lazysh"
