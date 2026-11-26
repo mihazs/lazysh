@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { SshFixture } from '../../../tests/support/sshFixture';
 import { guestEnvironment } from './androidEngineBench';
-import { ACCEPTED_RISK, fromBaseline, type BaselineResult, type EvidenceRecord } from './androidEvidence';
+import { ACCEPTED_RISK, fromBaseline, fromMemoryCheckpoints, memorySessionCounts, type BaselineResult, type EvidenceRecord, type MemoryCheckpoint } from './androidEvidence';
 import { adbFor, androidProbe, installedApkDigests, type Window } from './androidProbe';
 import { screenOf, shellSession, streamWorkload } from './workloads';
 
@@ -125,8 +125,7 @@ async function captureStream(socket: Socket, probe: ReturnType<typeof androidPro
 async function runNative(serial: string, softwareGpu: boolean, mode: 'idle' | 'streams' | 'shell' | 'input' | 'commit' | 'flood' | 'memory', backgroundSessions = 0, xterm = false, display = false) {
   const checkStreams = mode !== 'idle' && mode !== 'memory';
   let xtermObservations: Array<{workload: string; domObservationMs: number; fixtureBytes: number; streamDisplayMs?: number; streamDisplayBurstsMs?: number[]; burstMs?: number[]}> = [];
-  const memoryCounts = [1, 5, 10, 0, 0, 0, 0, 0];
-  const memory: Array<{ sessions: number; cycle: number; pssKiB: number }> = [];
+  const memory: MemoryCheckpoint[] = [];
   const streamOrder = (mode === 'streams' ? streams.map(([kind]) => kind) : mode === 'input' ? (backgroundSessions ? ['input'] : Object.keys(inputPayloads)) : [mode])
     .flatMap(kind => Array<string>(streamRuns).fill(kind));
   const adb = adbFor(serial);
@@ -153,8 +152,8 @@ async function runNative(serial: string, softwareGpu: boolean, mode: 'idle' | 's
       const stream = checkStreams && prepared && streamOrder[samples.length];
       const streamRequest = Boolean(stream && request === `${nonce} measure ${stream} ${samples.length}\n`);
       const cycle = Math.max(0, memory.length - 2);
-      const memoryRequest = mode === 'memory' && memory.length < memoryCounts.length
-        && request === `${nonce} memory ${memoryCounts[memory.length]} ${cycle}\n`;
+      const memoryRequest = mode === 'memory' && memory.length < memorySessionCounts.length
+        && request === `${nonce} memory ${memorySessionCounts[memory.length]} ${cycle}\n`;
       const validRequest = mode === 'memory' ? memoryRequest : checkStreams ? (geometry?.[1] === nonce && !prepared) || streamRequest : request === `${nonce} ${expected[samples.length]}\n`;
       if (active || !validRequest) {
         socket.destroy();
@@ -168,7 +167,7 @@ async function runNative(serial: string, softwareGpu: boolean, mode: 'idle' | 's
           const pssKiB = probe.pssKiB();
           if (!Number.isFinite(pssKiB) || pssKiB <= 0 || probe.processes().pids.join(',') !== pids)
             throw new Error('The Android PSS process set changed or a counter was unavailable');
-          memory.push({ sessions: memoryCounts[memory.length], cycle, pssKiB });
+          memory.push({ sessions: memorySessionCounts[memory.length], cycle, pssKiB });
           if (xterm && memory.length === 1) await writeFile(join(fixture.directory, 'bench-memory.go'), '', { mode: 0o600, flag: 'wx' });
           console.log(`${xterm ? 'Xterm' : 'Native'} PSS measured with ${memory.at(-1)!.sessions} sessions (cycle ${cycle})`);
           socket.end('done\n');
@@ -383,7 +382,7 @@ async function runNative(serial: string, softwareGpu: boolean, mode: 'idle' | 's
           ([, line]) => JSON.parse(line));
       }
       const observedOrder = xterm ? xtermObservations : submissions;
-      const complete = mode === 'memory' ? memory.length === memoryCounts.length : checkStreams
+      const complete = mode === 'memory' ? memory.length === memorySessionCounts.length : checkStreams
         ? prepared && samples.length === streamOrder.length && observedOrder.map(sample => sample.workload).join(',') === streamOrder.join(',')
           && (mode === 'streams' || observedOrder.every(sample => sample.burstMs?.length === (mode === 'shell' ? shellBursts : (mode === 'flood' || mode === 'commit') ? inputKeys : inputPayloads[sample.workload as keyof typeof inputPayloads]?.length)
             && sample.burstMs.every(ms => Number.isFinite(ms) && ms >= 0)))
@@ -463,30 +462,28 @@ if (import.meta.main) {
   if (apks && JSON.stringify(apks) !== JSON.stringify(installedApkDigests(adbFor(serial), packageName))) {
     throw new Error('Installed APKs changed during the native SSH measurements');
   }
-  if (mode === 'memory') {
-    await writeFile(out, JSON.stringify({ kind: 'android-native-session-memory', engine: xterm ? 'xterm' : 'native', runId, environment, gpu, apks, memory }, null, 2) + '\n');
-    process.exit(0);
-  }
-  if (xterm && mode !== 'idle') {
+  if (xterm && mode !== 'idle' && mode !== 'memory') {
     await writeFile(out, JSON.stringify({ kind: 'android-packaged-xterm-stream-diagnostic', mode, runId, environment, apks, prepared, displayCapture: display, ...(backgroundSessions ? { sessions: backgroundSessions + 1, backgroundProgress } : {}),
       observations: xtermObservations.map((sample, index) => ({ ...sample, ...(!display && { android: samples[index] }) })) }, null, 2) + '\n');
     process.exit(0);
   }
-  if (mode !== 'idle') {
+  if (mode !== 'idle' && mode !== 'memory') {
     await writeFile(out, JSON.stringify({ kind: 'android-native-stream-correctness', mode, runId, environment, gpu, prepared, apks, displayCapture: display, ...(backgroundSessions ? { sessions: backgroundSessions + 1, ...(display && { backgroundProgress }) } : {}), runsPerWorkload: streamRuns,
       submissions: submissions.map((sample, index) => ({ ...sample, ...(!display && { android: samples[index] }) })) }, null, 2) + '\n');
     process.exit(0);
   }
   const git = (...args: string[]) => execFileSync('git', args, { cwd: import.meta.dirname, encoding: 'utf8' }).trim();
   const adapter = xterm ? 'xterm-dom' : 'native-wgpu';
-  const measurements = fromBaseline(workloads, adapter);
+  const measurements = mode === 'memory' ? fromMemoryCheckpoints(memory, adapter) : fromBaseline(workloads, adapter);
   const record: EvidenceRecord = {
-    schema: 1, kind: 'android-engine-comparison', runId, label: xterm ? 'packaged-xterm-idle' : 'native-idle', startedAt, finishedAt: new Date().toISOString(),
+    schema: 1, kind: 'android-engine-comparison', runId, label: `${xterm ? 'packaged-xterm' : 'native'}-${mode}`, startedAt, finishedAt: new Date().toISOString(),
     source: { commit: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain') !== '' }, environment: { ...environment, installedApks: apks }, acceptedRisk: ACCEPTED_RISK,
-    limits: 'W0 only. A software-rendered emulator run qualifies the harness and does not establish Waydroid targets.',
+    limits: `${mode === 'memory' ? 'W9 memory only, one set of checkpoints per arm.' : 'W0 only.'} A software-rendered emulator run qualifies the harness and does not establish Waydroid targets.`,
     arms: [{ adapter, engine: xterm ? 'Packaged xterm.js' : 'Native terminal', host: packageName, gpu, page: null,
-      notes: 'The packaged terminal was connected to an owned SSH shell. Host counters were sampled during six 30-second windows.' }],
+      notes: mode === 'memory'
+        ? 'Guest PSS at one fresh SSH session, five and ten filled SSH sessions, and after five open-fill-close cycles.'
+        : 'The packaged terminal was connected to an owned SSH shell. Host counters were sampled during six 30-second windows.' }],
     measurements,
   };
-  await writeFile(out, JSON.stringify(record, null, 2) + '\n');
+  await writeFile(out, JSON.stringify(mode === 'memory' ? { ...record, memory } : record, null, 2) + '\n');
 }

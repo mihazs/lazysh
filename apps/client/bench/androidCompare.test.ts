@@ -187,6 +187,15 @@ describe('what the comparison refuses to say', () => {
     expect(() => compareRecords([xterm, { ...native, environment: { device: { serial: 'emulator-5554' } } }])).toThrow(/not the same guest/);
     expect(() => compareRecords([])).toThrow(/no record given/);
   });
+
+  it('refuses packaged arms captured from different APKs even with the same run id', () => {
+    const packaged = (adapter: string, sha256: string) => record([arm(adapter)], [], {
+      environment: { device: { serial: 'emulator-5554' }, installedApks: [{ name: 'base.apk', sha256 }] },
+    });
+    const xterm = packaged('xterm-dom', 'a'.repeat(64));
+    expect(() => compareRecords([xterm, packaged('native-wgpu', 'a'.repeat(64))])).not.toThrow();
+    expect(() => compareRecords([xterm, packaged('native-wgpu', 'b'.repeat(64))])).toThrow('not the same installed APKs');
+  });
 });
 
 describe('the command', () => {

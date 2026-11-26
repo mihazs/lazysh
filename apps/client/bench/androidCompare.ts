@@ -57,9 +57,13 @@ const describe = (row: Row) => `${label(row)}: ${row.baseline} ${row.baselineVal
 function mergeRecords(records: EvidenceRecord[]) {
   if (records.length === 0) throw new RecordError('no record given');
   const [first] = records;
+  const packaged = records.find(record => record.environment.installedApks !== undefined);
   for (const record of records) {
     if (record.runId !== first.runId) throw new RecordError(`not the same run: ${first.runId} and ${record.runId}; a comparison is only valid for arms measured in one lane run`);
     if (record.environment.device.serial !== first.environment.device.serial) throw new RecordError(`not the same guest: ${first.environment.device.serial} and ${record.environment.device.serial}`);
+    if (record.environment.installedApks !== undefined
+      && JSON.stringify(record.environment.installedApks) !== JSON.stringify(packaged?.environment.installedApks))
+      throw new RecordError('not the same installed APKs for the packaged benchmark arms');
   }
   return { runId: first.runId, device: first.environment.device, arms: records.flatMap(r => r.arms), measurements: records.flatMap(r => r.measurements) };
 }
