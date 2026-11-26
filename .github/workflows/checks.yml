@@ -1985,6 +1985,7 @@ jobs:
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: terminal-session
+      LAZYSH_ANDROID_UI_NATIVE_MOSH: '1'
     steps:
       - *source-checkout
       - *source-bun
@@ -1997,8 +1998,7 @@ jobs:
         run: echo "ANDROID_NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
       - *android-owned-rust
       - *android-owned-host-dependencies
-      # The native tmux case starts tmux from the owned shell, which is the runner's own.
-      - run: sudo sh .github/scripts/apt-install.sh tmux
+      - run: sudo sh .github/scripts/apt-install.sh tmux mosh
       - *android-cache-identity
       - *android-owned-cache
       - run: bun install --frozen-lockfile

@@ -2,7 +2,7 @@ import {expect,test} from 'bun:test';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {nativeBenchmarkInstrumentationCommand} from '../apps/client/bench/androidNativeBench';
-import {androidNativeSessionAcceptance,sessionCases,validateNativeSessionReport} from './support/androidTerminalCore';
+import {androidNativeMoshResize,androidNativeSessionAcceptance,sessionCases,validateNativeSessionReport} from './support/androidTerminalCore';
 
 const report=(rows:string[])=>`<?xml version="1.0"?><testsuites><testsuite tests="${rows.length}">${rows.join('')}</testsuite></testsuites>`;
 const row=([className,name]:readonly [string,string],body='')=>`<testcase name="${name}" classname="${className}" time="1">${body}</testcase>`;
@@ -34,4 +34,8 @@ test('the packaged benchmark selects only its own AndroidJUnitRunner method and 
 // The case needs the x86_64 debug APK built with the native-terminal feature and an explicitly selected emulator or Waydroid guest.
 test.skipIf(process.env.LAZYSH_ANDROID_UI_NATIVE_SESSION!=='1')('actual Android app opens a native session through its real UI, draws the shell on a surface and takes typing',async()=>{
   await androidNativeSessionAcceptance(undefined,process.env.LAZYSH_ANDROID_SOFTWARE_GPU!=='0');
+},1_000_000);
+
+test.skipIf(process.env.LAZYSH_ANDROID_UI_NATIVE_MOSH!=='1')('actual Android native Mosh changes the remote PTY grid and keeps its original shell on rotation',async()=>{
+  await androidNativeMoshResize(process.env.LAZYSH_NATIVE_MOSH_SERVER??'/usr/bin/mosh-server');
 },1_000_000);
