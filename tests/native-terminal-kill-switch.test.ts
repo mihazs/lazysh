@@ -117,3 +117,20 @@ test('macOS bundle rehearsal isolates the native and rollback build profiles', a
       .toBe('lazysh-macos-native-package-' + mode);
   }
 });
+
+test('the macOS bundle receipt records the archive byte count with GNU tools on PATH', async () => {
+  const {jobs} = await document('.github/workflows/terminal-macos-surface.yml');
+  const step = jobs['terminal-macos-app-host'].steps.find(step => step.name === 'Build and verify an ad-hoc macOS release app');
+  const start = step.run.indexOf('output="$RUNNER_TEMP/');
+  const path = await directory();
+  const summary = join(path, 'summary.md');
+  const result = await spawnText(project, ['bash', '-e', '-c', [
+    'ditto() { printf abc > "${@: -1}"; }',
+    'app=app expected=1.102.0 detected=off',
+    step.run.slice(start),
+  ].join('\n')], { ...process.env, RUNNER_TEMP: path, GITHUB_STEP_SUMMARY: summary });
+  expect(result.code, result.stderr).toBe(0);
+  const receipt = await Bun.file(summary).text();
+  expect(receipt).toContain('\nbytes=3\n');
+  expect(receipt).toContain('\nba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n');
+});

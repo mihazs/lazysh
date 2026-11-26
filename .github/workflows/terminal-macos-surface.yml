@@ -162,7 +162,8 @@ jobs:
           mkdir -p "$output"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$output/lazysh.app.zip"
           archive="$output/lazysh.app.zip"
-          printf '%s\n' "version=$expected" "engine=$detected" "sha=$(git rev-parse HEAD)" "bytes=$(stat -f %z "$archive")" > "$output/receipt.txt"
+          bytes=$(wc -c < "$archive")
+          printf '%s\n' "version=$expected" "engine=$detected" "sha=$(git rev-parse HEAD)" "bytes=$((bytes))" > "$output/receipt.txt"
           shasum -a 256 "$archive" | cut -d' ' -f1 >> "$output/receipt.txt"
           cat "$output/receipt.txt" >> "$GITHUB_STEP_SUMMARY"
       - name: Retain the signed rehearsal bundle and receipt
