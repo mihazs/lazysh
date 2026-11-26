@@ -322,6 +322,9 @@ async function desktop(target: ArtifactTarget, root: string, output: string) {
     const deb = await exactlyOne('deb/*.deb', bundle);
     requirePlatform(await native('dpkg-deb', ['--field', deb, 'Version']) === identity.version, 'Debian version mismatch');
     requirePlatform(await native('dpkg-deb', ['--field', deb, 'Architecture']) === 'amd64', 'Debian architecture mismatch');
+    const dependencies = await native('dpkg-deb', ['--field', deb, 'Depends']);
+    requirePlatform(dependencies.split(',').some(dependency =>
+      dependency.replace(/\s/g, '') === 'libprotobuf-lite32t64|libprotobuf-lite32'), 'Debian package omits protobuf-lite runtime providers');
     const image = await exactlyOne('appimage/*.AppImage', bundle);
     await debCompanion(deb, published);
     await appImageCompanion(image, published);

@@ -12,6 +12,11 @@ const named = (id: string) => release.find(entry => entry.id === id)!;
 const roots = gitFixtureRoots('lazysh-release-workflow-test-');
 afterAll(() => roots.cleanup());
 
+test('the Linux Debian package declares providers for its protobuf-lite runtime ABI', async () => {
+  const configuration = await Bun.file(new URL('../apps/client/src-tauri/tauri.linux.conf.json', import.meta.url)).json();
+  expect(configuration.bundle?.linux?.deb?.depends).toContain('libprotobuf-lite32t64 | libprotobuf-lite32');
+});
+
 // The success path: admission enabled the source; cache lookups are worst-case misses.
 async function steps(entry: RunnerJob, row: Context, engine = 'on') {
   return executedSteps(entry.job.steps, { ...entry.context, matrix: row, env: { LAZYSH_NATIVE_TERMINAL: engine }, steps: { prepare: { outputs: { enabled: 'true' } } } });
