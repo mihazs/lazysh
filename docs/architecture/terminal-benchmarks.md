@@ -677,9 +677,49 @@ Not decided here, because the lane cannot show it: battery energy (the 20 % targ
 
 #### Measured so far
 
-**Nothing from the lane yet.** The harness was exercised end to end on the Waydroid guest on 2026-11-22: a smoke-scale run of the baseline spec in the guest's WebView read real CPU, wakeup, SurfaceFlinger and PSS counters for every workload, including the churn workload. Three full-scale runs were started and none finished: the first was spoiled when another lane uninstalled and launched the app under test while it held the window focus and, in the same minutes, a `waydroid app launch` of the host app by the runner itself reopened its page as `about:blank` (the page under test ended up in a background activity); the second was stopped by hand because its W9 stage, at 200 keys a run, would have taken over an hour (below); the third was cut off by a desktop reset under load, after which the Waydroid session did not come back without root. No figure from any of them is recorded, so the xterm.js side of G14, G15 and the idle half of G16 is **not measured**, and no number may be quoted here until a complete run's record is committed under `benchmarks/` with its run id.
+The two packaged engines ran on the same Android 13 x86_64 Waydroid guest against an owned OpenSSH fixture. The native engine used the Radeon NAVI14 Vulkan adapter with RADV Mesa 26.0.8. The [measurement record](benchmarks/android-native-waydroid-20261126.json) includes run IDs, APK digests, workload hashes, and samples. The side-by-side debug build included the SwiftKey correction from [#2750](https://github.com/mihazs/lazysh/pull/2750).
 
-What the abandoned runs did show, and the next run is arranged around: with five background sessions streaming at full rate, the WebView's main thread is so busy that a key typed through the DevTools protocol took about 1.8 s to reach the page (about 0.55 keys/s), against about 20 ms in desktop Chromium, so the Android run types 40 keys per W9 run instead of 200 (`sessionKeys` in `e2e/terminal-bench.spec.ts`); the rest of the full-scale run (W0 to W4, W10, W12) took about 8 minutes. The guest's display runs at 240 Hz, so a focused xterm.js terminal with the cursor blinking presents frames at close to the display rate (31 frames in 0.32 s in the smoke run).
+The [#2520](https://github.com/mihazs/lazysh/pull/2520) functionality suite passed all 20 runnable journeys. Its five remaining cases require a different fixture, release build, input method, or hardware. A separate touchscreen SwiftKey test on the same guest also passed inline zsh history, repeated words, Backspace, and one Enter submission. [Acceptance issue #2519](https://github.com/mihazs/lazysh/issues/2519#issuecomment-7204357044)
+
+W1 checked 300 shell bursts per repetition and completed five repetitions per engine at 79 × 6. Median per-run p50 and p95 display capture times were 35.8 ms and 41.5 ms for xterm.js, and 26.1 ms and 33.8 ms for native.
+
+W2–W4 captured five samples per engine and workload at the same 79 × 6 grid. The fixture and APK digests matched. The values are median milliseconds from stream release to display capture.
+
+| Workload | xterm.js | Native |
+| --- | ---: | ---: |
+| Plain output | 1,411.1 | 432.3 |
+| ANSI output | 819.3 | 142.8 |
+| Redraws | 306.8 | 112.5 |
+
+The separate W2–W4 counter run used a 79 × 7 grid and matched fixture and APK digests. Median CPU ms/MiB for xterm.js and native were 1,100 and 202 for plain output, 1,295 and 120 for ANSI, and 1,162 and 218 for redraws. The native SurfaceFlinger records include frame intervals. Native jank rates remain unmeasured because the required counters were absent.
+
+The W9 run measured Android process PSS on both engines, using the same app APK. Values are in MiB.
+
+| Checkpoint | xterm.js | Native |
+| --- | ---: | ---: |
+| One fresh session | 480 | 529 |
+| Five sessions | 563 | 494 |
+| Ten sessions | 608 | 369 |
+| After the fifth cleanup cycle | 832 | 374 |
+
+The W0 run compared three 30-second windows per engine and cursor mode. The comparator passed the idle portion of G16.
+
+| Cursor | Median metric | xterm.js | Native |
+| --- | --- | ---: | ---: |
+| Blinking | CPU ms/s | 124.09 | 8.31 |
+| Blinking | Wakeups/s | 1,830.45 | 37.39 |
+| Blinking | Frames/s | 2.63 | 1.86 |
+| Steady | CPU ms/s | 4.66 | 2.99 |
+| Steady | Wakeups/s | 53.21 | 14.44 |
+| Steady | Frames/s | 0.00 | 0.00 |
+
+W12 input under sustained output used a temporary 1920 × 1440 Waydroid display and the same 79 × 5 terminal grid for both engines. Each arm completed five repetitions of 200 echoed keys. Median per-run p50 and p95 capture latencies were 88.9 ms and 252.5 ms for xterm.js, and 52.6 ms and 90.6 ms for native. The fixture and APK digests matched, and the display size was restored after the run.
+
+With five sessions open, each engine captured 1,000 foreground echoes at 79 × 5. Every background session advanced its output in every repetition. Median per-run p50 and p95 were 138.57 ms and 262.84 ms for xterm.js, and 41.83 ms and 50.64 ms for native. The ten-session xterm arm lost its completion signal, so its comparison remains open.
+
+The Android default still requires the full performance matrix and acceptance on the release candidate. [Rollout issue #2094](https://github.com/mihazs/lazysh/issues/2094)
+
+In the earlier November 22 exploratory runs, with five background sessions streaming at full rate, the WebView's main thread is so busy that a key typed through the DevTools protocol took about 1.8 s to reach the page (about 0.55 keys/s), against about 20 ms in desktop Chromium, so the Android run types 40 keys per W9 run instead of 200 (`sessionKeys` in `e2e/terminal-bench.spec.ts`); the rest of the full-scale run (W0 to W4, W10, W12) took about 8 minutes. The guest's display runs at 240 Hz, so a focused xterm.js terminal with the cursor blinking presents frames at close to the display rate (31 frames in 0.32 s in the smoke run).
 
 ## Results
 
@@ -688,7 +728,7 @@ What the abandoned runs did show, and the next run is arranged around: with five
 | W0, W1, W2, W3, W4, W9, W10, W12 | measured, [baseline](#measured-baseline) | measured, [shootout](#renderer-shootout-xtermjs-renderers-1323): on par or better except W3 frame pacing, W4 CPU and fixed memory | measured: much slower | host and Waydroid microbenchmarks only: [parse stage on these very workloads](#parse-stage-on-the-baselines-own-workloads-native-core-versus-xtermjs-host-microbenchmark-not-a-device-baseline), [wgpu prototype](#wgpu-prototype-against-the-cpu-reference-renderer-host-gpu-not-a-device), [Android Canvas replay](#android-canvas-drawing-of-the-shared-layout-waydroid-not-a-device), [WebAssembly parse](#webassembly-vt-versus-xtermjs-parse-only-host-microbenchmark-not-a-candidate); no text, no device | undecided; see [ADR 0001, amendments 1 and 2](adr-0001-terminal-runtime.md#amendment-1-2026-11-12-first-renderer-shootout-results) |
 | W5, W6, W7, W8, W11 | measured on desktop Chromium, [program workloads](#program-workloads-w5-to-w8-and-w11); not on Android (the Waydroid lane could not start) | not measured | not measured | the core on the same bytes and screens, host microbenchmark, same section; no renderer, no device | undecided |
 | W13 | not implemented | not measured | not measured | not measured | undecided |
-| All workloads on Android | not measured (the harness for the same-run comparison on the Waydroid lane exists, [no recorded run yet](#measured-so-far)) | not measured | not measured | not measured (the Canvas replay ran on Waydroid, which is not a device) | undecided |
+| Packaged Android on Waydroid | W0 idle, W1–W4 display latency and W9 memory, [matched measurements](#measured-so-far) | outside these runs | outside these runs | same workloads and guest | lower native display latency and lower PSS at five and ten sessions. Full performance matrix pending. |
 
 ### Core parse throughput (host microbenchmark, not a device baseline)
 
