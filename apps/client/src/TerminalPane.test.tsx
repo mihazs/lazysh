@@ -175,7 +175,7 @@ describe('selection on a native session',()=>{
     const canvas=view.container.querySelector<HTMLElement>('.terminal-canvas')!;
     // 20 columns of 10px and 4 rows of 10px.
     canvas.getBoundingClientRect=()=>({left:0,top:0,width:200,height:40,right:200,bottom:40,x:0,y:0,toJSON(){}});
-    await adapter.attach({kind:'native',anchorId:canvas.id});
+    await act(async()=>{});
     return {adapter,canvas,view};
   }
   const touch=(canvas:HTMLElement,type:string,x:number,y:number)=>canvas.dispatchEvent(Object.assign(new Event(type,{bubbles:true,cancelable:true}),{touches:type==='touchend'?[]:[{clientX:x,clientY:y}],changedTouches:[{clientX:x,clientY:y}]}));
@@ -199,6 +199,31 @@ describe('selection on a native session',()=>{
     await waitFor(()=>expect(navigator.clipboard.writeText).toHaveBeenCalledWith('world'));
     expect(adapter.hasSelection()).toBe(false);
     vi.useRealTimers();
+  });
+
+  it('starts a fresh touch selection after copying the previous one',async()=>{
+    vi.useFakeTimers({shouldAdvanceTime:true});
+    try {
+      const {adapter,canvas}=await nativePane('hello world\r\nsecond row');
+      const hold=async(x:number,y:number)=>{
+        const pointer=(type:string)=>canvas.dispatchEvent(Object.assign(
+          new MouseEvent(type,{clientX:x,clientY:y,bubbles:true,cancelable:true}),{pointerType:'touch',pointerId:1},
+        ));
+        await act(async()=>{
+          pointer('pointerdown');
+          touch(canvas,'touchstart',x,y);
+          await vi.advanceTimersByTimeAsync(700);
+          pointer('pointerup');
+          touch(canvas,'touchend',x,y);
+        });
+      };
+      await hold(72,5);
+      expect(adapter.selectedText()).toBe('world');
+      fireEvent.click(within(screen.getByRole('toolbar',{name:'Selection actions'})).getByRole('button',{name:'Copy'}));
+      expect(adapter.hasSelection()).toBe(false);
+      await hold(15,15);
+      expect(adapter.selectedText()).toBe('second');
+    } finally { vi.useRealTimers(); }
   });
 
   it('selects the whole buffer, history included, and copies the visible screen, from the selection actions',async()=>{
