@@ -1379,9 +1379,11 @@ test('an attached image opens from the user bubble without moving the scroll pos
   const flow=agent.getByRole('region',{name:'Conversation messages',exact:true});
   // Codex previews are opt-in: nothing is requested and no control shows until the switch is on.
   await expect(agent.getByRole('button',{name:/· View$/})).toHaveCount(0);
-  await agent.getByRole('button',{name:'Agent view options',exact:true}).click();
-  await agent.getByRole('checkbox',{name:'Show image previews',exact:true}).check();
-  await page.keyboard.press('Escape');
+  await (await workspaceControl(page,'Preferences')).click();
+  const preferences=page.getByRole('dialog',{name:'Preferences',exact:true});
+  await preferences.getByRole('button',{name:'Show image previews',exact:true}).click();
+  await preferences.getByRole('checkbox',{name:'Codex',exact:true}).check();
+  await preferences.getByRole('button',{name:'Close Preferences',exact:true}).click();
   const image=agent.getByRole('button',{name:'Image 32 × 16 · View',exact:true});
   await expect(image).toBeVisible();
   // The stream itself carries the previews: the channel was reopened asking for them.
