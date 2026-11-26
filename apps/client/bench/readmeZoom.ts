@@ -72,7 +72,7 @@ export function zoomFilter(keyframes: Keyframe[], source: { width: number; heigh
 }
 const even = (n: number) => Math.round(n / 2) * 2;
 
-function probe(file: string) {
+export function probe(file: string) {
   const out = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', file]);
   const [width, height] = out.stdout.toString().trim().split(',').map(Number);
   if (!width || !height) throw new Error(`cannot read the size of ${file}`);
@@ -97,8 +97,12 @@ export function renderClip(input: string, keyframes: Keyframe[], output: string,
   } finally { rmSync(work, { recursive: true, force: true }); }
 }
 
+/** `--name value` pairs of a command line. */
+export const flags = (argv: string[]): Record<string, string> =>
+  Object.fromEntries(argv.reduce<string[][]>((pairs, item, i, all) => (item.startsWith('--') ? [...pairs, [item.slice(2), all[i + 1]]] : pairs), []));
+
 if (process.argv[1]?.endsWith('readmeZoom.ts')) {
-  const args = Object.fromEntries(process.argv.slice(2).reduce<string[][]>((pairs, item, i, all) => (item.startsWith('--') ? [...pairs, [item.slice(2), all[i + 1]]] : pairs), []));
+  const args = flags(process.argv.slice(2));
   if (!args.in || !args.keyframes || !args.out) { console.error('usage: readmeZoom.ts --in raw.mp4 --keyframes keyframes.json --out clip.mp4 [--crop-top PX] [--crop-bottom PX] [--width 540] [--fps 30] [--max-kb 5120]'); process.exit(2); }
   try {
     const size = renderClip(args.in, JSON.parse(readFileSync(args.keyframes, 'utf8')), args.out, {

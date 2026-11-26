@@ -1,0 +1,104 @@
+[
+ {
+  "kind": "card",
+  "duration": 2.5,
+  "title": "lazysh",
+  "subtitle": "SSH from your phone.\nKeep sessions on your server.\nWatch your coding agents.",
+  "transition": "fade"
+ },
+ {
+  "kind": "clip",
+  "file": "agent-chat.mp4",
+  "start": 2.0,
+  "duration": 7.3,
+  "caption": "Follow your coding agent from your phone",
+  "transition": "fade"
+ },
+ {
+  "kind": "clip",
+  "file": "agent-approval.mp4",
+  "start": 0.4,
+  "duration": 6,
+  "caption": "Approve your agent from your phone"
+ },
+ {
+  "kind": "image",
+  "file": "sessions.png",
+  "duration": 3.5,
+  "caption": "Sessions survive disconnects",
+  "keyframes": [
+   {
+    "t": 0,
+    "zoom": 1,
+    "x": 0.5,
+    "y": 0.5
+   },
+   {
+    "t": 1,
+    "zoom": 1.5,
+    "x": 0.34,
+    "y": 0.74
+   },
+   {
+    "t": 3.5,
+    "zoom": 1.5,
+    "x": 0.34,
+    "y": 0.8
+   }
+  ]
+ },
+ {
+  "kind": "image",
+  "file": "hosts.png",
+  "duration": 3,
+  "caption": "Your hosts. No account.",
+  "keyframes": [
+   {
+    "t": 0,
+    "zoom": 1,
+    "x": 0.5,
+    "y": 0.5
+   },
+   {
+    "t": 1,
+    "zoom": 1.5,
+    "x": 0.34,
+    "y": 0.42
+   },
+   {
+    "t": 3,
+    "zoom": 1.5,
+    "x": 0.34,
+    "y": 0.55
+   }
+  ]
+ },
+ {
+  "kind": "clip",
+  "file": "terminal-live.mp4",
+  "start": 1.0,
+  "duration": 7,
+  "caption": "A real terminal, built for the phone keyboard"
+ },
+ {
+  "kind": "clip",
+  "file": "files-browse.mp4",
+  "start": 0,
+  "duration": 6,
+  "caption": "Browse and preview remote files"
+ },
+ {
+  "kind": "clip",
+  "file": "terminal-engine.mp4",
+  "start": 2.8,
+  "duration": 5.5,
+  "caption": "Pick your terminal engine"
+ },
+ {
+  "kind": "card",
+  "duration": 3.5,
+  "title": "lazysh",
+  "subtitle": "Free and open source\nAndroid, Linux and Windows\ngithub.com/mihazs/lazysh",
+  "transition": "fadeblack"
+ }
+]

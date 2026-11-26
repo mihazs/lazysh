@@ -9,7 +9,7 @@
 # Exit: 0 done, 1 the media cannot be made to fit its budget or a check failed, 2 usage, 3 a tool or the guest is missing.
 # Environment: ADB (adb binary), ANDROID_SERIAL (default 192.168.240.112:5555), README_MEDIA_OUT (default docs/assets/readme next to the repo root),
 # README_CROP_TOP and README_CROP_BOTTOM (pixels of the guest's status and navigation bars to cut from every capture, default 0),
-# README_PNG_MAX_KB (300), README_GIF_MAX_KB (4096), README_MP4_MAX_KB (5120).
+# README_PNG_MAX_KB (300), README_GIF_MAX_KB (5120), README_MP4_MAX_KB (5120).
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -17,7 +17,7 @@ adb=${ADB:-adb}
 serial=${ANDROID_SERIAL:-192.168.240.112:5555}
 out=${README_MEDIA_OUT:-$here/../../../docs/assets/readme}
 crop_top=${README_CROP_TOP:-0}; crop_bottom=${README_CROP_BOTTOM:-0}
-png_max=$((${README_PNG_MAX_KB:-300} * 1024)); gif_max=$((${README_GIF_MAX_KB:-4096} * 1024)); mp4_max=$((${README_MP4_MAX_KB:-5120} * 1024))
+png_max=$((${README_PNG_MAX_KB:-300} * 1024)); gif_max=$((${README_GIF_MAX_KB:-5120} * 1024)); mp4_max=$((${README_MP4_MAX_KB:-5120} * 1024))
 work=''
 
 say() { echo "readme-capture: $*" >&2; }
@@ -40,7 +40,7 @@ fit_png() { # fit_png <raw.png> <dest.png>
 
 # GIFs: fewer frames per second, a narrower frame and fewer colours until the file fits.
 fit_gif() { # fit_gif <video> <dest.gif>
-  for step in 12:360:128 10:320:96 8:288:64 6:240:48; do
+  for step in 12:360:128 12:360:96 12:360:64 10:360:64 10:320:64 10:300:64 8:288:64 6:240:48; do
     fps=${step%%:*}; rest=${step#*:}; width=${rest%%:*}; colors=${rest#*:}
     ffmpeg -v error -y -i "$1" -vf "fps=$fps,crop=iw:ih-$crop_top-$crop_bottom:0:$crop_top,scale=$width:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=$colors:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
       -loop 0 "$work/try.gif" || die 3 'ffmpeg failed'
