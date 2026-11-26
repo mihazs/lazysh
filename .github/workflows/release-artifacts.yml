@@ -102,8 +102,24 @@ jobs:
           path: ${{ runner.temp }}/published-companion
       - name: Stage the verified companion where the Tauri bundler picks up its sidecar
         run: bun .changeset/release-bundle.ts stage ${{ matrix.target }} "${{ runner.temp }}/published-companion"
+      - name: Provision the Windows native terminal toolchain
+        if: matrix.target == 'windows-x64' && env.LAZYSH_NATIVE_TERMINAL == 'on'
+        shell: bash
+        run: |
+          root="$(cygpath -m "$RUNNER_TEMP")/lazysh-windows-release"
+          sh .github/scripts/windows-terminal-zig.sh "$root"
+          printf '%s\n' "ZIG=$root/zig-x86_64-windows-0.16.0/zig.exe" "LIBGHOSTTY_VT_WINDOWS_LIBC=$root/windows-libc.txt" >> "$GITHUB_ENV"
+      - if: matrix.target == 'linux-x64' && env.LAZYSH_NATIVE_TERMINAL == 'on'
+        uses: ./.github/actions/ghostty-zig
+        with:
+          link-source: 'true'
+          restore-only: 'true'
       - name: Build native installation packages without debug flags
-        run: bun run --cwd apps/client tauri build --config src-tauri/tauri.bundled-agent.conf.json --bundles ${{ matrix.bundles }} -- --locked
+        shell: bash
+        run: |
+          features=()
+          if [ "$LAZYSH_NATIVE_TERMINAL" = on ]; then features=(--features native-terminal); fi
+          bun run --cwd apps/client tauri build --config src-tauri/tauri.bundled-agent.conf.json --bundles ${{ matrix.bundles }} "${features[@]}" -- --locked
       - name: Validate native packages, require the verified companion in each, accept Windows install and repair, and record exact bytes
         env:
           LAZYSH_COMPANION_DIR: ${{ runner.temp }}/published-companion

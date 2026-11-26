@@ -22,6 +22,12 @@ on:
     branches: [main]
     paths: *surface-paths
   workflow_dispatch:
+    inputs:
+      installer_engine:
+        description: Build and verify an unsigned NSIS test installer with the native engine on or off
+        type: choice
+        default: skip
+        options: [skip, 'on', 'off']
 
 permissions:
   contents: read
@@ -81,7 +87,7 @@ jobs:
 
   terminal-windows-app-host:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.installer_engine != 'skip' && 90 || 60 }}
     defaults:
       run:
         shell: bash
@@ -106,9 +112,42 @@ jobs:
             echo "CARGO_TARGET_DIR=$root/target"
           } >> "$GITHUB_ENV"
       - name: Build the native-enabled app and run the Windows anchor test
+        if: github.event_name != 'workflow_dispatch' || inputs.installer_engine == 'skip'
         run: |
           args=(--manifest-path apps/client/src-tauri/Cargo.toml --locked --features native-terminal --lib)
           case_name=native_terminal_surface::windows::tests::anchor_edges_map_to_physical_client_pixels
           sh .github/scripts/retry-zig-fetch.sh cargo test "${args[@]}" --no-run
           cargo test "${args[@]}" -- --list --exact "$case_name" | grep -Fx "$case_name: test"
           cargo test "${args[@]}" -- --exact "$case_name"
+      - if: github.event_name == 'workflow_dispatch' && inputs.installer_engine != 'skip'
+        uses: ./.github/actions/setup-bun
+        with:
+          restore-only: 'true'
+      - name: Build and verify the unsigned native terminal test installer
+        if: github.event_name == 'workflow_dispatch' && inputs.installer_engine != 'skip'
+        env:
+          LAZYSH_NATIVE_TERMINAL: ${{ inputs.installer_engine }}
+        run: |
+          bun install --frozen-lockfile
+          sh .github/scripts/retry-zig-fetch.sh bun run --cwd apps/client tauri build --bundles nsis --features native-terminal -- --locked
+          bun -e '
+            import {join} from "node:path";
+            import {exactlyOne, windowsInstallation} from "./.changeset/release-platform.ts";
+            const build = join(process.env.CARGO_TARGET_DIR, "release");
+            const installer = await exactlyOne("nsis/*.exe", join(build, "bundle"));
+            const {version} = await Bun.file("apps/client/package.json").json();
+            console.info(await windowsInstallation(installer, join(build, "lazysh.exe"), version));
+          '
+      - name: Retain the verified test installer
+        if: github.event_name == 'workflow_dispatch' && inputs.installer_engine != 'skip'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-windows-native-test-installer-${{ inputs.installer_engine }}
+          path: ${{ env.CARGO_TARGET_DIR }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7
+      - name: Verify xterm.js in the installed kill-switch build
+        if: github.event_name == 'workflow_dispatch' && inputs.installer_engine == 'off'
+        uses: ./.github/actions/windows-installed-gui
+        env:
+          LAZYSH_NATIVE_TERMINAL: 'off'

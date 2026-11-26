@@ -13,8 +13,8 @@ const roots = gitFixtureRoots('lazysh-release-workflow-test-');
 afterAll(() => roots.cleanup());
 
 // The success path: admission enabled the source; cache lookups are worst-case misses.
-async function steps(entry: RunnerJob, row: Context) {
-  return executedSteps(entry.job.steps, { ...entry.context, matrix: row, steps: { prepare: { outputs: { enabled: 'true' } } } });
+async function steps(entry: RunnerJob, row: Context, engine = 'on') {
+  return executedSteps(entry.job.steps, { ...entry.context, matrix: row, env: { LAZYSH_NATIVE_TERMINAL: engine }, steps: { prepare: { outputs: { enabled: 'true' } } } });
 }
 
 // The desktop builds wait for the verified companions they bundle, so the critical path has three entries.
@@ -81,6 +81,40 @@ test('each desktop build stages the verified companion its own platform uploaded
     expect(staged).toContain(`stage ${row.target} "${directory}"`);
     expect(interpolate(executed[validate].step.env.LAZYSH_COMPANION_DIR, executed[validate].context)).toBe(directory);
     expect(executed[build].step.run).toContain('--config src-tauri/tauri.bundled-agent.conf.json');
+    expect(executed[build].step.run).toContain('--features native-terminal');
+    const provision = at(step => step.run?.includes('windows-terminal-zig.sh'));
+    const zig = at(step => step.uses === './.github/actions/ghostty-zig');
+    if (row.target === 'windows-x64') {
+      expect(provision).toBeGreaterThanOrEqual(0);
+      expect(provision).toBeLessThan(build);
+      expect(zig).toBe(-1);
+    } else {
+      expect(provision).toBe(-1);
+      expect(zig).toBeGreaterThanOrEqual(0);
+      expect(zig).toBeLessThan(build);
+      expect(executed[zig].step.with).toEqual({ 'link-source': 'true', 'restore-only': 'true' });
+    }
+  }
+});
+
+test('desktop rollback builds without the terminal feature or its toolchain', async () => {
+  const desktop = named('desktop');
+  for (const row of desktop.rows) {
+    const off = (await steps(desktop, row, 'off')).map(({step}) => step);
+    expect(off.some(step => step.uses === './.github/actions/ghostty-zig')).toBe(false);
+    expect(off.some(step => step.run?.includes('windows-terminal-zig.sh'))).toBe(false);
+    const build = off.find(step => step.run?.includes('tauri build'));
+    const command = interpolate(build.run, {matrix: row});
+    for (const mode of ['on', 'off']) {
+      const result = await spawnText(project, ['bash', '-e', '-c', ['bun() { printf "%s\\n" "$@"; }', command].join('\n')], {
+        ...process.env, LAZYSH_NATIVE_TERMINAL: mode,
+      });
+      expect(result.code).toBe(0);
+      const args = result.stdout.trim().split('\n');
+      expect(args.includes('--features')).toBe(mode === 'on');
+      expect(args.includes('native-terminal')).toBe(mode === 'on');
+      expect(args.at(-1)).toBe('--locked');
+    }
   }
 });
 
