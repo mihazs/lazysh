@@ -9,7 +9,7 @@ Read the numbers with the limits at the end.
 
 | Option | Decision | Reason in one line |
 | --- | --- | --- |
-| mold as the dev/test linker | **Opt-in**, documented below; not in the repository config, not in CI | 21 percent less CPU on a clean test build and about 6 times less on an incremental relink, but Linux only and a new tool; wall time is not resolvable on this machine |
+| mold as the dev/test linker | **Opt-in**, documented below; not in the repository config, not in CI | 17 to 21 percent less CPU on a clean test build, 20 percent less wall time on the desktop crate (255 against 318 s), 3.5 to 6 times less CPU on an incremental relink; but Linux only and a new tool |
 | wild as the dev/test linker | Rejected | More CPU than the default linker in both builds (+27 percent clean, +86 percent incremental) |
 | Cranelift codegen backend | Rejected | Nightly only; no build-time gain over nightly LLVM (clean -6 percent CPU, incremental +8 percent); the agent's unit tests abort under it |
 | Plain nightly toolchain | Rejected | Faster on this crate, but forces nightly on contributors and F-Droid has no use for it; see the table |
@@ -72,6 +72,17 @@ Readings:
   LLVM. The cause was not investigated further. It would also need nightly in every place it is used.
 - The nightly target directory is a third of the stable one (3.7 against 11 GB) for the same crate; that comes from the toolchain, not
   the backend, and is noted so nobody reads the Cranelift row's 4.0 GB as a backend saving.
+
+The desktop application crate (`lazysh`, Tauri with Whisper, Parakeet and the rest, `cargo test --locked --no-run -p lazysh`, one clean run and three incremental runs
+after touching `apps/client/src-tauri/src/lib.rs`, at a load of 4 to 19, so wall time is meaningful here) agrees:
+
+| Variant | Clean wall / CPU | Incremental wall (3 runs) | Incremental CPU (3 runs) | Peak RSS | Target | Unit tests |
+| --- | --- | --- | --- | --- | --- | --- |
+| default (LLD) | 318.2 s / 1504.9 s | 14.6, 15.7, 15.3 s | 58.0, 61.1, 62.0 s | 3853 MB | 12 GB | 795 pass |
+| mold | 255.5 s / 1249.2 s | 13.2, 13.0, 13.2 s | 16.6, 17.1, 17.0 s | 4219 MB (clean), 2256 MB (incr.) | 12 GB | 795 pass |
+
+mold is 20 percent faster on the clean test build, 14 percent faster on the incremental one and uses 17 percent and 72 percent less CPU. Those are the gains
+on this machine only; they do not change the decision below, because the cost is paid by every contributor and every job.
 
 ### Enable mold on your machine (opt-in)
 
@@ -139,7 +150,6 @@ Step timings from run 45856165676 (one run; the jobs queued 25 to 131 minutes be
 
 - One machine (24 threads, 31 GB), shared with other sessions: wall times are affected by load, which is why CPU time is the primary metric and the load average is
   recorded with each run. Wall-clock claims are made only where the result is large against that noise.
-- The linker matrix is one link-heavy crate (`lazysh-agent`). The desktop application crate (`lazysh`, with Tauri, Whisper and wgpu) was not measured: a clean test build needs
-  tens of gigabytes of target directory and the disk had 58 GB free for every session. The relative link-time result should carry over; the absolute numbers will not.
+- The full linker matrix is one link-heavy crate (`lazysh-agent`); the desktop crate was measured for the default linker and mold only (wild and Cranelift were already rejected on the agent crate).
 - CI changes were validated by running the classifier and the moon graph locally and by the existing workflow tests; the hosted runner was not exercised.
 - Android timings come from one hosted run; no emulator or device was run locally for this page.
