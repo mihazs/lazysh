@@ -772,7 +772,10 @@ pub async fn herdr_action(
 
 #[cfg(all(test, unix))]
 pub(crate) fn isolate_test_socket(command: &mut std::process::Command, home: &std::path::Path) {
-    command.env("HERDR_SOCKET_PATH", home.join("herdr.sock"));
+    // Explicit sessions derive their socket from the isolated configuration directory.
+    command
+        .env("XDG_STATE_HOME", home)
+        .env("HERDR_SOCKET_PATH", home.join("herdr.sock"));
     for name in [
         "HERDR_CLIENT_SOCKET_PATH",
         "HERDR_SESSION",
@@ -798,6 +801,10 @@ mod tests {
         assert_eq!(
             overrides[OsStr::new("HERDR_SOCKET_PATH")],
             Some(home.join("herdr.sock").as_os_str()),
+        );
+        assert_eq!(
+            overrides[OsStr::new("XDG_STATE_HOME")],
+            Some(home.as_os_str())
         );
         for name in [
             "HERDR_CLIENT_SOCKET_PATH",
@@ -1341,7 +1348,7 @@ mod tests {
             .unwrap();
             let mut server = Self::configured(temp.path(), "herdr");
             let server = server
-                .arg("server")
+                .args(["--session", "default", "server"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
@@ -1350,7 +1357,7 @@ mod tests {
             let ready = (0..100).any(|_| {
                 let ready = herdr
                     .command("herdr")
-                    .args(["api", "snapshot"])
+                    .args(["--session", "default", "api", "snapshot"])
                     .output()
                     .unwrap()
                     .status

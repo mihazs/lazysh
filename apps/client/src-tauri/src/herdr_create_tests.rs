@@ -867,7 +867,7 @@ fn real_herdr_worktree_workspace_and_agent() {
     let mut server = Command::new("herdr");
     configure(&mut server);
     let server = server
-        .arg("server")
+        .args(["--session", "default", "server"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -888,9 +888,12 @@ fn real_herdr_worktree_workspace_and_agent() {
     };
     let mut ready = false;
     for _ in 0..200 {
-        if now(remote.run(&args(&["herdr", "api", "snapshot"]), Duration::ZERO))
-            .unwrap()
-            .status
+        if now(remote.run(
+            &args(&["herdr", "--session", "default", "api", "snapshot"]),
+            Duration::ZERO,
+        ))
+        .unwrap()
+        .status
             == 0
         {
             ready = true;
