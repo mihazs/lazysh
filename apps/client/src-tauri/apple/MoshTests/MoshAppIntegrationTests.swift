@@ -111,10 +111,10 @@ final class MoshAppIntegrationTests: XCTestCase {
       };
       const access = await waitFor('app access', async () => {
         const status = await ipc.invoke('app_lock_status');
-        return status.initialized && !status.locked && status.nonce ? status : null;
+        return status.initialized && !status.locked ? status : null;
       }).catch(() => null);
       if (!access) return {passed: false, stage: 'initialize app access', type: 'unavailable'};
-      const invoke = (command, args) => ipc.invoke(command, args, {headers: {'X-Lazysh-Access': access.nonce}});
+      const invoke = (command, args) => ipc.invoke(command, args, {headers: {'X-Lazysh-Access': access.nonce ?? ''}});
       const channel = receive => '__CHANNEL__:' + ipc.transformCallback(event => {
         if (event.message) receive(event.message);
       });
