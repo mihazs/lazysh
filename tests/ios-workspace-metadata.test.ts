@@ -181,3 +181,19 @@ test('configuration lists and architecture arrays retain explicit truncation mar
   expect(decoded.project.values).toHaveLength(32);
   expect(decoded.project.values[0].settings.ARCHS).toEqual(['arch0', 'arch1', 'arch2', 'arch3', 'arch4', 'arch5', 'arch6', '[truncated]']);
 });
+
+test('the native iOS app runs the Metal probe on the same simulator after installation', async () => {
+  const terminal = workflow.jobs['terminal-ios'].steps;
+  const install = terminal.findIndex(step => step.id === 'ios-terminal-install');
+  const probe = terminal.findIndex(step => step.run?.includes('-only-testing:LazyshMoshAppTests/'));
+  expect(install).toBeGreaterThanOrEqual(0);
+  expect(probe).toBeGreaterThan(install);
+  expect(terminal[install].run).toContain('simctl install "$LAZYSH_IOS_SIMULATOR_ID"');
+  expect(terminal[probe].if).toContain("steps.ios-terminal-install.outcome == 'success'");
+  expect(terminal[probe].run).toContain('id=$LAZYSH_IOS_SIMULATOR_ID');
+  const testCase = 'LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalBuildAdmitsTheMetalRenderer';
+  expect(terminal[probe].run).toContain('-only-testing:' + testCase);
+  expect(steps.find(step => step.id === 'ios-mosh-app')?.run).toContain('-skip-testing:' + testCase);
+  const fixture = await Bun.file(join(root, 'apps/client/src-tauri/apple/MoshTests/MoshAppIntegrationTests.swift')).text();
+  expect(fixture).toContain('func testNativeTerminalBuildAdmitsTheMetalRenderer()');
+});
