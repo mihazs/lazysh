@@ -5473,12 +5473,7 @@ class NativeWorkspaceTest {
                     verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label, nativeTmux)
                     if (!nativeTmux) verifyOwnedTmuxDefault(scenario, fixture, name, label)
                 } finally {
-                    if (nativeTmux) evaluate(scenario, """(() => {
-                        if ($previous === null) localStorage.removeItem('$key');
-                        else localStorage.setItem('$key', $previous);
-                        window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
-                        return true;
-                    })()""")
+                    if (nativeTmux) evaluate(scenario, PageDriver.restoreStorageScript(key, previous))
                 }
             } else if (requireZellij) {
                 verifyOwnedZellij(scenario, fixture.getJSONObject("zellij"), name)

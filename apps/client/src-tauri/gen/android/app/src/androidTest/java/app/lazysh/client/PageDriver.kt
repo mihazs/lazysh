@@ -50,6 +50,14 @@ internal object PageDriver {
     /** Two screen rectangles agree to within a pixel of rounding. */
     fun near(a: Rect, b: Rect) = listOf(a.left - b.left, a.top - b.top, a.right - b.right, a.bottom - b.bottom).all { abs(it) <= 1 }
 
+    /** The page script that puts a saved `localStorage` value back (removed when there was none) and tells the app its storage changed. `previous` is the earlier read, interpolated as the page expression it was. */
+    fun restoreStorageScript(key: String, previous: Any?) = """(() => {
+        if ($previous === null) localStorage.removeItem('$key');
+        else localStorage.setItem('$key', $previous);
+        window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
+        return true;
+    })()"""
+
     /** The result of `expression` as JSON text; the WebView is looked up again for every call, since a recreation replaces it. */
     fun js(expression: String): String {
         val result = AtomicReference<String>()
