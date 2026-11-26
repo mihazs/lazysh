@@ -1,5 +1,34 @@
 # @lazysh/agent
 
+## 1.102.0
+
+### Minor Changes
+
+- feat(usage): enable agent background quota collection by default ([#2533](https://github.com/mihazs/lazysh/pull/2533))
+
+  <details><summary>Details</summary>
+
+  Managed companion setup provisions a supported user timer. Hosts can still disable collection or forbid provider quota reads.
+
+  </details>
+- feat(agents): show the current Claude Code and Codex goals in Agent View ([#2549](https://github.com/mihazs/lazysh/pull/2549))
+
+  <details><summary>Details</summary>
+
+  The goal and status follow the live session while reading its conversation. Codex also reports its recorded budget and elapsed time.
+
+  </details>
+
+### Patch Changes
+
+- fix(agent): read complete browser relay command records ([#2591](https://github.com/mihazs/lazysh/pull/2591))
+
+  <details><summary>Details</summary>
+
+  The host-browser test fixture waits for each record's newline before parsing it.
+
+  </details>
+
 ## 1.101.5
 
 No changes in this release.
