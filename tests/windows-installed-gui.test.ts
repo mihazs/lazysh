@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { digestFile } from '../.changeset/release-artifacts';
 import { project } from './support/gitFixture';
-import { document } from './support/workflowGraph';
+import { document, evaluate, executedSteps } from './support/workflowGraph';
 import { exactlyOne, windowsNsisBinaryDigest } from '../.changeset/release-platform';
 import { assertCargoReceipt, descendantsOf, edgeDriverVersion, freePorts, hostState, installWebViewArguments, launch, mainWindow, parseHostState,
   parseProcessTable, pinnedTools, powershell, processTable, quote, removeWebViewArguments, requireOwnedWindowsRunner, sameImage, killOwned, until,
@@ -14,6 +14,26 @@ import { assertCargoReceipt, descendantsOf, edgeDriverVersion, freePorts, hostSt
 
 const root = join(import.meta.dir, '..');
 const results = join(root, 'test-results/windows-gui');
+
+test('Windows installer dispatches only build the requested profile', async () => {
+  const { jobs } = await document('.github/workflows/windows-surface-probe.yml');
+  const job = jobs['terminal-windows-app-host'];
+  for (const [event_name, installer_engine, anchor, installer, gui] of [
+    ['pull_request', undefined, true, false, false],
+    ['push', undefined, true, false, false],
+    ['workflow_dispatch', 'skip', true, false, false],
+    ['workflow_dispatch', 'on', false, true, false],
+    ['workflow_dispatch', 'off', false, true, true],
+  ] as const) {
+    const context = { github: { event_name }, inputs: { installer_engine } };
+    expect(evaluate(job['timeout-minutes'], context)).toBe(installer ? 90 : 60);
+    const names = (await executedSteps(job.steps, context))
+      .map(({ step }) => step.name);
+    expect(names.includes('Build the native-enabled app and run the Windows anchor test')).toBe(anchor);
+    expect(names.includes('Build and verify the unsigned native terminal test installer')).toBe(installer);
+    expect(names.includes('Verify xterm.js in the installed kill-switch build')).toBe(gui);
+  }
+});
 
 test('Windows installed GUI acceptance refuses any job it does not own', () => {
   const owned = { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_TEMP: 'C:\\Temp' };
@@ -348,6 +368,14 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
         `);
         await browser.request('POST', `/session/${browser.session}/refresh`, {});
         await until('application shell after setting Native', () => browser.find('button.about-button'));
+        await browser.click(await until('Preferences button', () => browser.find('button.preferences-button')));
+        await browser.click(await until('Terminal and accessibility settings', () => browser.find('button[data-settings-target="terminal"]')));
+        const reason = await until('disabled native engine reason', () => browser.find('#terminal-engine-native-off'));
+        expect(await browser.text(reason)).toContain('disabled in this build');
+        const native = await until('Native engine radio', () => browser.find('input[name="terminal-engine"][value="native"]'));
+        expect(await browser.property(native, 'checked')).toBe(true);
+        expect(await browser.property(native, 'disabled')).toBe(true);
+        await browser.click(await until('Close Preferences', () => browser.find('button[aria-label="Close Preferences"]')));
       }
       await secondary(['--dir', name], caller);
       const screen = await until('local terminal', () => browser.find('.terminal-canvas .xterm-screen'));
