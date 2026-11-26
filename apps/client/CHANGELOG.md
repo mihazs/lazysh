@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.102.1
+
+### Patch Changes
+
+- fix(bench): require complete Android engine comparison measurements ([#2598](https://github.com/mihazs/lazysh/pull/2598))
+
+  <details><summary>Details</summary>
+
+  Incomplete workload pairs cannot produce a passing verdict.
+
+  </details>
+
 ## 1.102.0
 
 ### Minor Changes
