@@ -20,13 +20,28 @@ on:
     branches: [main]
     paths: *surface-paths
   workflow_dispatch:
+    inputs:
+      voiceover_probe:
+        description: Run the real VoiceOver state probe on a disposable runner
+        type: boolean
+        default: false
 
 concurrency:
   group: terminal-macos-surface-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  voiceover-state:
+    if: github.event_name == 'workflow_dispatch' && inputs.voiceover_probe
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toggle real VoiceOver and verify AppKit state
+        run: swift .github/scripts/macos-voiceover-probe.swift
+
   terminal-macos-surface:
+    if: github.event_name != 'workflow_dispatch' || !inputs.voiceover_probe
     runs-on: macos-latest
     timeout-minutes: 45
     defaults:
@@ -85,6 +100,7 @@ jobs:
 
 
   terminal-macos-app-host:
+    if: github.event_name != 'workflow_dispatch' || !inputs.voiceover_probe
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
