@@ -5,14 +5,11 @@ This is an initial, manual-update recipe for the public source revision in
 anything, or submit metadata to F-Droid. Automatic updates stay disabled until
 the separate release/tagging gates under #333 are complete.
 
-The current candidate pins 0.22.0 / 22000 at
-`3dc44f47dac1c5fa29a8e3220ee82efd46484f4d`, including the FOSS UnifiedPush
-registration foundation and the separately gated native event-display source.
-Removing the unused normal `android` project retains the selected
-`android-unifiedpush` project and its `android-shared` sources. This metadata
-update does not establish distributor delivery, retained inbox behavior or
-complete free-software remote push. The original provider-none 0.12.2 execution
-is recorded separately below.
+The current candidate pins 1.101.5 / 1101005 at
+`f4e5e4014d8da10a587db032393c3264383ab21b` and includes the native terminal
+engine. Removing the unused Google push project retains the UnifiedPush
+implementation and shared sources. The initial provider-none build is
+recorded below.
 
 The recipe follows the official [metadata reference](https://f-droid.org/docs/Build_Metadata_Reference/).
 Run it with the official `fdroidserver` tools from this directory. Its
@@ -53,6 +50,9 @@ Bun lockfile rather than that application's versions.
   source directory is removed from the disposable source snapshot so the
   source scanner still examines every remaining input without an ignore rule.
   No source or binary scan bypass is authorized.
+- Zig 0.16.0 is a checksum-verified host build tool. The recipe uses it to
+  compile the vendored Ghostty terminal core for arm64 with the pinned NDK.
+  The Rust renderer is built from the locked Cargo sources.
 - Mosh/Whisper and other app-native libraries must be compiled from source.
   Parakeet's pinned ONNX Runtime is a prebuilt publisher archive, so this recipe
   never passes the Cargo feature `parakeet-android` that the Google builds use
@@ -177,3 +177,18 @@ registration transport, notification delivery, retained inbox behavior, mobile
 execution or complete free-software push. Official VM operation, Bun tool-policy
 approval, full license/asset review, reproducibility and submission remain
 separate gates. Automatic updates, signing, tags and publishing remain disabled.
+
+## Native terminal build checkpoint (1.101.5)
+
+The pinned source revision above passed `fdroid scanner --exit-code` and
+`fdroid build --test --stop --scan-binary` with fdroidserver 2.4.5 in the
+buildserver-trixie image pinned above. The scanner retained the existing
+FiraCode font-permission warning. APK scans for known non-free classes and
+extra signing blocks passed.
+
+The unsigned APK reports `app.lazysh.client`, version 1.101.5 / 1101005,
+and `arm64-v8a`. It is 43,024,766 bytes (41.0 MiB of 47 MiB).
+`apk-engine.ts` found 5 native surface JNI entry points and 188 wgpu
+markers. `software-gpu-switch.sh` confirmed the release excludes the
+debug switch. APK SHA-256 is
+`6f6ddd0316acdef106071ca2ac136dc8b5eb454f1668d06bc27eeef44408c8a8`.

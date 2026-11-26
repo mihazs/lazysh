@@ -144,9 +144,9 @@ jobs:
         with:
           targets: aarch64-linux-android
       - *cargo-registry
-      # Zig 0.16.0 and the admitted Ghostty archives: the Google flavor links libghostty-vt through the native-terminal feature.
-      # The FOSS flavor stays without it until the F-Droid recipe builds the same engine (docs/architecture/terminal-migration-plan.md).
+      # Both release flavors build libghostty-vt from pinned source when the engine is included.
       - uses: ./.github/actions/ghostty-zig
+        if: env.LAZYSH_NATIVE_TERMINAL == 'on'
         with:
           link-source: 'true'
           restore-only: 'true'
@@ -158,11 +158,12 @@ jobs:
           for variant in foss google; do
             rm -rf -- "$outputs"
             # Only the Google flavor links the prebuilt ONNX Runtime for Parakeet; the FOSS flavor builds every native library from source.
-            features=(--features parakeet-android,native-terminal)
-            if [ "$variant" = foss ]; then features=(--features fdroid); fi
-            sh "$GITHUB_WORKSPACE/.github/scripts/retry-gradle-resolution.sh" sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" bun run --cwd apps/client tauri android build --target aarch64 --apk --ci "${features[@]}" -- --locked
+            features=parakeet-android
+            if [ "$variant" = foss ]; then features=fdroid; fi
+            if [ "$LAZYSH_NATIVE_TERMINAL" = on ]; then features="$features,native-terminal"; fi
+            sh "$GITHUB_WORKSPACE/.github/scripts/retry-gradle-resolution.sh" sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" bun run --cwd apps/client tauri android build --target aarch64 --apk --ci --features "$features" -- --locked
             bun .changeset/release-platform.ts "android-$variant-arm64" "$RUNNER_TEMP/installation-files/android-$variant-arm64"
-            # The Google flavor carries the engine unless the kill switch is off, the FOSS flavor never does: a mismatch fails before upload.
+            # The APK must carry the engine its kill switch calls for before upload.
             bun .github/scripts/apk-engine.ts "$outputs"/outputs/apk/universal/release/*.apk "$variant" "$LAZYSH_NATIVE_TERMINAL"
           done
       - uses: actions/upload-artifact@v4

@@ -13,8 +13,8 @@ const roots = gitFixtureRoots('lazysh-release-workflow-test-');
 afterAll(() => roots.cleanup());
 
 // The success path: admission enabled the source; cache lookups are worst-case misses.
-async function steps(entry: RunnerJob, row: Context) {
-  return executedSteps(entry.job.steps, { ...entry.context, matrix: row, steps: { prepare: { outputs: { enabled: 'true' } } } });
+async function steps(entry: RunnerJob, row: Context, engine = 'on') {
+  return executedSteps(entry.job.steps, { ...entry.context, matrix: row, env: { LAZYSH_NATIVE_TERMINAL: engine }, steps: { prepare: { outputs: { enabled: 'true' } } } });
 }
 
 // The desktop builds wait for the verified companions they bundle, so the critical path has three entries.
@@ -151,7 +151,11 @@ apk=apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/ap
 case "$*" in
   *"tauri android build"*)
     [ ! -e "$apk" ] || { echo stale >> "$LOG"; exit 9; }
-    case "$*" in *"--features fdroid"*) flavor=foss ;; *) flavor=google ;; esac
+    case "$LAZYSH_NATIVE_TERMINAL:$*" in
+      on:*"--features fdroid,native-terminal "*|off:*"--features fdroid "*) flavor=foss ;;
+      on:*"--features parakeet-android,native-terminal "*|off:*"--features parakeet-android "*) flavor=google ;;
+      *) exit 4 ;;
+    esac
     [ "$flavor" = "$FAIL" ] && exit 7
     mkdir -p "$(dirname "$apk")" && echo "$flavor" > "$apk"
     echo "build $flavor" >> "$LOG" ;;
@@ -181,6 +185,10 @@ esac
   expect((await Bun.file(log).text()).trim().split('\n')).toEqual([
     'build foss', 'validate android-foss-arm64 /owned/installation-files/android-foss-arm64 foss', 'engine foss switch=on apk=foss']);
   // Each flavor's validated bytes are uploaded under its own target receipt name.
+  for (const mode of ['on', 'off']) {
+    const executed = await steps(android, {}, mode);
+    expect(executed.some(({step}) => step.uses === './.github/actions/ghostty-zig')).toBe(mode === 'on');
+  }
   const uploads = android.job.steps.filter((item: any) => item.uses === 'actions/upload-artifact@v4')
     .map((item: any) => [item.with.name, item.with.path]);
   expect(uploads).toEqual(['foss', 'google'].map(flavor => [`release-android-${flavor}-arm64`,

@@ -1930,7 +1930,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # The Google release APK with the native terminal engine (#2306): the release workflow's own build command (the release profile,
+  # The Android release APKs with the native terminal engine (#2306): the release workflow's own build commands (release profile,
   # unsigned), the size ceiling it enforces and the engine check it makes, which release-artifacts.yml cannot show on a pull request.
   # Built twice, with the kill switch on and off (#1342): the rehearsal of the rollback of docs/install-and-update.md, "Maintainers".
   # Selected only by a pull request that changes the release build configuration (native-changes.sh), never by a push. Nothing runs on a device here.
@@ -1943,6 +1943,7 @@ jobs:
       # The kill switch (#1342) is rehearsed with the release: built with `off`, the very APK that carries the engine with `on` must not.
       fail-fast: false
       matrix:
+        flavor: [google, foss]
         kill-switch: [on, off]
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: '4'
@@ -1958,15 +1959,19 @@ jobs:
         with:
           targets: aarch64-linux-android
       - run: bun install --frozen-lockfile
-      - name: Build the Google release APK with the native terminal engine, as release-artifacts.yml does
+      - name: Build the ${{ matrix.flavor }} release APK as release-artifacts.yml does
+        env:
+          FLAVOR: ${{ matrix.flavor }}
         run: |
           export CMAKE_ANDROID_NDK="$NDK_HOME" ANDROID_NDK_HOME="$NDK_HOME" WHISPER_DONT_GENERATE_BINDINGS=1
-          sh .github/scripts/retry-zig-fetch.sh bun run --cwd apps/client tauri android build --target aarch64 --apk --ci --features parakeet-android,native-terminal -- --locked
+          features=parakeet-android,native-terminal
+          if [ "$FLAVOR" = foss ]; then features=fdroid,native-terminal; fi
+          sh .github/scripts/retry-zig-fetch.sh bun run --cwd apps/client tauri android build --target aarch64 --apk --ci --features "$features" -- --locked
       - run: sh .github/scripts/native-lib-size.sh arm64-v8a
       - name: Hold the APK to the release size ceiling
-        run: bun .github/scripts/apk-budget.ts android-google-arm64 apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+        run: bun .github/scripts/apk-budget.ts android-${{ matrix.flavor }}-arm64 apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
       - name: Hold the APK to the engine its kill switch calls for
-        run: bun .github/scripts/apk-engine.ts apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk google "$LAZYSH_NATIVE_TERMINAL"
+        run: bun .github/scripts/apk-engine.ts apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk ${{ matrix.flavor }} "$LAZYSH_NATIVE_TERMINAL"
       # The release engine has no way to draw on a CPU rasterizer: the debug switch is not compiled in (native_renderer.rs).
       - name: The release APK carries no software-GPU switch
         run: sh .github/scripts/software-gpu-switch.sh absent apps/client/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk

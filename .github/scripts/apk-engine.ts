@@ -1,6 +1,6 @@
 // Usage: bun .github/scripts/apk-engine.ts <apk> <google|foss> [on|off]
 // Hold an Android APK to what its flavor and the build's kill switch (LAZYSH_NATIVE_TERMINAL, #1342) say about the native terminal engine:
-// the Google flavor carries it unless the switch was off, the FOSS flavor never does. "Carries" is read from the arm64 native library: the
+// both flavors carry it unless the switch was off. "Carries" is read from the arm64 native library: the
 // JNI entry points of the surface host and the renderer's wgpu strings. One without the other fails whatever was expected.
 // Exits 1 when the APK is not what was expected and 2 when the call or the library is unusable.
 import { appendFile } from 'node:fs/promises';
@@ -15,7 +15,7 @@ const lib = Buffer.from(bytes);
 const count = (needle: string) => { let found = 0; for (let at = lib.indexOf(needle); at >= 0; at = lib.indexOf(needle, at + needle.length)) found++; return found; };
 const entries = count('Java_app_lazysh_client_JniSurface_native'), wgpu = count('wgpu');
 const carries = entries > 0 && wgpu > 0, without = entries === 0 && wgpu === 0;
-const required = flavor === 'google' && killSwitch === 'on';
+const required = killSwitch === 'on';
 const line = `${flavor} APK built with the kill switch ${killSwitch}: ${entries} surface host entry points and ${wgpu} wgpu strings in ${library}; the engine is ${required ? 'required' : 'to be left out'}`;
 console.log(line);
 if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `- ${line}\n`);
