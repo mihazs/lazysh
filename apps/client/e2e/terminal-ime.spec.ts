@@ -629,17 +629,18 @@ test('zero-code Process preserves owned text before a native suggestion',async({
   expect(await page.evaluate(()=>({writes:window.ownedIme.writes,proposal:window.ownedIme.proposal}))).toEqual({writes:['teh','\x7f\x7fhe'],proposal:null});
 });
 
-test('zero-code Process during native composition does not commit or replay preedit',async({page,context})=>{
+test('zero-code Process during composition does not commit or replay preedit',{tag:'@shared-ime'},async({page,context})=>{
   const cdp=await context.newCDPSession(page);
   await cdp.send('Input.imeSetComposition',{text:'teh',selectionStart:3,selectionEnd:3});
-  await page.evaluate(()=>{
-    const area=window.ownedIme.textarea;
+  await page.evaluate(native=>{
+    const area=native?window.nativeSurface.session.adapter.inputElement()!:window.ownedIme.textarea;
     area.dispatchEvent(new KeyboardEvent('keydown',{key:'Process',keyCode:0,bubbles:true,composed:true}));
     area.dispatchEvent(new KeyboardEvent('keypress',{key:'Unidentified',keyCode:0,bubbles:true,composed:true}));
-  });
-  expect(await page.evaluate(()=>window.ownedIme.writes)).toEqual([]);
+  },native);
+  const writes=()=>page.evaluate(native=>native?window.nativeSurface.core!.inputs.map(input=>input.data):window.ownedIme.writes,native);
+  expect(await writes()).toEqual([]);
   await cdp.send('Input.insertText',{text:'the'});
-  await expect.poll(()=>page.evaluate(()=>window.ownedIme.writes)).toEqual(['the']);
+  await expect.poll(writes).toEqual(['the']);
   await cdp.detach();
 });
 
