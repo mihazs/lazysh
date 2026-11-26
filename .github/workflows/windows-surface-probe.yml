@@ -132,11 +132,13 @@ jobs:
           sh .github/scripts/retry-zig-fetch.sh bun run --cwd apps/client tauri build --bundles nsis --features native-terminal -- --locked
           bun -e '
             import {join} from "node:path";
-            import {exactlyOne, windowsInstallation} from "./.changeset/release-platform.ts";
+            import {exactlyOne, verifyWindowsTerminalEngine, windowsInstallation} from "./.changeset/release-platform.ts";
             const build = join(process.env.CARGO_TARGET_DIR, "release");
             const installer = await exactlyOne("nsis/*.exe", join(build, "bundle"));
             const {version} = await Bun.file("apps/client/package.json").json();
-            console.info(await windowsInstallation(installer, join(build, "lazysh.exe"), version));
+            const binary = join(build, "lazysh.exe");
+            await verifyWindowsTerminalEngine(binary, process.env.LAZYSH_NATIVE_TERMINAL);
+            console.info(await windowsInstallation(installer, binary, version));
           '
       - name: Retain the verified test installer
         if: github.event_name == 'workflow_dispatch' && inputs.installer_engine != 'skip'
@@ -146,8 +148,9 @@ jobs:
           path: ${{ env.CARGO_TARGET_DIR }}/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 7
-      - name: Verify xterm.js in the installed kill-switch build
-        if: github.event_name == 'workflow_dispatch' && inputs.installer_engine == 'off'
+      - name: Verify xterm.js fallback in the installed build
+        if: github.event_name == 'workflow_dispatch' && inputs.installer_engine != 'skip'
         uses: ./.github/actions/windows-installed-gui
         env:
-          LAZYSH_NATIVE_TERMINAL: 'off'
+          LAZYSH_WINDOWS_GUI_NARRATOR: ${{ inputs.installer_engine == 'on' && '1' || '0' }}
+          LAZYSH_NATIVE_TERMINAL: ${{ inputs.installer_engine }}

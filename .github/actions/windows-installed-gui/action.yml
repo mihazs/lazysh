@@ -47,11 +47,19 @@ runs:
         "LAZYSH_WINDOWS_GUI_EDGEDRIVER=$driver" >> $env:GITHUB_ENV
         "LAZYSH_WINDOWS_GUI_DRIVER=$env:RUNNER_TEMP\lazysh-native-driver\bin\tauri-driver.exe" >> $env:GITHUB_ENV
     - name: Install, drive and uninstall the packaged application
+      if: env.LAZYSH_WINDOWS_GUI_NARRATOR != '1'
       shell: bash
       env:
         LAZYSH_TEST_WINDOWS_GUI: '1'
         LAZYSH_EXPECTED_SOURCE_REVISION: ${{ inputs.revision || github.sha }}
       run: bun test tests/windows-installed-gui.test.ts --test-name-pattern 'actual Windows installed GUI'
+    - name: Verify the installed native terminal fallback with real Narrator
+      if: env.LAZYSH_WINDOWS_GUI_NARRATOR == '1'
+      shell: pwsh
+      env:
+        LAZYSH_TEST_WINDOWS_GUI: '1'
+        LAZYSH_EXPECTED_SOURCE_REVISION: ${{ inputs.revision || github.sha }}
+      run: ./.github/scripts/windows-narrator-probe.ps1 -InstalledGui
     - name: Retain only the owned synthetic application window
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@v4

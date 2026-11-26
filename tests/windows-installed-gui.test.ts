@@ -22,16 +22,18 @@ test('Windows installer dispatches only build the requested profile', async () =
     ['pull_request', undefined, true, false, false],
     ['push', undefined, true, false, false],
     ['workflow_dispatch', 'skip', true, false, false],
-    ['workflow_dispatch', 'on', false, true, false],
+    ['workflow_dispatch', 'on', false, true, true],
     ['workflow_dispatch', 'off', false, true, true],
   ] as const) {
     const context = { github: { event_name }, inputs: { installer_engine } };
     expect(evaluate(job['timeout-minutes'], context)).toBe(installer ? 90 : 60);
-    const names = (await executedSteps(job.steps, context))
-      .map(({ step }) => step.name);
+    const steps = await executedSteps(job.steps, context);
+    const names = steps.map(({ step }) => step.name);
     expect(names.includes('Build the native-enabled app and run the Windows anchor test')).toBe(anchor);
-    expect(names.includes('Build and verify the unsigned native terminal test installer')).toBe(installer);
-    expect(names.includes('Verify xterm.js in the installed kill-switch build')).toBe(gui);
+    const build = steps.find(({ step }) => step.name === 'Build and verify the unsigned native terminal test installer');
+    expect(Boolean(build)).toBe(installer);
+    if (installer) expect(build?.step.run).toContain('await verifyWindowsTerminalEngine(binary, process.env.LAZYSH_NATIVE_TERMINAL)');
+    expect(names.includes('Verify xterm.js fallback in the installed build')).toBe(gui);
   }
 });
 
@@ -361,7 +363,17 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
   try {
     await withInstalledGui('singleton-dir', async ({ browser, app, secondary, connections, owned }) => {
       await until('application shell', () => browser.find('button.about-button'));
-      if (process.env.LAZYSH_NATIVE_TERMINAL === 'off') {
+      const engineBuild = process.env.LAZYSH_NATIVE_TERMINAL;
+      const narrator = process.env.LAZYSH_WINDOWS_GUI_NARRATOR === '1';
+      if (narrator) {
+        const platform = await browser.script(`return Promise.all([
+          window.__TAURI_INTERNALS__.invoke('screen_reader_active'),
+          window.__TAURI_INTERNALS__.invoke('terminal_core_available'),
+        ]);`) as [boolean, {available: boolean}];
+        expect(platform[0]).toBe(true);
+        expect(platform[1].available).toBe(true);
+      }
+      if (engineBuild === 'off' || engineBuild === 'on') {
         await browser.script(`
           localStorage.setItem('lazysh.preferences.v1', JSON.stringify({version: 1, terminalEngine: 'native'}));
           localStorage.setItem('lazysh.terminal.backend', 'native');
@@ -374,7 +386,11 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
           browser.find(".//button[normalize-space()='Preferences']", menu, 'xpath')));
         await browser.click(await until('Terminal and accessibility settings', () => browser.find('button[data-settings-target="terminal"]')));
         const reason = await until('disabled native engine reason', () => browser.find('#terminal-engine-native-off'));
-        expect(await browser.text(reason)).toContain('disabled in this build');
+        const refusal = await browser.text(reason);
+        if (engineBuild === 'off') expect(refusal).toContain('disabled in this build');
+        else if (narrator) expect(refusal).toContain('a screen reader is active and the native engine cannot be read by it');
+        else expect(refusal).toMatch(/no hardware GPU, only a software rasterizer|no adapter the policy accepts could create a device/);
+        console.info(`Windows installed terminal rollback (${engineBuild}): ${refusal}`);
         const native = await until('Native engine radio', () => browser.find('input[name="terminal-engine"][value="native"]'));
         expect(await browser.property(native, 'checked')).toBe(true);
         expect(await browser.property(native, 'disabled')).toBe(true);
@@ -390,6 +406,12 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
       await browser.click(screen);
       await browser.keys('cd');
       await until('cd output', async () => (await shown()).split(path).length > 3 ? true : undefined, 30_000);
+      if (narrator) {
+        await until('xterm accessibility tree containing the shell directory', async () => {
+          const text = await browser.script("return document.querySelector('.terminal-canvas .xterm-accessibility')?.textContent ?? ''");
+          return typeof text === 'string' && text.includes(path) ? true : undefined;
+        });
+      }
       expect(connections()).toBe(0);
     });
   } finally { await rm(caller, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); }
