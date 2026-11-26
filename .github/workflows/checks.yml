@@ -921,9 +921,7 @@ jobs:
         id: ios-terminal-fixture
         if: ${{ !cancelled() && steps.ios-terminal-install.outcome == 'success' }}
         timeout-minutes: 18
-        run: |
-          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix protobuf)/lib/pkgconfig"
-          cargo +1.96.1 build --locked -p lazysh --example terminal_ssh_fixture --target-dir "$RUNNER_TEMP/terminal-fixture-target"
+        run: cargo +1.96.1 build --locked -p lazysh-terminal-ssh-fixture --target-dir "$RUNNER_TEMP/terminal-fixture-target"
       - name: Exercise the installed iOS terminal with owned SSH
         id: ios-terminal-ssh
         if: ${{ !cancelled() && steps.ios-terminal-fixture.outcome == 'success' }}
@@ -931,7 +929,7 @@ jobs:
         run: |
           fixture_log="$RUNNER_TEMP/ios-terminal-fixture.log"
           export LAZYSH_TERMINAL_FIXTURE_PASSWORD="$(uuidgen | tr -d '-')"
-          "$RUNNER_TEMP/terminal-fixture-target/debug/examples/terminal_ssh_fixture" > "$fixture_log" &
+          "$RUNNER_TEMP/terminal-fixture-target/debug/lazysh-terminal-ssh-fixture" > "$fixture_log" &
           fixture_pid=$!
           trap 'kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true' EXIT
           for attempt in {1..50}; do

@@ -1,0 +1,10 @@
+[package]
+name = "lazysh-terminal-ssh-fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rand = "0.10"
+russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
