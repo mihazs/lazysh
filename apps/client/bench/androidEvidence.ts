@@ -38,7 +38,10 @@ export type Measurement = {
 type Base = Pick<Measurement, 'adapter' | 'workload' | 'variant' | 'metric' | 'correct'>;
 type Summary = { p50: number; p95: number; n: number };
 
-export type Arm = { adapter: string; engine: string; host: string; gpu: unknown; page: unknown; notes: string };
+export type Arm = {
+  adapter: string; engine: string; host: string; gpu: unknown; page: unknown; notes: string;
+  stream?: { cols: number; rows: number; fixtures: Partial<Record<string, string>> };
+};
 export type EvidenceRecord = {
   schema: 1; kind: 'android-engine-comparison';
   /** The lane run this record belongs to: records are only compared when their ids and guests are the same. */

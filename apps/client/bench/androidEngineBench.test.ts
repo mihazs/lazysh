@@ -8,18 +8,29 @@ import { guestEnvironment, packagedSshEcho } from './androidEngineBench';
 // Resolve the host Bun before the fixture shadows it for the nested runner.
 const bun = execFileSync('bun', ['--eval', 'process.stdout.write(process.execPath)'], { encoding: 'utf8' });
 
-function runBaseline(receiptPath?: string) {
+const digest = 'a'.repeat(64);
+const streamReceipt = {
+  kind: 'android-native-stream-correctness', mode: 'streams', runId: 'owned-lane',
+  environment: { device: { serial: 'emulator-5554' } },
+  prepared: { columns: 49, rows: 24, sha256: { plain: digest, ansi: digest, redraw: digest } },
+};
+function runBaseline(receiptPath?: string, reference?: typeof streamReceipt, mismatch = false) {
   const dir = mkdtempSync(join(tmpdir(), 'lazysh-android-baseline-'));
-  const out = join(dir, 'comparison.json');
+  const out = join(dir, 'comparison.json'), native = join(dir, 'native.json');
   try {
+    if (reference) writeFileSync(native, JSON.stringify(reference));
     writeFileSync(join(dir, 'adb'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
     writeFileSync(join(dir, 'bun'), `#!/bin/sh
 path=${'$'}{TEST_RECEIPT_PATH:-${'$'}LAZYSH_BENCH_WRITE}
 writes=0
 if [ "$path" = adapter ]; then writes=1; fi
-printf '{"writePath":"%s","adapterWrites":%s,"toolchain":{"xterm":"5.5.0"},"page":{},"results":[]}' "$path" "$writes" > "$LAZYSH_BENCH_OUT"
+grid="${'$'}{LAZYSH_BENCH_GRID:-20x5}"
+cols="${'$'}{grid%x*}"
+rows="${'$'}{grid#*x}"
+printf '{"writePath":"%s","adapterWrites":%s,"toolchain":{"xterm":"5.5.0"},"page":{"cols":%s,"rows":%s},"fixtures":{"plain":{"sha256":"%s"},"ansi":{"sha256":"%s"},"redraw":{"sha256":"%s"}},"results":[]}' "$path" "$writes" "$cols" "$rows" '${digest}' '${digest}' '${mismatch ? 'b'.repeat(64) : digest}' > "$LAZYSH_BENCH_OUT"
 `, { mode: 0o700 });
-    const result = spawnSync(bun, [join(import.meta.dirname, 'androidEngineBench.ts'), '--out', out, '--serial', 'emulator-5554'], {
+    const result = spawnSync(bun, [join(import.meta.dirname, 'androidEngineBench.ts'), '--out', out, '--serial', 'emulator-5554', '--run-id', 'owned-lane',
+      ...(reference ? ['--native-stream', native] : [])], {
       encoding: 'utf8',
       env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, LAZYSH_BENCH_WRITE: 'direct', TEST_RECEIPT_PATH: receiptPath ?? '' },
     });
@@ -35,6 +46,19 @@ it('requires the Android xterm baseline to write through the adapter', () => {
 
 it('does not publish a comparison record from a direct-write baseline', () => {
   expect(runBaseline('direct')).toMatchObject({ status: 1, record: null, stderr: expect.stringMatching(/adapter write path/) });
+});
+
+it('launches xterm with the native grid and publishes only matching fixture bytes', () => {
+  expect(runBaseline(undefined, streamReceipt)).toMatchObject({
+    status: 0, record: { arms: [{ stream: { cols: 49, rows: 24, fixtures: { W2: digest, W3: digest, W4: digest } } }] },
+  });
+  expect(runBaseline(undefined, streamReceipt, true)).toMatchObject({ status: 1, record: null, stderr: expect.stringMatching(/digests differ/) });
+});
+
+it('refuses a stream receipt from another run', () => {
+  expect(runBaseline(undefined, { ...streamReceipt, runId: 'foreign' })).toMatchObject({
+    status: 1, record: null, stderr: expect.stringMatching(/lane run and guest/),
+  });
 });
 
 const fixture = '/data/local/tmp/lazysh-ui-ssh-0123456789abcdef0123456789abcdef/fixture.json';

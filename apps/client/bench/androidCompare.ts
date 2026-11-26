@@ -64,12 +64,27 @@ function mergeRecords(records: EvidenceRecord[]) {
   return { runId: first.runId, device: first.environment.device, arms: records.flatMap(r => r.arms), measurements: records.flatMap(r => r.measurements) };
 }
 
-function rowsAgainst(baseline: string, native: string, measurements: Measurement[], hostsMatch: boolean): Row[] {
+const streamWorkloads = new Set(['W2', 'W3', 'W4']);
+function requireMatchingStream(workload: string, baseline: Arm | undefined, native: Arm | undefined) {
+  const baselineStream = baseline?.stream, nativeStream = native?.stream;
+  const baselineHash = baselineStream?.fixtures?.[workload], nativeHash = nativeStream?.fixtures?.[workload];
+  const digest = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  const positive = (value: number) => Number.isSafeInteger(value) && value > 0;
+  if (!baselineStream || !nativeStream || !digest(baselineHash) || !digest(nativeHash)
+      || ![baselineStream.cols, baselineStream.rows, nativeStream.cols, nativeStream.rows].every(positive))
+    throw new RecordError(`${workload}: missing stream fixture metadata`);
+  if (baselineStream.cols !== nativeStream.cols || baselineStream.rows !== nativeStream.rows)
+    throw new RecordError(`${workload}: different terminal grids (${baselineStream.cols}×${baselineStream.rows} and ${nativeStream.cols}×${nativeStream.rows})`);
+  if (baselineHash !== nativeHash) throw new RecordError(`${workload}: different fixture hashes`);
+}
+
+function rowsAgainst(baseline: string, native: string, measurements: Measurement[], baselineArm: Arm | undefined, nativeArm: Arm | undefined): Row[] {
   const rows: Row[] = [];
   for (const n of measurements.filter(m => m.adapter === native)) {
     const x = measurements.find(m => m.adapter === baseline && m.workload === n.workload && m.variant === n.variant && m.metric === n.metric);
     // Absolute PSS says nothing about the engines when they ran in different host apps: only growth over one session is compared then.
-    if (!x || (n.metric === 'pssMiB' && !hostsMatch)) continue;
+    if (!x || (n.metric === 'pssMiB' && baselineArm?.host !== nativeArm?.host)) continue;
+    if (streamWorkloads.has(n.workload)) requireMatchingStream(n.workload, baselineArm, nativeArm);
     const spec = METRICS[n.metric], tolerance = Math.max(RULES.toleranceFloor, spread(x) ?? 0, spread(n) ?? 0);
     for (const stat of spec.tails ? (['p50', 'p95'] as const) : (['p50'] as const)) {
       const gain = spec.better === 'lower' ? x[stat] - n[stat] : n[stat] - x[stat];
@@ -109,8 +124,9 @@ export function compareRecords(records: EvidenceRecord[]): Verdict {
   const natives = adapters.filter(a => a.startsWith('native')), baselines = adapters.filter(a => a.startsWith('xterm'));
   if (natives.length > 1) throw new RecordError(`more than one native adapter in one run: ${natives.join(', ')}`);
   const native = natives[0] ?? null, caveats: string[] = [];
-  const host = (adapter: string) => arms.find((arm: Arm) => arm.adapter === adapter)?.host;
-  const rows = native ? baselines.flatMap(b => rowsAgainst(b, native, measurements, host(b) === host(native))) : [];
+  const arm = (adapter: string) => arms.find(arm => arm.adapter === adapter);
+  const host = (adapter: string) => arm(adapter)?.host;
+  const rows = native ? baselines.flatMap(b => rowsAgainst(b, native, measurements, arm(b), arm(native))) : [];
   for (const b of baselines) if (native && host(b) !== host(native)) caveats.push(`${b} ran in "${host(b)}" and ${native} in "${host(native)}": absolute PSS is not compared, only growth over one session.`);
   const wrong = native ? measurements.filter(m => m.correct === false) : [];
   const targets: Target[] = [{

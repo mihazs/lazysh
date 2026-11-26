@@ -12,7 +12,8 @@ function measure(adapter: string, { workload = 'W12', variant = null, metric, va
   const base = { adapter, workload, variant, metric, correct };
   return (p95 === undefined ? perRun(base, values) : perRunSummaries(base, values.map(p50 => ({ p50, p95, n: 100 }))))!;
 }
-const arm = (adapter: string, host = 'bench host'): Arm => ({ adapter, engine: adapter, host, gpu: null, page: null, notes: '' });
+const stream = { cols: 49, rows: 15, fixtures: { W2: 'a'.repeat(64), W3: 'b'.repeat(64), W4: 'c'.repeat(64) } };
+const arm = (adapter: string, host = 'bench host'): Arm => ({ adapter, engine: adapter, host, gpu: null, page: null, notes: '', stream });
 const record = (arms: Arm[], measurements: Measurement[], overrides: Partial<EvidenceRecord> = {}): EvidenceRecord => ({
   schema: 1, kind: 'android-engine-comparison', runId: 'engine-20261122T200000Z', label: null, startedAt: '', finishedAt: '', source: { commit: null, dirty: null },
   environment: { device: { serial: '192.168.240.112:5555' } }, limits: '', acceptedRisk: [], arms, measurements, ...overrides,
@@ -64,6 +65,18 @@ describe('deciding the provisional targets', () => {
     expect(exitCode(verdict)).toBe(0);
     expect(outcomes(verdict)).toEqual({ 'no-correctness-regression': 'met', 'input-latency-under-heavy-output': 'met', 'no-material-regression': 'met', 'key-improvement': 'met', 'idle-near-zero': 'met', 'memory-not-worse': 'met' });
     expect(target(verdict, 'key-improvement').evidence[0]).toMatch(/W12 keys-idle inputLatencyMs p50: xterm-dom 10.00 ms, native 6.00 \(\+40% better/);
+  });
+
+  it('requires matching stream fixtures and terminal grids before comparing throughput', () => {
+    const throughput: Spec = { workload: 'W2', metric: 'throughputMiBs', values: [20, 20, 20] };
+    const xterm = record([arm('xterm-dom')], [measure('xterm-dom', throughput)]);
+    const native = (metadata?: typeof stream) =>
+      record([{ ...arm('native-wgpu'), stream: metadata }], [measure('native-wgpu', throughput)]);
+
+    expect(compareRecords([xterm, native(stream)]).rows).toHaveLength(1);
+    expect(() => compareRecords([xterm, native({ ...stream, rows: 26 })])).toThrow('different terminal grids');
+    expect(() => compareRecords([xterm, native({ ...stream, fixtures: { W2: 'b'.repeat(64) } })])).toThrow('different fixture hashes');
+    expect(() => compareRecords([xterm, native()])).toThrow('missing stream fixture metadata');
   });
 
   it('is a loss when typing under heavy output is slower, and names the figures', () => {
