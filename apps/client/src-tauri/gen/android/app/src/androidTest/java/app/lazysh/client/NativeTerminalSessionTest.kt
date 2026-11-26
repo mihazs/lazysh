@@ -324,12 +324,7 @@ class NativeTerminalSessionTest {
             }
             evidence.put("keyboardDismissedByOverscroll", true)
         } finally {
-            js("""(() => {
-                if ($previous === null) localStorage.removeItem('$key');
-                else localStorage.setItem('$key', $previous);
-                window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
-                return true;
-            })()""")
+            js(PageDriver.restoreStorage(key, previous))
         }
         PageDriver.invoke("native_terminal_surface_focus", "{session:${quoted(id)},focused:true}")
         PageDriver.poll("the editor to regain focus after the overscroll check", 30) { ui { input.hasFocus() }.takeIf { it } }

@@ -19,6 +19,15 @@ import org.junit.Assert.assertTrue
 internal object PageDriver {
     private val scenario get() = NativeActivityFixture.scenario
 
+    fun restoreStorage(key: String, previousJson: String): String = """(() => {
+        const key = ${JSONObject.quote(key)};
+        const previous = $previousJson;
+        if (previous === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, previous);
+        window.dispatchEvent(new StorageEvent('storage', {key}));
+        return true;
+    })()"""
+
     fun <T> poll(what: String, seconds: Long = 30, read: () -> T?): T {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
         while (true) {
