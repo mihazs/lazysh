@@ -9,9 +9,29 @@ function Read-NarratorRunning {
   return ($null -ne $entry -and $entry.RunningState -ne 0 -and $null -ne $entry.RunningState)
 }
 
+Add-Type -Namespace LazyshRehearsal -Name Accessibility -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("uiautomationcore.dll")]
+public static extern int UiaClientsAreListening();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern int SystemParametersInfoW(uint action, uint parameter, out int value, uint flags);
+'@
+
+function Write-AccessibilitySample([string]$phase) {
+  $legacy = 0
+  $legacyAvailable = [LazyshRehearsal.Accessibility]::SystemParametersInfoW(70, 0, [ref]$legacy, 0) -ne 0
+  [ordered]@{
+    phase = $phase
+    narratorRunning = (Read-NarratorRunning)
+    uiaListener = ([LazyshRehearsal.Accessibility]::UiaClientsAreListening() -ne 0)
+    legacyAvailable = $legacyAvailable
+    legacyActive = ($legacyAvailable -and $legacy -ne 0)
+  } | ConvertTo-Json -Compress | Write-Output
+}
+
 if ((Read-NarratorRunning) -or (Get-Process -Name Narrator -ErrorAction SilentlyContinue)) {
   throw 'The runner already has a Narrator session.'
 }
+Write-AccessibilitySample 'before'
 
 $reader = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\Narrator.exe') -PassThru
 try {
@@ -23,6 +43,7 @@ try {
     Start-Sleep -Milliseconds 100
   }
   Write-Output 'Narrator running marker observed after startup.'
+  Write-AccessibilitySample 'running'
   # Narrator Home can live in the tray, so the reader need not have a closable
   # main window. Use the documented Windows+Ctrl+Enter stop shortcut.
   Add-Type -Namespace LazyshRehearsal -Name Keyboard -MemberDefinition @'
@@ -44,6 +65,7 @@ public static extern void keybd_event(byte key, byte scan, uint flags, System.UI
     throw 'The Narrator running marker remained set after the process exited.'
   }
   Write-Output 'Narrator running marker cleared after normal shutdown.'
+  Write-AccessibilitySample 'after'
 } finally {
   if (-not $reader.HasExited) {
     $reader.Kill()

@@ -47,6 +47,7 @@ concurrency:
 
 jobs:
   windows-surface-probe:
+    if: github.event_name != 'workflow_dispatch' || inputs.reader_case != 'narrator'
     runs-on: windows-latest
     timeout-minutes: 40
     defaults:
@@ -95,6 +96,7 @@ jobs:
           retention-days: 7
 
   terminal-windows-app-host:
+    if: github.event_name != 'workflow_dispatch' || inputs.reader_case != 'narrator'
     runs-on: ${{ inputs.reader_runner || 'windows-latest' }}
     timeout-minutes: 60
     defaults:
@@ -134,7 +136,12 @@ jobs:
           case_name=screen_reader::windows_tests::the_windows_reader_probe_tracks_an_owned_uia_subscription
           cargo test "${args[@]}" -- --list --ignored --exact "$case_name" | grep -Fx "$case_name: test"
           cargo test "${args[@]}" -- --ignored --exact "$case_name"
-      - name: Observe the running state of a task-owned Narrator
-        if: github.event_name == 'workflow_dispatch' && inputs.reader_case == 'narrator'
+  terminal-windows-narrator:
+    if: github.event_name == 'workflow_dispatch' && inputs.reader_case == 'narrator'
+    runs-on: ${{ inputs.reader_runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Observe screen-reader signals with a task-owned Narrator
         shell: pwsh
         run: ./.github/scripts/windows-narrator-probe.ps1
