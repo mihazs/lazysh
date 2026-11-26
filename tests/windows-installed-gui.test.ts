@@ -189,8 +189,9 @@ async function withInstalledGui(name: string, scenario: (gui: InstalledGui) => P
   const revision = needEnv('LAZYSH_EXPECTED_SOURCE_REVISION');
   expect(revision).toMatch(/^[0-9a-f]{40}$/);
   const { version } = await Bun.file(join(root, 'apps/client/package.json')).json();
-  const installer = await exactlyOne('nsis/*.exe', join(root, 'target/release/bundle'));
-  const binary = join(root, 'target/release/lazysh.exe');
+  const release = join(process.env.CARGO_TARGET_DIR || join(root, 'target'), 'release');
+  const installer = await exactlyOne('nsis/*.exe', join(release, 'bundle'));
+  const binary = join(release, 'lazysh.exe');
   const predicted = await windowsNsisBinaryDigest(binary, await digestFile(binary));
 
   // Ambient installations and application data are rejected, never adopted or removed.
@@ -340,6 +341,14 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
   try {
     await withInstalledGui('singleton-dir', async ({ browser, app, secondary, connections, owned }) => {
       await until('application shell', () => browser.find('button.about-button'));
+      if (process.env.LAZYSH_NATIVE_TERMINAL === 'off') {
+        await browser.script(`
+          localStorage.setItem('lazysh.preferences.v1', JSON.stringify({version: 1, terminalEngine: 'native'}));
+          localStorage.setItem('lazysh.terminal.backend', 'native');
+        `);
+        await browser.request('POST', `/session/${browser.session}/refresh`, {});
+        await until('application shell after setting Native', () => browser.find('button.about-button'));
+      }
       await secondary(['--dir', name], caller);
       const screen = await until('local terminal', () => browser.find('.terminal-canvas .xterm-screen'));
       expect(await owned()).toEqual([app]);
