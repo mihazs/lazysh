@@ -45,7 +45,7 @@ Credentials remain on the host. The app receives a bounded report with provider 
 
 A host owner can turn off account quota reads with `lazysh-agent usage-collection update --expected-revision R --account-quota-enabled false` ([how to](companion-settings.md#forbid-account-quota-reads-on-a-host)). The status-bar item and this page then say that the host does not allow account usage reads and show **no percentage**: the quota is unknown, not zero, and nothing reads a credential or contacts a provider. The default is on, so hosts that never set it keep today's behavior.
 
-A host can also opt in to **recording** bounded samples of this quota on a timer while no app is open ([how to](companion-settings.md#record-account-quota-samples-in-the-background)). It is off by default and honors the switch above. The usage page then shows it under **Background collection**:
+A host **records** bounded samples of this quota on a user timer while no app is open. Managed companion setup provisions the timer by default on supported hosts. The collector honors the switch above and hosts can [opt out](companion-settings.md#record-account-quota-samples-in-the-background). The usage page then shows it under **Background collection**:
 
 - whether the collector is on and how often, and whether its timer is installed, drifted or impossible on that account (and, on Linux, that without lingering the timer only runs while someone is logged in);
 - the last run and its outcome (a sample, skipped because the host forbids the read, or no report);

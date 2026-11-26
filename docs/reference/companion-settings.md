@@ -102,7 +102,7 @@ The account quota read has its own strict file, `usage-collection.json`, with it
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `accountQuotaEnabled` | `true` | Whether `lazysh-agent account-usage` may read provider quotas on this host. Existing hosts keep reading. |
-| `collectorEnabled` | `false` | Whether the [usage collector](#usage-collector) records samples. Set by `usage-collector enable` and `disable`. |
+| `collectorEnabled` | `true` | Whether the [usage collector](#usage-collector) records samples. Set by `usage-collector enable` and `disable`. |
 | `collectorIntervalMinutes` | `30` | The collector's interval, 5 to 1440. |
 
 With `accountQuotaEnabled` set to `false`, `lazysh-agent account-usage` answers `{"schemaVersion":1,"state":"disabled","source":null,"report":null}` and exits 0. It does so **before** it opens a credential file, starts `ai-usagebar` or a helper process, or makes a request. `disabled` means the quota is unknown because the host forbids reading it: there is no report, so the app shows no percentage and never zero. A policy file that is malformed, has another schema version, an interval outside 5 to 1440, unknown fields or more than 4 KiB makes `account-usage` fail (exit 1, no output), so a host that tried to forbid the read is never treated as allowing it; the file is not repaired.
@@ -113,11 +113,12 @@ Native Cargo fixtures run the real binary with a fake `ai-usagebar` that records
 
 ## Usage collector
 
-`lazysh-agent usage-collector` records bounded samples of the account quota report while no lazysh app is open. It is **off by default**, nothing in it runs or is written until `enable`, and the design is [ADR 0005](../architecture/adr-0005-background-usage-collection.md).
+`lazysh-agent usage-collector` records bounded samples of the account quota report while no lazysh app is open. It is **enabled by default** with no saved policy. Managed companion setup provisions the user timer when supported. Manual installations can run `ensure`. The design is [ADR 0005](../architecture/adr-0005-background-usage-collection.md).
 
 | CLI operation | Contract |
 | --- | --- |
-| `usage-collector enable [--interval-minutes N]` | Installs the user-level timer (below), then records `collectorEnabled: true` and the interval (5 to 1440; absent keeps the stored one, default 30) in `usage-collection.json`. Idempotent. Exit 41 when this account cannot hold a timer (nothing changed) and 42 when the system or an existing file refuses it (written files put back, the collector stays off). |
+| `usage-collector enable [--interval-minutes N]` | Installs the user-level timer (below), then records `collectorEnabled: true` and the interval (5 to 1440; absent keeps the stored one, default 30) in `usage-collection.json`. Idempotent. Exit 41 when this account cannot hold a timer (nothing changed) and 42 when the system or an existing file refuses it (written files put back and policy preserved). |
+| `usage-collector ensure` | Provisions a missing timer on a supported host when collection and account quota reads are enabled. Returns status and preserves saved policy. |
 | `usage-collector disable` | Records `collectorEnabled: false`, then removes the timer, and only files or tasks that carry the marker `lazysh-agent-managed: usage-collector`. A foreign file or task of the same name is left alone and gives exit 42. Recorded samples stay. |
 | `usage-collector status [--limit N]` | Read only, creates nothing. Prints the policy, the timer, the last run and a summary of the samples; with `--limit` (0 to 200) also the newest samples, newest first. |
 | `usage-collector run` | What the timer runs. Prints `{"schemaVersion":1,"outcome":"..."}` and exits 0 for every expected outcome. |
@@ -165,7 +166,7 @@ The timer ticks every five minutes. A run is due at the first tick that is at le
 
 **Suspend, shutdown and offline.** Nothing runs while the host is off or suspended, and no sample is invented for the gap. The first tick after it finds the interval elapsed and records **one** sample (systemd `Persistent=true`, launchd and Task Scheduler catch up the same way), never a burst. A tick while offline records an `unavailable` run and no sample. The gap stays visible in the timestamps.
 
-**Privacy boundary.** The one thing the collector adds is that the host contacts each configured provider on the user's interval while no lazysh app is open, with the credentials the quota read already uses, so it is off by default and has a 5-minute floor. It reads no transcript, writes nothing outside the state directory and the timer files, sends nothing anywhere itself, stores no credential and exports nothing: the app receives samples only through `usage-collector status` over the user's own SSH connection.
+**Privacy boundary.** The one thing the collector adds is that the host contacts each configured provider on the user's interval while no lazysh app is open, with the credentials the quota read already uses. The interval has a 5-minute floor. It reads no transcript, writes nothing outside the state directory and the timer files, sends nothing anywhere itself, stores no credential and exports nothing: the app receives samples only through `usage-collector status` over the user's own SSH connection.
 
 **Restart semantics.** Nothing is resident, so nothing restarts. `enable`, `disable` and `usage-collection update` apply from the next tick or the next `account-usage` call. A read already running finishes; a run in flight when `disable` returned writes nothing. Updating the companion does not touch the timer: the units hold the absolute path of the executable, which an atomic replace keeps valid, but a companion moved or deleted leaves a timer pointing at nothing (`status` reports `drift`). `enable` and `disable` take one lifecycle lock (`usage-collector-lifecycle.lock`, taken only once the account is known to hold a timer) and wait for each other, so the timer and the policy never end up disagreeing. A failed re-enable leaves the collector that was already on in place, and `enable` refuses a launchd job with the collector's label that lazysh did not load instead of replacing it; an earlier launchd or systemd install is loaded again when a replacement fails.
 

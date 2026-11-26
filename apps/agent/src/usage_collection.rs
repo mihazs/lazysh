@@ -29,7 +29,7 @@ impl Default for Policy {
             schema_version: 1,
             revision: 0,
             account_quota_enabled: true,
-            collector_enabled: false,
+            collector_enabled: true,
             collector_interval_minutes: DEFAULT_INTERVAL_MINUTES,
         }
     }

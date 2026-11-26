@@ -15,7 +15,7 @@ fn absent_policy_reads_as_defaults_and_creates_no_state() {
     let policy = json(&run(&state, &["usage-collection", "show"]));
     assert_eq!(policy["revision"], 0);
     assert_eq!(policy["accountQuotaEnabled"], true);
-    assert_eq!(policy["collectorEnabled"], false);
+    assert_eq!(policy["collectorEnabled"], true);
     assert_eq!(policy["collectorIntervalMinutes"], 30);
     assert!(!state.exists());
 }
@@ -27,7 +27,7 @@ fn updates_persist_for_new_processes_and_a_stale_revision_changes_nothing() {
     let first = json(&set_quota(&state, "0", "false"));
     assert_eq!(first["revision"], 1);
     assert_eq!(first["accountQuotaEnabled"], false);
-    assert_eq!(first["collectorEnabled"], false);
+    assert_eq!(first["collectorEnabled"], true);
     assert_eq!(json(&run(&state, &["usage-collection", "show"])), first);
     let stale = set_quota(&state, "0", "true");
     assert!(!stale.status.success());

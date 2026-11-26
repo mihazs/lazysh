@@ -129,6 +129,11 @@ limited() { # seconds input command...
   await "$!" "$secs"
 }
 
+# Older releases and accounts without a user timer can still be installed.
+ensure_collector() {
+  limited 20 /dev/null "$agent" usage-collector ensure >/dev/null 2>&1 || true
+}
+
 # A newer installed version is never replaced, and the same version needs no download.
 newer() { # is $1 strictly newer than $2
   oifs=$IFS; IFS=.; set -- $1 $2; IFS=$oifs
@@ -147,7 +152,7 @@ if [ -f "$agent" ]; then
 fi
 if [ -n "$installed" ]; then
   cur_json='{"version":"'$installed'","managed":true}'
-  if [ "$installed" = "$version" ]; then finish 0 upToDate '' '' ''; fi
+  if [ "$installed" = "$version" ]; then ensure_collector; finish 0 upToDate '' '' ''; fi
   ! newer "$installed" "$version" || finish 23 failed downgradeRefused '' 'The host has a newer companion'
 fi
 
@@ -237,4 +242,5 @@ limited 20 /dev/null "$agent" --version >"$work/after" 2>/dev/null || back
 set -- $(owner_mode "$agent") || back
 [ "$1" = "$uid" ] && [ "$2" = 700 ] || back
 cur_json='{"version":"'$version'","managed":true}'
+ensure_collector
 finish 0 updated '' '' ''

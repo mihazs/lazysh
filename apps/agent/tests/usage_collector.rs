@@ -69,8 +69,9 @@ fn tick(directory: &Path, at: DateTime<Utc>, response: Response) -> (Outcome, u3
 fn a_collector_that_is_off_reads_nothing_and_writes_nothing() {
     let directory = tempfile::tempdir().unwrap();
     let state = directory.path().join("state");
+    usage_collection::update(&state, None, |policy| policy.collector_enabled = false).unwrap();
     assert_eq!(tick(&state, start(), quota()), (Outcome::Off, 0));
-    assert!(!state.exists());
+    assert!(!state.join("usage-samples.json").exists());
     // Disabled after having run: still nothing, and what was recorded stays untouched.
     enable(&state, 30);
     assert_eq!(tick(&state, start(), quota()), (Outcome::Recorded, 1));
