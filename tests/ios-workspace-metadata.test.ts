@@ -200,4 +200,15 @@ test('the native iOS app runs the Metal probe on the same simulator after instal
   expect(steps.find(step => step.id === 'ios-mosh-app')?.run).toContain('-skip-testing:' + testCase);
   const fixture = await Bun.file(join(root, 'apps/client/src-tauri/apple/MoshTests/MoshAppIntegrationTests.swift')).text();
   expect(fixture).toContain('func testNativeTerminalBuildAdmitsTheMetalRenderer()');
+  const fixtureBuild = terminal.findIndex(step => step.id === 'ios-terminal-fixture');
+  const acceptance = terminal.findIndex(step => step.name === 'Exercise the installed iOS terminal with owned SSH');
+  expect(fixtureBuild).toBeGreaterThan(install);
+  expect(terminal[fixtureBuild].run).toContain('--example terminal_ssh_fixture');
+  expect(acceptance).toBeGreaterThan(fixtureBuild);
+  expect(terminal[acceptance].if).toContain("steps.ios-terminal-fixture.outcome == 'success'");
+  const sshCase = 'LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalAttachesAndHandsBackAnOwnedSshSession';
+  expect(terminal[acceptance].run).toContain('-only-testing:' + sshCase);
+  expect(terminal[acceptance].run).toContain("grep -cFx 'terminal fixture received exact input'");
+  expect(steps.find(step => step.id === 'ios-mosh-app')?.run).toContain('-skip-testing:' + sshCase);
+  expect(fixture).toContain('func testNativeTerminalAttachesAndHandsBackAnOwnedSshSession()');
 });
