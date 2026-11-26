@@ -23,9 +23,22 @@ try {
     Start-Sleep -Milliseconds 100
   }
   Write-Output 'Narrator running marker observed after startup.'
-  $reader.Refresh()
-  if (-not $reader.CloseMainWindow() -or -not $reader.WaitForExit(10000)) {
-    throw 'The task-owned Narrator window did not close normally.'
+  # Narrator Home can live in the tray, so the reader need not have a closable
+  # main window. Use the documented Windows+Ctrl+Enter stop shortcut.
+  Add-Type -Namespace LazyshRehearsal -Name Keyboard -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern void keybd_event(byte key, byte scan, uint flags, System.UIntPtr extra);
+'@
+  $keys = @(0x5B, 0x11, 0x0D)
+  foreach ($key in $keys) {
+    [LazyshRehearsal.Keyboard]::keybd_event($key, 0, 0, [UIntPtr]::Zero)
+  }
+  [array]::Reverse($keys)
+  foreach ($key in $keys) {
+    [LazyshRehearsal.Keyboard]::keybd_event($key, 0, 2, [UIntPtr]::Zero)
+  }
+  if (-not $reader.WaitForExit(10000)) {
+    throw 'The task-owned Narrator did not exit after its stop shortcut.'
   }
   if (Read-NarratorRunning) {
     throw 'The Narrator running marker remained set after the process exited.'
