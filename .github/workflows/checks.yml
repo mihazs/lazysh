@@ -805,7 +805,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.terminal_ios == 'true'
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 85
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
@@ -917,6 +917,39 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/native-terminal-ios.xcresult" \
             -test-timeouts-enabled YES -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 120 \
             test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
+      - name: Build the owned terminal SSH fixture
+        id: ios-terminal-fixture
+        if: ${{ !cancelled() && steps.ios-terminal-install.outcome == 'success' }}
+        timeout-minutes: 18
+        run: |
+          export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix protobuf)/lib/pkgconfig"
+          cargo +1.96.1 build --locked -p lazysh --example terminal_ssh_fixture --target-dir "$RUNNER_TEMP/terminal-fixture-target"
+      - name: Exercise the installed iOS terminal with owned SSH
+        if: ${{ !cancelled() && steps.ios-terminal-fixture.outcome == 'success' }}
+        timeout-minutes: 8
+        run: |
+          fixture_log="$RUNNER_TEMP/ios-terminal-fixture.log"
+          export LAZYSH_TERMINAL_FIXTURE_PASSWORD="$(uuidgen | tr -d '-')"
+          "$RUNNER_TEMP/terminal-fixture-target/debug/examples/terminal_ssh_fixture" > "$fixture_log" &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..50}; do
+            if [ -s "$fixture_log" ]; then break; fi
+            kill -0 "$fixture_pid"
+            sleep 0.2
+          done
+          read -r port fingerprint < "$fixture_log"
+          [[ "$port" =~ ^[0-9]+$ && "$fingerprint" == SHA256:* ]]
+          export TEST_RUNNER_LAZYSH_TERMINAL_FIXTURE_PORT="$port"
+          export TEST_RUNNER_LAZYSH_TERMINAL_FIXTURE_FINGERPRINT="$fingerprint"
+          export TEST_RUNNER_LAZYSH_TERMINAL_FIXTURE_PASSWORD="$LAZYSH_TERMINAL_FIXTURE_PASSWORD"
+          xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests \
+            -configuration debug -destination "platform=iOS Simulator,id=$LAZYSH_IOS_SIMULATOR_ID" \
+            -only-testing:LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalAttachesAndHandsBackAnOwnedSshSession \
+            -resultBundlePath "$RUNNER_TEMP/native-terminal-session-ios.xcresult" \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 120 \
+            test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
+          test "$(grep -cFx 'terminal fixture received exact input' "$fixture_log")" = 2
       - name: Delete the simulator
         if: ${{ always() && env.LAZYSH_IOS_SIMULATOR_ID != '' }}
         run: xcrun simctl delete "$LAZYSH_IOS_SIMULATOR_ID"
@@ -2843,7 +2876,7 @@ jobs:
         id: ios-mosh-app
         timeout-minutes: 8
         if: ${{ !cancelled() && steps.ios-app-install.outcome == 'success' }}
-        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -skip-testing:LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalBuildAdmitsTheMetalRenderer -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
+        run: xcodebuild -project apps/client/src-tauri/gen/apple/lazysh.xcodeproj -scheme LazyshMoshAppTests -configuration debug -destination "platform=iOS Simulator,id=$APPLE_STATUS_SIMULATOR_ID" -skip-testing:LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalBuildAdmitsTheMetalRenderer -skip-testing:LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalAttachesAndHandsBackAnOwnedSshSession -resultBundlePath apps/client/src-tauri/gen/apple/mosh-app.xcresult -test-timeouts-enabled YES -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
       - name: Run native workspace Save, relaunch, and Delete acceptance
         id: ios-workspace
         timeout-minutes: 8
