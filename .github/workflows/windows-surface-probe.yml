@@ -22,6 +22,14 @@ on:
     branches: [main]
     paths: *surface-paths
   workflow_dispatch:
+    inputs:
+      reader_runner:
+        description: Windows image for the terminal app and reader rehearsal
+        type: choice
+        options:
+          - windows-2025
+          - windows-2022
+        default: windows-2025
 
 permissions:
   contents: read
@@ -80,7 +88,7 @@ jobs:
           retention-days: 7
 
   terminal-windows-app-host:
-    runs-on: windows-latest
+    runs-on: ${{ inputs.reader_runner || 'windows-latest' }}
     timeout-minutes: 60
     defaults:
       run:

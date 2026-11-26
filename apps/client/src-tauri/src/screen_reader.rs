@@ -138,6 +138,10 @@ mod windows_tests {
         thread::sleep,
         time::{Duration, Instant},
     };
+    use windows_sys::Win32::UI::{
+        Accessibility::UiaClientsAreListening,
+        WindowsAndMessaging::{SystemParametersInfoW, SPI_GETSCREENREADER},
+    };
 
     #[test]
     #[ignore = "requires an isolated interactive Windows runner"]
@@ -147,7 +151,24 @@ mod windows_tests {
             std::env::var("RUNNER_ENVIRONMENT").as_deref(),
             Ok("github-hosted")
         );
-        assert_eq!(windows_accessibility_active(), Ok(false));
+        let mut legacy_reader: windows_sys::core::BOOL = 0;
+        // SAFETY: The legacy query writes one BOOL to the stack.
+        let (uia_listener, legacy_status) = unsafe {
+            (
+                UiaClientsAreListening() != 0,
+                SystemParametersInfoW(
+                    SPI_GETSCREENREADER,
+                    0,
+                    (&mut legacy_reader as *mut windows_sys::core::BOOL).cast(),
+                    0,
+                ) != 0,
+            )
+        };
+        assert_eq!(
+            windows_accessibility_active(),
+            Ok(false),
+            "runner baseline is occupied (UIA listener={uia_listener}, legacy query succeeded={legacy_status}, legacy flag={legacy_reader})"
+        );
 
         let mut reader = Command::new("powershell.exe")
             .args([
