@@ -179,6 +179,11 @@ The native arm also verifies surface and core retirement. PSS is sampled
 immediately after cleanup and includes the Android app and its WebView
 processes.
 
+Both memory commands write standard comparison records with the raw
+checkpoints in `memory`. Pass the two records to `androidCompare.ts` to
+check G15. A memory-only comparison stays incomplete for the full rollout
+gate.
+
 On one Android 15 x86_64 emulator run with matching app APK hashes, xterm
 used 381 MiB at five sessions and 424 MiB at ten. Native used 399 MiB
 and 405 MiB with its debug software GPU. After the fifth cleanup cycle,

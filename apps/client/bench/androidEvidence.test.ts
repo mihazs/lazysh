@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { streamSubmissions } from './androidNativeBench';
-import { fromBaseline, parseRecord, perRun, perRunSummaries, spread, type BaselineResult, type Measurement } from './androidEvidence';
+import { fromBaseline, fromMemoryCheckpoints, memorySessionCounts, parseRecord, perRun, perRunSummaries, spread, type BaselineResult, type Measurement } from './androidEvidence';
 
 const base = { adapter: 'xterm-dom', workload: 'W2', variant: null, metric: 'throughputMiBs', correct: true } as const;
 const window = (windowMs: number, cpuMs: number, wakeups: number, frames: number, interval: { p50: number; p95: number } | null = null, jankyFramePercent: number | null = null) => ({ windowMs, cpuMs, wakeups, frames, frameIntervalMs: interval, jankyFramePercent, layers: [], processSetChanged: false });
@@ -28,6 +28,22 @@ describe('folding runs into a measurement', () => {
     expect(spread(perRun(base, [10, 12, 11])!)).toBeCloseTo(2 / 11);
     expect(spread(perRun(base, [10])!)).toBeNull();
   });
+});
+
+it('reports packaged W9 totals, growth over one session and signed churn drift', () => {
+  const checkpoints = memorySessionCounts.map((sessions, index) => ({
+    sessions, cycle: Math.max(0, index - 2), pssKiB: [250, 300, 400, 275, 274, 271, 270, 269][index] * 1024,
+  }));
+  const list = fromMemoryCheckpoints(checkpoints, 'native-wgpu');
+  expect(list).toHaveLength(5);
+  expect(find(list, 'W9', 'sessions-5', 'pssMiB')).toMatchObject({ p50: 300, correct: true });
+  expect(find(list, 'W9', 'sessions-10', 'pssMiB')?.p50).toBe(400);
+  expect(find(list, 'W9', 'sessions-5', 'pssGrowthMiB')?.p50).toBe(50);
+  expect(find(list, 'W9', 'sessions-10', 'pssGrowthMiB')?.p50).toBe(150);
+  expect(find(list, 'W9', 'churn', 'pssChurnDriftMiB')).toMatchObject({ p50: -6, runs: 1, samples: 1 });
+  for (const incomplete of [checkpoints.slice(0, -1), [...checkpoints].reverse()]) {
+    expect(() => fromMemoryCheckpoints(incomplete, 'native-wgpu')).toThrow('ordered churn checkpoints');
+  }
 });
 
 describe('the xterm.js arm from the baseline spec on Android', () => {

@@ -86,6 +86,24 @@ export const spread = (m: Pick<Measurement, 'runs' | 'p50' | 'min' | 'max'>) => 
 type Run = Record<string, any>;
 /** One workload of the baseline spec's result file (`apps/client/e2e/terminal-bench.spec.ts`), as written with LAZYSH_BENCH_ANDROID set. */
 export type BaselineResult = { workload: string; title: string; variant: string | null; correct: boolean; runs: Run[] };
+export const memorySessionCounts = [1, 5, 10, 0, 0, 0, 0, 0] as const;
+export type MemoryCheckpoint = { sessions: number; cycle: number; pssKiB: number };
+
+/** Packaged W9 samples come from one run. Churn checkpoints describe one run's drift, not five independent repeats. */
+export function fromMemoryCheckpoints(checkpoints: MemoryCheckpoint[], adapter: string): Measurement[] {
+  if (checkpoints.length !== memorySessionCounts.length || checkpoints.some(({sessions, cycle, pssKiB}, index) =>
+    sessions !== memorySessionCounts[index] || cycle !== Math.max(0, index - 2) || !finite(pssKiB) || pssKiB <= 0)) {
+    throw new Error('W9 requires one, five and ten sessions followed by five ordered churn checkpoints');
+  }
+  const [baseline, five, ten, ...churn] = checkpoints;
+  const runs: BaselineResult[] = [five, ten].map(({ sessions, pssKiB }) => ({
+    workload: 'W9', title: `${sessions} simultaneous sessions`, variant: null, correct: true,
+    runs: [{ pss: { kiB: pssKiB, baselineKiB: baseline.pssKiB } }],
+  }));
+  runs.push({ workload: 'W9', title: 'Session churn', variant: 'churn', correct: true,
+    runs: [{ churn: { pssKiB: churn.map(sample => sample.pssKiB) } }] });
+  return fromBaseline(runs, adapter);
+}
 const idleVariants: Record<string, string> = { 'cursor blink on, focused': 'blink-on', 'cursor blink off, focused': 'blink-off' };
 const keyVariants: Array<[titlePrefix: string, id: string]> = [['Keyboard input, one key', 'keys-idle'], ['Keyboard auto-repeat', 'repeat-idle'], ['Keyboard input during', 'keys-during-output'], ['IME composition', 'ime-commit']];
 const perSecond = (value: number | undefined, window?: Window) => (finite(value) && window?.windowMs ? value / (window.windowMs / 1000) : null);
