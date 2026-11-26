@@ -98,13 +98,26 @@ export class NativeInputCapture implements Disposable {
    * the editor holds only what has not gone yet, and it is emptied as it is sent, so no order can send it twice.
    */
   private readonly compositionend = () => {
+    if (!this.composing) {
+      // A canceled editor can receive the old completion after focus has already returned.
+      if (this.settling === undefined) this.element.value = '';
+      return;
+    }
     this.composing = false; this.preedit.hidden = true; this.preedit.textContent = '';
     this.settling = setTimeout(this.flush);
   };
-  private readonly input = (event: Event) => { if (!this.composing && !(event as InputEvent).isComposing) this.flush(); };
+  private readonly input = (event: InputEvent) => {
+    if (this.composing) return;
+    if (this.settling === undefined && (event.isComposing || event.inputType === 'insertCompositionText' || event.inputType === 'insertFromComposition')) {
+      this.element.value = '';
+      return;
+    }
+    if (!event.isComposing) this.flush();
+  };
 
   private readonly flush = () => {
     clearTimeout(this.settling);
+    this.settling = undefined;
     if (this.composing) return;
     // Text that settles after focus left is dropped, as the xterm.js editor drops it.
     const text = document.activeElement === this.element ? this.element.value.replace(/\r?\n/g, '\r') : '';
@@ -121,6 +134,7 @@ export class NativeInputCapture implements Disposable {
   /** A composition that loses focus is dropped, and the keys still held are released, so no program waits for one that cannot come. */
   private readonly lostFocus = () => {
     clearTimeout(this.settling);
+    this.settling = undefined;
     this.composing = false; this.preedit.hidden = true; this.preedit.textContent = ''; this.element.value = '';
     for (const input of this.pressed.values()) this.adapter.sendKey({...input, release: true, repeat: false});
     this.pressed.clear();

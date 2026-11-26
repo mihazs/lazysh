@@ -59,6 +59,33 @@ async function open(options: HeadlessCoreOptions = {}) {
   return {adapter, core, answers};
 }
 
+it.each([false, true])('drops a retired composition after refocusing, including final input=%s', async finalInput => {
+  const {adapter,core}=await open();
+  const area=adapter.inputElement()!;
+  const composition=(type:string,data='')=>area.dispatchEvent(new CompositionEvent(type,{data,bubbles:true}));
+  try {
+    adapter.focus();
+    composition('compositionstart');
+    area.value='retired';
+    adapter.blur();
+    adapter.focus();
+    area.value='retired';
+    composition('compositionend',area.value);
+    if(finalInput){
+      area.value='retired';
+      area.dispatchEvent(new InputEvent('input',{data:area.value,inputType:'insertFromComposition',bubbles:true}));
+    }
+    await sleep(10);
+    composition('compositionstart');
+    area.value='fresh';
+    composition('compositionend',area.value);
+    composition('compositionend',area.value);
+    await sleep(10);
+    expect(core.inputs.map(input=>input.data)).toEqual(['fresh']);
+    expect(area.value).toBe('');
+  } finally { await adapter.dispose(); }
+});
+
 describe('native backend specifics', () => {
   it('reports what it is: native, no renderer, and a data path that follows the core', async () => {
     const fed = await open();
