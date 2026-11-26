@@ -3,7 +3,8 @@
 # Install apt packages without letting a stalled mirror hang the job. It writes network
 # timeouts and retries for every later apt run, bounds `apt-get update` and
 # `apt-get install -y` with `timeout`, and on a failure or timeout switches the hosted
-# runner's Azure mirror to HTTPS archive.ubuntu.com and tries once more. When that also fails
+# runner's Azure or regional EC2 mirror (e.g. us-east-2.ec2.archive.ubuntu.com, which the runner's mirror list can name
+# and which can trickle at ~150 kB/s without ever tripping the idle timeout) to HTTPS archive.ubuntu.com and tries once more. When that also fails
 # (Canonical's hosts can be unresolvable from the runners), it moves every Ubuntu source to the
 # HTTPS non-Canonical mirror $LAZYSH_APT_MIRROR (default mirrors.mit.edu, which carries both
 # ubuntu and ubuntu-ports) and tries a last time. Signatures are still verified by apt.
@@ -12,7 +13,9 @@
 set -u
 etc=${LAZYSH_APT_ROOT:-}/etc/apt
 update_seconds=${LAZYSH_APT_UPDATE_SECONDS:-300}
-install_seconds=${LAZYSH_APT_INSTALL_SECONDS:-900}
+# A healthy install of the largest set (webkit, ~120 MB) takes under a minute; apt keeps downloaded debs, so a retry on another mirror
+# resumes instead of restarting. 240 s bounds a degraded mirror's cost where 900 s once cost 15 min per attempt (27.9 min in total).
+install_seconds=${LAZYSH_APT_INSTALL_SECONDS:-240}
 mirror=${LAZYSH_APT_MIRROR:-mirrors.mit.edu}
 stage=0
 refresh=1
@@ -31,7 +34,7 @@ install() { bounded "$install_seconds" apt-get install -y "$@"; }
 fallback() {
   what=$1; stage=$((stage + 1))
   case $stage in
-    1) host=archive.ubuntu.com; set -- -e 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' -e 's#http://archive\.ubuntu\.com/#https://archive.ubuntu.com/#g' ;;
+    1) host=archive.ubuntu.com; set -- -e 's#(azure|[a-z0-9-]+\.ec2)\.archive\.ubuntu\.com#archive.ubuntu.com#g' -e 's#http://archive\.ubuntu\.com/#https://archive.ubuntu.com/#g' ;;
     2) host=$mirror; set -- -e "s#https?://(azure\.archive|archive|security)\.ubuntu\.com/ubuntu/?#https://$mirror/ubuntu/#g" -e "s#https?://ports\.ubuntu\.com/ubuntu-ports/?#https://$mirror/ubuntu-ports/#g" ;;
     *) return 1 ;;
   esac

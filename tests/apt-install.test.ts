@@ -20,10 +20,10 @@ const archived = (text: string) => text.replaceAll('azure.archive.ubuntu.com', '
 /**
  * A fake root whose apt-get records each call, refuses to run before the bounded network
  * configuration exists, and behaves per `APT_BEHAVIOUR`: `hang` stalls while any source still
- * names the Azure mirror, `stall` always stalls, `canonical` fails while any source names ubuntu.com, `fail` fails every call, `fail-install` every
+ * names the Azure mirror, `regional` while any source names a regional EC2 mirror, `stall` always stalls, `canonical` fails while any source names ubuntu.com, `fail` fails every call, `fail-install` every
  * install and `fail-install-once` only the first install.
  */
-async function aptRoot() {
+async function aptRoot(mirrorList = mirrors, overrides: Record<string, string | undefined> = {}) {
   const root = await mkdtemp(join(tmpdir(), 'lazysh-apt-install-test-'));
   temporary.push(root);
   const bin = join(root, 'bin'), etc = join(root, 'etc', 'apt');
@@ -31,7 +31,9 @@ async function aptRoot() {
   await mkdir(join(etc, 'sources.list.d'), { recursive: true });
   await writeFile(join(etc, 'sources.list'), oneLine);
   await writeFile(join(etc, 'sources.list.d', 'ubuntu.sources'), deb822);
-  await writeFile(join(etc, 'apt-mirrors.txt'), mirrors);
+  await writeFile(join(etc, 'apt-mirrors.txt'), mirrorList);
+  // With BOUNDS set, a recording `timeout` that runs the command at once: the bound it was given is the observable.
+  if (overrides.BOUNDS) await writeFile(join(bin, 'timeout'), '#!/bin/sh\necho "bound $2" >> "$BOUNDS"\nshift 2\nexec "$@"\n', { mode: 0o700 });
   await writeFile(join(bin, 'sudo'), '#!/bin/sh\nexec "$@"\n', { mode: 0o700 });
   await writeFile(join(bin, 'dpkg'), '#!/bin/sh\necho "dpkg $*" >> "$CALLS"\n[ "$APT_BEHAVIOUR" != stall-dpkg ] || sleep 60\n[ "$APT_BEHAVIOUR" != fail-dpkg ]\n', { mode: 0o700 });
   await writeFile(join(bin, 'apt-get'), `#!/bin/sh
@@ -39,6 +41,7 @@ async function aptRoot() {
 echo "$*" >> "$CALLS"
 case $APT_BEHAVIOUR:$1 in
   hang:*) if grep -qr azure "$LAZYSH_APT_ROOT/etc/apt"; then sleep 60; fi ;;
+  regional:install) if grep -qr 'ec2\.archive' "$LAZYSH_APT_ROOT/etc/apt"; then sleep 60; fi ;;
   stall:*) sleep 60 ;;
   canonical:*) if grep -qr 'ubuntu\.com' "$LAZYSH_APT_ROOT/etc/apt"; then exit 100; fi ;;
   fail:* | fail-install:install) exit 100 ;;
@@ -48,8 +51,10 @@ esac
   const read = (path: string) => readFile(join(etc, path), 'utf8').catch(() => undefined);
   const run = async (argv: string[], behaviour = 'ok', cwd = project) => {
     const started = performance.now();
-    const child = Bun.spawn(argv, { cwd, stdout: 'pipe', stderr: 'pipe', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`,
-      LAZYSH_APT_ROOT: root, LAZYSH_APT_UPDATE_SECONDS: '1', LAZYSH_APT_INSTALL_SECONDS: '1', APT_BEHAVIOUR: behaviour, CALLS: join(root, 'calls') } });
+    const env: Record<string, string | undefined> = { ...process.env, PATH: `${bin}:${process.env.PATH}`, LAZYSH_APT_ROOT: root,
+      LAZYSH_APT_UPDATE_SECONDS: '1', LAZYSH_APT_INSTALL_SECONDS: '1', APT_BEHAVIOUR: behaviour, CALLS: join(root, 'calls'), ...overrides };
+    for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
+    const child = Bun.spawn(argv, { cwd, stdout: 'pipe', stderr: 'pipe', env: env as Record<string, string> });
     const [stdout, exit] = await Promise.all([new Response(child.stdout).text(), child.exited]);
     const calls = (await readFile(join(root, 'calls'), 'utf8').catch(() => '')).split('\n').filter(Boolean);
     return { exit, stdout, calls, seconds: (performance.now() - started) / 1000, config: await read('apt.conf.d/99lazysh-bounded-network'),
@@ -58,7 +63,8 @@ esac
   return run;
 }
 
-const install = async (args: string[], behaviour?: string) => (await aptRoot())(['sh', script, ...args], behaviour);
+const install = async (args: string[], behaviour?: string, mirrorList?: string, overrides?: Record<string, string | undefined>) =>
+  (await aptRoot(mirrorList, overrides))(['sh', script, ...args], behaviour);
 
 describe.skipIf(process.platform !== 'linux')('bounded apt installer', () => {
   test('writes network timeouts, then updates and installs the exact packages from the configured mirror', async () => {
@@ -72,6 +78,21 @@ describe.skipIf(process.platform !== 'linux')('bounded apt installer', () => {
       sources: [archived(oneLine), archived(deb822), archived(mirrors)] });
     expect(result.stdout).toContain('::warning::apt-get update failed or timed out');
     expect(result.seconds).toBeLessThan(20);
+  });
+
+  test('a stalled regional EC2 mirror (the runner mirror list can name one) is replaced, not retried', async () => {
+    const regional = 'http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://archive.ubuntu.com/ubuntu/\tpriority:2\n';
+    const result = await install(['strace'], 'regional', regional);
+    expect(result).toMatchObject({ exit: 0, calls: ['update', 'install -y strace', 'update', 'dpkg --configure -a', 'install -y strace'] });
+    expect(result.sources[2]).toBe('https://archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\n');
+  });
+
+  test('an install that stalls is cut after four minutes by default, not fifteen', async () => {
+    const bounds = join(await mkdtemp(join(tmpdir(), 'lazysh-apt-install-bound-')), 'bounds');
+    temporary.push(join(bounds, '..'));
+    const run = await aptRoot(mirrors, { LAZYSH_APT_UPDATE_SECONDS: undefined, LAZYSH_APT_INSTALL_SECONDS: undefined, BOUNDS: bounds });
+    expect((await run(['sh', script, 'strace'])).exit).toBe(0);
+    expect((await readFile(bounds, 'utf8')).split('\n').filter(Boolean)).toEqual(['bound 300', 'bound 240']);
   });
 
   test('when Canonical hosts stay unreachable, sources move to a non-Canonical HTTPS mirror, ports included', async () => {
