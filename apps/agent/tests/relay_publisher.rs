@@ -189,6 +189,7 @@ impl Fixture {
         command
             .args(args)
             .env("LAZYSH_STATE_DIR", &self.state)
+            .env("LAZYSH_RELAY_AUTOSTART", "0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -229,6 +230,21 @@ impl Fixture {
     async fn ingest(&self, state: &str) {
         self.run(&["ingest","--agent","generic"],Some(json!({"schemaVersion":1,"sessionId":"private-session","agent":"private-agent","project":"ssh://private-host/private-path","state":state,"summary":"private-prompt-transcript","paneId":"%private"}))).await;
     }
+    async fn ingest_automatic(&self) {
+        let mut command = self.command(&["ingest", "--agent", "generic"]);
+        command.env_remove("LAZYSH_RELAY_AUTOSTART");
+        let mut child = command.spawn().unwrap();
+        let payload = json!({"schemaVersion":1,"sessionId":"private-session","agent":"private-agent",
+            "project":"private-project","state":"needs_attention","summary":"private-prompt"});
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(&payload).unwrap())
+            .await
+            .unwrap();
+        assert!(child.wait_with_output().await.unwrap().status.success());
+    }
     async fn remote_enable(&self) {
         client::admin_action(
             &self.client,
@@ -253,6 +269,28 @@ impl Fixture {
             .arg("--relay-ca-file")
             .arg(&self.ca);
         child_report(command.spawn().unwrap(), 8).await
+    }
+    async fn configure_automatic(&self, revision: &str) -> Value {
+        let mut command = self.command(&[
+            "relay",
+            "configure",
+            "--expected-revision",
+            revision,
+            "--enable",
+            "--capability-file",
+        ]);
+        command.env_remove("LAZYSH_RELAY_AUTOSTART");
+        command
+            .arg(&self.capability)
+            .arg("--relay-ca-file")
+            .arg(&self.ca);
+        child_report(command.spawn().unwrap(), 8).await
+    }
+    async fn automatic() -> Self {
+        let fixture = Self::new().await;
+        fixture.remote_enable().await;
+        assert_eq!(fixture.configure_automatic("0").await["revision"], 1);
+        fixture
     }
     async fn held_flush(&self, args: &[&str]) -> tokio::process::Child {
         self.tap.hold_next.store(true, Ordering::SeqCst);
@@ -387,6 +425,100 @@ async fn wait_delivery(delivery: &Delivery, count: u32) {
     .unwrap()
     .unwrap()
     .forget();
+}
+
+async fn wait_for_sender_exit(fixture: &Fixture) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(file) = std::fs::File::open(fixture.state.join("relay-publisher.lock")) {
+                if file.try_lock().is_ok() {
+                    file.unlock().unwrap();
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn stop_automatic_sender(fixture: &Fixture, revision: &str) {
+    fixture
+        .run(&["relay", "disable", "--expected-revision", revision], None)
+        .await;
+    wait_for_sender_exit(fixture).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unconfigured_host_does_not_start_a_sender() {
+    let fixture = Fixture::new().await;
+    fixture.ingest_automatic().await;
+    assert_eq!(fixture.status().await["pending"], 0);
+    assert!(!fixture.state.join("relay-publisher.lock").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enabling_relay_starts_a_sender_that_delivers_agent_events() {
+    let fixture = Fixture::automatic().await;
+    let (shutdown, worker) = fixture.delivery_worker().await;
+    fixture.ingest("needs_attention").await;
+    wait_delivery(&fixture.delivery, 1).await;
+    fixture.wait_status("retainedRecorded", 1).await;
+    let bodies = fixture.delivery.bodies.lock().await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["kind"], "needs_attention");
+    assert!(!bodies[0].to_string().contains("private-"));
+    drop(bodies);
+    stop_automatic_sender(&fixture, "1").await;
+    shutdown_delivery(shutdown, worker).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_agent_report_recovers_an_absent_enabled_sender() {
+    let fixture = Fixture::new().await;
+    fixture.remote_enable().await;
+    fixture.configure("0").await;
+    let (shutdown, worker) = fixture.delivery_worker().await;
+    fixture.ingest_automatic().await;
+    wait_delivery(&fixture.delivery, 1).await;
+    fixture.wait_status("retainedRecorded", 1).await;
+    assert_eq!(
+        fixture.delivery.bodies.lock().await[0]["kind"],
+        "needs_attention"
+    );
+    stop_automatic_sender(&fixture, "1").await;
+    shutdown_delivery(shutdown, worker).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconfiguration_starts_the_new_revision_after_the_old_sender_releases_the_lock() {
+    let fixture = Fixture::automatic().await;
+    let (shutdown, worker) = fixture.delivery_worker().await;
+    // Wait until the first sender actually owns the lock, then change its revision.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(file) = std::fs::File::open(fixture.state.join("relay-publisher.lock")) {
+                if file.try_lock().is_err() {
+                    break;
+                }
+                file.unlock().unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fixture.configure_automatic("1").await["revision"], 2);
+    fixture.ingest("needs_attention").await;
+    wait_delivery(&fixture.delivery, 1).await;
+    fixture.wait_status("retainedRecorded", 1).await;
+    assert_eq!(fixture.remote_count(), 1);
+    fixture
+        .run(&["relay", "disable", "--expected-revision", "2"], None)
+        .await;
+    wait_for_sender_exit(&fixture).await;
+    shutdown_delivery(shutdown, worker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

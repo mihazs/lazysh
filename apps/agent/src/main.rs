@@ -472,8 +472,7 @@ fn json(value: impl serde::Serialize) -> lazysh_agent::Result<serde_json::Value>
     serde_json::to_value(value).map_err(|_| Error::InvalidEvent)
 }
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
-    // A lazysh app newer than this companion sends its version. Hooks run inside agent turns and
-    // never start anything; `auto-update` and `update` are the update itself.
+    // Hooks run inside agent turns and must not trigger the unrelated auto-updater.
     let update = (!matches!(
         cli.command,
         Command::Ingest { .. } | Command::ApprovalRequest { .. } | Command::AutoUpdate { .. }
@@ -495,6 +494,13 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         lazysh_agent::host_features::read(&lazysh_agent::state_directory()?)?
             .check_simulator_streaming()?;
     }
+    let mut wake_sender = false;
+    let configure_sender = matches!(
+        &cli.command,
+        Command::Relay {
+            command: lazysh_agent::relay::RelayCommand::Configure { enable: true, .. }
+        }
+    );
     let output = match cli.command {
         Command::BrowserOpen { .. } => None,
         Command::BrowserWatch {
@@ -1003,6 +1009,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                     }
                     let (mut store, admission) = open_admitting(agent)?;
                     store.record_kimi_code(&observation, chrono::Utc::now(), admission)?;
+                    wake_sender = true;
                 }
             } else {
                 let (event, source) = if reported_history {
@@ -1029,6 +1036,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                         chrono::Utc::now(),
                         admission,
                     )?;
+                    wake_sender = true;
                 }
             }
             None
@@ -1045,9 +1053,15 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             store.settle_rejected_dialogs(chrono::Utc::now(), admission)?;
             let mut snapshot = store.snapshot(limit, chrono::Utc::now())?;
             snapshot.update = update;
+            wake_sender = true;
             Some(serde_json::to_value(snapshot).map_err(|_| Error::InvalidEvent)?)
         }
     };
+    if wake_sender || configure_sender {
+        if let Ok(directory) = lazysh_agent::state_directory() {
+            let _ = lazysh_agent::relay::ensure_sender(&directory, configure_sender);
+        }
+    }
     if let Some(output) = output {
         let mut stdout = io::stdout().lock();
         serde_json::to_writer(&mut stdout, &output)

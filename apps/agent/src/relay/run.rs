@@ -35,6 +35,12 @@ pub enum RelayCommand {
         #[arg(long)]
         expected_revision: u64,
     },
+    /// Start the configured background sender, waiting briefly for an older revision to leave.
+    #[command(hide = true)]
+    AutoRun {
+        #[arg(long)]
+        expected_revision: u64,
+    },
     /// Drain only this invocation's original local revision under a bounded dispatch deadline.
     Flush {
         #[arg(long,default_value_t=8,value_parser=clap::value_parser!(u8).range(1..=8))]
@@ -49,6 +55,9 @@ fn encode(value: impl Serialize) -> Result<serde_json::Value> {
 pub fn run(command: RelayCommand, directory: &Path) -> Result<serde_json::Value> {
     match command {
         RelayCommand::Run { expected_revision } => encode(worker(directory, expected_revision)?),
+        RelayCommand::AutoRun { expected_revision } => {
+            encode(worker_automatic(directory, expected_revision)?)
+        }
         RelayCommand::Status => encode(Store::open(directory)?.relay_status()?),
         RelayCommand::Disable { expected_revision } => {
             encode(Store::open(directory)?.relay_disable(expected_revision)?)
@@ -72,7 +81,7 @@ pub fn run(command: RelayCommand, directory: &Path) -> Result<serde_json::Value>
     }
 }
 mod sender;
-use sender::{capture, dispatch, signal, worker};
+use sender::{capture, dispatch, signal, worker, worker_automatic};
 
 fn supported() -> Result<()> {
     if cfg!(unix) {
@@ -165,6 +174,13 @@ fn drain_lock(directory: &Path) -> Result<DrainLock> {
     file.try_lock()
         .map_err(|_| Error::Relay("RelayDrainBusy"))?;
     Ok(DrainLock(file))
+}
+pub(super) fn probe_worker(directory: &Path) -> Result<bool> {
+    match drain_lock(directory) {
+        Ok(_lock) => Ok(true),
+        Err(Error::Relay("RelayDrainBusy")) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
