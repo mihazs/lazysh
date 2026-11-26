@@ -925,6 +925,7 @@ jobs:
           export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix zlib)/lib/pkgconfig:$(brew --prefix protobuf)/lib/pkgconfig"
           cargo +1.96.1 build --locked -p lazysh --example terminal_ssh_fixture --target-dir "$RUNNER_TEMP/terminal-fixture-target"
       - name: Exercise the installed iOS terminal with owned SSH
+        id: ios-terminal-ssh
         if: ${{ !cancelled() && steps.ios-terminal-fixture.outcome == 'success' }}
         timeout-minutes: 8
         run: |
@@ -950,6 +951,13 @@ jobs:
             -test-timeouts-enabled YES -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 120 \
             test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim"
           test "$(grep -cFx 'terminal fixture received exact input' "$fixture_log")" = 2
+      - name: Upload failed native iOS terminal SSH result
+        if: ${{ !cancelled() && steps.ios-terminal-ssh.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lazysh-ios-native-terminal-ssh-result
+          path: ${{ runner.temp }}/native-terminal-session-ios.xcresult
+          if-no-files-found: warn
       - name: Delete the simulator
         if: ${{ always() && env.LAZYSH_IOS_SIMULATOR_ID != '' }}
         run: xcrun simctl delete "$LAZYSH_IOS_SIMULATOR_ID"
