@@ -1,5 +1,5 @@
 ---
-"lazysh-agent": patch
+"@lazysh/agent": patch
 ---
 
 fix(notifications): start the enabled host relay sender automatically
