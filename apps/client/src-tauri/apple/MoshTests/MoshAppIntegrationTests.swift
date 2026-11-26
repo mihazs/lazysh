@@ -112,17 +112,20 @@ final class MoshAppIntegrationTests: XCTestCase {
       const access = await waitFor('app access', async () => {
         const status = await ipc.invoke('app_lock_status');
         return status.initialized && !status.locked && status.nonce ? status : null;
-      });
+      }).catch(() => null);
+      if (!access) return {passed: false, stage: 'initialize app access', type: 'unavailable'};
       const invoke = (command, args) => ipc.invoke(command, args, {headers: {'X-Lazysh-Access': access.nonce}});
       const channel = receive => '__CHANNEL__:' + ipc.transformCallback(event => {
         if (event.message) receive(event.message);
       });
       const hostId = 'ios-terminal-fixture';
       let sessionId;
+      let stage = 'save fixture host';
       try {
         await invoke('save_host', {host: {id: hostId, name: 'Owned iOS fixture', hostname: '127.0.0.1',
           port, username: 'terminal-fixture', transport: 'ssh'}});
         const options = {hostId, password, cols: 40, rows: 12};
+        stage = 'verify host key pinning';
         try {
           const unexpected = await invoke('connect', {...options, events: channel(() => {})});
           sessionId = unexpected.sessionId;
@@ -130,18 +133,25 @@ final class MoshAppIntegrationTests: XCTestCase {
         } catch (error) {
           if (error.kind !== 'unknown_host_key' || error.fingerprint !== fingerprint) throw error;
         }
+        stage = 'trust fixture key';
         await invoke('trust_host_key', {hostId, fingerprint});
+        stage = 'open native core';
         const events = channel(() => {});
         await invoke('terminal_core_open', {events, cols: options.cols, rows: options.rows});
+        stage = 'connect native SSH';
         sessionId = (await invoke('connect', {...options, events})).sessionId;
         const text = () => invoke('terminal_core_text', {sessionId});
+        stage = 'read native frame';
         await waitFor('native frame text', async () => (await text()).includes('LAZYSH_IOS_FRAME'));
         const anchor = {x: 16, y: 180, width: 260, height: 180, dpr: devicePixelRatio};
+        stage = 'place native surface';
         const surface = await invoke('native_terminal_surface_place', {session: sessionId, anchor, background: 0});
         if (!surface.placed || !surface.ready || surface.width <= 0 || surface.height <= 0)
           throw new Error('Native terminal did not create its Metal surface');
+        stage = 'send native input';
         await invoke('terminal_core_input', {sessionId, input: {type: 'text', text: 'LAZYSH_IOS_INPUT'}});
         await invoke('terminal_core_input', {sessionId, input: {type: 'key', code: 'Enter', key: 'Enter'}});
+        stage = 'read native acknowledgement';
         await waitFor('native input acknowledgement', async () => (await text()).includes('LAZYSH_IOS_ACK'));
 
         let output = '';
@@ -149,13 +159,19 @@ final class MoshAppIntegrationTests: XCTestCase {
         const fallbackEvents = channel(event => {
           if (event.type === 'data') output += decoder.decode(Uint8Array.from(event.data), {stream: true});
         });
+        stage = 'release native transport';
         const snapshot = await invoke('terminal_core_release', {sessionId, events: fallbackEvents});
         if (typeof snapshot !== 'string' || !snapshot.includes('LAZYSH_IOS_ACK'))
           throw new Error('The native snapshot lost the input acknowledgement');
         await invoke('native_terminal_surface_remove', {session: sessionId});
+        stage = 'send fallback input';
         await invoke('write_stdin', {sessionId, data: 'LAZYSH_IOS_INPUT' + String.fromCharCode(13)});
+        stage = 'read fallback acknowledgement';
         await waitFor('WebView output after native handback', () => output.includes('LAZYSH_IOS_ACK'));
-        return true;
+        return {passed: true};
+      } catch (error) {
+        return {passed: false, stage,
+          type: error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : typeof error};
       } finally {
         if (sessionId) {
           await invoke('native_terminal_surface_remove', {session: sessionId});
@@ -167,9 +183,14 @@ final class MoshAppIntegrationTests: XCTestCase {
       defer { completed.fulfill() }
       switch result {
       case .success(let value):
-        XCTAssertEqual(value as? Bool, true)
+        let verdict = value as? [String: Any]
+        let stage = verdict?["stage"] as? String ?? "unknown stage"
+        let type = verdict?["type"] as? String ?? "unknown error"
+        XCTAssertEqual(verdict?["passed"] as? Bool, true, "Owned iOS terminal failed at \(stage) (\(type))")
       case .failure(let error):
-        XCTFail("Owned iOS terminal failed: \(error.localizedDescription)")
+        let details = error as NSError
+        let line = details.userInfo["WKJavaScriptExceptionLineNumber"] as? Int ?? 0
+        XCTFail("Owned iOS terminal failed: \(error.localizedDescription) (script line \(line))")
       }
     }
     wait(for: [completed], timeout: 65)
