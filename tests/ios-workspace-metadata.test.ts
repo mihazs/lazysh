@@ -208,7 +208,11 @@ test('the native iOS app runs the Metal probe on the same simulator after instal
   expect(terminal[acceptance].if).toContain("steps.ios-terminal-fixture.outcome == 'success'");
   const sshCase = 'LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalAttachesAndHandsBackAnOwnedSshSession';
   expect(terminal[acceptance].run).toContain('-only-testing:' + sshCase);
-  expect(terminal[acceptance].run).toContain("grep -cFx 'terminal fixture received exact input'");
+  for (const engine of ['native', 'xterm']) {
+    expect(terminal[acceptance].run).toContain(`grep -cFx 'terminal fixture received exact ${engine} input'`);
+    expect(terminal[acceptance].run).toContain(`test "$${engine}" = 1`);
+  }
+  expect(terminal[acceptance].run).toContain('test "$rejected" = 0');
   expect(steps.find(step => step.id === 'ios-mosh-app')?.run).toContain('-skip-testing:' + sshCase);
   expect(fixture).toContain('func testNativeTerminalAttachesAndHandsBackAnOwnedSshSession()');
   const report = terminal.findIndex(step => step.name === 'Upload failed native iOS terminal SSH result');

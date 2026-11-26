@@ -135,10 +135,9 @@ final class MoshAppIntegrationTests: XCTestCase {
       };
       const surface = () => document.querySelector('[data-terminal-surface=native]');
       const rows = () => [...document.querySelectorAll('.terminal-canvas .xterm-rows > div')].map(row => row.textContent);
-      const sendInput = async selector => {
+      const sendInput = async (selector, data) => {
         const editor = await waitFor('terminal editor', () => document.querySelector(selector));
         editor.focus();
-        const data = 'LAZYSH_IOS_INPUT';
         editor.value = data;
         editor.dispatchEvent(new InputEvent('input', {bubbles: true, data, inputType: 'insertText'}));
         const enter = {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true};
@@ -169,7 +168,7 @@ final class MoshAppIntegrationTests: XCTestCase {
         await waitFor('the native terminal surface', surface);
         button(document, 'Skip')?.click();
         stage = 'type through native editor';
-        await sendInput('[data-terminal-editor]');
+        await sendInput('[data-terminal-editor]', 'LAZYSH_IOS_NATIVE');
         stage = 'switch engines through workspace tools';
         await click('Workspace tools');
         const tools = await waitFor('workspace tools', () => document.querySelector('[role=dialog]:has(.workspace-tools-content)'));
@@ -186,11 +185,11 @@ final class MoshAppIntegrationTests: XCTestCase {
         await waitFor('replayed frame', () => rows().some(row => row.includes('LAZYSH_IOS_FRAME')));
         stage = 'read the native input acknowledgement after switching';
         await waitFor('one replayed native input acknowledgement', () =>
-          rows().filter(row => row.includes('LAZYSH_IOS_ACK')).length === 1);
+          rows().filter(row => row.includes('LAZYSH_IOS_ACK_NATIVE')).length === 1);
         stage = 'type through the xterm.js editor';
-        await sendInput('.xterm-helper-textarea');
+        await sendInput('.xterm-helper-textarea', 'LAZYSH_IOS_XTERM');
         await waitFor('second acknowledgement over the same session', () =>
-          rows().filter(row => row.includes('LAZYSH_IOS_ACK')).length === 2);
+          rows().filter(row => row.includes('LAZYSH_IOS_ACK_XTERM')).length === 1);
         stage = 'read the visible fallback reason';
         await click('Workspace tools');
         const note = await waitFor('engine switch reason', () => [...document.querySelectorAll('[role=note]')].find(note =>

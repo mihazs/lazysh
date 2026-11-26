@@ -935,13 +935,15 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/native-terminal-session-ios.xcresult" \
             -test-timeouts-enabled YES -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 120 \
             test CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR="$GITHUB_WORKSPACE/apps/client/src-tauri/gen/apple/build/arm64-sim" || result=$?
-          received="$(grep -cFx 'terminal fixture received exact input' "$fixture_log" || true)"
-          echo "Owned SSH fixture received $received exact terminal inputs."
+          native="$(grep -cFx 'terminal fixture received exact native input' "$fixture_log" || true)"
+          xterm="$(grep -cFx 'terminal fixture received exact xterm input' "$fixture_log" || true)"
+          rejected="$(grep -cFx 'terminal fixture rejected repeated or out-of-order input' "$fixture_log" || true)"
+          echo "Owned SSH fixture received native=$native and xterm=$xterm exact terminal inputs, rejected=$rejected."
           if [ "$result" != 0 ]; then
             xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/native-terminal-session-ios.xcresult" || true
             exit "$result"
           fi
-          test "$received" = 2
+          test "$native" = 1 && test "$xterm" = 1 && test "$rejected" = 0
       - name: Upload failed native iOS terminal SSH result
         if: ${{ !cancelled() && steps.ios-terminal-ssh.outcome == 'failure' }}
         uses: actions/upload-artifact@v4
