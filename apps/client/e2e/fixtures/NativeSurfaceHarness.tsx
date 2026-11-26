@@ -1,3 +1,4 @@
+import type {NativeCoreBridge} from '../../src/nativeCoreBridge';
 import {createBrowserTerminal} from './browserTerminalRegistry';
 import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
@@ -16,7 +17,7 @@ declare global {interface Window {nativeSurface:Awaited<ReturnType<typeof mountN
  * stand-in core or on xterm.js. The shell's surface commands are recorded in `calls`; `refuse` makes `place` answer as a release build does.
  * No host, transport or private terminal content: the output is synthetic.
  */
-export async function mountNativeSurfaceHarness({engine,refuse=false}:{engine:'native'|'xterm';refuse?:boolean}) {
+export async function mountNativeSurfaceHarness({engine,refuse=false,bridge}:{engine:'native'|'xterm';refuse?:boolean;bridge?:NativeCoreBridge}) {
   applyAccessStatus({initialized:true,supported:true,reason:'Synthetic native surface access fixture.',enabled:true,locked:false,
     generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'c'.repeat(64)});
   // The workspace beneath stays mounted but unseen, so what the page paints here is only this pane's chain.
@@ -28,7 +29,7 @@ export async function mountNativeSurfaceHarness({engine,refuse=false}:{engine:'n
     element.className=className;parent.append(element);return element;
   },host);
   document.body.append(host);
-  const {adapter,core}=await createBrowserTerminal(engine,{columns:40,rows:10});
+  const {adapter,core}=await createBrowserTerminal(engine,{columns:40,rows:10},bridge);
   const session:LiveSession={id:'native-surface-fixture',hostId:'fixture',name:'Native surface fixture',destination:'fixture',adapter,connected:true};
   const calls:SurfaceCall[]=[],errors:string[]=[];
   const app=window.nativeFixtureInvoke;
