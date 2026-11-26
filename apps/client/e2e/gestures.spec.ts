@@ -4,14 +4,14 @@ import {openHistoryWorkspace} from './fixtures/terminalHistory';
 import {closePreferences,openPreferenceCategory,workspaceControl} from './fixtures/workspaceControl';
 import type {mountGestureHarness} from './fixtures/GestureHarness';
 import type {MultiplexerKind} from '../src/bridge';
-declare global {interface Window {gestures:ReturnType<typeof mountGestureHarness>}}
+declare global {interface Window {gestures:Awaited<ReturnType<typeof mountGestureHarness>>}}
 
 test.afterEach(async({page})=>{await page.evaluate(()=>window.gestures?.dispose());});
 
 async function mount(page:Page,kind?:MultiplexerKind) {
   await page.evaluate(async kind=>{
     const fixture=await import('/e2e/fixtures/GestureHarness.tsx');
-    window.gestures=fixture.mountGestureHarness(kind);
+    window.gestures=await fixture.mountGestureHarness(kind);
   },kind);
   await expect(page.locator('.terminal-canvas .xterm-screen')).toBeVisible();
 }
@@ -27,11 +27,11 @@ async function pinchOut(page:Page,touch:Awaited<ReturnType<typeof touchscreen>>)
   await touch.gesture([{x:x-40,y},{x:x+40,y}],[{x:x-110,y},{x:x+110,y}]);
 }
 /** Lines the harness terminal's viewport sits above the live screen. */
-const scrolledBack=(page:Page)=>page.evaluate(()=>{const buffer=window.gestures.terminal.buffer.active;return buffer.baseY-buffer.viewportY;});
+const scrolledBack=(page:Page)=>page.evaluate(()=>{const {length,rows,top}=window.gestures.adapter.viewport();return length-rows-top;});
 /** Fills the scrollback and leaves the reader 50 lines up in history. */
 async function readHistory(page:Page) {
-  await page.evaluate(()=>new Promise<void>(done=>window.gestures.terminal.write(Array.from({length:200},(_,line)=>`history ${line}\r\n`).join(''),done)));
-  await page.evaluate(()=>window.gestures.terminal.scrollLines(-50));
+  await page.evaluate(()=>window.gestures.adapter.write!(new TextEncoder().encode(Array.from({length:200},(_,line)=>`history ${line}\r\n`).join(''))));
+  await page.evaluate(()=>window.gestures.adapter.scroll({kind:'lines',delta:-50}));
   expect(await scrolledBack(page)).toBe(50);
 }
 async function swipe(page:Page,touch:Awaited<ReturnType<typeof touchscreen>>,dx:number,dy:number) {
@@ -109,7 +109,7 @@ test('triple tap runs its own action once while double and single taps wait to s
   // Neither the double nor the single tap action fires late for the same three taps, and the taps leave no selection that would block the next ones.
   await page.waitForTimeout(500);
   expect((await recorded(page)).steps).toEqual([['\x1b']]);
-  expect(await page.evaluate(()=>window.gestures.terminal.hasSelection())).toBe(false);
+  expect(await page.evaluate(()=>window.gestures.adapter.hasSelection())).toBe(false);
   await taps(2);
   await expect.poll(async()=>(await recorded(page)).steps).toEqual([['\x1b'],['\t']]);
   await taps(1);
