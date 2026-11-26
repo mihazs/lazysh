@@ -90,6 +90,28 @@ fn answer(id: &str, what: &str, call: impl FnOnce() -> Result<(), String>) -> jb
     JNI_FALSE
 }
 
+#[cfg(debug_assertions)]
+#[no_mangle]
+pub extern "system" fn Java_app_lazysh_client_NativeBenchmark_presented(
+    mut env: JNIEnv,
+    _: JClass,
+    id: JString,
+) -> jni::sys::jlongArray {
+    let sample = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let id = text(&mut env, &id)?;
+        let (bytes, at, processed) = panes(|panes| panes.benchmark_presented(&id))?;
+        let values = [
+            i64::try_from(bytes).ok()?,
+            i64::try_from(at.as_nanos()).ok()?,
+            i64::try_from(processed).ok()?,
+        ];
+        let array = env.new_long_array(values.len() as jint).ok()?;
+        env.set_long_array_region(&array, 0, &values).ok()?;
+        Some(array.into_raw())
+    }));
+    sample.ok().flatten().unwrap_or(std::ptr::null_mut())
+}
+
 #[no_mangle]
 pub extern "system" fn Java_app_lazysh_client_JniSurface_nativeReady(
     mut env: JNIEnv,

@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.view.SurfaceView
+import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.webkit.WebMessage
@@ -154,7 +155,8 @@ class NativeTerminalSessionTest {
         connectSavedHost(trustNewKey = true, ready = ready)
     }
 
-    private fun connectSavedHost(trustNewKey: Boolean, ready: String = "false") {
+    private fun connectSavedHost(trustNewKey: Boolean = false, ready: String = "false") {
+        revealHosts()
         until("the saved host", 60, "Boolean(window.__lz.find(\"button[aria-label='Connect to $hostName']\"))")
         click("button[aria-label='Connect to $hostName']")
         until("the connection dialog", 60, "Boolean(window.__lz.find('[role=dialog] form .destination'))")
@@ -217,10 +219,12 @@ class NativeTerminalSessionTest {
     /** The settled surface once it differs from `other`, the one it showed before what the case just did. */
     private fun settledAfter(what: String, other: Bitmap) = settled(what) { checksum(it) != checksum(other) }
 
+    private fun terminalEditor() = checkNotNull(ui { activity ->
+        (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<TerminalInputView>().firstOrNull() }
+    }) { "the session's keyboard editor" }
+
     private fun typeIntoTheSurface(command: String, enter: Boolean = true) {
-        val input = checkNotNull(ui { activity ->
-            (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<TerminalInputView>().firstOrNull() }
-        }) { "the session's keyboard editor" }
+        val input = terminalEditor()
         ui {
             val connection = checkNotNull(input.onCreateInputConnection(EditorInfo()))
             connection.commitText(command, 1)
@@ -486,24 +490,118 @@ class NativeTerminalSessionTest {
         }
     }
 
-    private fun measureIdle(port: Int) {
+    private fun startNativeBenchmark(port: Int): String {
         require(port in 1..65535)
         val probe = JSONObject(PageDriver.invoke("native_terminal_probe"))
         assertEquals("the native benchmark has an adapter", true, probe.getBoolean("available"))
         instrumentation.sendStatus(2, Bundle().apply { putString("lazyshNativeBenchmarkGpu", probe.getJSONObject("adapter").toString()) })
-        val id = startNativeSession()
+        return startNativeSession()
+    }
+
+    private val xtermRowsSelector = ".terminal-canvas .xterm-screen .xterm-rows"
+
+    private fun startXtermBenchmark(expectPrompt: Boolean = true) {
+        openEngineSettings()
+        choose("input[name='terminal-engine'][value='xterm']")
+        click("button[aria-label='Close Preferences']")
+        connect()
+        val prompt = fixture.getString("prompt").trim()
+        PageDriver.poll("the packaged xterm SSH terminal", 60) {
+            val rows = xtermRows()
+            true.takeIf { if (expectPrompt) rows.joinToString("").trimEnd() == prompt else rows.isNotEmpty() }
+        }
+        assertTrue("the xterm test has no native terminal surface", ui { TerminalSurfaces.ids().isEmpty() })
+        instrumentation.sendStatus(2, Bundle().apply { putString("lazyshPackagedXterm", "true") })
+    }
+
+    private fun xtermRows(): List<String> {
+        val rows = JSONArray(js("""Array.from(
+            window.__lz.find(${quoted(xtermRowsSelector)})?.children ?? [],
+            row => row.textContent.replace(/\u00a0/g, " ").trimEnd())"""))
+        return List(rows.length()) { rows.getString(it) }
+    }
+
+    private fun typeIntoXterm(command: String) {
+        click("button[aria-label='Compose']")
+        set(".terminal-compose textarea", command)
+        val (x, y) = screenPoint(".terminal-compose button[aria-label='Send']:not(:disabled)")
+        assertTrue("the composer receives the Send tap", UiDevice.getInstance(instrumentation).click(x, y))
+    }
+
+    private val streamDisplayColor: Int?
+        get() = InstrumentationRegistry.getArguments().getString("lazyshStreamDisplayColor")?.toInt()
+
+    private fun xtermDisplayBounds(): Rect {
+        val box = JSONArray(js("""(() => {
+            const r = window.__lz.find(${quoted(xtermRowsSelector)})?.getBoundingClientRect();
+            return r ? [r.left, r.top, r.right, r.bottom, innerWidth] : null;
+        })()"""))
+        return ui { activity ->
+            val web = checkNotNull(EdgeGestureExclusion.webView(activity.window.decorView))
+            val origin = IntArray(2).also(web::getLocationOnScreen)
+            val scale = web.width / box.getDouble(4)
+            Rect(
+                origin[0] + (box.getDouble(0) * scale).roundToInt(),
+                origin[1] + (box.getDouble(1) * scale).roundToInt(),
+                origin[0] + (box.getDouble(2) * scale).roundToInt(),
+                origin[1] + (box.getDouble(3) * scale).roundToInt(),
+            )
+        }
+    }
+
+    private fun streamDisplayPixels(bounds: Rect, columns: Int, rows: Int, bottom: Boolean = false): TerminalEchoPixels {
+        // The end marker paints the last cell of the first row. Include its neighbors for padding and rounding.
+        val region = Rect(bounds)
+        region.left = bounds.right - (bounds.width().toDouble() * 3 / columns).roundToInt()
+        val band = (bounds.height().toDouble() * 2 / rows).roundToInt()
+        if (bottom) region.top = bounds.bottom - band else region.bottom = bounds.top + band
+        return TerminalEchoPixels(instrumentation.uiAutomation, region)
+    }
+
+    private fun closeXtermBenchmark(remaining: Int = 0) {
+        val close = ".session-tabs button[aria-label='Disconnect $hostName']"
+        val active = ".session-tab-active button[aria-label='Disconnect $hostName']"
+        act("""(() => {
+            const button = document.querySelector(${quoted(active)});
+            if (!button || button.disabled) return false;
+            button.click();
+            return true;
+        })()""", "disconnect the active owned xterm benchmark tab")
+        until("the owned xterm tab and renderer to close", 30,
+            "document.querySelectorAll(${quoted(close)}).length === $remaining && " +
+            "document.querySelectorAll('.terminal-pane .xterm-screen').length === $remaining")
+    }
+
+    private fun measureIdle(port: Int, xterm: Boolean) {
+        require(port in 1..65535)
         val prompt = fixture.getString("prompt").trim()
         val nonce = fixture.getString("nonce")
-        awaitRow(id, "the prompt before measuring idle", { it.startsWith(prompt) })
-        awaitInk("the prompt before measuring idle") { ink(it, 0 until it.height / 6) > 40 }
-
+        val id = if (xterm) {
+            startXtermBenchmark()
+            null
+        } else startNativeBenchmark(port).also {
+            awaitRow(it, "the prompt before measuring idle", { row -> row.startsWith(prompt) })
+            awaitInk("the prompt before measuring idle") { picture -> ink(picture, 0 until picture.height / 6) > 40 }
+        }
+        fun screenText() = if (id == null) xtermRows().joinToString("\n") else coreText(id)
         for ((variant, cursor) in listOf("blink-on" to 1, "blink-off" to 2)) {
-            // Set the cursor in the SSH stream and check the marker before opening a measurement window.
             val marker = "lazysh-idle-$variant"
-            typeIntoTheSurface("printf '\\033[$cursor q%s\\n' '$marker'")
-            awaitRow(id, "the idle cursor mode", { it == marker })
+            val command = "printf '\\033[$cursor q%s\\n' '$marker'"
+            if (id == null) {
+                typeIntoXterm(command)
+                PageDriver.poll("the xterm idle cursor marker") { true.takeIf { marker in xtermRows() } }
+                val cursorConfigured = """(() => {
+                    const cursor = window.__lz.find(${quoted(xtermRowsSelector)})?.querySelector('.xterm-cursor');
+                    return !!cursor && document.hasFocus() && cursor.closest('.xterm').contains(document.activeElement)
+                        && cursor.classList.contains('xterm-cursor-blink') === ${cursor == 1};
+                })()"""
+                until("the requested xterm cursor mode", 15, cursorConfigured)
+            } else {
+                typeIntoTheSurface(command)
+                awaitRow(id, "the idle cursor mode", { it == marker })
+            }
             repeat(3) { sample ->
-                val before = coreText(id)
+                val before = screenText()
                 Socket().use { socket ->
                     socket.connect(InetSocketAddress("127.0.0.1", port), 5000)
                     socket.soTimeout = 45_000
@@ -511,8 +609,515 @@ class NativeTerminalSessionTest {
                     // The host samples the guest while this thread blocks and the terminal is untouched.
                     assertEquals("the host completed the idle window", "done", socket.getInputStream().bufferedReader(Charsets.US_ASCII).readLine())
                 }
-                assertEquals("the idle screen text stays unchanged", before, coreText(id))
+                assertEquals("the idle screen text stays unchanged", before, screenText())
             }
+        }
+        if (xterm) closeXtermBenchmark()
+    }
+
+    private fun fillBenchmarkHistory(id: String, prompt: String) {
+        awaitRow(id, "the owned shell prompt", { it == prompt })
+        typeIntoTheSurface("stty -opost; cat bench-memory.bin; printf 'lazysh-memory-filled\\r\\n'")
+        awaitRow(id, "the end of 5000 lines of history", { it == "lazysh-memory-filled" })
+        assertTrue("the last generated line reached the native core", coreText(id).contains("background session line 004999"))
+    }
+
+    private fun streamConfiguration(port: Int, columns: Int, rows: Int) = Socket().use { socket ->
+        socket.connect(InetSocketAddress("127.0.0.1", port), 5000)
+        socket.soTimeout = 15_000
+        val nonce = fixture.getString("nonce")
+        socket.getOutputStream().write("$nonce $columns $rows\n".toByteArray(Charsets.US_ASCII))
+        JSONObject(socket.getInputStream().bufferedReader(Charsets.UTF_8).readLine())
+    }
+
+    private fun <T> measureStream(port: Int, kind: String, index: Int, measure: (java.io.BufferedReader, java.io.OutputStream) -> T): T = Socket().use { socket ->
+        socket.connect(InetSocketAddress("127.0.0.1", port), 5000)
+        socket.soTimeout = 60_000
+        val input = socket.getInputStream().bufferedReader(Charsets.US_ASCII)
+        val output = socket.getOutputStream()
+        val nonce = fixture.getString("nonce")
+        output.write("$nonce measure $kind $index\n".toByteArray(Charsets.US_ASCII))
+        assertEquals("the host counters started", "go", input.readLine())
+        measure(input, output)
+    }
+
+    private fun checkXtermStreams(port: Int) {
+        startXtermBenchmark(expectPrompt = false)
+        val backgroundCount = InstrumentationRegistry.getArguments().getString("lazyshBackgroundSessions")?.toInt() ?: 0
+        repeat(backgroundCount) { position ->
+            until("the xterm session at position $position", 45,
+                "Array.from(document.querySelectorAll('.session-tabs [role=tab]')).length === ${position + 1}")
+            PageDriver.poll("the background xterm SSH worker at position $position", 45) {
+                true.takeIf { "lazysh-background-ready" in xtermRows() }
+            }
+            connectSavedHost()
+        }
+        if (backgroundCount > 0) {
+            until("the foreground xterm session", 45, "document.querySelectorAll('.session-tabs [role=tab]').length === ${backgroundCount + 1}")
+            PageDriver.poll("the foreground xterm SSH PTY grid") {
+                true.takeIf { xtermRows().any { it.startsWith("lazysh-grid ") } }
+            }
+        }
+        val showKeyboard = InstrumentationRegistry.getArguments().getString("lazyshShowBenchmarkKeyboard") == "true"
+        if (showKeyboard) {
+            val editable = "document.hasFocus() && document.activeElement?.matches('.terminal-canvas .xterm-helper-textarea:not([readonly])') === true"
+            if (js(editable) != "true") {
+                val (x, y) = screenPoint("button[aria-label='Show keyboard'], button[aria-label='Toggle keyboard']")
+                assertTrue("the xterm keyboard button receives the tap", UiDevice.getInstance(instrumentation).click(x, y))
+            }
+            until("the active xterm input", 15, editable)
+            PageDriver.poll("the Android keyboard to be visible", 15) {
+                true.takeIf {
+                    ui { activity ->
+                        ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                    }
+                }
+            }
+        }
+        val requestedRows = InstrumentationRegistry.getArguments().getString("lazyshBenchmarkRows")?.toInt() ?: 0
+        val current = PageDriver.poll("the xterm pane to fit the requested rows", 15) {
+            xtermRows().size.takeIf { it >= requestedRows && it > 0 }
+        }
+        val targetRows = requestedRows.takeIf { it > 0 } ?: current
+        if (targetRows < current) {
+            act("""(() => {
+                const canvas = window.__lz.find(${quoted(xtermRowsSelector)})?.closest('.terminal-canvas');
+                if (!canvas) return false;
+                canvas.style.maxHeight = (canvas.getBoundingClientRect().height * $targetRows / $current) + 'px';
+                return true;
+            })()""", "cap the xterm benchmark pane to $targetRows rows")
+            PageDriver.poll("the xterm benchmark grid to resize", 15) { true.takeIf { xtermRows().size == targetRows } }
+        }
+        val reported = Regex("lazysh-grid ([1-9][0-9]*) ([1-9][0-9]*)")
+        val (rows, columns) = PageDriver.poll("the packaged xterm SSH PTY and viewport to agree") {
+            val visible = xtermRows()
+            visible.firstNotNullOfOrNull { row ->
+                reported.matchEntire(row)?.takeIf { it.groupValues[1].toInt() == visible.size }
+            }
+        }.destructured
+        val configuration = streamConfiguration(port, columns.toInt(), rows.toInt())
+        val order = configuration.getJSONArray("order")
+        val screens = configuration.getJSONObject("screens")
+        for (index in 0 until order.length()) {
+            val kind = order.getString(index)
+            require(kind in listOf("plain", "ansi", "redraw", "shell", "flood"))
+            val marker = "lazysh-stream-$index-ready"
+            val workload = screens.getJSONObject(kind)
+            fun rowsFrom(json: JSONArray) = List(json.length()) { json.getString(it) }
+            val expected = rowsFrom(workload.getJSONArray("rows"))
+            val keys = workload.optJSONArray("keys")
+            val checkpoints = workload.optJSONArray("checkpoints")
+            val burstMs = JSONArray()
+            PageDriver.poll("the staged xterm stream at the benchmark grid") {
+                val visible = xtermRows()
+                true.takeIf { marker in visible && visible.size == expected.size }
+            }
+            val color = streamDisplayColor
+            val displayColors = workload.optJSONArray("displayColors")
+            val displayBounds = color?.let { xtermDisplayBounds() }
+            val display = displayBounds?.takeIf { displayColors == null }?.let { streamDisplayPixels(it, columns.toInt(), rows.toInt()) }
+            val displayBursts = JSONArray()
+            var streamDisplayMs: Double? = null
+            val elapsed = measureStream(port, kind, index) { input, output ->
+                val observedMs = if (keys != null) {
+                    var totalMs = 0.0
+                    repeat(keys.length()) { key ->
+                        val capture = streamDisplayPixels(checkNotNull(displayBounds), columns.toInt(), rows.toInt(), bottom = true)
+                        output.write("start\n".toByteArray(Charsets.US_ASCII))
+                        assertEquals("the host armed the next xterm flood echo", "ready", input.readLine())
+                        val started = ui { activity ->
+                            val web = checkNotNull(EdgeGestureExclusion.webView(activity.window.decorView))
+                            val editor = checkNotNull(web.onCreateInputConnection(EditorInfo()))
+                            val began = System.nanoTime()
+                            assertTrue("the WebView accepts flood key $key", editor.commitText(keys.getString(key), 1))
+                            began
+                        }
+                        val elapsed = capture.awaitColor(checkNotNull(displayColors).getInt(key), started)
+                        displayBursts.put(elapsed)
+                        burstMs.put(elapsed)
+                        totalMs += elapsed
+                        assertTrue("the fixture echoed flood key $key", input.readLine().toLong() > 0)
+                        output.write("done\n".toByteArray(Charsets.US_ASCII))
+                    }
+                    PageDriver.poll("the exact packaged xterm flood screen") { true.takeIf { xtermRows() == expected } }
+                    totalMs
+                } else if (checkpoints == null) {
+                    val started = System.nanoTime()
+                    output.write("start\n".toByteArray(Charsets.US_ASCII))
+                    if (display != null) streamDisplayMs = display.awaitColor(checkNotNull(color), started)
+                    PageDriver.poll("the exact packaged xterm $kind screen", 30) { true.takeIf { xtermRows() == expected } }
+                    val elapsed = (System.nanoTime() - started) / 1_000_000.0
+                    output.write("done\n".toByteArray(Charsets.US_ASCII))
+                    elapsed
+                } else {
+                    var totalMs = 0.0
+                    repeat(checkpoints.length()) { burst ->
+                        val screen = rowsFrom(checkpoints.getJSONArray(burst))
+                        val capture = displayBounds?.let { streamDisplayPixels(it, columns.toInt(), rows.toInt()) }
+                        val started = System.nanoTime()
+                        output.write("start\n".toByteArray(Charsets.US_ASCII))
+                        if (capture != null) displayBursts.put(capture.awaitColor(checkNotNull(displayColors).getInt(burst), started))
+                        while (xtermRows() != screen) {
+                            assertTrue("the exact xterm shell screen for burst $burst", System.nanoTime() - started < 5_000_000_000L)
+                            Thread.sleep(4)
+                        }
+                        val elapsed = (System.nanoTime() - started) / 1_000_000.0
+                        burstMs.put(elapsed)
+                        totalMs += elapsed
+                        output.write("done\n".toByteArray(Charsets.US_ASCII))
+                    }
+                    assertEquals("the final xterm shell screen", expected, xtermRows())
+                    totalMs
+                }
+                assertEquals("the host captured the counters", "done", input.readLine())
+                output.write("verified\n".toByteArray(Charsets.US_ASCII))
+                assertEquals("the host released the verified screen", "verified", input.readLine())
+                observedMs
+            }
+            val sample = JSONObject().put("workload", kind).put("domObservationMs", elapsed).put("fixtureBytes", workload.getLong("bytes"))
+            if (checkpoints != null || keys != null) sample.put("burstMs", burstMs)
+            if (displayColors != null) sample.put("streamDisplayBurstsMs", displayBursts)
+            streamDisplayMs?.let { sample.put("streamDisplayMs", it) }
+            instrumentation.sendStatus(2, Bundle().apply { putString("lazyshXtermStreamObservation", sample.toString()) })
+        }
+        for (remaining in backgroundCount downTo 0) closeXtermBenchmark(remaining)
+    }
+
+    private fun checkStreamedBenchmarkScreens(port: Int) {
+        var id = startNativeBenchmark(port)
+        val prompt = fixture.getString("prompt").trim()
+        awaitRow(id, "the prompt before the streamed benchmark", { it.startsWith(prompt) })
+        awaitInk("the prompt before the streamed benchmark") { ink(it, 0 until it.height / 6) > 40 }
+        val background = mutableListOf<String>()
+        val backgroundCount = InstrumentationRegistry.getArguments().getString("lazyshBackgroundSessions")?.toInt() ?: 0
+        require(backgroundCount in listOf(0, 4, 9))
+        repeat(backgroundCount) { slot ->
+            fillBenchmarkHistory(id, prompt)
+            if (streamDisplayColor != null) {
+                typeIntoTheSurface("sh bench-background.sh ${slot + 1}")
+                awaitRow(id, "the background SSH worker", { it == "lazysh-background-ready" })
+            } else {
+                val index = "\$index"
+                val chunk = "\$chunk"
+                typeIntoTheSurface("index=0; while :; do while [ ! -f bench-$index.go-background ]; do sleep .01; done; " +
+                    "chunk=0; while [ -f bench-$index.go-background ]; do dd if=bench-memory.bin bs=16384 count=1 status=none; " +
+                    "chunk=\$((chunk+1)); printf \"\\r\\nw9-$index-$chunk\\r\\n\"; sleep .01; done; index=\$((index+1)); done")
+            }
+            background.add(id)
+            connectSavedHost()
+            id = PageDriver.poll("a new native session", 45) { ui { TerminalSurfaces.ids().singleOrNull { it !in background } } }
+        }
+        if (background.isNotEmpty()) fillBenchmarkHistory(id, prompt)
+        fun terminalGrid() = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
+        val showKeyboard = InstrumentationRegistry.getArguments().getString("lazyshShowBenchmarkKeyboard") == "true"
+        fun keyboardVisible() = ui { activity ->
+            ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+        }
+        fun settledGrid(): JSONObject {
+            var previous: Triple<Int, Int, Boolean>? = null
+            var stableSince = System.nanoTime()
+            return PageDriver.poll("the native benchmark grid to settle", 15) {
+                val state = terminalGrid()
+                val size = Triple(state.getInt("columns"), state.getInt("rows"), keyboardVisible())
+                if (size != previous) {
+                    previous = size
+                    stableSince = System.nanoTime()
+                }
+                state.takeIf {
+                    (!showKeyboard || size.third) && size.first > 0 && size.second > 0 &&
+                        System.nanoTime() - stableSince >= 500_000_000
+                }
+            }
+        }
+        val grid = if (showKeyboard) {
+            if (!keyboardVisible()) click("button[aria-label='Show keyboard'], button[aria-label='Toggle keyboard']")
+            val initial = settledGrid()
+            val target = InstrumentationRegistry.getArguments().getString("lazyshBenchmarkRows")?.toInt() ?: 0
+            val initialRows = initial.getInt("rows")
+            require(target in 0..initialRows) { "Requested $target rows, but only $initialRows fit" }
+            if (target == 0 || target == initialRows) initial else {
+                // Let the normal surface placement resize both the renderer and the SSH PTY.
+                act("""(() => {
+                    const pane = window.__lz.find(${quoted(nativePane)});
+                    if (!pane) return false;
+                    pane.style.maxHeight = (pane.getBoundingClientRect().height * $target / $initialRows) + 'px';
+                    return true;
+                })()""", "cap the benchmark pane to $target rows")
+                PageDriver.poll("the resized native grid to report $target rows", 15) {
+                    true.takeIf { terminalGrid().getInt("rows") == target }
+                }
+                settledGrid().also {
+                    assertEquals("the requested benchmark rows", target, it.getInt("rows"))
+                    assertEquals("the original benchmark columns", initial.getInt("columns"), it.getInt("columns"))
+                }
+            }
+        } else settledGrid()
+        if (showKeyboard) {
+            val expectedSize = "lazysh-grid ${grid.getInt("rows")} ${grid.getInt("columns")}"
+            typeIntoTheSurface("printf 'lazysh-grid %s\\r\\n' \"\$(stty size)\"")
+            awaitRow(id, "the remote benchmark PTY to match the rendered grid", { it == expectedSize })
+        }
+        val configuration = streamConfiguration(port, grid.getInt("columns"), grid.getInt("rows"))
+        val screens = configuration.getJSONObject("screens")
+        val runs = configuration.getInt("runs")
+        require(runs in 1..5)
+        val order = configuration.getJSONArray("order")
+        for (index in 0 until order.length()) {
+            val kind = order.getString(index)
+            require(kind in listOf("plain", "ansi", "redraw", "shell", "input", "repeat", "ime", "commit", "flood"))
+            val workload = screens.getJSONObject(kind)
+            val rows = workload.getJSONArray("rows")
+            val expected = List(rows.length()) { rows.getString(it) }
+            val flood = kind == "flood"
+            val inputRun = flood || kind in listOf("input", "repeat", "ime", "commit")
+            val marker = if (inputRun) "lazysh-input-ready" else "lazysh-stream-$index-ready"
+            val reset = "\u001b[2 q\u001b[2J\u001b[H"
+            val resetOutput = "printf '\\033[2 q\\033[2J\\033[H${if (kind == "commit") "\\033[?25l" else ""}'"
+            val burstSizes = workload.optJSONArray("bursts")
+            val keys = workload.optJSONArray("keys")
+            val parts = if (keys != null) List(keys.length()) { keys.getString(it).toByteArray(Charsets.UTF_8).size.toLong() }
+                else if (burstSizes == null) listOf(workload.getLong("bytes"))
+                else List(burstSizes.length()) { burstSizes.getLong(it) }
+            val gate = "bench-$index.go"
+            val payload = if (burstSizes == null) {
+                "while [ ! -f $gate ]; do sleep .01; done; $resetOutput; dd if=bench-$kind.bin bs=16384 status=none"
+            } else {
+                val burst = "${'$'}burst"
+                "burst=0; while [ $burst -lt ${parts.size} ]; do while [ ! -f $gate-$burst ]; do sleep .002; done; " +
+                    "if [ $burst -eq 0 ]; then $resetOutput; printf '%s' '${'$'} '; fi; " +
+                    "cat bench-shell-$burst.bin; burst=\$((burst+1)); done"
+            }
+            // Stage the command and its echo before opening the host counter window.
+            if (inputRun) {
+                val command = if (flood) "python3 bench-flood.py $gate bench-flood.bin ${parts.size}" +
+                    if (workload.has("displayColors")) " bench-flood-markers.json" else ""
+                    else "dd bs=1 count=${workload.getLong("bytes")} status=none"
+                typeIntoTheSurface("stty -icanon -echo -opost; $resetOutput; printf '%s\\r\\n' '$marker'; $command; while [ -f $gate ]; do sleep .01; done; stty icanon echo; printf '\\r\\n'")
+            }
+            else typeIntoTheSurface("stty -opost; printf '%s\\r\\n' '$marker'; $payload; while [ -f $gate ]; do sleep .01; done; printf '\\r\\n'")
+            awaitRow(id, "the staged stream", { it == marker })
+            val before = PageDriver.poll("the staged stream marker to be presented", 5) {
+                NativeBenchmark.presented(id)?.takeIf { it[0] == it[2] }
+            }
+            val stagedScreen = surfacePixels()
+            var target = before[2] + if (inputRun) 0 else reset.length + if (burstSizes != null) 2 else 0
+            val timings = mutableListOf<Double>()
+            val displayTimings = mutableListOf<Double>()
+            val backgroundChunks = JSONArray()
+            val color = streamDisplayColor
+            val displayColors = workload.optJSONArray("displayColors")
+            val displayBounds = color?.let { surfaceBounds() }
+            val display = displayBounds?.takeIf { displayColors == null }?.let { streamDisplayPixels(it, grid.getInt("columns"), grid.getInt("rows")) }
+            val displayBursts = JSONArray()
+            var streamDisplayMs: Double? = null
+            val presented = measureStream(port, kind, index) { input, output ->
+                val editor = if (inputRun) terminalEditor() else null
+                if (inputRun && !flood) {
+                    output.write("start\n".toByteArray(Charsets.US_ASCII))
+                    assertEquals("the host armed the input run", "ready", input.readLine())
+                }
+                val progress = Regex("w9-$index-([1-9][0-9]*)")
+                fun backgroundProgress(session: String, previous: Long = 0): Long {
+                    var last = ""
+                    try {
+                        return PageDriver.poll("W9 background output during run $index", 20) {
+                            last = coreText(session)
+                            last.lineSequence().mapNotNull { row -> progress.matchEntire(row.trim())?.groupValues?.get(1)?.toLong() }
+                                .maxOrNull()?.takeIf { it > previous }
+                        }
+                    } catch (error: AssertionError) {
+                        throw AssertionError("W9 background screen after chunk $previous: ${last.takeLast(420)}", error)
+                    }
+                }
+                val initialProgress = if (flood) emptyList() else background.map { backgroundProgress(it) }
+                val visibleEcho = if (kind == "commit") {
+                    val bounds = surfaceBounds()
+                    val columns = grid.getInt("columns")
+                    val rows = grid.getInt("rows")
+                    val echoRows = (parts.size + columns - 1) / columns
+                    val rowHeight = bounds.height().toDouble() / rows
+                    val top = bounds.top
+                    bounds.top = top + rowHeight.roundToInt()
+                    bounds.bottom = top + ((echoRows + 1) * rowHeight).roundToInt()
+                    TerminalEchoPixels(instrumentation.uiAutomation, bounds)
+                } else null
+                val connection = if (kind == "ime" || kind == "commit" || (flood && displayColors != null)) ui {
+                    checkNotNull(editor?.onCreateInputConnection(EditorInfo()))
+                } else null
+                val submissions = parts.mapIndexed { keyIndex, size ->
+                    if (flood) {
+                        output.write("start\n".toByteArray(Charsets.US_ASCII))
+                        assertEquals("the host armed the next flood echo", "ready", input.readLine())
+                    } else target += size
+                    val capture = displayBounds?.takeIf { displayColors != null }?.let {
+                        streamDisplayPixels(it, grid.getInt("columns"), grid.getInt("rows"), bottom = flood)
+                    }
+                    val started = if (editor == null) System.nanoTime().also {
+                        output.write("start\n".toByteArray(Charsets.US_ASCII))
+                    } else ui {
+                        val key = checkNotNull(keys).getString(keyIndex)
+                        if (connection != null) {
+                            if (kind == "ime") assertTrue("the native editor accepted composition", connection.setComposingText(key, 1))
+                            val began = System.nanoTime()
+                            assertTrue("the native editor accepted IME commit", connection.commitText(key, 1))
+                            began
+                        } else {
+                            val code = KeyEvent.KEYCODE_A + (key.single() - 'a')
+                            val uptime = android.os.SystemClock.uptimeMillis()
+                            val repeat = if (kind == "repeat") keyIndex / 10 else 0
+                            val began = System.nanoTime()
+                            assertTrue("the native editor accepted a key down",
+                                editor.dispatchKeyEvent(KeyEvent(uptime, uptime, KeyEvent.ACTION_DOWN, code, repeat)))
+                            if (kind != "repeat" || keyIndex == parts.lastIndex)
+                                editor.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+                            began
+                        }
+                    }
+                    if (capture != null) displayBursts.put(capture.awaitColor(checkNotNull(displayColors).getInt(keyIndex), started))
+                    if (display != null) streamDisplayMs = display.awaitColor(checkNotNull(color), started)
+                    if (visibleEcho != null) displayTimings.add(visibleEcho.awaitEcho(started / 1e6))
+                    if (flood) target = before[2] + input.readLine().toLong()
+                    var sample: LongArray?
+                    do {
+                        sample = NativeBenchmark.presented(id)
+                        if (sample != null && sample[0] == target && sample[2] == target && sample[1] >= started) break
+                        assertTrue("the full $kind stream reaches watermark $target", System.nanoTime() - started < 5_000_000_000L)
+                        Thread.sleep(4)
+                    } while (true)
+                    val completed = checkNotNull(sample)
+                    timings.add((completed[1] - started) / 1_000_000.0)
+                    if (!inputRun || flood) output.write("done\n".toByteArray(Charsets.US_ASCII))
+                    if (burstSizes != null) Thread.sleep(4)
+                    if (kind == "repeat") {
+                        val remaining = 33 - (System.nanoTime() - started) / 1_000_000
+                        if (remaining > 0) Thread.sleep(remaining)
+                    }
+                    completed
+                }
+                background.take(initialProgress.size).forEachIndexed { position, session ->
+                    val initial = initialProgress[position]
+                    backgroundChunks.put(backgroundProgress(session, initial) - initial)
+                }
+                if (inputRun && !flood) output.write("done\n".toByteArray(Charsets.US_ASCII))
+                assertEquals("the host captured the counters", "done", input.readLine())
+                var observed = emptyList<String>()
+                var readback = "unavailable"
+                try {
+                    PageDriver.poll("the exact $kind benchmark screen", 45) {
+                        val snapshot = JSONObject(invoke("terminal_core_snapshot", id))
+                        val window = snapshot.getJSONObject("window")
+                        val texts = window.getJSONArray("rows")
+                        val top = snapshot.getJSONObject("state").getJSONObject("viewport").getInt("top")
+                        val first = top - window.getInt("first")
+                        val state = snapshot.getJSONObject("state")
+                        readback = "${state.getInt("columns")}x${state.getInt("rows")} first=$first available=${texts.length()} ime=${keyboardVisible()}"
+                        if (first < 0 || first + expected.size > texts.length()) return@poll null
+                        observed = List(expected.size) { texts.getString(first + it).trimEnd() }
+                        observed.takeIf { it == expected }
+                    }
+                } catch (error: AssertionError) {
+                    val differing = expected.zip(observed).count { (want, got) -> want != got }
+                    throw AssertionError("$kind grid compared ${observed.size}/${expected.size} rows, $differing different; grid=$readback; last row=${observed.lastOrNull()}", error)
+                }
+                if (showKeyboard) {
+                    val current = terminalGrid()
+                    for (dimension in listOf("columns", "rows")) {
+                        assertEquals("the native grid keeps its $dimension during IME input", grid.getInt(dimension), current.getInt(dimension))
+                    }
+                }
+                settledAfter("the rendered $kind benchmark screen", stagedScreen)
+                output.write("verified\n".toByteArray(Charsets.US_ASCII))
+                assertEquals("the host released the verified screen", "verified", input.readLine())
+                submissions.last()
+            }
+            evidence.put("$kind-$index", timings.sum())
+            val sample = JSONObject().put("workload", kind).put("submittedMs", timings.sum())
+                .put("presentedBytes", presented[0]).put("processedBytes", presented[2])
+            if (displayColors != null) sample.put("streamDisplayBurstsMs", displayBursts)
+            streamDisplayMs?.let { sample.put("streamDisplayMs", it) }
+            if (background.isNotEmpty() && !flood) sample.put("backgroundChunks", backgroundChunks)
+            if (kind == "commit") sample.put("androidDispatchToDisplayCaptureMs", JSONArray(displayTimings))
+            if (inputRun || burstSizes != null) sample.put("burstMs", JSONArray(timings))
+            instrumentation.sendStatus(2, Bundle().apply { putString("lazyshNativeBenchmarkSubmission", sample.toString()) })
+            awaitRow(id, "the returned shell prompt", { it == prompt })
+        }
+        if (background.isNotEmpty()) {
+            background.add(id)
+            closeBenchmarkSessions(background)
+        }
+        Evidence.record("native-streamed-benchmark", evidence)
+    }
+
+    private fun closeBenchmarkSessions(ids: MutableList<String>) {
+        while (ids.isNotEmpty()) {
+            val id = PageDriver.poll("the active native surface before closing") {
+                ui { TerminalSurfaces.ids().singleOrNull { it in ids } }
+            }
+            click("button.mobile-tools, button[aria-label='Workspace tools']")
+            click(".workspace-tools-end", "End $hostName connection")
+            ids.remove(id)
+            until("the closed terminal tab to disappear", 30, "document.querySelectorAll('.session-tabs [role=tab]').length === ${ids.size}")
+            PageDriver.poll("the closed Android surface to retire") { ui { true.takeIf { id !in TerminalSurfaces.ids() } } }
+            PageDriver.poll("the closed native core to retire") {
+                true.takeIf { invoke("terminal_core_text", id) == "error No native terminal core for this session" }
+            }
+        }
+    }
+
+    private fun checkSessionMemory(port: Int, xterm: Boolean) {
+        val ids = mutableListOf<String>()
+        if (xterm) startXtermBenchmark() else ids.add(startNativeBenchmark(port))
+        val prompt = fixture.getString("prompt").trim()
+        val nonce = fixture.getString("nonce")
+        val marker = "lazysh-memory-filled"
+        fun measure(count: Int, cycle: Int = 0) {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress("127.0.0.1", port), 5000)
+                socket.soTimeout = 20_000
+                socket.getOutputStream().write("$nonce memory $count $cycle\n".toByteArray(Charsets.US_ASCII))
+                assertEquals("the host captured PSS with $count sessions", "done", socket.getInputStream().bufferedReader(Charsets.US_ASCII).readLine())
+            }
+        }
+        fun awaitXtermHistory(count: Int) {
+            PageDriver.poll("each of the $count xterm sessions to receive its history", 45) {
+                val result = js("""Array.from(document.querySelectorAll(${quoted(xtermRowsSelector)}))
+                    .filter(rows => Array.from(rows.children).some(row => row.textContent.trim() === ${quoted(marker)})).length""")
+                true.takeIf { result == count.toString() }
+            }
+            assertTrue("the active xterm session receives the final history line",
+                xtermRows().any { it.startsWith("background session line 004999") })
+            assertTrue("xterm allocates no native surface", ui { TerminalSurfaces.ids().isEmpty() })
+        }
+        if (!xterm) awaitRow(ids.single(), "the first owned shell prompt", { it == prompt })
+        measure(1)
+        var count = 1
+        if (xterm) awaitXtermHistory(count) else fillBenchmarkHistory(ids.single(), prompt)
+        fun openFilled() {
+            connectSavedHost()
+            count++
+            if (xterm) awaitXtermHistory(count) else {
+                val id = PageDriver.poll("a new native session", 45) { ui { TerminalSurfaces.ids().singleOrNull { it !in ids } } }
+                ids.add(id)
+                fillBenchmarkHistory(id, prompt)
+            }
+        }
+        fun closeAll() {
+            if (xterm) while (count > 0) closeXtermBenchmark(--count)
+            else closeBenchmarkSessions(ids)
+            count = 0
+        }
+        for (sessions in 2..10) {
+            openFilled()
+            if (sessions == 5 || sessions == 10) {
+                for (id in ids) assertTrue("a retained native session still has its history", coreText(id).contains(marker))
+                measure(sessions)
+            }
+        }
+        closeAll()
+        for (cycle in 1..5) {
+            repeat(5) { openFilled() }
+            closeAll()
+            measure(0, cycle)
         }
     }
 
@@ -760,9 +1365,21 @@ class NativeTerminalSessionTest {
             checkBuildTimeKillSwitch()
             return
         }
+        val memoryPort = InstrumentationRegistry.getArguments().getString("lazyshMemoryBenchPort")
+        if (memoryPort != null) {
+            checkSessionMemory(memoryPort.toInt(), InstrumentationRegistry.getArguments().getString("lazyshPackagedXterm") == "true")
+            return
+        }
         val idlePort = InstrumentationRegistry.getArguments().getString("lazyshIdleBenchPort")
         if (idlePort != null) {
-            measureIdle(idlePort.toInt())
+            measureIdle(idlePort.toInt(), InstrumentationRegistry.getArguments().getString("lazyshPackagedXterm") == "true")
+            return
+        }
+        val streamPort = InstrumentationRegistry.getArguments().getString("lazyshStreamBenchPort")
+        if (streamPort != null) {
+            if (InstrumentationRegistry.getArguments().getString("lazyshPackagedXterm") == "true") {
+                checkXtermStreams(streamPort.toInt())
+            } else checkStreamedBenchmarkScreens(streamPort.toInt())
             return
         }
         if (InstrumentationRegistry.getArguments().getString("lazyshXtermSshEcho") == "true") {
