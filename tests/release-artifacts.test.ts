@@ -7,7 +7,7 @@ import { aggregatePackages, artifactName, artifactTargets, packageBudgetsMiB, re
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
-import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, windowsNsisBinaryDigest } from '../.changeset/release-platform';
+import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, verifyWindowsTerminalEngine, windowsNsisBinaryDigest } from '../.changeset/release-platform';
 import type { ReleasePolicy } from '../.changeset/release-tag';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
@@ -412,4 +412,15 @@ test('NSIS image prediction preserves the runtime bundle-comparison constants by
   const expected = raw.replace(rawBundleMarker, nsisBundleMarker);
   expect(await windowsNsisBinaryDigest(source, await digestFile(source))).toEqual({ bytes: Buffer.byteLength(expected),
     sha256: new Bun.CryptoHasher('sha256').update(expected).digest('hex') });
+}));
+
+test('Windows release verifies the packaged engine matches the kill switch', () => fixture(async root => {
+  const binary = join(root, 'lazysh.exe');
+  await Bun.write(binary, Buffer.from('LazyshNativeTerminalSurface\0', 'utf16le'));
+  await expect(verifyWindowsTerminalEngine(binary, 'on')).resolves.toBeUndefined();
+  await expect(verifyWindowsTerminalEngine(binary, 'off')).rejects.toThrow('Windows native terminal engine mismatch');
+  await Bun.write(binary, 'no native window class');
+  await expect(verifyWindowsTerminalEngine(binary, 'off')).resolves.toBeUndefined();
+  await expect(verifyWindowsTerminalEngine(binary, 'on')).rejects.toThrow('Windows native terminal engine mismatch');
+  await expect(verifyWindowsTerminalEngine(binary, undefined)).rejects.toThrow('Invalid native terminal release switch');
 }));

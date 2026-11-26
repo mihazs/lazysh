@@ -95,6 +95,23 @@ export async function windowsNsisBinaryDigest(path: string, source: { bytes: num
   predicted.update(tail);
   return { bytes, sha256: predicted.digest('hex') };
 }
+/** The release binary carries this UTF-16 HWND class only when the native Windows host is compiled in. */
+export async function verifyWindowsTerminalEngine(binary: string, mode: string | undefined) {
+  requirePlatform(mode === 'on' || mode === 'off', 'Invalid native terminal release switch');
+  const marker = Buffer.from('LazyshNativeTerminalSurface\0', 'utf16le');
+  let tail = Buffer.alloc(0);
+  let present = false;
+  for await (const chunk of createReadStream(binary)) {
+    const bytes = Buffer.concat([tail, chunk]);
+    if (bytes.includes(marker)) {
+      present = true;
+      break;
+    }
+    tail = bytes.subarray(-(marker.length - 1));
+  }
+  requirePlatform(present === (mode === 'on'), 'Windows native terminal engine mismatch');
+}
+
 /** `companion`, when the installer bundles one, is what the installation must contain beside the app. */
 export async function windowsInstallation(installer: string, binary: string, version: string, companion?: PublishedCompanion) {
   requirePlatform(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
@@ -315,7 +332,9 @@ async function desktop(target: ArtifactTarget, root: string, output: string) {
       '(Get-Item -LiteralPath $env:LAZYSH_INSTALLER).VersionInfo.ProductVersion'],
     { ...process.env, LAZYSH_INSTALLER: installer });
     requirePlatform([identity.version, `${identity.version}.0`].includes(version), 'Windows installer version mismatch');
-    console.info(await windowsInstallation(installer, join(root, 'target/release/lazysh.exe'), identity.version, published));
+    const binary = join(root, 'target/release/lazysh.exe');
+    await verifyWindowsTerminalEngine(binary, process.env.LAZYSH_NATIVE_TERMINAL);
+    console.info(await windowsInstallation(installer, binary, identity.version, published));
     sources.push(installer);
   } else {
     const app = await exactlyOne('macos/*.app', bundle);

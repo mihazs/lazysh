@@ -81,6 +81,16 @@ test('each desktop build stages the verified companion its own platform uploaded
     expect(staged).toContain(`stage ${row.target} "${directory}"`);
     expect(interpolate(executed[validate].step.env.LAZYSH_COMPANION_DIR, executed[validate].context)).toBe(directory);
     expect(executed[build].step.run).toContain('--config src-tauri/tauri.bundled-agent.conf.json');
+    const provision = at(step => step.run?.includes('windows-terminal-zig.sh'));
+    const command = String(interpolate(executed[build].step.run, executed[build].context));
+    if (row.target === 'windows-x64') {
+      expect(provision).toBeGreaterThanOrEqual(0);
+      expect(provision).toBeLessThan(build);
+      expect(command).toContain('--features native-terminal');
+    } else {
+      expect(provision).toBe(-1);
+      expect(command).not.toContain('--features native-terminal');
+    }
   }
 });
 
