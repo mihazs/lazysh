@@ -368,7 +368,10 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
         `);
         await browser.request('POST', `/session/${browser.session}/refresh`, {});
         await until('application shell after setting Native', () => browser.find('button.about-button'));
-        await browser.click(await until('Preferences button', () => browser.find('button.preferences-button')));
+        await browser.click(await until('Workspace tools', () => browser.find('button.workspace-tools-trigger')));
+        const menu = await until('Application tools', () => browser.find('#workspace-tools-page-application:not([aria-hidden="true"])'));
+        await browser.click(await until('Preferences in Workspace tools', () =>
+          browser.find(".//button[normalize-space()='Preferences']", menu, 'xpath')));
         await browser.click(await until('Terminal and accessibility settings', () => browser.find('button[data-settings-target="terminal"]')));
         const reason = await until('disabled native engine reason', () => browser.find('#terminal-engine-native-off'));
         expect(await browser.text(reason)).toContain('disabled in this build');
