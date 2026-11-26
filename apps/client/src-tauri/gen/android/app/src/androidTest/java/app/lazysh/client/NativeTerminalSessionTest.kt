@@ -1240,6 +1240,36 @@ class NativeTerminalSessionTest {
     }
 
     @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() { with(driver) {
+        val recoveryEngine = InstrumentationRegistry.getArguments().getString("lazyshRendererRecovery")
+        if (recoveryEngine != null) {
+            org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q)
+            val previousSession = if (recoveryEngine == "native") startNativeSession() else {
+                startXtermBenchmark()
+                null
+            }
+            PageDriver.terminateRendererAndAwaitReplacement()
+            theUnlockedPage()
+            if (previousSession != null) {
+                PageDriver.poll("the retired core", 30) {
+                    invoke("terminal_core_text", previousSession).takeIf { it == "error No native terminal core for this session" }
+                }
+            }
+            revealHosts()
+            connectSavedHost(trustNewKey = false)
+            val command = "printf '%s\\n' renderer-recovered"
+            if (previousSession != null) {
+                val restarted = session(replaced = previousSession)
+                typeIntoTheSurface(command)
+                awaitRow(restarted, "new native SSH echo", { it == "renderer-recovered" })
+            } else {
+                PageDriver.poll("new xterm SSH prompt", 30) {
+                    true.takeIf { xtermRows().any { row -> row.contains(fixture.getString("prompt").trim()) } }
+                }
+                typeIntoXterm(command)
+                PageDriver.poll("new xterm SSH echo", 30) { true.takeIf { "renderer-recovered" in xtermRows() } }
+            }
+            return
+        }
         if (InstrumentationRegistry.getArguments().getString("lazyshKillSwitch") == "true") {
             checkBuildTimeKillSwitch()
             return
