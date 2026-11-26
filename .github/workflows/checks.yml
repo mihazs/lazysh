@@ -73,6 +73,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # native-changes.sh asks the moon project graph (moon-areas.mjs) which projects a pull request touches.
+      - name: Set up Bun for the moon project graph
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/setup-bun
+      - name: Install the workspace for the moon project graph
+        if: github.event_name == 'pull_request'
+        run: bun install --frozen-lockfile
       - id: paths
         env:
           EVENT: ${{ github.event_name }}
@@ -80,18 +87,14 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: sh .github/scripts/native-changes.sh | tee -a "$GITHUB_OUTPUT"
-      - name: Set up Bun for the fast gate
-        if: &fast-gate github.event_name == 'pull_request' && steps.paths.outputs.native == 'true'
-        uses: ./.github/actions/setup-bun
       - name: Set up rustfmt for the fast gate
-        if: *fast-gate
+        if: &fast-gate github.event_name == 'pull_request' && steps.paths.outputs.native == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - name: Fail fast on formatting, hook, CI structure and client type errors
         if: *fast-gate
         run: |
-          bun install --frozen-lockfile
           cargo fmt --all -- --check
           bun run test:hooks
           bun run test:ci

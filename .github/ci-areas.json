@@ -1,0 +1,100 @@
+{
+  "_": "Own CI areas of each moon project. A changed file selects the areas of its project and of every project that depends on it (moon dependsOn, kept equal to the Cargo path graph by tests/moon-graph.test.ts). Areas are the names native-changes.sh maps to checks.yml jobs.",
+  "projects": {
+    "client": [
+      "client"
+    ],
+    "wry-vendor": [
+      "all"
+    ],
+    "client-native": [
+      "client"
+    ],
+    "agent": [
+      "agent"
+    ],
+    "share-service": [
+      "client"
+    ],
+    "notification-service": [
+      "agent",
+      "push",
+      "relay"
+    ],
+    "transcription-service": [],
+    "common": [
+      "herdr"
+    ],
+    "account-usage": [],
+    "companion-release": [],
+    "ai-usagebar-vendor": [
+      "client",
+      "agent"
+    ],
+    "notification-client": [
+      "push",
+      "relay",
+      "gotify"
+    ],
+    "push-registration": [
+      "android",
+      "ios",
+      "push"
+    ],
+    "mosh-transport": [
+      "ios",
+      "mosh"
+    ],
+    "credential-vault": [
+      "ios"
+    ],
+    "display-idle": [
+      "ios"
+    ],
+    "apple-speech": [
+      "ios"
+    ],
+    "apple-status": [
+      "ios"
+    ],
+    "et-transport": [
+      "client"
+    ],
+    "parakeet-runtime": [
+      "client"
+    ],
+    "portable-pty-vendor": [
+      "client"
+    ],
+    "deep-link-vendor": [
+      "client"
+    ],
+    "herdr-upstream": [
+      "herdr",
+      "terminal_runtime"
+    ],
+    "herdr-guard": [
+      "herdr"
+    ],
+    "terminal-runtime": [
+      "terminal_runtime",
+      "terminal_bridge",
+      "terminal_windows",
+      "android_core"
+    ],
+    "terminal-renderer-wgpu": [
+      "terminal_runtime",
+      "terminal_bridge",
+      "terminal_windows",
+      "android_core"
+    ]
+  },
+  "ignoreEdges": [
+    "terminal-runtime>herdr-upstream",
+    "client-native>terminal-runtime",
+    "client-native>terminal-renderer-wgpu",
+    "client-native>agent",
+    "herdr-upstream>herdr-guard"
+  ],
+  "_ignoreEdges": "dependent>dependency edges moon declares but that do not make a change flow: optional feature-gated crates (native-terminal) and test-only edges. A change in the dependency does not select the dependent's areas."
+}

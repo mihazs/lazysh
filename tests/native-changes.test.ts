@@ -1,7 +1,11 @@
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { gitFixtureRoots, project, spawnText as run } from './support/gitFixture';
+import { moonJson } from './support/moon';
+
+// The first moon query on a cold runner can take longer than bun's 5 s default.
+setDefaultTimeout(60_000);
 
 const script = join(project, '.github', 'scripts', 'native-changes.sh');
 const workflow = async (name: string) => Bun.YAML.parse(await Bun.file(join(project, '.github', 'workflows', name)).text()) as any;
@@ -234,10 +238,10 @@ test.each([
   ['Mosh transport', ['packages/mosh-transport/src/lib.rs'], { ...clientRun, ...iosRun, 'native-android-mosh': 1 }],
   ['push registration', ['packages/push-registration/src/lib.rs'], { ...clientRun, ...iosRun,
     'native-android-herdr-navigation': 1, 'native-android-auxiliary': 1, 'native-android-ntfy': 2 }],
-  ['shared common code', ['packages/common/src/hex_digest.rs'], { ...clientRun, ...agentRun }],
+  ['shared common code', ['packages/common/src/hex_digest.rs'], { ...clientRun, ...agentRun, 'native-android-gotify': 1 }],
   ['the shared companion release crate', ['packages/companion-release/src/lib.rs'], { ...clientRun, ...agentRun }],
   ...(['apps/notification-service/src/lib.rs', 'packages/notification-client/src/lib.rs'] as const).map(path => [
-    `the notification relay (${path})`, [path], { ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2, 'native-android-gotify': 1 }] as const),
+    `the notification relay (${path})`, [path], { ...(path.startsWith('packages/') ? clientRun : {}), ...agentRun, 'native-linux-runtimes': 1, 'native-android-ntfy': 2, 'native-android-gotify': 1 }] as const),
   ['the Gotify acceptance owner and its host support', ['tests/android-gotify.test.ts', 'tests/support/androidGotify.ts'], { ...alwaysRun, 'native-android-gotify': 1 }],
   ['the native Gotify case', ['apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/GotifyAndroidTest.kt'], { ...androidRun, 'native-android-gotify': 1 }],
   ['the pinned official Gotify artifacts', ['apps/client/src-tauri/fixtures/gotify-provenance.json'], { ...clientRun, 'native-android-gotify': 1 }],
@@ -322,9 +326,12 @@ test('every native job waits only for the gate and same-run Herdr bytes, and eve
   expect(await runningJobs(everything)).toEqual(fullRun);
   // The fast gate runs only after classification, only on pull requests that select native work.
   const steps = checks.jobs.changes.steps;
-  expect(steps.findIndex((step: any) => step.id === 'paths')).toBe(1);
-  expect(steps.length).toBeGreaterThan(2);
-  for (const step of steps.slice(2)) expect(step.if).toBe("github.event_name == 'pull_request' && steps.paths.outputs.native == 'true'");
+  // The two steps before it install Bun and the workspace so that the script can query the moon project graph.
+  const paths = steps.findIndex((step: any) => step.id === 'paths');
+  expect(paths).toBe(3);
+  for (const step of steps.slice(1, paths)) expect(step.if).toBe("github.event_name == 'pull_request'");
+  expect(steps.length).toBeGreaterThan(paths + 1);
+  for (const step of steps.slice(paths + 1)) expect(step.if).toBe("github.event_name == 'pull_request' && steps.paths.outputs.native == 'true'");
 });
 
 test('pull request matrices fail fast while main and release staging keep every verdict', async () => {
@@ -367,4 +374,22 @@ test('a Changesets version bump selects no native job, but a dependency or code 
   expect((await run([...Object.keys(bump), 'apps/client/src/a.ts'], bump)).android).toBe('true');
   // A bump on a push to main still runs everything.
   expect(await classify(Object.keys(bump), { event: 'push', seed, seedContents: base, contents: bump })).toEqual(everything);
+});
+
+test('the graph-derived area map covers every moon project, only names real edges, and a path outside the graph selects everything', async () => {
+  const config = JSON.parse(await Bun.file(join(project, '.github', 'ci-areas.json')).text());
+  const projects = (await moonJson(['query', 'projects'])).projects as any[];
+  // A new project without an entry would silently select no area: this fails until it is mapped.
+  expect(projects.map(entry => entry.id).sort()).toEqual(Object.keys(config.projects).sort());
+  const edges = projects.flatMap(entry => (entry.config.dependsOn ?? []).map((dependency: any) => `${entry.id}>${dependency.id ?? dependency}`));
+  for (const edge of config.ignoreEdges) expect(edges).toContain(edge);
+  const unknown = await classify(['packages/not-a-project/src/lib.rs']);
+  expect(unknown).toEqual(pullRequestEverything);
+});
+
+test('a change in a leaf crate selects its dependents through moon, not unrelated jobs', async () => {
+  const outputs = await classify(['packages/et-transport/src/lib.rs']);
+  expect(outputs.linux).toBe('true'); // client depends on it
+  expect(outputs.terminal_runtime).toBe('false');
+  expect(outputs.android).toBe('true');
 });
