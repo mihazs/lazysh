@@ -28,6 +28,23 @@ const tie: Spec[] = [
   { workload: 'W0', variant: 'blink-on', metric: 'idleCpuMsPerSecond', values: [50, 50, 50] },
   { workload: 'W9', variant: 'sessions-5', metric: 'pssGrowthMiB', values: [80, 80, 80] },
   { workload: 'W9', variant: 'sessions-10', metric: 'pssGrowthMiB', values: [160, 160, 160] },
+  ...['repeat-idle', 'ime-commit'].map(variant => ({ workload: 'W12', variant, metric: 'inputLatencyMs' as const, values: [10, 10, 10], p95: 20 })),
+  { workload: 'W12', variant: FLOOD, metric: 'jankyFramePercent', values: [1, 1, 1] },
+  { workload: 'W1', metric: 'outputLatencyMs', values: [10, 10, 10], p95: 20 },
+  ...['W3', 'W4'].flatMap(workload => [
+    { workload, metric: 'throughputMiBs' as const, values: [20, 20, 20] },
+    { workload, metric: 'cpuMsPerMiB' as const, values: [100, 100, 100] },
+  ]),
+  ...['blink-on', 'blink-off'].flatMap(variant => [
+    { workload: 'W0', variant, metric: 'idleWakeupsPerSecond' as const, values: [10, 10, 10] },
+    { workload: 'W0', variant, metric: 'idleFramesPerSecond' as const, values: [2, 2, 2] },
+  ]),
+  { workload: 'W0', variant: 'blink-off', metric: 'idleCpuMsPerSecond', values: [50, 50, 50] },
+  ...['sessions-5', 'sessions-10'].flatMap(variant => [
+    { workload: 'W9', variant, metric: 'inputLatencyMs' as const, values: [30, 30, 30], p95: 60 },
+    { workload: 'W9', variant, metric: 'jankyFramePercent' as const, values: [1, 1, 1] },
+  ]),
+  { workload: 'W9', variant: 'churn', metric: 'pssChurnDriftMiB', values: [1] },
 ];
 /** The xterm.js side is `tie`; native is `tie` with the given figures replaced (matched by workload, variant, metric). */
 function run(changes: Array<Partial<Spec> & Pick<Spec, 'metric'>> = [], { natives = tie, extra = [] as Measurement[], hosts = ['bench host', 'bench host'] } = {}) {
@@ -77,7 +94,7 @@ describe('deciding the provisional targets', () => {
   });
 
   it('counts a faster stream as nothing if it ends on another screen', () => {
-    const verdict = run([{ metric: 'throughputMiBs', values: [40, 40, 40], correct: false }, { metric: 'cpuMsPerMiB', values: [40, 40, 40] }]);
+    const verdict = run([{ workload: 'W2', metric: 'throughputMiBs', values: [40, 40, 40], correct: false }, { metric: 'cpuMsPerMiB', values: [40, 40, 40] }]);
     expect(target(verdict, 'no-correctness-regression')).toMatchObject({ outcome: 'not met', evidence: ['native-wgpu W2: ended on a different screen'] });
     expect(verdict.status).toBe('targets not met');
   });
@@ -124,6 +141,22 @@ describe('what the comparison refuses to say', () => {
     expect(verdict.status).toBe('incomplete');
     expect(exitCode(verdict)).toBe(3);
     expect(new Set(verdict.targets.map(t => t.outcome))).toEqual(new Set(['not measured']));
+  });
+
+  it('refuses to pass when a required heavy-output variant is missing', () => {
+    const faster = { metric: 'inputLatencyMs' as const, variant: 'keys-idle', values: [6, 6, 6], p95: 12 };
+    expect(run([faster], { natives: tie.filter(spec => spec.variant !== 'sessions-10' || spec.metric !== 'inputLatencyMs') }).status).toBe('incomplete');
+  });
+
+  it('reports a missing baseline workload and preserves a known regression', () => {
+    const baseline = record([arm('xterm-dom')], tie.filter(spec => spec.workload !== 'W4').map(spec => measure('xterm-dom', spec)));
+    const native = (idle: number) => record([arm('native-wgpu')], tie.map(spec => measure('native-wgpu',
+      spec.metric === 'idleCpuMsPerSecond' ? { ...spec, values: [idle] } :
+      spec.variant === 'keys-idle' ? { ...spec, values: [6], p95: 12 } : spec)));
+    const incomplete = compareRecords([baseline, native(50)]);
+    expect(incomplete.status).toBe('incomplete');
+    expect(incomplete.caveats).toContain('xterm-dom: missing paired W4 throughputMiBs');
+    expect(compareRecords([baseline, native(90)]).status).toBe('targets not met');
   });
 
   it('is incomplete when a target has no figure to judge it by, and a known loss still wins over it', () => {

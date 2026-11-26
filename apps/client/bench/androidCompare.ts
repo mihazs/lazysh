@@ -18,6 +18,24 @@ export const RULES = {
 };
 const HEAVY_OUTPUT = ['keys-during-output', 'sessions-5', 'sessions-10'];
 
+// The full Android baseline produces these decision metrics. Absolute PSS is
+// optional because the two arms can use different host apps.
+const requiredMetrics: Array<[string, string | null, MetricId]> = [
+  ...['blink-on', 'blink-off'].flatMap(variant =>
+    Object.keys(RULES.idleNearZero).map(metric => ['W0', variant, metric as MetricId] as [string, string, MetricId])),
+  ['W1', null, 'outputLatencyMs'],
+  ...['W2', 'W3', 'W4'].flatMap(workload => [
+    [workload, null, 'throughputMiBs'], [workload, null, 'cpuMsPerMiB'],
+  ] satisfies Array<[string, null, MetricId]>),
+  ...['keys-idle', 'repeat-idle', 'keys-during-output', 'ime-commit'].map(variant =>
+    ['W12', variant, 'inputLatencyMs'] satisfies [string, string, MetricId]),
+  ['W12', 'keys-during-output', 'jankyFramePercent'],
+  ...['sessions-5', 'sessions-10'].flatMap(variant => [
+    ['W9', variant, 'inputLatencyMs'], ['W9', variant, 'jankyFramePercent'], ['W9', variant, 'pssGrowthMiB'],
+  ] satisfies Array<[string, string, MetricId]>),
+  ['W9', 'churn', 'pssChurnDriftMiB'],
+];
+
 export class RecordError extends Error {}
 
 export type Row = {
@@ -103,11 +121,19 @@ export function compareRecords(records: EvidenceRecord[]): Verdict {
     const per = baselines.map(b => ({ b, ...check(rows.filter(row => row.baseline === b)) }));
     targets.push({
       id, gate, statement, evidence: per.flatMap(r => r.evidence),
-      outcome: !native || per.length === 0 || per.some(r => r.outcome === 'not measured') ? 'not measured' : per.some(r => r.outcome === 'not met') ? 'not met' : 'met',
+      outcome: per.some(r => r.outcome === 'not met') ? 'not met' : !native || per.length === 0 || per.some(r => r.outcome === 'not measured') ? 'not measured' : 'met',
     });
   }
   // A loss is known even when something else is missing; a missing native arm or measurement is never reported as a pass.
-  const status = targets.some(t => t.outcome === 'not met') ? 'targets not met' : targets.every(t => t.outcome === 'met') ? 'targets met' : 'incomplete';
+  const missing: string[] = [];
+  for (const baseline of native ? baselines : []) {
+    for (const [workload, variant, metric] of requiredMetrics) {
+      if (!rows.some(row => row.baseline === baseline && row.workload === workload && row.variant === variant && row.metric === metric))
+        missing.push(`${baseline}: missing paired ${workload}${variant ? ` ${variant}` : ''} ${metric}`);
+    }
+  }
+  caveats.push(...missing);
+  const status = targets.some(t => t.outcome === 'not met') ? 'targets not met' : missing.length === 0 && targets.every(t => t.outcome === 'met') ? 'targets met' : 'incomplete';
   return { runId, device, native, baselines, status, targets, rows, caveats };
 }
 export const exitCode = (verdict: Verdict) => ({ 'targets met': 0, 'targets not met': 1, incomplete: 3 })[verdict.status];
