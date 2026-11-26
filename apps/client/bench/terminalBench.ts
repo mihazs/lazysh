@@ -250,13 +250,24 @@ const api = {
     const { terminal } = harness!, { bursts, screen } = shellSession(interactions, terminal, 10);
     const applied: number[] = [], rendered: number[] = [];
     await putAndWait(terminal, '$ ');
-    for (const burst of bursts) {
+    for (const [index, burst] of bursts.entries()) {
       const written = performance.now();
-      const render = new Promise<void>(resolve => put(terminal, burst, () => {
-        applied.push(performance.now() - written);
-        const d = terminal.onRender(() => { d.dispose(); rendered.push(performance.now() - written); resolve(); });
-      }));
-      await Promise.race([render, sleep(100)]);
+      await new Promise<void>((resolve, reject) => {
+        let appliedAt: number | undefined;
+        const listener = terminal.onRender(() => {
+          if (appliedAt === undefined) return;
+          clearTimeout(deadline);
+          listener.dispose();
+          applied.push(appliedAt - written);
+          rendered.push(performance.now() - written);
+          resolve();
+        });
+        const deadline = setTimeout(() => {
+          listener.dispose();
+          reject(new Error(`W1 burst ${index + 1} of ${bursts.length} did not render`));
+        }, 1000);
+        put(terminal, burst, () => { appliedAt = performance.now(); });
+      });
       await sleep(4);
     }
     await settle();
