@@ -323,12 +323,13 @@ impl Fixture {
             .filter(|path| path.is_dir())
             .collect()
     }
-    /// Every command the fake browser received.
+    /// Every complete command in the fake browser's append-only log.
     fn commands(&self) -> Vec<Value> {
-        self.recorded("commands")
+        fs::read(self.directory.path().join("commands"))
             .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
+            .split_inclusive(|&byte| byte == b'\n')
+            .take_while(|line| line.ends_with(b"\n"))
+            .map(|line| serde_json::from_slice(line).unwrap())
             .collect()
     }
     fn methods(&self) -> Vec<String> {
@@ -384,6 +385,21 @@ impl Fixture {
 
 fn closed(relay: &Relay) -> Value {
     relay.next_json("closed")
+}
+
+#[test]
+fn the_command_log_can_be_read_during_an_append() {
+    let fixture = Fixture::new();
+    let path = fixture.directory.path().join("commands");
+    let first = json!({"method": "Page.enable"});
+    let second = json!({"method": "Page.startScreencast"});
+    let mut log = fs::File::create(path).unwrap();
+    write!(log, "{first}\n{{\"method\":\"Page.start").unwrap();
+
+    assert_eq!(fixture.commands(), vec![first.clone()]);
+
+    writeln!(log, "Screencast\"}}").unwrap();
+    assert_eq!(fixture.commands(), vec![first, second]);
 }
 
 #[test]
