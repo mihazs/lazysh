@@ -59,7 +59,10 @@ class NativeTerminalSurfacePlugin(private val owner: Activity) : Plugin(owner) {
         }
     }
 
-    @Command fun focus(invoke: Invoke) = onUi(invoke) { _, id, args -> TerminalSurfaces.focus(id, args.getBoolean("focused"), if (args.has("keyboard")) args.getBoolean("keyboard") else true); null }
+    @Command fun focus(invoke: Invoke) = onUi(invoke) { _, id, args ->
+        TerminalSurfaces.focus(id, args.getBoolean("focused"), args.optBoolean("keyboard", true), args.optBoolean("ifIdle"))
+        null
+    }
 
     @Command fun state(invoke: Invoke) = onUi(invoke) { _, id, _ -> TerminalSurfaces.state(id) }
 }

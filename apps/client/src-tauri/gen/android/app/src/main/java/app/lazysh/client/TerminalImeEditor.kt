@@ -70,6 +70,7 @@ class TerminalImeEditor(
     val selectionEnd: Int get() = maxOf(selStart, selEnd)
     val composingStart: Int get() = compStart
     val composingEnd: Int get() = compEnd
+    val canDismissKeyboard: Boolean get() = depth == 0 && compStart < 0 && previous == value
 
     /** The preedit the surface should draw at the cursor while the keyboard composes, or null. */
     val composing: String? get() {

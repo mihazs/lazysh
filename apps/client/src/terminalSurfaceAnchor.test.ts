@@ -211,6 +211,8 @@ it('uses the replacement renderer nonce for surface operations and permits remov
   await nativeSurface.look('s1', {theme: {foreground: '#ffffff'}, fontFamily: 'monospace', fontSize: 14, cursorStyle: 'block', cursorBlink: false, brightBold: false});
   await nativeSurface.cell(14, 1);
   await nativeSurface.focus('s1', true);
+  await nativeSurface.focus('s1', false, true, true);
+  expect(invoke).toHaveBeenLastCalledWith('native_terminal_surface_focus', {session: 's1', focused: false, keyboard: true, ifIdle: true}, {headers: {'X-Lazysh-Access': nonce}});
   await nativeSurface.takeInput('s1');
 
   expect(invoke.mock.calls.map(([command, , options]) => [command, options?.headers])).toEqual([
@@ -218,6 +220,7 @@ it('uses the replacement renderer nonce for surface operations and permits remov
     'native_terminal_surface_state',
     'native_terminal_surface_look',
     'native_terminal_surface_cell',
+    'native_terminal_surface_focus',
     'native_terminal_surface_focus',
     'native_terminal_surface_input',
   ].map(command => [command, {'X-Lazysh-Access': nonce}]));

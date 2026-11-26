@@ -2183,6 +2183,21 @@ describe('page features over a native pane', () => {
     expect(mocks.invoke.mock.calls.some(([command, args]) => command === "soft_keyboard" && args?.action === "show")).toBe(false);
   });
 
+  it('requests idle-only keyboard dismissal after an upward native overscroll', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({matches: query === '(pointer: coarse)', addEventListener() {}, removeEventListener() {}}));
+    savePreferences({...defaults, dismissKeyboardOnOverscroll: true});
+    const {adapter} = await nativePane('shell prompt');
+    vi.spyOn(adapter, 'inputElement').mockReturnValue(undefined);
+    const dismiss = vi.fn();
+    Object.assign(adapter, {dismissKeyboardIfIdle: dismiss});
+    const canvas = screen.getByLabelText('Terminal for Host');
+    vi.stubGlobal('innerHeight', window.innerHeight - 240);
+    fireEvent.resize(window);
+    fireEvent.touchStart(canvas, {touches: [{identifier: 1, clientX: 8, clientY: 100}]});
+    fireEvent.touchMove(canvas, {touches: [{identifier: 1, clientX: 8, clientY: 48}]});
+    expect(dismiss).toHaveBeenCalledOnce();
+  });
+
   it('finds a word in the whole buffer, scrolls to it and selects its row, and wraps to the first match', async () => {
     const {adapter} = await nativePane(`${Array.from({length: 30}, (_, i) => i === 3 || i === 20 ? `row ${i} needle` : `row ${i}`).join('\r\n')}`);
     pressMore('Find');

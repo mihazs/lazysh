@@ -53,6 +53,19 @@ class TerminalImeEditorTest {
 
     private fun assertRemoteFollowsEditor() = assertEquals("the remote line is the editor text", editor.text, remote.line)
 
+    @Test
+    fun theKeyboardCanDismissAfterPendingCompositionHasCommitted() {
+        assertTrue(editor.canDismissKeyboard)
+        editor.beginBatchEdit()
+        assertFalse(editor.canDismissKeyboard)
+        editor.setComposingText("日本", 1)
+        editor.endBatchEdit()
+        assertFalse(editor.canDismissKeyboard)
+        editor.finishComposingText()
+        assertEquals("日本", remote.line)
+        assertTrue(editor.canDismissKeyboard)
+    }
+
     @Test fun anAutocorrectedWordIsTypedOnceAndNeverAsPreedit() {
         batch {
             setComposingText("teh", 1)

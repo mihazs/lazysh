@@ -107,6 +107,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   useEffect(() => {activeRef.current = active; return () => {activeRef.current = false;};}, [active]);
   const preferences = usePreferences();
   const softKeyboard = useSoftKeyboard();
+  const keyboardOpen = useRef(softKeyboard.open);
+  keyboardOpen.current = softKeyboard.open;
   const fonts = useDeviceFonts();
   const [ctrl, setCtrl] = useState(false);
   const [ctrlLocked, setCtrlLocked] = useState(false);
@@ -477,10 +479,12 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const scrolling = registerTextInteraction('scroll', () => !!scroll?.active);
     const safeDismiss=(owner:InputOwner|null)=>{
       const adapter=session.adapter,area=adapter.inputElement(),modes=adapter.modes(),view=pasteView.current;
+      const editorReady=area
+        ? document.hasFocus()&&area===document.activeElement&&!area.readOnly&&area.value===''&&imeInput.current?.idle===true
+        : keyboardOpen.current===true&&!!adapter.dismissKeyboardIfIdle;
       return !!owner&&inputOwner.current===owner&&!owner.disposed&&owner.session.id===session.id&&owner.session.adapter===adapter
         &&view.id===session.id&&view.adapter===adapter&&view.connected&&activeRef.current&&mounted.current&&access.current()
-        &&!document.hidden&&document.hasFocus()&&!composingIme()&&imeInput.current?.idle===true&&!adapter.hasSelection()
-        &&area===document.activeElement&&!area?.readOnly&&area?.value===''
+        &&!document.hidden&&!composingIme()&&!adapter.hasSelection()&&editorReady
         &&modes.mouseTracking==='none'&&adapter.atLiveScreen()
         &&!document.querySelector('[role="dialog"][aria-modal="true"]');
     };
@@ -538,7 +542,10 @@ export default function TerminalPane({ session, active, swiping = false, typingA
             press.current = null; cancelTaps();
             // An upward finger moves toward the bottom of local history.
             if(scroll.dismiss&&-dy>=48){
-              retireDismiss();session.adapter.blur();event.stopPropagation();if(event.cancelable)event.preventDefault();return;
+              retireDismiss();
+              if (session.adapter.inputElement()) session.adapter.blur();
+              else session.adapter.dismissKeyboardIfIdle?.();
+              event.stopPropagation();if(event.cancelable)event.preventDefault();return;
             }
             const tracking = session.adapter.modes().mouseTracking, screenType = session.adapter.modes().alternateScreen ? 'alternate' : 'normal';
             const pixelWheel = tracking === 'none' || tracking === 'x10';

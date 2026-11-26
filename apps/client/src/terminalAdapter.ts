@@ -240,6 +240,8 @@ export interface TerminalAdapter {
 
   focus(): void;
   blur(): void;
+  /** Ask the native editor to release only if it still owns focus and has no pending input. */
+  dismissKeyboardIfIdle?(): void;
 
   /** Listeners run in order and never outlive `dispose`. */
   /** `types` limits delivery to those event types; a backend then wires only what was asked for. */

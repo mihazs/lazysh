@@ -58,7 +58,9 @@ internal class SurfaceHost(activity: Activity, val web: View, private val frame:
         return FrameLayout.LayoutParams(at.width, at.height, Gravity.TOP or Gravity.LEFT).apply { leftMargin = at.left; topMargin = at.top }
     }
 
-    fun focusInput(focused: Boolean, keyboard: Boolean) {
+    fun focusInput(focused: Boolean, keyboard: Boolean, ifIdle: Boolean) {
+        if (!focused && ifIdle && (!input.hasFocus() || !input.hasWindowFocus() || !input.editor.canDismissKeyboard))
+            throw SurfaceUnavailable("native_surface_input_busy")
         cancelInputFocus()
         val imm = input.context.getSystemService(InputMethodManager::class.java)
         if (!focused) {
@@ -206,9 +208,9 @@ internal object TerminalSurfaces {
      * back to the WebView, so a field of the page (the composer, a dialog, the search box) is the one the keyboard types into, and the
      * keyboard closes unless `keyboard` is false (the page took the keyboard itself).
      */
-    fun focus(id: String, focused: Boolean, keyboard: Boolean = true) {
+    fun focus(id: String, focused: Boolean, keyboard: Boolean = true, ifIdle: Boolean = false) {
         val host = entries[id]?.host ?: throw SurfaceUnavailable("native_surface_session")
-        host.focusInput(focused, keyboard)
+        host.focusInput(focused, keyboard, ifIdle)
     }
 
     fun state(id: String): SurfaceState {
