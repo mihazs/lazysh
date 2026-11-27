@@ -71,7 +71,12 @@ fn conversation_options(
     if !matches!(agent, TranscriptAgent::Claude) {
         return Err(Error::InvalidArgument);
     }
-    let mut page = project_claude(capture(path)?, limit, inline_images, window)?;
+    let size = open_transcript(path)?.metadata()?.len();
+    let mut page = if size > lazysh_common::record_checkpoint::MAX_SNAPSHOT {
+        super::claude_large::read(|| open_transcript(path), limit, inline_images, window, None)?
+    } else {
+        project_claude(capture(path)?, limit, inline_images, window)?
+    };
     super::work::attach_children(&mut page, path);
     Ok(page)
 }
@@ -97,6 +102,120 @@ pub(super) fn project_claude(
 /// tiny records from costing more memory than the snapshot budget implies.
 const MAX_RECORDS: usize = 100_000;
 
+/// One Claude record as a page message. A block longer than the client accepts is cut and says so, never refused.
+pub(super) fn claude_message(record: &Value, inline_images: bool, position: u64) -> Option<Value> {
+    let mut message = super::events::claude(record).or_else(|| {
+        if inline_images {
+            super::normalize_images(record, TranscriptAgent::Claude, position)
+        } else {
+            normalize(record, TranscriptAgent::Claude, position)
+        }
+    })?;
+    super::codex_conversation::fit(&mut message);
+    Some(message)
+}
+
+pub(super) fn is_conversation_record(record: &Value) -> bool {
+    matches!(
+        record["type"].as_str(),
+        Some("user" | "assistant" | "progress" | "system" | "attachment")
+    ) && record["uuid"].is_string()
+}
+
+#[derive(Default)]
+pub(super) struct ClaudeContext {
+    queue: Queue,
+    roster: super::session_roster::Roster,
+    session_seen: bool,
+    permission_mode: Option<Value>,
+    cost_usd: Option<f64>,
+    worktree: Option<String>,
+}
+
+impl ClaudeContext {
+    pub(super) fn observe(&mut self, record: &Value, expected: Option<&str>) -> Result<()> {
+        if !record.is_object() {
+            return Err(Error::InvalidEvent);
+        }
+        if let (Some(expected), Some(value)) = (expected, record.get("sessionId")) {
+            if value.as_str() != Some(expected) {
+                return Err(Error::InvalidEvent);
+            }
+            self.session_seen = true;
+        }
+        match record["type"].as_str() {
+            Some("queue-operation") => self.queue.apply(record),
+            Some("attachment") => self.roster.apply(record),
+            Some("permission-mode") => self.permission_mode = record.get("permissionMode").cloned(),
+            Some("cost-state") => self.cost_usd = record["totalCostUSD"].as_f64(),
+            Some("worktree-state") => {
+                self.worktree = record["worktreeSession"]["worktreeName"]
+                    .as_str()
+                    .map(str::to_owned)
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn verify(&self, expected: Option<&str>) -> Result<()> {
+        if expected.is_some() && !self.session_seen {
+            return Err(Error::InvalidEvent);
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish(
+        self,
+        records: &[(u64, Value)],
+        chain: &[usize],
+    ) -> (Vec<Value>, Option<Value>) {
+        let session = super::session_info::Session::claude(
+            &chain
+                .iter()
+                .rev()
+                .map(|index| &records[*index].1)
+                .filter(|record| record["isSidechain"] != true)
+                .collect::<Vec<_>>(),
+            self.permission_mode.as_ref(),
+            self.cost_usd,
+            self.worktree.map(Value::from).as_ref(),
+        )
+        .with_info(self.roster.into_value())
+        .into_value();
+        (self.queue.pending(), session)
+    }
+}
+
+pub(super) fn prepare_records(mut records: Vec<(u64, Value)>) -> (Vec<(u64, Value)>, bool) {
+    let own_file = {
+        let mut messages = records
+            .iter()
+            .filter(|(_, record)| matches!(record["type"].as_str(), Some("user" | "assistant")))
+            .peekable();
+        messages.peek().is_some() && messages.all(|(_, record)| record["isSidechain"] == true)
+    };
+    if own_file {
+        for (_, record) in &mut records {
+            record["isSidechain"] = Value::Bool(false);
+        }
+    }
+    let latest: HashMap<String, usize> = records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (_, record))| string(record, "uuid").map(|id| (id, index)))
+        .collect();
+    let records = records
+        .into_iter()
+        .enumerate()
+        .filter(|(index, (_, record))| {
+            record["uuid"].as_str().and_then(|id| latest.get(id)) == Some(index)
+        })
+        .map(|(_, record)| record)
+        .collect();
+    (records, own_file)
+}
+
 pub(super) fn project_claude_bounded(
     bytes: Vec<u8>,
     limit: u8,
@@ -113,12 +232,7 @@ pub(super) fn project_claude_bounded(
     let size = bytes.len() as u64;
     let mut reader = Cursor::new(&bytes);
     let mut records = Vec::new();
-    let mut queue = Queue::default();
-    let mut session_seen = false;
-    let mut permission_mode = None;
-    let mut cost_usd = None;
-    let mut worktree = None;
-    let mut roster = super::session_roster::Roster::default();
+    let mut context = ClaudeContext::default();
     let mut offset = 0;
     while offset < size {
         let line = super::read_record_line_bounded(&mut reader, line_limit)?;
@@ -129,32 +243,8 @@ pub(super) fn project_claude_bounded(
         if !line.iter().all(u8::is_ascii_whitespace) {
             let mut record: Value =
                 serde_json::from_slice(&line).map_err(|_| Error::InvalidEvent)?;
-            if !record.is_object() {
-                return Err(Error::InvalidEvent);
-            }
-            if let (Some(expected), Some(value)) = (expected_session_id, record.get("sessionId")) {
-                if value.as_str() != Some(expected) {
-                    return Err(Error::InvalidEvent);
-                }
-                session_seen = true;
-            }
-            match record["type"].as_str() {
-                Some("queue-operation") => queue.apply(&record),
-                Some("attachment") => roster.apply(&record),
-                Some("permission-mode") => permission_mode = record.get("permissionMode").cloned(),
-                Some("cost-state") => cost_usd = record["totalCostUSD"].as_f64(),
-                Some("worktree-state") => {
-                    worktree = record["worktreeSession"]["worktreeName"]
-                        .as_str()
-                        .map(str::to_owned);
-                }
-                _ => {}
-            }
-            if matches!(
-                record["type"].as_str(),
-                Some("user" | "assistant" | "progress" | "system" | "attachment")
-            ) && record["uuid"].is_string()
-            {
+            context.observe(&record, expected_session_id)?;
+            if is_conversation_record(&record) {
                 if expected_session_id.is_some()
                     && !matches!(record["type"].as_str(), Some("user" | "assistant"))
                 {
@@ -190,52 +280,13 @@ pub(super) fn project_claude_bounded(
         }
         offset += bytes as u64;
     }
-    if expected_session_id.is_some() && !session_seen {
-        return Err(Error::InvalidEvent);
-    }
+    context.verify(expected_session_id)?;
     drop(bytes);
-    // A sub-agent's own file records every message as a sidechain; read on its own, that is its main branch.
-    let own_file = {
-        let mut messages = records
-            .iter()
-            .filter(|(_, record)| matches!(record["type"].as_str(), Some("user" | "assistant")))
-            .peekable();
-        messages.peek().is_some() && messages.all(|(_, record)| record["isSidechain"] == true)
-    };
-    if own_file {
-        for (_, record) in &mut records {
-            record["isSidechain"] = Value::Bool(false);
-        }
-    }
-    let latest: HashMap<String, usize> = records
-        .iter()
-        .enumerate()
-        .filter_map(|(index, (_, record))| string(record, "uuid").map(|id| (id, index)))
-        .collect();
-    let records: Vec<_> = records
-        .into_iter()
-        .enumerate()
-        .filter(|(index, (_, record))| {
-            record["uuid"].as_str().and_then(|id| latest.get(id)) == Some(index)
-        })
-        .map(|(_, record)| record)
-        .collect();
+    let (records, _) = prepare_records(records);
     let (chain, leaf) = active_chain(&records)?;
     let activity = leaf.and_then(|leaf| activity(&records, leaf));
     let work = super::work::tasks(chain.iter().map(|index| &records[*index].1));
-    let session = super::session_info::Session::claude(
-        &chain
-            .iter()
-            .rev()
-            .map(|index| &records[*index].1)
-            .filter(|record| record["isSidechain"] != true)
-            .collect::<Vec<_>>(),
-        permission_mode.as_ref(),
-        cost_usd,
-        worktree.map(Value::from).as_ref(),
-    )
-    .with_info(roster.into_value())
-    .into_value();
+    let (queued, session) = context.finish(&records, &chain);
     let branch_id = chain
         .last()
         .and_then(|index| string(&records[*index].1, "uuid"));
@@ -243,17 +294,10 @@ pub(super) fn project_claude_bounded(
         .into_iter()
         .filter_map(|index| {
             let (position, record) = &records[index];
-            if let Some(event) = super::events::claude(record) {
-                Some(event)
-            } else if inline_images {
-                super::normalize_images(record, agent, *position)
-            } else {
-                normalize(record, agent, *position)
-            }
+            claude_message(record, inline_images, *position)
         })
         .collect();
     let selected = select(all, window, limit)?;
-    let queued = queue.pending();
     Ok(TranscriptPage {
         schema_version: 1,
         view: "active_branch",
@@ -380,11 +424,11 @@ fn candidate_results<'a>(
 /// the queue. Text the harness injects (`<task-notification>`, `<agent-message>`, ...) starts with
 /// `<` and is not something a person typed, so it is not shown.
 #[derive(Default)]
-struct Queue(Vec<(String, Option<String>)>);
+pub(super) struct Queue(Vec<(String, Option<String>)>);
 const MAX_QUEUED: usize = 20;
 const MAX_QUEUED_TEXT: usize = 4096;
 impl Queue {
-    fn apply(&mut self, record: &Value) {
+    pub(super) fn apply(&mut self, record: &Value) {
         let content = record["content"].as_str().unwrap_or_default();
         match record["operation"].as_str() {
             Some("enqueue") => self
@@ -402,7 +446,7 @@ impl Queue {
             _ => {}
         }
     }
-    fn pending(self) -> Vec<Value> {
+    pub(super) fn pending(self) -> Vec<Value> {
         self.0
             .into_iter()
             .filter(|(text, _)| !text.trim().is_empty() && !text.trim_start().starts_with('<'))
@@ -443,7 +487,7 @@ pub(crate) fn interrupted(record: &Value) -> bool {
 /// Turn state at the selected leaf. Claude Code records `system/turn_duration`
 /// after a turn ends; an unanswered question or plan approval waits for the
 /// user; an assistant `tool_use` stop or a user record means a turn is running.
-fn activity(records: &[(u64, Value)], leaf: usize) -> Option<&'static str> {
+pub(super) fn activity(records: &[(u64, Value)], leaf: usize) -> Option<&'static str> {
     let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
     for (index, (_, record)) in records.iter().enumerate() {
         if let Some(parent) = record["parentUuid"].as_str() {
@@ -497,7 +541,7 @@ fn activity(records: &[(u64, Value)], leaf: usize) -> Option<&'static str> {
     }
 }
 
-fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)> {
+pub(super) fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)> {
     let mut by_id = HashMap::new();
     let mut parents = HashSet::new();
     for (index, (_, record)) in records.iter().enumerate() {
@@ -563,7 +607,7 @@ fn parent(record: &Value) -> Option<&str> {
     })
 }
 
-fn is_main(record: &Value) -> bool {
+pub(super) fn is_main(record: &Value) -> bool {
     record["isSidechain"] != true
         && record["isMeta"] != true
         && record.get("teamName").is_none_or(|v| v.is_null())
@@ -736,6 +780,144 @@ mod snapshot_audit {
             json!({"type":"assistant","uuid":id,"parentUuid":parent,"message":{"content":text}})
         )
     }
+    /// `count` chained assistant rows `{prefix}0..`, the first under `root`.
+    fn chain(file: &mut File, prefix: &str, root: Option<&str>, count: usize, text: &str) {
+        for number in 0..count {
+            let id = format!("{prefix}{number}");
+            let parent = if number > 0 {
+                Some(format!("{prefix}{}", number - 1))
+            } else {
+                root.map(str::to_owned)
+            };
+            file.write_all(row(&id, parent.as_deref(), text).as_bytes())
+                .unwrap();
+        }
+    }
+    #[test]
+    fn claude_pages_across_a_conversation_larger_than_the_snapshot_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("long.jsonl");
+        let mut file = File::create(&path).unwrap();
+        chain(&mut file, "message-", None, 80, &"x".repeat(224 * 1024));
+        assert!(file.metadata().unwrap().len() > lazysh_common::record_checkpoint::MAX_SNAPSHOT);
+        super::super::claude_large::take_scanned();
+        let tail =
+            conversation_window(&path, TranscriptAgent::Claude, 1, false, &Window::Tail).unwrap();
+        let scanned = super::super::claude_large::take_scanned();
+        assert!(
+            scanned < 2 * 1024 * 1024,
+            "opening one recent message scanned {scanned} bytes"
+        );
+        assert_eq!(tail.messages[0]["id"], "message-79");
+        assert!(tail.truncated);
+        let before = Window::Before("message-79".into());
+        let previous =
+            conversation_window(&path, TranscriptAgent::Claude, 1, false, &before).unwrap();
+        assert_eq!(previous.messages[0]["id"], "message-78");
+        assert!(previous.has_newer);
+    }
+
+    #[test]
+    fn a_large_earlier_tool_result_does_not_block_the_latest_page() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large-tool-result.jsonl");
+        let mut file = File::create(&path).unwrap();
+        let long_text = "x".repeat(5 * 1024 * 1024);
+        let result = json!({
+            "type": "user",
+            "uuid": "tool",
+            "message": {"content": [{"type":"tool_result","tool_use_id":"call","content":long_text}]}
+        });
+        writeln!(file, "{result}").unwrap();
+        chain(&mut file, "m", Some("tool"), 55, &"x".repeat(224 * 1024));
+        let tail =
+            conversation_window(&path, TranscriptAgent::Claude, 1, false, &Window::Tail).unwrap();
+        assert_eq!(tail.messages[0]["id"], "m54");
+        assert!(tail.truncated);
+    }
+
+    #[test]
+    fn older_pages_read_only_the_needed_suffix() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("old-page.jsonl");
+        let mut file = File::create(&path).unwrap();
+        chain(&mut file, "message-", None, 80, &"x".repeat(224 * 1024));
+        super::super::claude_large::take_scanned();
+        let page = conversation_window(
+            &path,
+            TranscriptAgent::Claude,
+            1,
+            false,
+            &Window::Before("message-79".into()),
+        )
+        .unwrap();
+        assert_eq!(page.messages[0]["id"], "message-78");
+        let scanned = super::super::claude_large::take_scanned();
+        assert!(
+            scanned < 2 * 1024 * 1024,
+            "one previous page scanned {scanned} bytes"
+        );
+        super::super::claude_large::take_scanned();
+        let farther = conversation_window(
+            &path,
+            TranscriptAgent::Claude,
+            1,
+            false,
+            &Window::Before("message-70".into()),
+        )
+        .unwrap();
+        assert_eq!(farther.messages[0]["id"], "message-69");
+        let farther_scanned = super::super::claude_large::take_scanned();
+        assert!(
+            farther_scanned < 8 * 1024 * 1024,
+            "a farther page scanned {farther_scanned} bytes"
+        );
+    }
+
+    #[test]
+    fn one_oversized_message_is_cut_with_a_note_and_earlier_pages_stay_reachable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large-message.jsonl");
+        let mut file = File::create(&path).unwrap();
+        chain(&mut file, "message-", None, 80, &"x".repeat(224 * 1024));
+        let body = "🌎hello".repeat(120_000);
+        file.write_all(row("large", Some("message-79"), &body).as_bytes())
+            .unwrap();
+
+        let tail =
+            conversation_window(&path, TranscriptAgent::Claude, 1, false, &Window::Tail).unwrap();
+        let text = tail.messages[0]["blocks"][0]["text"].as_str().unwrap();
+        assert_eq!(tail.messages[0]["id"], "large");
+        assert!(text.len() <= 262_144 && text.starts_with("🌎hello"));
+        assert!(text.contains("more bytes not shown]"));
+        let earlier = conversation_window(
+            &path,
+            TranscriptAgent::Claude,
+            1,
+            false,
+            &Window::Before("large".into()),
+        )
+        .unwrap();
+        assert_eq!(earlier.messages[0]["id"], "message-79");
+    }
+
+    #[test]
+    fn tail_preserves_a_queued_message_from_before_the_recent_suffix() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.jsonl");
+        let mut file = File::create(&path).unwrap();
+        // Claude Code writes `type` first, which is how the tail read finds state records without parsing every line.
+        writeln!(
+            file,
+            r#"{{"type":"queue-operation","operation":"enqueue","content":"waiting"}}"#
+        )
+        .unwrap();
+        chain(&mut file, "m", None, 80, &"x".repeat(224 * 1024));
+        let page =
+            conversation_window(&path, TranscriptAgent::Claude, 1, false, &Window::Tail).unwrap();
+        assert_eq!(page.queued[0]["text"], "waiting");
+    }
+
     fn source(fill: char) -> String {
         row("root", None, "owned root")
             + &row("answer", Some("root"), &fill.to_string().repeat(18000))
