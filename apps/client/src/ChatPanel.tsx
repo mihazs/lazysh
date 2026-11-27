@@ -719,7 +719,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     window.dispatchEvent(new CustomEvent("lazysh-prompt-draft", { detail: { sessionId, text: draft } }));
     setDraftStatus("chatDraftStaged");
   }
-  const eventLabel = ({kind,text}: InjectedEvent) => <>{t(({task:'chatEventTask',output:'chatEventOutput',interrupted:'chatEventInterrupted',compacted:'chatEventCompacted',answer:'chatEventAnswer',goal:'chatEventGoal',goalMet:'chatEventGoalMet',planMode:'chatEventPlanMode',planModeExit:'chatEventPlanModeExit',recap:'chatEventRecap',hookFailed:'chatEventHookFailed'} as const)[kind])}{text && <> · <span>{text}</span></>}</>;
+  const eventLabel = ({kind,text}: InjectedEvent) => <>{t(({task:'chatEventTask',output:'chatEventOutput',interrupted:'chatEventInterrupted',compacted:'chatEventCompacted',answer:'chatEventAnswer',goal:'chatEventGoal',goalMet:'chatEventGoalMet',planMode:'chatEventPlanMode',planModeExit:'chatEventPlanModeExit',recap:'chatEventRecap',hookFailed:'chatEventHookFailed',unmapped:'chatEventUnmapped'} as const)[kind])}{text && <> · <span>{text}</span></>}</>;
   const roleName = (message: Message) => t(({user:"chatRoleUser",assistant:"chatRoleAssistant",tool:"chatRoleTool",record:"chatRoleRecord",event:"chatRoleRecord"} as const)[message.role]);
   // The timeline shows prompt and answer as chat bubbles; the role stays the accessible name.
   const paired = (block: Block) => timeline && !!block.id && block.type === 'tool_result' && toolCalls.has(block.id);

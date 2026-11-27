@@ -150,10 +150,11 @@ pub(super) fn project_claude_bounded(
                 }
                 _ => {}
             }
-            if matches!(
+            if (matches!(
                 record["type"].as_str(),
                 Some("user" | "assistant" | "progress" | "system" | "attachment")
-            ) && record["uuid"].is_string()
+            ) || super::events::fallback_candidate(&record))
+                && record["uuid"].is_string()
             {
                 if expected_session_id.is_some()
                     && !matches!(record["type"].as_str(), Some("user" | "assistant"))
