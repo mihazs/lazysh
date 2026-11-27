@@ -4,6 +4,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 import {act,cleanup,render,screen} from '@testing-library/react';
 import ChatPanel from './ChatPanel';
+import {openFolds} from './test/openFolds';
 vi.mock('@tauri-apps/api/core',async original=>(await import('./test/nativeCoreMock')).mockNativeCoreWithChannel(original));
 
 /** A page as the host companion reads a Gemini CLI session (apps/agent/tests/gemini_conversation.rs builds the same shapes). */
@@ -59,7 +60,7 @@ describe('a Gemini CLI conversation in the Agent view',()=>{
   });
 
   it('renders a tool the mapping does not know as an ordinary tool block, with no error', async()=>{
-    await open();
+    await open();await openFolds();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('The reader is done.')).toBeTruthy();
     expect(document.body.textContent).toContain('google_web_search');

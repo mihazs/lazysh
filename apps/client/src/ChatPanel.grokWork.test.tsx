@@ -3,6 +3,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {cleanup,screen} from '@testing-library/react';
 import type {BoundConversation} from './ChatPanel';
 import {answerTranscripts,openBound} from './test/boundTranscript';
+import {openFolds} from './test/openFolds';
 vi.mock('@tauri-apps/api/core',async original=>(await import('./test/nativeCoreMock')).mockNativeCoreWithChannel(original));
 
 /** A page as the host companion reads a Grok Build session (apps/agent/tests/grok_work.rs builds the same shapes): the edit is a
@@ -38,14 +39,14 @@ describe('a Grok Build conversation with work records in the Agent view',()=>{
   });
 
   it('draws the recorded edit as the shared diff card',async()=>{
-    await openBound(bound);
+    await openBound(bound);await openFolds();
     const card=screen.getByText('edit').closest('details')!;
     expect(card.getAttribute('data-kind')).toBe('diff');
     expect(card.querySelector('.agent-diff-lines')!.textContent).toBe('-let total = a + b;\n+let total = a + b + c;\n');
   });
 
   it('renders a tool the mapping does not know as an ordinary tool block, with no error',async()=>{
-    await openBound(bound);
+    await openBound(bound);await openFolds();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('The sum is fixed.')).toBeTruthy();
     expect(screen.getByText('Teleport `home`').closest('details')!.getAttribute('data-kind')).not.toBe('diff');
