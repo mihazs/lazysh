@@ -3204,13 +3204,41 @@ class NativeWorkspaceTest {
             target === shell -> listOf(navigation.getString("workspaceLabel"), shell.getString("label"), shell.getString("paneId"))
             else -> listOf(source.getString("label"), "codex")
         })
-        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null, fromParent: Boolean = false, status: String? = null) {
+        // The Spaces layout is one remembered preference: the selector, storage and the tree's class must agree, and of the two real
+        // spaces exactly `open` show their tabs (accordion: the focused one; list and grid: both).
+        // A run that ended early may have left a layout behind; start from what storage holds, which a mounted sidebar already read.
+        val storedLayout = evaluate(scenario, "localStorage.getItem('lazysh.multiplexer.layout')").trim('"')
+        var shownLayout = if (storedLayout == "accordion" || storedLayout == "grid") storedLayout else "list"
+        var layoutStored = storedLayout != "null"
+        fun layoutIs(layout: String, stored: Boolean, open: Int? = null) = """
+            (()=>{const root=document.querySelector(".herdr-navigation[data-mode='spaces']:not([hidden])");
+              const select=Array.from(root?.querySelectorAll('label')??[]).find(x=>x.textContent.startsWith('Jump To layout'))?.querySelector('select');
+              const spaces=Array.from(root?.querySelectorAll('li.herdr-space')??[]).map(li=>li.querySelector(':scope > ul')!==null);
+              const stored=localStorage.getItem('lazysh.multiplexer.layout');
+              return select?.value===${JSONObject.quote(layout)} && (stored??'list')===${JSONObject.quote(layout)} && (${!stored} || stored===${JSONObject.quote(layout)}) &&
+                root.querySelector('.herdr-navigation-tree')?.classList.contains(${JSONObject.quote("herdr-layout-$layout")})===true &&
+                (${open === null} || (spaces.length===2 && spaces.filter(Boolean).length===${open ?: 0}));})()
+        """
+        fun chooseLayout(layout: String, open: Int? = null) {
+            // The earlier choice must still be what this opening shows, including a display whose sidebar mounts fresh.
+            awaitDocument(scenario, "remembered $shownLayout Herdr layout", layoutIs(shownLayout, layoutStored))
+            assertEquals("The layout selector must accept $layout", "true", evaluate(scenario, """(()=>{
+                const select=Array.from(document.querySelectorAll(".herdr-navigation[data-mode='spaces']:not([hidden]) label")).find(x=>x.textContent.startsWith('Jump To layout'))?.querySelector('select');
+                if(!select||select.disabled)return false;
+                Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,${JSONObject.quote(layout)});
+                select.dispatchEvent(new Event('change',{bubbles:true}));return true;})()"""))
+            awaitDocument(scenario, "chosen $layout Herdr layout", layoutIs(layout, true, open))
+            shownLayout = layout
+            layoutStored = true
+        }
+        fun navigate(mode: String, targetLabel: String, target: JSONObject, context: String? = null, fromParent: Boolean = false, status: String? = null, layout: String? = null, open: Int? = null) {
             // From the parent SSH display, the switch activates the first existing Herdr display.
             val display = if (fromParent) 1 else 2
             if (fromParent) {choose(0); closeSoftKeyboard()}
             keepTopBar(scenario)
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
             onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$mode']")).perform(webClick())
+            if (layout != null) chooseLayout(layout, open)
             val match = if (context == null) "span[strong[normalize-space(.)='$targetLabel']]" else "span[strong[normalize-space(.)='$targetLabel'] and small[contains(.,'$context')]]"
             val state = if (status == null) "" else "[@data-agent-status='$status'][.//span[contains(@class,'row-tag-status')][normalize-space(.)='${statusText.getValue(status)}']]"
             val row = "//section[contains(@class,'herdr-navigation') and not(@hidden)]//button[contains(@class,'herdr-navigation-row')][$match]$state"
@@ -3308,10 +3336,13 @@ class NativeWorkspaceTest {
             click("Choose terminal destination")
             awaitDocument(scenario, "stock Herdr truthfully refuses private input preparation", "document.querySelector(\"section[aria-label='Terminal input'] [role=alert]\")?.textContent==='Guarded input is unavailable for this Herdr terminal. Use Stage or open the terminal.'")
             assertEquals("Stock Herdr cannot offer a private receipt", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
-            navigate("Workspaces", navigation.getString("workspaceLabel"), agent)
-            navigate("Workspaces", shell.getString("label"), shell, fromParent = true)
+            // Accordion opens one of the two real spaces; grid and list open both. Each is chosen through the real selector, must be
+            // what the next opening shows (the second one on a display whose sidebar mounts fresh) and must not change the exact
+            // target a row focuses.
+            navigate("Workspaces", navigation.getString("workspaceLabel"), agent, layout = "accordion", open = 1)
+            navigate("Workspaces", shell.getString("label"), shell, fromParent = true, layout = "grid", open = 2)
             navigate("Agents", "codex", agent, agent.getString("label"), status = agent.getString("status"))
-            navigate("Workspaces", shell.getString("paneId"), shell)
+            navigate("Workspaces", shell.getString("paneId"), shell, layout = "list", open = 2)
             sessionView(scenario, "Transcript")
             assertEquals("Navigation cannot create stock input authority", "false", evaluate(scenario, "Array.from(document.querySelectorAll('button')).some(x=>x.textContent==='Send to terminal'||x.textContent==='Confirm this destination')"))
             reopenSource()

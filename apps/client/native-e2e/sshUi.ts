@@ -218,6 +218,14 @@ export async function disconnectOwnedSsh(gui:NativeGui,terminal:Terminal,name='O
   await terminal.waitForDisplayed({reverse:true});
 }
 
+/** The shared end of an owned Herdr GUI case: a single tab, the original app owner, no extra connection, no stray terminal bytes, then the explicit disconnect. */
+export async function finishOwnedHerdr(gui:NativeGui,browser:NonNullable<NativeGui['browser']>,terminal:Terminal,owner:Owner,herdr:{name:string;expectBytes(bytes:Buffer):Promise<unknown>}) {
+  expect(await browser.$$('[role="tab"]')).toHaveLength(1);
+  expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
+  await herdr.expectBytes(Buffer.alloc(0));
+  await disconnectOwnedSsh(gui,terminal,`Owned SSH GUI host / ${herdr.name}`);
+}
+
 async function cleanupOwnedSshGui(window:NativeGui|undefined,server:Pick<SshFixture,'stop'>|undefined,failed:boolean,captureSafe:boolean) {
   if(failed && window) {
     console.error(`Owned SSH GUI failure stage: ${window.stage}`);
