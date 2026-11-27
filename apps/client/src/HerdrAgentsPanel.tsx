@@ -1,5 +1,5 @@
 import {t,useUi,formatNumber} from './i18n/core';
-import {SshControlClosedError,uiErrorText} from './i18n/localError';
+import {uiErrorText} from './i18n/localError';
 import {useHerdrNavigation,herdrStatusKeys,type LiveAgent,type ReportedSessionRef} from './useHerdrNavigation';
 import HerdrSessionDetails,{reportedSessionCounts,type ReportedSessionSource} from './HerdrSessionDetails';
 import {useAccessSnapshot} from './access';
@@ -21,7 +21,7 @@ export function EnterSessionButton({server,target,lease,enabled,owner,onEnterHer
 }
 /** Live Herdr metadata is independent of companion lifecycle reports and grants no input authority. */
 /** `navigation` is a reader its owner already runs (the Agent view keeps one to follow the focused pane); without it the panel reads on its own. */
-export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports,navigation,onRestoreHostTools,onEnterHerdr,onChooseSession}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;navigation?:ReturnType<typeof useHerdrNavigation>;onRestoreHostTools?:(restored:()=>void)=>void;onEnterHerdr?:Enter;onChooseSession?:(row:LiveAgent&{agent_session:ReportedSessionRef},server:string)=>void}) {
+export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports,navigation,onEnterHerdr,onChooseSession}:{sessionId:string;herdrSession?:string;visible:boolean;reports?:ReportedSessionSource;navigation?:ReturnType<typeof useHerdrNavigation>;onEnterHerdr?:Enter;onChooseSession?:(row:LiveAgent&{agent_session:ReportedSessionRef},server:string)=>void}) {
   useUi();
   useAccessSnapshot();
   const own=useHerdrNavigation({sessionId,herdrSession,visible:visible && !navigation,reports});
@@ -35,7 +35,7 @@ export default function HerdrAgentsPanel({sessionId,herdrSession,visible,reports
   return <section className="herdr-agents" aria-label={t('herdrAgentsTitle')} aria-busy={busy}>
     <div className="tool-bar"><h3>{t('herdrAgentsTitle')}</h3><button className="subtle-button" disabled={busy} onClick={()=>void refresh()}>{t('herdrAgentsRefresh')}</button></div>
     {busy && !data?.loaded && failure?.host!==sessionId && <p role="status">{t('herdrReading')}</p>}
-    {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={busy || !visible || !lease.current()} onClick={()=>onRestoreHostTools(()=>void refresh())}>{t('hostToolsRestore')}</button>}</div>}
+    {failure?.host===sessionId && <p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>}
     {data && <>
       {data.servers.length===0?<p>{t('herdrAgentsNoServers')}</p>:<>
         <details className="herdr-server-setup" open={!data.loaded || !data.server || failure?.host===sessionId ? true : undefined}>

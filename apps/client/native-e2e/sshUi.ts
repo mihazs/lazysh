@@ -100,6 +100,9 @@ export async function openOwnedSsh(gui:NativeGui,ssh:SshFixture,transport:'ssh'|
 export async function openOwnedRememberedSsh(gui:NativeGui,ssh:SshFixture,entry?:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>,port=ssh.port) {
   return openSsh(gui,ssh,'ssh',port,entry,true);
 }
+export async function openOwnedRememberedMosh(gui:NativeGui,ssh:SshFixture,entry:NonNullable<import('../src/bridge').Host['defaultMultiplexer']>,port=ssh.port) {
+  return openSsh(gui,ssh,'mosh',port,entry,true);
+}
 /** `supply` chooses the identity in the open connection dialog and presses Connect itself. */
 export async function openOwnedSshWith(gui:NativeGui,ssh:SshFixture,supply:(connect:Terminal)=>Promise<void>) {
   return openSsh(gui,ssh,'ssh',ssh.port,undefined,false,'Owned SSH GUI host',supply);

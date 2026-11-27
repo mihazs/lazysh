@@ -698,6 +698,37 @@ describe('live Herdr discovery',()=>{
       {...tree,panes:[{...tree.panes[0],cwd:'/bad\u0000path'}]},
       {...tree,agents:Array(4097).fill(tree.agents[0])}])expect(()=>parseHerdrAgents(value)).toThrow();
   });
+  it('refreshes the visible owning Herdr view after host-tools recovery',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core');
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
+    const view=render(<HerdrAgentsPanel sessionId="owned" visible/>);await screen.findByText('builder');
+    const reads=()=>vi.mocked(invoke).mock.calls.filter(([name])=>name==='herdr_tree').length;
+    const initial=reads();
+    act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'other'})));expect(reads()).toBe(initial);
+    act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'owned'})));await waitFor(()=>expect(reads()).toBe(initial+1));
+    view.rerender(<HerdrAgentsPanel sessionId="owned" visible={false}/>);
+    act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'owned'})));expect(reads()).toBe(initial+1);
+  });
+  it('does not run a queued agent refresh after the document becomes hidden',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core'),pending=deferredRead();
+    vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?pending.promise:undefined);
+    render(<AgentPanel sessionId="owned" showHerdr={false}/>);await waitFor(()=>expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='agent_snapshot')).toBe(true));
+    act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'owned'})));
+    const descriptor=Object.getOwnPropertyDescriptor(document,'hidden');
+    Object.defineProperty(document,'hidden',{configurable:true,value:true});
+    try {
+      await act(async()=>pending.resolve({schemaVersion:1,sessions:[]}));
+      expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='agent_snapshot')).toHaveLength(1);
+    } finally {if(descriptor)Object.defineProperty(document,'hidden',descriptor);else Reflect.deleteProperty(document,'hidden');}
+  });
+  it('queues one recovery refresh behind an in-flight Herdr read',async()=>{
+    const {invoke}=await import('@tauri-apps/api/core'),pending=deferredRead();let reads=0;
+    vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:command!=='herdr_tree'?undefined:++reads===1?pending.promise:tree);
+    render(<HerdrAgentsPanel sessionId="owned" visible/>);await waitFor(()=>expect(reads).toBe(1));
+    act(()=>{for(let n=0;n<2;n++)window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'owned'}));});
+    await act(async()=>pending.resolve(tree));await waitFor(()=>expect(reads).toBe(2));
+    expect(await screen.findByText('builder')).toBeTruthy();
+  });
   it('requires a server choice for multiple servers and never mixes same-pane agents across them',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockImplementation(async(command,args)=>{
@@ -751,31 +782,25 @@ describe('live Herdr discovery',()=>{
   it('distinguishes missing live metadata from a genuinely empty server',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockImplementation(command=>Promise.resolve(command==='multiplexer_sessions'?[{name:'default'}]:{...tree,agents:undefined}));
-    render(<HerdrAgentsPanel sessionId="legacy-host" visible onRestoreHostTools={vi.fn()}/>);
+    render(<HerdrAgentsPanel sessionId="legacy-host" visible/>);
     await screen.findByText(`${t('herdrAgentsUnavailable')} ${t('herdrAgentsUnsupported')}`);
     expect(screen.queryByText(/Showing .*detected agents/)).toBeNull();
     expect(screen.queryByText('builder')).toBeNull();
     expect(screen.queryByRole('button',{name:t('hostToolsRestore')})).toBeNull();
   });
   it.each([
-    {name:'closed command control',error:{kind:'ssh_host_tools_closed',message:'same host error text'},recover:true},
-    {name:'closed upload control',error:{kind:'ssh_control_closed',message:'same host error text'},recover:false},
-    {name:'remote command',error:{kind:'remote_command_failed',message:'same host error text'},recover:false},
-    {name:'text-only error',error:new Error('same host error text'),recover:false},
-  ])('offers explicit recovery only for $name',async({error,recover})=>{
-    const {invoke}=await import('@tauri-apps/api/core'),restore=vi.fn();
+    {error:{kind:'ssh_host_tools_closed',message:'ignored'},message:t('hostToolsClosed')},
+    {error:{kind:'ssh_host_tools_unavailable',message:'ignored'},message:t('hostToolsUnavailable')},
+    {error:{kind:'ssh_host_tools_credentials',message:'ignored'},message:t('hostToolsCredentials')},
+    {error:{kind:'ssh_host_tools_host_changed',message:'ignored'},message:t('hostToolsHostChanged')},
+    {error:{kind:'ssh_host_tools_unsupported',message:'ignored'},message:t('hostToolsUnsupported')},
+    {error:{kind:'ssh_host_tools_host_missing',message:'ignored'},message:t('hostToolsHostMissing')},
+  ])('shows the local recovery reason without an authentication button',async({error,message})=>{
+    const {invoke}=await import('@tauri-apps/api/core');
     vi.mocked(invoke).mockImplementation(async command=>{if(command==='multiplexer_sessions')return [{name:'default'}];throw error;});
-    render(<HerdrAgentsPanel sessionId="control-owner" visible onRestoreHostTools={restore}/>);
-    await screen.findByText(`${t('herdrAgentsUnavailable')} ${recover?t('hostToolsClosed'):'same host error text'}`);
-    const button=screen.queryByRole('button',{name:t('hostToolsRestore')});
-    expect(!!button).toBe(recover);expect(restore).not.toHaveBeenCalled();
-    if(button){
-      fireEvent.click(button);expect(restore).toHaveBeenCalledOnce();
-      vi.mocked(invoke).mockImplementation(async command=>command==='multiplexer_sessions'?[{name:'default'}]:tree);
-      await act(async()=>restore.mock.calls[0][0]());
-      await screen.findByText('builder');
-      expect(screen.queryByRole('button',{name:t('hostToolsRestore')})).toBeNull();
-    }
+    render(<HerdrAgentsPanel sessionId="control-owner" visible/>);
+    await screen.findByText(`${t('herdrAgentsUnavailable')} ${message}`);
+    expect(screen.queryByRole('button',{name:t('hostToolsRestore')})).toBeNull();
   });
   it('suspends discovery when hidden and drops an old source before issuing its snapshot',async()=>{
     const {invoke}=await import('@tauri-apps/api/core');

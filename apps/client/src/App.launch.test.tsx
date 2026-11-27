@@ -447,19 +447,19 @@ it.each([
   {name:'wrong schema',response:{schemaVersion:2,status:'restored'},valid:false},
   {name:'uncertain status',response:{schemaVersion:1,status:'uncertain'},valid:false},
   {name:'extra field',response:{schemaVersion:1,status:'restored',extra:true},valid:false},
-].flatMap(item=>(['files','hostTools'] as const).map(purpose=>({...item,purpose}))))('validates $name $purpose recovery without creating or adopting a terminal',async({response,valid,purpose})=>{
+])('validates $name file recovery without creating or adopting a terminal',async({response,valid})=>{
   const user=userEvent.setup(),restored=vi.fn(),connected=vi.fn();
-  const restore=purpose==='files'?mocks.api.restoreFileTransfer:mocks.api.restoreHostTools;
+  const restore=mocks.api.restoreFileTransfer;
   restore.mockResolvedValue(response);
-  render(<ConnectDialog host={{...host,transport:'mosh'}} hosts={[host]} connected={connected} close={vi.fn()} recovery={{sessionId:'original-mosh',purpose,restored}}/>);
+  render(<ConnectDialog host={{...host,transport:'mosh'}} hosts={[host]} connected={connected} close={vi.fn()} recovery={{sessionId:'original-mosh',restored}}/>);
   expect(screen.queryByLabelText('Transport')).toBeNull();
   expect(screen.queryByText('Save credentials on this device after connecting')).toBeNull();
   await user.type(screen.getByLabelText('Password'),'ephemeral-restore');
-  await user.click(screen.getByRole('button',{name:t(purpose==='files'?'attachmentRestore':'hostToolsRestore')}));
+  await user.click(screen.getByRole('button',{name:t('attachmentRestore')}));
   if(valid)await waitFor(()=>expect(restored).toHaveBeenCalledOnce());
-  else {expect(await screen.findByRole('alert')).toHaveProperty('textContent',t(purpose==='files'?'attachmentRestoreInvalid':'hostToolsRestoreInvalid'));expect(restored).not.toHaveBeenCalled();}
+  else {expect(await screen.findByRole('alert')).toHaveProperty('textContent',t('attachmentRestoreInvalid'));expect(restored).not.toHaveBeenCalled();}
   expect(restore).toHaveBeenCalledWith('original-mosh',{password:'ephemeral-restore'},{useSavedCredentials:false});
-  expect(purpose==='files'?mocks.api.restoreHostTools:mocks.api.restoreFileTransfer).not.toHaveBeenCalled();
+  expect(mocks.api.restoreHostTools).not.toHaveBeenCalled();
   expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.connectMosh).not.toHaveBeenCalled();
   expect(mocks.api.adoptSession).not.toHaveBeenCalled();expect(mocks.createTerminal).not.toHaveBeenCalled();expect(connected).not.toHaveBeenCalled();
 });
@@ -479,14 +479,14 @@ it('uses existing saved credential authorization for upload recovery and suppres
   expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
 
-it.each(['lock','hidden','closed-source','unmount'] as const)('does not publish late host-tools recovery after %s',async mode=>{
+it.each(['lock','hidden','closed-source','unmount'] as const)('does not publish late file recovery after %s',async mode=>{
   applyAccessStatus(unlockedStatus());
   const user=userEvent.setup(),restored=vi.fn(),current=vi.fn(()=>true);let complete!:(value:{schemaVersion:1;status:'restored'})=>void;
-  mocks.api.restoreHostTools.mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
-  const view=render(<ConnectDialog host={host} hosts={[host]} connected={vi.fn()} close={vi.fn()} recovery={{sessionId:'original-mosh',purpose:'hostTools',current,restored}}/>);
-  await user.type(screen.getByLabelText('Password'),'ephemeral-tools');
-  await user.click(screen.getByRole('button',{name:t('hostToolsRestore')}));
-  expect(mocks.api.restoreHostTools).toHaveBeenCalledWith('original-mosh',{password:'ephemeral-tools'},{useSavedCredentials:false});
+  mocks.api.restoreFileTransfer.mockImplementation(()=>new Promise(resolve=>{complete=resolve;}));
+  const view=render(<ConnectDialog host={host} hosts={[host]} connected={vi.fn()} close={vi.fn()} recovery={{sessionId:'original-mosh',current,restored}}/>);
+  await user.type(screen.getByLabelText('Password'),'ephemeral-files');
+  await user.click(screen.getByRole('button',{name:t('attachmentRestore')}));
+  expect(mocks.api.restoreFileTransfer).toHaveBeenCalledWith('original-mosh',{password:'ephemeral-files'},{useSavedCredentials:false});
   if(mode==='hidden'){
     Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});
     act(()=>document.dispatchEvent(new Event('visibilitychange')));
@@ -495,5 +495,5 @@ it.each(['lock','hidden','closed-source','unmount'] as const)('does not publish 
   else if(mode==='closed-source')current.mockReturnValue(false);
   else view.unmount();
   await act(async()=>complete({schemaVersion:1,status:'restored'}));
-  expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.restoreFileTransfer).not.toHaveBeenCalled();
+  expect(restored).not.toHaveBeenCalled();expect(mocks.api.connect).not.toHaveBeenCalled();expect(mocks.api.restoreHostTools).not.toHaveBeenCalled();
 });
