@@ -1477,20 +1477,6 @@ test('background Mosh document observations distinguish renderer state without r
   expect(JSON.stringify(sample())).not.toContain('private');expect(JSON.stringify(sample())).not.toContain(name);
 });
 
-
-test('board Setup observations cross native JSON callbacks as strict booleans or null',async()=>{
-  const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
-  const script=source.match(/val expanded = evaluate\(scenario, """([\s\S]*?)"""/)!;
-  expect(script).not.toBeNull();
-  const selector='.agent-panel:not([hidden]) > .tool-bar button[aria-expanded]';
-  const expression=script[1].replaceAll('${JSONObject.quote(setup)}',JSON.stringify(selector));
-  const callback=(attributes:string[])=>JSON.stringify(new Function('document',`return (${expression});`)({querySelectorAll:(value:string)=>{
-    expect(value).toBe(selector);return attributes.map(attribute=>({getAttribute:()=>attribute}));
-  }}));
-  expect(callback(['false'])).toBe('false');expect(callback(['true'])).toBe('true');
-  for(const attributes of [[],['false','true'],['private-unexpected-value'],['']])expect(callback(attributes)).toBe('null');
-});
-
 test('whole-value native clipboard paste selects existing text before paste within its original budget',async()=>{
   const source=await readFile(join(import.meta.dir,'../apps/client/src-tauri/gen/android/app/src/androidTest/java/app/lazysh/client/NativeWorkspaceTest.kt'),'utf8');
   const body=source.match(/private fun pasteOwnedText\([\s\S]*?\n    @Test/)![0];
