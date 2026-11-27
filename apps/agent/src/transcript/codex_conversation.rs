@@ -2,6 +2,7 @@
 use super::window::{fit, select, Window, MAX_TEXT};
 use super::{
     codex_lineage, interaction, message_size, Error, Result, TranscriptAgent, TranscriptPage,
+    MAX_PAGE,
 };
 use serde_json::{json, Value};
 #[path = "codex_index.rs"]
