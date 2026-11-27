@@ -3,11 +3,8 @@ description: Verify the pinned model archive, then run the Parakeet manager case
 runs:
   using: composite
   steps:
-    - name: Restore the pinned Parakeet model archive
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.temp }}/lazysh-parakeet-model-cache
-        key: lazysh-parakeet-model-1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9
+    # Not cached: the 487 MB download and its check took 3.6 s, the entry never hit in 5 of 5 runs (the
+    # job runs on main only and the entry is evicted between runs), and saving it cost 36 s a run.
     - name: Verify the pinned Parakeet model archive
       shell: bash
       env:
