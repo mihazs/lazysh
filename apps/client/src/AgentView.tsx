@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useId, useMemo, useRef, useState} from 'react';
 import {Ellipsis,Search,TerminalSquare} from 'lucide-react';
 import ChatPanel, {type BoundConversation, type BoundRecords} from './ChatPanel';
+import {agentNames, storedImages} from './agentImagePreferences';
 import AgentComposer, {type ComposerProof} from './AgentComposer';
 import HerdrAgentsPanel, {EnterSessionButton} from './HerdrAgentsPanel';
 import {HerdrWorkspaceCreate,HerdrWorktreeCreate} from './HerdrWorkspaceCreateDialog';
@@ -37,7 +38,6 @@ import './AgentView.css';
 import './AgentChrome.css';
 
 const goalStatuses = {active:'agentGoalActive', paused:'agentGoalPaused', complete:'agentGoalComplete', completed:'agentGoalComplete', blocked:'agentGoalBlocked', budget_limited:'agentGoalBudgetLimited', usage_limited:'agentGoalUsageLimited'} as const;
-const agentNames: Record<BoundConversation['agent'], string> = {claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', gemini: 'Gemini CLI', 'grok-acp': 'Grok Build'};
 /** What the view shows: a conversation, who it belongs to and, for a Herdr pick, how to enter its pane.
  * `linked` marks the agent of the focused pane; any other pick is the user's own choice and says so. */
 type Selection = {row?:AgentSession;history?:boolean;resume?:string;conversation:BoundConversation;cwd?:string;title?:string;place?:string;status?:keyof typeof herdrStatusKeys;linked?:boolean;focusKey?:string;enter?:{server:string;target:HerdrNavigationTarget}};
@@ -50,19 +50,15 @@ function herdrSelection(row:LinkedAgent,server:string,extra:Partial<Selection>):
 function StartButtons({sessionId}:{sessionId:string}) {
   return <>{(['claude','codex'] as const).map(agent=><button type="button" key={agent} onClick={()=>window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text:agent}}))}>{t('agentViewStartNamed',{agent:agentNames[agent]})}</button>)}</>;
 }
-/** Image previews cost bytes on a mobile link: on by default for Claude Code, opt-in for Codex whose companion support is newer. Kept per viewer. */
-const imageDefaults: Record<BoundConversation['agent'], boolean> = {claude: true, codex: false, opencode: false, gemini: false, 'grok-acp': false};
-function storedImages() {
-  try {return {...imageDefaults, ...JSON.parse(localStorage.getItem('lazysh.agentImages') ?? '{}')} as Record<BoundConversation['agent'], boolean>;} catch {return imageDefaults;}
-}
 /** `partial` is an agent the view names but cannot follow as a conversation; `records` is what a records-only adapter wrote for that session, shown read-only. */
 type Binding = {kind: 'finding'} | {kind: 'none'} | {kind: 'partial'; row: AgentSession; records?: BoundRecords} | {kind: 'bound'; row: AgentSession; conversation: BoundConversation};
 const sameSource = (left: BoundConversation | BoundRecords | undefined, right: BoundConversation | BoundRecords) => !!left && left.path === right.path && left.agent === right.agent && left.report?.sessionId === right.report?.sessionId && left.report?.paneId === right.report?.paneId;
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, full, onToggleFull, tmux, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
+export default function AgentView({sessionId, shown, full, onToggleFull, tmux, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, images: imagePreferences, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
   sessionId: string; shown: boolean; /** The Agent view has the whole window: the app bars around it are hidden. */full?: boolean; onToggleFull?: () => void; tmux: boolean; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
+  images?: ReturnType<typeof storedImages>;
   onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
 }) {
   useUi();
@@ -76,7 +72,8 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
   const [choosing,setChoosing] = useState(false);
   const [unavailable,setUnavailable] = useState(false);
   const [menu,setMenu] = useState(false);
-  const [images,setImages] = useState(storedImages);
+  const [initialImages] = useState(storedImages);
+  const images = imagePreferences ?? initialImages;
   const [history,setHistory] = useState<string>();
   const menuId = useId();
   const [usage,setUsage] = useState<Record<string,number|string>>();
@@ -357,7 +354,6 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
       {reader && info?.info && <button type="button" aria-expanded={infoOpen} onClick={()=>{setInfoOpen(true);setMenu(false);}}>{t('agentInfoOpen')}</button>}
       {tmux && !selected && kept?.agent === 'claude' && composerControl?.ready && <button type="button" disabled={composerControl.busy} onClick={askModel}>{t('agentModelSwitch')}</button>}
       {reader && <AgentSessionDetails session={info}/>}
-      {reader && kept && !kept.herdr && <label><input type="checkbox" checked={!!images[kept.agent]} onChange={event=>{const next={...images,[kept.agent]:event.target.checked};setImages(next);try {localStorage.setItem('lazysh.agentImages',JSON.stringify(next));} catch { /* A preference only. */ }}} />{t('agentImagesShow')}</label>}
       {reader && counts && <p>{t('agentViewUsage', {input: counts('inputTokens'), output: counts('outputTokens'), read: counts('cacheReadTokens'), write: counts('cacheWriteTokens')})}</p>}
     </div>}
     {reader && info?.goal && <details className="agent-goal">

@@ -3,6 +3,7 @@ import {act,cleanup,fireEvent,render,screen,within} from '@testing-library/react
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {invoke} from '@tauri-apps/api/core';
 import AgentView from './AgentView';
+import {storedImages} from './agentImagePreferences';
 import {chatFollowAccess as access} from './test/chatFollowAccess';
 import {tmuxChatReply,tmuxChatSnapshot} from './test/tmuxChat';
 import {herdrNavigationTree} from './test/herdrNavigation';
@@ -1272,10 +1273,10 @@ describe('image previews in the user bubble',()=>{
   });
   it('keeps the placeholder with the reason when the image is not admitted, and honours the switch for Codex',async()=>{
     host('codex',[row('Codex','%3')],'available',[withImage()]);
-    render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+    const {rerender}=render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
     await advance(0);
     expect(calls('agent_transcript')[0]).not.toHaveProperty('inlineImages');
-    fireEvent.click(within(options()).getByRole('checkbox',{name:'Show image previews'}));
+    rerender(<AgentView images={{...storedImages(),codex:true}} sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
     await advance(0);
     expect(calls('agent_transcript').at(-1)).toMatchObject({agent:'codex',view:'conversation',inlineImages:true});
     expect(screen.getByText(/This image cannot be previewed here/)).toBeTruthy();
