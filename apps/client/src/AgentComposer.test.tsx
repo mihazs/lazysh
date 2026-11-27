@@ -216,6 +216,16 @@ async function clickNoticeRetry() {
   fireEvent.click(retry());
 }
 
+async function confirmStop() {
+  const stop=await waitFor(()=>{
+    const button=screen.getByRole<HTMLButtonElement>('button',{name:t('chatTerminalStop')});
+    expect(button.disabled).toBe(false);
+    return button;
+  });
+  fireEvent.click(stop);
+  fireEvent.click(await screen.findByRole('button',{name:t('agentComposerStopConfirm')}));
+}
+
 it('sends on a stock Herdr host through its own agent input, with no guard and no error shown',async()=>{
   stockHerdr();mountStock();
   await sendTyped('Run the tests\nthen commit');
@@ -223,12 +233,7 @@ it('sends on a stock Herdr host through its own agent input, with no guard and n
   expect(agentInputs()).toEqual([{sessionId:'ssh',target:stockTarget,input:{kind:'send',text:'Run the tests\nthen commit'}}]);
   expect(vi.mocked(invoke).mock.calls.filter(([command])=>command==='herdr_chat').map(([,args])=>(args as {action:{kind:string}}).action.kind)).toEqual(['status']);
   expect(screen.queryByRole('alert')).toBeNull();expect(screen.queryByText(t('chatHerdrUnavailable'))).toBeNull();expect(screen.queryByText(t('chatTerminalFallback'))).toBeNull();
-  const stop=await waitFor(()=>{
-    const button=screen.getByRole<HTMLButtonElement>('button',{name:t('chatTerminalStop')});
-    expect(button.disabled).toBe(false);
-    return button;
-  });
-  fireEvent.click(stop);fireEvent.click(await screen.findByRole('button',{name:t('agentComposerStopConfirm')}));
+  await confirmStop();
   await waitFor(()=>expect(agentInputs()).toHaveLength(2));
   expect(agentInputs()[1]).toMatchObject({input:{kind:'request_stop'}});
 });
@@ -318,13 +323,7 @@ it('sends to a Zellij pane through its own agent input with nothing to confirm, 
   expect(zellijInputs()).toEqual([{sessionId:'ssh',target:zellijTarget,input:{kind:'send',text:'Run the tests\nthen commit'}}]);
   expect(vi.mocked(invoke).mock.calls.map(([command])=>command)).toEqual(['zellij_agent_input']);
   expect(screen.queryByRole('alert')).toBeNull();
-  const stop=await waitFor(()=>{
-    const button=screen.getByRole<HTMLButtonElement>('button',{name:t('chatTerminalStop')});
-    expect(button.disabled).toBe(false);
-    return button;
-  });
-  fireEvent.click(stop);
-  fireEvent.click(screen.getByRole('button',{name:t('agentComposerStopConfirm')}));
+  await confirmStop();
   await waitFor(()=>expect(zellijInputs()).toHaveLength(2));
   expect(zellijInputs()[1]).toMatchObject({target:zellijTarget,input:{kind:'request_stop'}});
 });
