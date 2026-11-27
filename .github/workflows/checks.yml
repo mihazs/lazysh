@@ -1759,6 +1759,7 @@ jobs:
           # invocation so cleanup runs before the action terminates the emulator.
           script: >-
             bash -c '
+            sh .github/scripts/android-await-systemui.sh || exit 1;
             diagnostic_dir="apps/client/src-tauri/gen/android/app/build/outputs/androidTest-results/system-diagnostics";
             mkdir -p "$diagnostic_dir";
             capture() {
