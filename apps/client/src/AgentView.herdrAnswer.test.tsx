@@ -12,16 +12,16 @@ vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import
 const SESSION='00000001-0000-4000-8000-000000000000';
 useAgentViewHarness();
 
-const request=(id:string,sessionId=SESSION)=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId:null,toolName:'Bash',toolInput:{command:`run ${id}`},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
-type Host={pane:string;requests:unknown[];messages:unknown[];waiting:boolean;guard:boolean;session:string;decided:unknown[];agent:'claude'|'codex';status:string;screen:string[];summary?:string;reportSession?:string;duplicateReport?:boolean;press?:(input:{kind:string;rows?:number;enter?:boolean})=>void};
+const request=(id:string,sessionId=SESSION,paneId:string|null=null)=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
+type Host={pane:string;requests:unknown[];messages:unknown[];waiting:boolean;guard:boolean;session:string;decided:unknown[];focused:boolean;agent:'claude'|'codex';status:string;screen:string[];summary?:string;reportSession?:string;duplicateReport?:boolean;press?:(input:{kind:string;rows?:number;enter?:boolean})=>void};
 /** The focused Herdr pane runs Claude Code `SESSION`; `pane` is where Herdr says that session runs now, `waiting` what the companion's report of it says. */
 function herdr(host:Partial<Host>={}) {
-  const state:Host={pane:'w2E:pF',requests:[],messages:[{id:'p',role:'user',blocks:[{type:'text',text:'Hello'}]}],waiting:true,guard:false,session:SESSION,decided:[],agent:'claude',status:'idle',screen:[],...host};
+  const state:Host={pane:'w2E:pF',requests:[],messages:[{id:'p',role:'user',blocks:[{type:'text',text:'Hello'}]}],waiting:true,guard:false,session:SESSION,decided:[],focused:true,agent:'claude',status:'idle',screen:[],...host};
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
     if(command==='multiplexer_sessions')return [{name:'owned'}];
     if(command==='herdr_tree'){
       const agent={...herdrNavigationTree.agents[0],pane_id:state.pane,agent:state.agent,agent_status:state.status,agent_session:{source:`herdr:${state.agent}`,agent:state.agent,kind:'id',value:state.session}};
-      return {...herdrNavigationTree,agents:[agent]};
+      return {...herdrNavigationTree,panes:herdrNavigationTree.panes.map(pane=>({...pane,focused:state.focused})),agents:[agent]};
     }
     if(command==='agent_herdr_conversation')return {schemaVersion:1,agent:state.agent,view:'active_branch',messages:state.messages,nextOffset:0,hasMore:false,activity:'waiting'};
     if(command==='agent_snapshot'){const report={sessionId:state.reportSession??SESSION,agent:state.agent==='claude'?'Claude Code':'Codex',project:'/work',state:state.waiting?'needs_attention':'working',updatedAt:new Date().toISOString(),summary:state.summary??'Answer requested',paneId:null,eventCount:3};return {schemaVersion:1,sessions:state.duplicateReport?[report,report]:[report]};}
@@ -56,6 +56,19 @@ describe('permission requests of the agent followed in a Herdr pane',()=>{
     const host=herdr({requests:[request('11111111-1111-4111-8111-111111111111')]});
     await mount();await advance(400);
     host.session='another-session';
+    await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
+    expect(calls('resolve_agent_approval')).toEqual([]);expect(within(dock()).getByRole('alert')).toBeTruthy();
+  });
+  it('shows the requests that name this exact Herdr pane or no pane, and no other pane or server',async()=>{
+    herdr({requests:[request('11111111-1111-4111-8111-111111111111',SESSION,'herdr:owned:w2E:pF'),request('22222222-2222-4222-8222-222222222222',SESSION,'herdr:owned:w2E:pG'),request('33333333-3333-4333-8333-333333333333',SESSION,'herdr:other:w2E:pF'),request('44444444-4444-4444-8444-444444444444'),request('55555555-5555-4555-8555-555555555555',SESSION,'%7')]});
+    await mount();
+    const text=dock().textContent;
+    expect(within(dock()).getAllByRole('article')).toHaveLength(2);expect(text).toContain('run 11111111');expect(text).toContain('run 44444444');
+  });
+  it('sends nothing once Herdr focuses another pane than the one that asked',async()=>{
+    const host=herdr({requests:[request('11111111-1111-4111-8111-111111111111',SESSION,'herdr:owned:w2E:pF')]});
+    await mount();await advance(400);
+    host.focused=false;
     await act(async()=>{fireEvent.click(screen.getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
     expect(calls('resolve_agent_approval')).toEqual([]);expect(within(dock()).getByRole('alert')).toBeTruthy();
   });

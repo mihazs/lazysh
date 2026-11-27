@@ -392,7 +392,7 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, p
       </div>
     </section>}
     {listing && !empty && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={shown} navigation={navigation} onEnterHerdr={onEnterHerdr} onChooseSession={onChoose} />}
-    {((!selected && tmux) || herdrClaude) && <AgentApprovalDock sessionId={sessionId} shown={shown && fresh} row={row} herdr={herdrClaude} access={access} invoke={invoke} />}
+    {((!selected && tmux) || herdrClaude || zellijAgent) && <AgentApprovalDock sessionId={sessionId} shown={shown && fresh} row={row} zellijSession={zellijAgent ? zellijSession : undefined} herdr={herdrClaude} access={access} invoke={invoke} />}
     {!selected && tmux && <AgentOpenCodeDock sessionId={sessionId} shown={shown && fresh} row={row} access={access} invoke={invoke} />}
     {herdrAgent && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && (selected?.status !== 'working' || (herdrReport?.sessionId === herdrAgent.agentSessionId && waitingKind(herdrReport) === 'question'))} terminal={herdrView} agent={agentNames[herdrAgent.agent]} answerable={hasDialogProfile(agentNames[herdrAgent.agent])} guard={herdrStillHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
     {zellijAgent && row && <AgentPickerDock sessionId={sessionId} shown={shown && fresh && row.state !== 'working'} terminal={zellijView} agent={row.agent} answerable={hasDialogProfile(row.agent)} guard={zellijHere} waiting={waiting} onShowTerminal={onShowTerminal} />}
