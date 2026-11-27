@@ -381,12 +381,13 @@ test('pull request matrices fail fast while main and release staging keep every 
 test('superseded runs cancel only where no publication or caller can be interrupted', async () => {
   const owner = { group: '${{ github.workflow }}-${{ github.ref }}', 'cancel-in-progress': true };
   for (const name of ['conventional-commits.yml', 'fdroid.yml']) expect((await workflow(name)).concurrency).toEqual(owner);
-  // checks and version cancel only superseded pull request runs; a main run always completes, so native
-  // verification finishes and the version PR is regenerated even while main keeps moving. The nightly device run has its
-  // own group, so it can neither displace a pending main run nor be displaced by one.
+  // version cancels only superseded pull request runs; a main run always completes, so the version PR is regenerated
+  // even while main keeps moving. checks cancels every superseded run of its ref: a starved main matrix must not hold the
+  // group while newer pushes wait, and main-verdict gives each main commit its verdict. The nightly device run has its own
+  // group, so it can neither displace a main run nor be displaced by one.
   const supersededPullRequestsOnly = { 'cancel-in-progress': "${{ github.event_name == 'pull_request' }}" };
   expect((await workflow('version.yml')).concurrency).toEqual({ ...owner, ...supersededPullRequestsOnly });
-  expect(checks.concurrency).toEqual({ group: "${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}", ...supersededPullRequestsOnly });
+  expect(checks.concurrency).toEqual({ group: "${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}", 'cancel-in-progress': true });
   // Reusable workflows inherit the caller's group; their own group could cancel or deadlock the caller.
   for (const name of ['companion-artifacts.yml', 'release-artifacts.yml']) expect((await workflow(name)).concurrency).toBeUndefined();
   // A new main push never aborts an in-flight verified tag publication.
