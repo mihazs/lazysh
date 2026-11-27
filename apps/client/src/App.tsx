@@ -1,7 +1,10 @@
 import './WorkspaceHierarchy.css';
 import {rememberedToolsPage, rememberToolsPage, WorkspaceToolsCarousel, type WorkspaceToolPage} from './WorkspaceToolsCarousel';
 import {cycleFocus, focusableWithin} from './focus';
-import {announceAuthHint, type AuthHint} from './authHints';
+import {announceAuthHint, onAuthHint, type AuthHint} from './authHints';
+import {signIn} from './authSignIn';
+import {AuthSignInSettings} from './AuthSignInSettings';
+import {setHostAuthChoice} from './authPolicy';
 import {SideMenuChoices} from './SideMenuChoices';
 import {useSideMenuGestures} from './useSideMenuGestures';
 import {useShowTopBar, useSideMenuMode, useTouchScreen} from './sideMenuMode';
@@ -1330,6 +1333,14 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   },[sessions]);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const hostsRef = useRef(hosts);
+  hostsRef.current = hosts;
+  // A sign-in the host started asks here; its tunnels end with their session, so its requests go too.
+  useEffect(() => onAuthHint(({sessionId, hint}) => {
+    const session = sessionsRef.current.find(item => item.id === sessionId);
+    if (session && !session.local) signIn.hint({sessionId, hostId: session.hostId, hostName: hostsRef.current.find(host => host.id === session.hostId)?.name ?? session.destination}, hint);
+  }), []);
+  useEffect(() => signIn.retain(new Set(sessions.filter(session => session.connected && !session.disposed).map(session => session.id))), [sessions]);
   const [reportedHistory,setReportedHistory]=useState<ReportedHistorySource>();
   const currentView = useRef({activeId,view});
   currentView.current = {activeId,view};
@@ -2027,6 +2038,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if (!deleting) return;
     try {
       await api.deleteHost(deleting.id);
+      setHostAuthChoice(deleting.id, 'tunnel', undefined);
       await loadHosts();
       setDeleting(null);
     } catch (e) {
@@ -2810,6 +2822,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             {id:'voice',section:'agents',title:t('appDictate'),disabled:!voiceReady,value:voiceReady?active?.name:active?t('settingsVoiceUnavailable'):t('settingsNeedsSession'),onSelect:()=>{setPreferences(false);visitView('voice');}},
             {id:'security',section:'security',title:t('preferencesCategorySecurity'),content:<AccessPanel/>},
             {id:'sync',section:'security',title:t('appEncryptedSync'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSync(true);}},
+            ...(native?[{id:'auth-signin',section:'general',title:t('authSettingsTitle'),content:<AuthSignInSettings hosts={hosts}/>}]:[]),
             {id:'sharing',section:'general',title:t('appShareableUploads'),disabled:!native,value:native?undefined:t('settingsNativeOnly'),onSelect:()=>{setPreferences(false);setSharing(true);}},
             ...(gesturePhone?[{id:'gestures',section:'help',title:t('gestureHelpTitle'),content:<Suspense fallback={null}><GestureTourHelp notes={tourNotes} play={()=>{setPreferences(false);gestureTour.show();}}/></Suspense>}]:[]),
             {id:'about',section:'help',title:t('appAboutLazysh'),onSelect:()=>{setPreferences(false);setAbout(true);}},
