@@ -268,6 +268,11 @@ fn browser_exited(child: &mut Child) -> io::Result<bool> {
     Ok(child.try_wait()?.is_some())
 }
 
+/// How long a browser gets after SIGTERM to flush what its pages wrote (a kept profile's storage) before SIGKILL; a
+/// loaded host needs several seconds, and a browser that has exited ends the wait at once.
+#[cfg(unix)]
+const TERM_GRACE: Duration = Duration::from_secs(15);
+
 #[cfg(unix)]
 fn terminate(child: &mut Child) {
     let group = child.id() as i32;
@@ -278,7 +283,7 @@ fn terminate(child: &mut Child) {
     if !exited {
         // SAFETY: the owned child has not been reaped, so its PID cannot be reused.
         unsafe { libc::kill(group, libc::SIGTERM) };
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + TERM_GRACE;
         while Instant::now() < deadline {
             match browser_exited(child) {
                 Ok(false) => std::thread::sleep(Duration::from_millis(25)),
