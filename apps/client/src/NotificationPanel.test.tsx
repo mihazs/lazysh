@@ -10,7 +10,7 @@ import { openSettingsPages } from './test/preferencesPanel';
 import { getInbox, updateInbox } from './notificationStore';
 import { localHostKey } from './localHost';
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => true, Channel: class { onmessage: ((event: unknown) => void) | undefined; } }));
 vi.mock('@tauri-apps/plugin-notification', () => ({ isPermissionGranted: vi.fn(), requestPermission: vi.fn(), registerActionTypes: vi.fn().mockResolvedValue(undefined), onAction: vi.fn().mockResolvedValue({ unregister: vi.fn() }) }));
 vi.stubGlobal('crypto', webcrypto);
 const sessions = [{ id: 'ssh1', hostId: 'host1', name: 'Dev host', connected: true }];
@@ -52,19 +52,22 @@ it('notifies once after a new attention event and pauses further collection', as
   expect(JSON.stringify(getInbox())).not.toContain('private prompt');
 });
 
-it('polls at most four hosts concurrently and discards late results after unmount', async () => {
+it('polls at most four hosts concurrently, asks each host for its Herdr servers within those four, and discards late results after unmount', async () => {
   const pending: ((value: unknown) => void)[] = [];
-  vi.mocked(invoke).mockImplementation(() => new Promise(resolve => pending.push(resolve)));
+  let inFlight = 0, peak = 0;
+  vi.mocked(invoke).mockImplementation(() => new Promise(resolve => { peak = Math.max(peak, ++inFlight); pending.push(value => { inFlight--; resolve(value); }); }));
   updateInbox({ monitoring: true });
   const many = Array.from({ length: 12 }, (_, index) => ({ ...sessions[0], id: `ssh${index}`, hostId: `host${index}` }));
   const mounted = render(<NotificationMonitor sessions={many} />);
   expect(invoke).toHaveBeenCalledTimes(4);
   await act(async () => { pending[0]({ schemaVersion: 1, sessions: [] }); });
   await waitFor(() => expect(invoke).toHaveBeenCalledTimes(5));
+  expect(vi.mocked(invoke).mock.calls[4][1]).toEqual({ sessionId: 'ssh0', kind: 'herdr' });
   mounted.unmount();
   const before = getInbox().rows;
   await act(async () => { pending.slice(1).forEach(resolve => resolve({ schemaVersion: 1, sessions: [event] })); });
   expect(getInbox().rows).toBe(before);
+  expect(peak).toBe(4);
 });
 
 it('groups inbox events by attention state, folds a group and ties opening to the live connection', async () => {
@@ -187,7 +190,6 @@ it('lists the pane without notifying while system notifications are paused, and 
   await waitFor(() => expect(getInbox().error).toContain('notification service down'));
 });
 
-
 it.each(['monitoring','connection'])('invalidates delayed events after %s is disabled and restored', async kind => {
   const view = await watchHerdr();
   const digest = crypto.subtle.digest.bind(crypto.subtle);
@@ -214,4 +216,110 @@ it.each(['monitoring','connection'])('invalidates delayed events after %s is dis
     expect(getInbox().rows).toEqual([]);
     expect(notified()).toHaveLength(0);
   } finally { release(); spy.mockRestore(); }
+});
+
+type WatchChannel = { onmessage: (event: unknown) => void };
+const calls = (command: string) => vi.mocked(invoke).mock.calls.filter(([name]) => name === command);
+const codexTree = (session: string) => ({ workspaces: [], tabs: [], panes: [{ workspace_id: 'w1', tab_id: 'w1:t1', pane_id: 'w1:p2', focused: false, agent_status: 'blocked' }],
+  agents: [{ terminal_id: 't2', workspace_id: 'w1', tab_id: 'w1:t1', pane_id: 'w1:p2', name: null, agent: 'codex', agent_status: 'blocked', agent_session: { source: 'herdr:codex', agent: 'codex', kind: 'id', value: session } }] });
+/** A host that runs one Herdr server, `main`, with a Codex agent of `session` in `w1:p2`; `reports` is what its hooks report.
+ * Each test names its own session: what Herdr reported of a turn is remembered across tests of this file. */
+const herdrHost = (session: string) => {
+  const channels: WatchChannel[] = [];
+  const send = (frame: object) => act(async () => { channels[0].onmessage({ type: 'frame', frame }); });
+  const host = { reports: [] as object[], channels, send, blocked: () => send({ type: 'status', paneId: 'w1:p2', workspaceId: 'w1', status: 'blocked', agent: 'codex', cwd: '/work' }),
+    hook: (extra: object = {}) => ({ ...event, sessionId: session, agent: 'Codex', project: '/work', paneId: 'herdr:main:w1:p2', eventCount: 1, updatedAt: new Date().toISOString(), ...extra }) };
+  vi.mocked(isPermissionGranted).mockResolvedValue(true);
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === 'agent_snapshot') return { schemaVersion: 1, sessions: host.reports };
+    if (command === 'multiplexer_sessions') return [{ name: 'main' }];
+    if (command === 'herdr_tree') return codexTree(session);
+    if (command === 'agent_watch_start') { channels.push((args as { events: WatchChannel }).events); return `watch-${channels.length}`; }
+  });
+  return host;
+};
+
+it('follows the Herdr server of each connected host while monitoring is on, with no Herdr view, and closes the stream with the host or the monitoring', async () => {
+  const host = herdrHost('codex-a');
+  updateInbox({ monitoring: true });
+  const mounted = render(<NotificationMonitor sessions={sessions} />);
+  await waitFor(() => expect(calls('agent_watch_start')).toHaveLength(1));
+  expect(calls('agent_watch_start')[0][1]).toMatchObject({ sessionId: 'ssh1', target: { kind: 'herdrEvents', herdrSession: 'main' } });
+  // Another poll lists the servers again and keeps the stream it has.
+  fireEvent(window, new Event('lazysh-inbox-refresh'));
+  await waitFor(() => expect(calls('multiplexer_sessions')).toHaveLength(2));
+  expect(calls('agent_watch_start')).toHaveLength(1);
+  mounted.rerender(<NotificationMonitor sessions={[{ ...sessions[0], connected: false }]} />);
+  await waitFor(() => expect(calls('agent_watch_stop')).toHaveLength(1));
+  mounted.rerender(<NotificationMonitor sessions={sessions} />);
+  await waitFor(() => expect(calls('agent_watch_start')).toHaveLength(2));
+  act(() => updateInbox({ monitoring: false }));
+  await waitFor(() => expect(calls('agent_watch_stop')).toHaveLength(2));
+  mounted.unmount();
+  expect(host.channels).toHaveLength(2);
+  expect(calls('agent_watch_stop')).toHaveLength(2);
+});
+
+it('leaves a host with several Herdr servers unfollowed unless its terminal is attached to one of them', async () => {
+  herdrHost('codex-b');
+  const listing = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args) => command === 'multiplexer_sessions' ? [{ name: 'a' }, { name: 'b' }] : listing(command, args));
+  updateInbox({ monitoring: true });
+  render(<NotificationMonitor sessions={sessions} />);
+  await waitFor(() => expect(calls('multiplexer_sessions')).toHaveLength(1));
+  await act(async () => {});
+  expect(calls('agent_watch_start')).toHaveLength(0);
+  const attached = { ...sessions[0], attached: { kind: 'herdr', name: 'b' } };
+  cleanup();
+  render(<NotificationMonitor sessions={[attached]} />);
+  await waitFor(() => expect(calls('agent_watch_start')).toHaveLength(1));
+  expect(calls('agent_watch_start')[0][1]).toMatchObject({ target: { herdrSession: 'b' } });
+});
+
+it('turns a blocked agent of the monitor\'s stream into one inbox row and one notification, and the hook\'s report of the same turn is neither another row nor another alert', async () => {
+  const host = herdrHost('codex-c');
+  updateInbox({ monitoring: true, notifications: true });
+  render(<NotificationMonitor sessions={sessions} />);
+  await waitFor(() => expect(host.channels).toHaveLength(1));
+  await host.send({ type: 'hello', protocol: 1, session: 'main' });
+  await host.blocked();
+  await waitFor(() => expect(calls('notify_agent_attention')).toHaveLength(1));
+  // No Herdr view reads the tree, so one read tells which session is in the pane.
+  expect(calls('herdr_tree')).toHaveLength(1);
+  expect(getInbox().rows).toHaveLength(1);
+  expect(getInbox().rows[0]).toMatchObject({ agent: 'Codex', state: 'needs_attention', agentSessionId: 'codex-c', paneId: 'herdr:main:w1:p2', project: '/work' });
+  host.reports.push(host.hook({ state: 'needs_attention' }));
+  fireEvent(window, new Event('lazysh-inbox-refresh'));
+  await waitFor(() => expect(calls('agent_snapshot')).toHaveLength(2));
+  await act(async () => {});
+  expect(getInbox().rows).toHaveLength(1);
+  expect(calls('notify_agent_attention')).toHaveLength(1);
+  // The next blocked turn of that pane reads its session again, since a new agent may have started in the pane; a working pane needs no read.
+  await host.send({ type: 'status', paneId: 'w1:p2', workspaceId: 'w1', status: 'working', agent: 'codex', cwd: '/work' });
+  expect(calls('herdr_tree')).toHaveLength(1);
+  await host.blocked();
+  await waitFor(() => expect(calls('herdr_tree')).toHaveLength(2));
+  await act(async () => {});
+  expect(calls('notify_agent_attention')).toHaveLength(1);
+});
+
+it('keeps the hook\'s own row and alert when the hook reported the turn before the stream did, and still lists a finished agent', async () => {
+  const host = herdrHost('codex-d');
+  host.reports.push(host.hook({ state: 'working' }));
+  updateInbox({ monitoring: true, notifications: true });
+  render(<NotificationMonitor sessions={sessions} />);
+  await waitFor(() => expect(host.channels).toHaveLength(1));
+  await waitFor(() => expect(getInbox().rows).toHaveLength(1));
+  host.reports[0] = host.hook({ state: 'needs_attention', eventCount: 2 });
+  fireEvent(window, new Event('lazysh-inbox-refresh'));
+  await waitFor(() => expect(calls('notify_agent_attention')).toHaveLength(1));
+  await host.blocked();
+  await act(async () => {});
+  expect(getInbox().rows).toHaveLength(1);
+  expect(getInbox().rows[0]).toMatchObject({ paneId: 'herdr:main:w1:p2', state: 'needs_attention' });
+  expect(calls('notify_agent_attention')).toHaveLength(1);
+  await host.send({ type: 'status', paneId: 'w1:p2', workspaceId: 'w1', status: 'done', agent: 'codex', cwd: '/work' });
+  await waitFor(() => expect(getInbox().rows.map(row => row.state)).toEqual(['done']));
+  expect(getInbox().rows[0].agentSessionId).toBe('codex-d');
+  expect(calls('notify_agent_attention')).toHaveLength(1);
 });

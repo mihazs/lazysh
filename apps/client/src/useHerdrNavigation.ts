@@ -47,7 +47,7 @@ const invalid=()=>new LocalUiError('herdrAgentsInvalid');
 function boundedText(value:unknown,limit:number):value is string {
   return typeof value==='string' && value.length>0 && new TextEncoder().encode(value).length<=limit && !/[\x00-\x1f\x7f-\x9f\uD800-\uDFFF]/u.test(value);
 }
-function servers(value:unknown):string[] {
+export function servers(value:unknown):string[] {
   if(!Array.isArray(value) || value.length>1000)throw invalid();
   const names=value.map(row=>{if(!row || !boundedText(row.name,200))throw invalid();return row.name as string;});
   if(new Set(names).size!==names.length)throw invalid();
