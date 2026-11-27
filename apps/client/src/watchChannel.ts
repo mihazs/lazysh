@@ -72,7 +72,13 @@ export function openWatch({sessionId, target, lease, invoke, connection, onState
     if (!unsupported || cancelled || (event as CustomEvent<{sessionId?: string}>).detail?.sessionId !== sessionId) return;
     clearTimeout(timer); unsupported = false; failures = 0; connect();
   };
+  // The host-tools command connection came back for this session: reopen at once instead of waiting out the backoff.
+  const recovered = (event: Event) => {
+    if ((event as CustomEvent<unknown>).detail !== sessionId || cancelled || !lease.current() || document.hidden) return;
+    clearTimeout(timer); stop(); failures = 0; connect();
+  };
   window.addEventListener(companionUpdatedEvent, updated);
+  window.addEventListener('lazysh-host-tools-restored', recovered);
   connect();
-  return () => { cancelled = true; clearTimeout(timer); window.removeEventListener(companionUpdatedEvent, updated); stop(); };
+  return () => { cancelled = true; clearTimeout(timer); window.removeEventListener(companionUpdatedEvent, updated); window.removeEventListener('lazysh-host-tools-restored', recovered); stop(); };
 }

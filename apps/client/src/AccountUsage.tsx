@@ -27,14 +27,13 @@ export function AccountUsageBar({model,onOpen,onShown}:{model:AccountUsageModel;
     <Activity size={12} aria-hidden="true"/>{headline?.percent!==null&&headline?.percent!==undefined&&<meter min={0} max={100} value={Math.min(100,headline.percent)} aria-hidden="true"/>}<span>{text}</span>{stale&&<span aria-label={t('accountUsageStaleLabel')}>· {t('accountUsageStaleShort')}</span>}
   </button>;
 }
-export function AccountUsageDetails({model,onRestoreHostTools,onOpenCompanion}:{model:AccountUsageModel;onOpenCompanion?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void}) {
+export function AccountUsageDetails({model,onOpenCompanion}:{model:AccountUsageModel;onOpenCompanion?:()=>void}) {
   useUi();
   const {entry,response,refreshing,refresh,select}=model;
   const problem=response&&response.state!=='ready'?t(accountUsageMessages[response.state]):null;
   return <section className="account-usage-details" aria-label={t('accountUsageTitle')}>
     <header><h2>{t('accountUsageTitle')}</h2><button type="button" onClick={refresh} disabled={refreshing}><RefreshCw size={16} aria-hidden="true"/>{t(refreshing?'accountUsageRefreshing':'accountUsageRefresh')}</button></header>
     {problem&&<p role="status">{problem}</p>}
-    {response?.state==='disconnected'&&onRestoreHostTools&&<button type="button" onClick={()=>onRestoreHostTools(refresh)}>{t('accountUsageRestore')}</button>}
     {onOpenCompanion&&(response?.state==='companion_required'||response?.state==='invalid_report')&&<button type="button" onClick={onOpenCompanion}><Download size={16} aria-hidden="true"/>{t('accountUsageInstall')}</button>}
     {response?.report?.entries.length===0&&<p>{t('accountUsageEmpty')}</p>}
     {entry&&<>

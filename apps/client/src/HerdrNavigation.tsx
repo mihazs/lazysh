@@ -7,7 +7,7 @@ import {workspaceDirectory} from './herdrCreate';
 import HerdrSessionDetails,{reportedSessionCounts,type ReportedSessionSource} from './HerdrSessionDetails';
 import type {HerdrNavigationTarget} from './bridge';
 import {formatNumber,t,useUi} from './i18n/core';
-import {captureUiError,LocalUiError,SshControlClosedError,uiErrorText,type UiErrorCause} from './i18n/localError';
+import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {herdrStatusKeys,homeRelativePath,useHerdrNavigation,type HerdrTree,type LiveAgent} from './useHerdrNavigation';
 import {readMuxLayout,writeMuxLayout,type MuxLayout} from './muxLayout';
 import './HerdrNavigation.css';
@@ -17,12 +17,12 @@ import './HerdrSpaces.css';
 export type HerdrContentReceipt=Readonly<{host:string;server:string;mode:'spaces'|'agents';identity:object;failed:boolean}>;
 
 const statuses:LiveAgent['agent_status'][]=['blocked','working','done','idle','unknown'];
-export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,onRestoreHostTools,navigationOnly=false,statusGroups,statusHostId=sessionId}:{
+export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visible,mode,reports,onOpenCompanion,onServerChange,onContentSettled,onNavigate,onAttach,onClose,navigationOnly=false,statusGroups,statusHostId=sessionId}:{
   sessionId:string;hostLabel:string;herdrSession?:string;visible:boolean;mode:'spaces'|'agents';reports?:ReportedSessionSource;navigationOnly?:boolean;
   onNavigate:(server:string,target:HerdrNavigationTarget,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onAttach:(server:string,lease:AccessLease,current:()=>boolean)=>Promise<void>;
   onContentSettled?:(receipt:HerdrContentReceipt)=>void;
-  onClose:()=>void;onOpenCompanion?:()=>void;onServerChange?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void;
+  onClose:()=>void;onOpenCompanion?:()=>void;onServerChange?:()=>void;
   statusGroups?:[Set<string>,Dispatch<SetStateAction<Set<string>>>];statusHostId?:string;
 }) {
   useUi();
@@ -116,7 +116,7 @@ export default function HerdrNavigation({sessionId,hostLabel,herdrSession,visibl
     tree?.tabs.find(value=>value.tab_id===agent.tab_id)?.label))??[];
   return <section className="herdr-navigation" data-mode={mode} data-setup-view={setupOpen||undefined} hidden={!visible} aria-label={t('herdrNavigationTitle')} aria-busy={busy||actionBusy} onKeyDownCapture={event=>{if(event.key==='Escape' && setupRequested){event.preventDefault();event.stopPropagation();showSetup(false);}}}>
     <header><div><h3 ref={setupHeading} tabIndex={-1}>{t(setupOpen?'herdrAgentsServer':mode==='spaces'?'herdrNavigationSpaces':'herdrAgentsTitle')}</h3><small title={hostLabel}>{hostLabel}</small></div>{!setupOpen && <button className="icon-button" ref={setupTrigger} title={t('herdrAgentsServer')} aria-label={t('herdrAgentsServer')} onClick={()=>showSetup(true)}><Settings2 size={18} aria-hidden="true"/></button>}{data?.server && mode==='spaces' && <details className="herdr-shared-focus-note muted" onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget))event.currentTarget.open=false;}} onKeyDownCapture={event=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();event.currentTarget.open=false;event.currentTarget.querySelector('summary')?.focus();}}}><summary aria-label={t('herdrSharedFocusShort')} title={t('herdrSharedFocusShort')}><Info size={17} aria-hidden="true"/></summary><p>{t('herdrNavigationShared')}</p></details>}<button className="icon-button" title={t('herdrRefresh')} disabled={busy||actionBusy} onClick={()=>void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('herdrRefresh')}</span></button><button className="icon-button herdr-navigation-back" title={t(setupRequested?'navigationBack':'herdrNavigationBack')} onClick={()=>setupRequested?showSetup(false):onClose()}><ArrowLeft size={18} aria-hidden="true"/><span className="sr-only">{t(setupRequested?'navigationBack':'herdrNavigationBack')}</span></button></header>
-    {failure?.host===sessionId && <div><p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>{onRestoreHostTools && failure.cause instanceof SshControlClosedError && <button className="subtle-button" disabled={working} onClick={()=>onRestoreHostTools(()=>void refresh())}>{t('hostToolsRestore')}</button>}</div>}
+    {failure?.host===sessionId && <p role="status">{t('herdrAgentsUnavailable')} {uiErrorText(failure.cause)}</p>}
     {actionError && <p className="inline-error" role="alert">{uiErrorText(actionError)}</p>}
     {actionError instanceof LocalUiError && actionError.key==='herdrNavigationCompanion' && onOpenCompanion && <button className="subtle-button" onClick={onOpenCompanion}>{t('companionInstallTitle')}</button>}
     {busy && !data?.loaded && <p role="status">{t('herdrReading')}</p>}

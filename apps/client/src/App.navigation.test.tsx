@@ -94,22 +94,6 @@ it('opens the existing Agents sidebar installer from account usage setup without
   expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
 
-it('reauthenticates only host tools from disconnected Mosh account usage and refreshes after success',async()=>{
-  enableTransports();mocks.accountUsageDisconnected=true;
-  mocks.api.connectMosh.mockResolvedValue({sessionId:'quota-mosh'});
-  mocks.api.restoreHostTools.mockResolvedValue({schemaVersion:1,status:'restored'});
-  const user=await connectAuto();await screen.findByText('Live SSH terminal');
-  await user.click(screen.getByRole('button',{name:'Open AI account usage'}));
-  await user.click(await screen.findByRole('button',{name:t('accountUsageRestore')}));
-  const dialog=await screen.findByRole('dialog');
-  await user.type(within(dialog).getByLabelText('Password'),'explicit-quota-recovery');
-  expect(mocks.api.restoreHostTools).not.toHaveBeenCalled();
-  await user.click(within(dialog).getByRole('button',{name:t('hostToolsRestore')}));
-  await waitFor(()=>expect(mocks.accountUsageRefresh).toHaveBeenCalledOnce());
-  expect(mocks.api.restoreHostTools).toHaveBeenCalledExactlyOnceWith('quota-mosh',{password:'explicit-quota-recovery'},{useSavedCredentials:false});
-  expect(mocks.api.restoreFileTransfer).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
-});
-
 it('opens attachments from the live toolbar and retires held callbacks after navigation or unmount',async()=>{
   mocks.api.connect.mockResolvedValue({sessionId:'toolbar-attachments'});
   const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));

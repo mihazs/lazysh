@@ -48,7 +48,7 @@ export function parseReportedHistory(value:unknown, agentSessionId:string):Repor
   return row as ReportedHistory;
 }
 
-export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSource,herdrSession,onUseReportedHistory,onRestoreHostTools,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;/** Every connected host, to offer the board that merges them. */hosts?:readonly BoardHost[];local?:boolean;companionSource?:CompanionSource;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onRestoreHostTools?:(restored:()=>void)=>void;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
+export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSource,herdrSession,onUseReportedHistory,visible:panelVisible=true,showHerdr=true,activityVisible=true,renderNavigation,activityRef,activityId }: { sessionId: string;hostKey?:string;hostLabel?:string;/** Every connected host, to offer the board that merges them. */hosts?:readonly BoardHost[];local?:boolean;companionSource?:CompanionSource;herdrSession?:string;visible?:boolean;showHerdr?:boolean;activityVisible?:boolean;renderNavigation?:(reports:ReportedSessionSource)=>ReactNode;activityRef?:Ref<HTMLDivElement>;activityId?:string;onUseReportedHistory?:(source:ReportedHistorySource)=>void }) {
   useUi();
   const visibility=useRef(panelVisible);visibility.current=panelVisible;
   const historyVisibility=useRef(activityVisible);historyVisibility.current=activityVisible;
@@ -107,6 +107,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
   const snapshotFlight=useRef<number|null>(null);
   const [companionUpdate,setCompanionUpdate]=useState<CompanionUpdate|undefined>();
   const lastUpdate=useRef<CompanionUpdate|undefined>(undefined);
+  const recoveryRefresh=useRef<string|undefined>(undefined);
   const historyRequest=useRef(0);
   const historyOwner=useRef<{source:string;key:string}|null>(null);
   const historyFlight=useRef<number|null>(null);
@@ -147,7 +148,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
     if(next?.state==='done' && was?.state!=='done')window.dispatchEvent(new CustomEvent(companionUpdatedEvent,{detail:{sessionId:source}}));
   }
   async function refresh() {
-    if(!visibility.current || !access.current() || snapshotFlight.current!==null)return;
+    if(!visibility.current || document.hidden || !access.current() || snapshotFlight.current!==null)return;
     const source=sessionId;
     const current = ++request.current;
     snapshotFlight.current=current;
@@ -162,6 +163,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
     } finally {
       if(snapshotFlight.current===current)snapshotFlight.current=null;
       if (visibility.current && selectedSource.current===source && current === request.current) setBusy(false);
+      if(recoveryRefresh.current===source && selectedSource.current===source) {recoveryRefresh.current=undefined;void refresh();}
     }
   }
   useEffect(()=>{setSessions([]);setLiveAgents(undefined);setLoaded(false);setError('');lastUpdate.current=undefined;setCompanionUpdate(undefined);},[sessionId]);
@@ -169,7 +171,12 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
     if(panelVisible && !document.hidden)void refresh();
     else if(!panelVisible) {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
     const interval=panelVisible ? window.setInterval(()=>{if(!document.hidden)void refresh();},5000) : undefined;
-    return()=>{window.clearInterval(interval);request.current++;snapshotFlight.current=null;historyRequest.current++;historyFlight.current=null;historyOwner.current=null;};
+    const recovered=(event:Event)=>{
+      if(!panelVisible || document.hidden || (event as CustomEvent<unknown>).detail!==sessionId)return;
+      if(snapshotFlight.current!==null)recoveryRefresh.current=sessionId;else void refresh();
+    };
+    window.addEventListener('lazysh-host-tools-restored',recovered);
+    return()=>{window.removeEventListener('lazysh-host-tools-restored',recovered);window.clearInterval(interval);request.current++;snapshotFlight.current=null;recoveryRefresh.current=undefined;historyRequest.current++;historyFlight.current=null;historyOwner.current=null;};
   },[sessionId,panelVisible]);
 
   const reportSource={host:loadedSessionId,available:panelVisible && access.current() && ready && !error,rows:reports,lease:access};
@@ -234,7 +241,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
       <CompanionHooksPanel sessionId={sessionId} visible={panelVisible} reveal={hookSetupRequest}/>
       {ready && <CompanionSettingsPanel key={sessionId} sessionId={sessionId} hostKey={archiveHost} visible={panelVisible && !error} />}
     </section>
-    {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} reports={reportSource} onRestoreHostTools={onRestoreHostTools ? restored=>onRestoreHostTools(()=>{restored();void refresh();}) : undefined} />}
+    {showHerdr && <HerdrAgentsPanel sessionId={sessionId} herdrSession={herdrSession} visible={panelVisible} reports={reportSource} />}
     <div className="agent-discovery">
       <StateFilter filter={filter} onChange={setFilter} count={ready && !error ? state=>state==='all'?matching.length:matching.filter(row=>row.state===state).length : undefined}/>
       {ready && !error && <p className="agent-result-count" role="status">{t('agentsResultCount',{shown:formatNumber(visible.length),total:formatNumber(activeReports.length)})}</p>}

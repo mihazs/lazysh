@@ -8,8 +8,8 @@ import {accountUsageHeadline,type AccountUsageResponse} from './accountUsageRepo
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 afterEach(()=>{cleanup();vi.clearAllMocks();vi.useRealTimers();Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});});
 const report:AccountUsageResponse={schemaVersion:1,state:'ready',report:{primary:'codex',entries:[{id:'codex',name:'Codex personal',shortName:'OAI',plan:'Pro',status:'ready',stale:false,fetchedAt:new Date().toISOString(),resetCredits:null,rows:[{type:'metric',label:'Weekly',percent:112.5,value:'112.5%',detail:'Provider-reported quota',headline:'percent',reading:'used',resetAt:null,windowSeconds:null,regen:null,modelPool:false}]}]}};
-function Surface({sessionId='ssh1',active=true,onRestoreHostTools,onOpenCompanion}:{sessionId?:string;active?:boolean;onOpenCompanion?:()=>void;onRestoreHostTools?:(restored:()=>void)=>void}) {
- const model=useAccountUsage(sessionId,active);return <><AccountUsageBar model={model} onOpen={()=>{}}/><AccountUsageDetails model={model} onOpenCompanion={onOpenCompanion} onRestoreHostTools={onRestoreHostTools}/></>;
+function Surface({sessionId='ssh1',active=true,onOpenCompanion}:{sessionId?:string;active?:boolean;onOpenCompanion?:()=>void}) {
+ const model=useAccountUsage(sessionId,active);return <><AccountUsageBar model={model} onOpen={()=>{}}/><AccountUsageDetails model={model} onOpenCompanion={onOpenCompanion}/></>;
 }
 it('renders real quota precision above 100 and clamps only its meter',async()=>{
  vi.mocked(invoke).mockResolvedValue(report);render(<Surface/>);
@@ -39,6 +39,22 @@ it('does not query hidden documents or inactive sessions and refreshes on return
  Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});fireEvent(document,new Event('visibilitychange'));await screen.findByText('112.5% used');
  rerender(<Surface active={false}/>);fireEvent(document,new Event('visibilitychange'));expect(invoke).toHaveBeenCalledTimes(1);
 });
+it('refreshes only the active session when its host tools recover',async()=>{
+ vi.mocked(invoke).mockResolvedValue(report);const {rerender,unmount}=render(<Surface sessionId="owned"/>);
+ await screen.findByText('112.5% used');
+ act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'other'})));expect(invoke).toHaveBeenCalledTimes(1);
+ act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'owned'})));await waitFor(()=>expect(invoke).toHaveBeenCalledTimes(2));
+ rerender(<Surface sessionId="owned" active={false}/>);
+ act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'owned'})));expect(invoke).toHaveBeenCalledTimes(2);
+ unmount();act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'owned'})));expect(invoke).toHaveBeenCalledTimes(2);
+});
+it('updates a disconnected view when host tools need new saved credentials',async()=>{
+ vi.mocked(invoke).mockResolvedValueOnce({schemaVersion:1,state:'disconnected',report:null}).mockResolvedValue({schemaVersion:1,state:'host_tools_credentials',report:null});render(<Surface/>);
+ await screen.findByText(/Account usage is unavailable/);
+ act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-status',{detail:'ssh1'})));
+ expect(await screen.findByText(/Host tools need saved credentials/)).toBeTruthy();
+ expect(screen.queryByRole('button',{name:'Reconnect host tools'})).toBeNull();
+});
 it('shows unavailable provider guidance without requiring an external tool or fabricated percentage',async()=>{
  vi.mocked(invoke).mockResolvedValue({schemaVersion:1,state:'unavailable',source:'builtin',report:null});render(<Surface/>);
  await screen.findByText(/Check provider sign-ins/);expect(screen.queryByRole('meter')).toBeNull();expect(screen.queryByText('0% used')).toBeNull();
@@ -57,13 +73,6 @@ it('marks a fresh-dated provider error with cached quota as stale',async()=>{
  vi.mocked(invoke).mockResolvedValue({...report,report:{...report.report!,entries:[{...report.report!.entries[0],status:'error',stale:false,fetchedAt:new Date().toISOString()}]}});
  render(<Surface/>);await screen.findByLabelText('Stale account usage');expect(screen.getByText(/Provider unavailable/)).toBeTruthy();
 });
-it('requests explicit host-tools recovery and refreshes only after the guarded restored callback',async()=>{
- vi.mocked(invoke).mockResolvedValueOnce({schemaVersion:1,source:null,state:'disconnected',report:null}).mockResolvedValueOnce(report);
- let restored!:(()=>void);const recover=vi.fn((callback:()=>void)=>{restored=callback;});render(<Surface onRestoreHostTools={recover}/>);
- fireEvent.click(await screen.findByRole('button',{name:'Reconnect host tools'}));expect(recover).toHaveBeenCalledTimes(1);expect(invoke).toHaveBeenCalledTimes(1);
- act(()=>restored());await screen.findByText('112.5% used');expect(invoke).toHaveBeenCalledTimes(2);expect(screen.queryByRole('button',{name:'Reconnect host tools'})).toBeNull();
-});
-
 it('offers the existing installer only for missing or incompatible companions and distinguishes empty accounts',async()=>{
  const install=vi.fn();vi.mocked(invoke).mockResolvedValueOnce({schemaVersion:1,state:'companion_required',report:null}).mockResolvedValueOnce({schemaVersion:1,state:'ready',source:'builtin',report:{primary:null,entries:[]}});
  render(<Surface onOpenCompanion={install}/>);fireEvent.click(await screen.findByRole('button',{name:'Install or update companion'}));expect(install).toHaveBeenCalledTimes(1);expect(screen.getByText('AI usage: setup')).toBeTruthy();expect(screen.queryByRole('meter')).toBeNull();
