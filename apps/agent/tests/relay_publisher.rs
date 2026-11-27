@@ -231,10 +231,14 @@ impl Fixture {
         self.run(&["ingest","--agent","generic"],Some(json!({"schemaVersion":1,"sessionId":"private-session","agent":"private-agent","project":"ssh://private-host/private-path","state":state,"summary":"private-prompt-transcript","paneId":"%private"}))).await;
     }
     async fn ingest_automatic(&self) {
+        let child = self.spawn_automatic_ingest("private-session").await;
+        assert!(child.wait_with_output().await.unwrap().status.success());
+    }
+    async fn spawn_automatic_ingest(&self, session: &str) -> tokio::process::Child {
         let mut command = self.command(&["ingest", "--agent", "generic"]);
         command.env_remove("LAZYSH_RELAY_AUTOSTART");
         let mut child = command.spawn().unwrap();
-        let payload = json!({"schemaVersion":1,"sessionId":"private-session","agent":"private-agent",
+        let payload = json!({"schemaVersion":1,"sessionId":session,"agent":"private-agent",
             "project":"private-project","state":"needs_attention","summary":"private-prompt"});
         child
             .stdin
@@ -243,7 +247,7 @@ impl Fixture {
             .write_all(&serde_json::to_vec(&payload).unwrap())
             .await
             .unwrap();
-        assert!(child.wait_with_output().await.unwrap().status.success());
+        child
     }
     async fn remote_enable(&self) {
         client::admin_action(
@@ -487,6 +491,42 @@ async fn an_agent_report_recovers_an_absent_enabled_sender() {
         fixture.delivery.bodies.lock().await[0]["kind"],
         "needs_attention"
     );
+    stop_automatic_sender(&fixture, "1").await;
+    shutdown_delivery(shutdown, worker).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_agent_reports_start_one_sender_and_deliver_each_event_once() {
+    const REPORTS: u32 = 6;
+    let fixture = Fixture::new().await;
+    fixture.remote_enable().await;
+    fixture.configure("0").await;
+    let (shutdown, worker) = fixture.delivery_worker().await;
+    let mut children = Vec::new();
+    for n in 0..REPORTS {
+        children.push(
+            fixture
+                .spawn_automatic_ingest(&format!("session-{n}"))
+                .await,
+        );
+    }
+    for child in children {
+        assert!(child.wait_with_output().await.unwrap().status.success());
+    }
+    wait_delivery(&fixture.delivery, REPORTS).await;
+    fixture
+        .wait_status("retainedRecorded", u64::from(REPORTS))
+        .await;
+    // A duplicate sender would have re-delivered a claimed event; give it time to show.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let bodies = fixture.delivery.bodies.lock().await;
+    let mut receipts: Vec<_> = bodies.iter().map(|b| b["receiptId"].clone()).collect();
+    assert_eq!(receipts.len(), REPORTS as usize);
+    receipts.sort_by_key(Value::to_string);
+    receipts.dedup();
+    assert_eq!(receipts.len(), REPORTS as usize);
+    drop(bodies);
+    assert_eq!(fixture.tap.posts.lock().await.len(), REPORTS as usize);
     stop_automatic_sender(&fixture, "1").await;
     shutdown_delivery(shutdown, worker).await;
 }
