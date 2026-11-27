@@ -9,7 +9,8 @@ import "./GestureTour.css";
 function Notes({scene, notes}: {scene: TourScene; notes: TourNotes}) {
   const off = scene === "typing" ? null : notes[scene];
   const mode = useGestureMode(), gestureNavigation = useGestureInsets().navigation === "gesture";
-  const where = mode === "handles" ? "gestureTourHandles" : mode === "edges" && gestureNavigation ? "gestureTourAndroidEdge" : null;
+  const showLines = edgeGestureSettings(usePreferences()).showLines;
+  const where = mode === "handles" ? (showLines ? "gestureTourHandles" : "gestureTourStrip") : mode === "edges" && gestureNavigation ? "gestureTourAndroidEdge" : null;
   const width = edgeGestureSettings(usePreferences()).zoneWidth;
   return <>
     {where && scene !== "typing" && <p>{t(where)}</p>}
@@ -40,8 +41,10 @@ const lines = [26, 40, 54, 68, 82, 96];
 /** A stylised phone. Every animation is CSS (see GestureTour.css); reduced motion shows the final frame and an arrow. */
 function Phone({scene, off}: {scene: TourScene; off: boolean}) {
   const {to, zone, hidden, handle} = scenes[scene];
-  const grip = useGestureMode() === "handles" ? handle : undefined;
-  const from: Point = grip ? [grip.x + grip.width / 2, grip.y + grip.height / 2] : scenes[scene].from;
+  const handles = useGestureMode() === "handles", showLines = edgeGestureSettings(usePreferences()).showLines;
+  // The handle is drawn only when the app draws its lines; otherwise the finger starts where the invisible handle is and no marker is shown.
+  const grip = handles && showLines ? handle : undefined;
+  const from: Point = handles && handle ? [handle.x + handle.width / 2, handle.y + handle.height / 2] : scenes[scene].from;
   const clip = useId().replace(/\W/g, "");
   const vars = {"--ax": `${from[0]}px`, "--ay": `${from[1]}px`, "--bx": `${to[0]}px`, "--by": `${to[1]}px`, "--hx": `${hidden[0]}px`, "--hy": `${hidden[1]}px`} as CSSProperties;
   return <svg className="gt-phone" data-scene={scene} data-off={off || undefined} style={vars} viewBox="0 0 160 300" aria-hidden="true" focusable="false">
@@ -62,7 +65,7 @@ function Phone({scene, off}: {scene: TourScene; off: boolean}) {
         <g className="gt-blocked"><circle cx="66" cy="112" r="15" /><path d="M55 123 77 101" /></g>
       </g>}
       {scene === "bottom" && <rect className="gt-pill" x="48" y="262" width="40" height="3" rx="1.5" />}
-      {grip ? <rect className="gt-handle" rx="2.5" {...grip} /> : <rect className="gt-zone" {...zone} />}
+      {grip ? <rect className="gt-handle" rx="2.5" {...grip} /> : !(handles && handle) && <rect className="gt-zone" {...zone} />}
       <path className="gt-arrow" d={arrow(from, to)} />
       <g className="gt-finger"><circle className="gt-ring" r="15" /><circle className="gt-dot" r="7" /></g>
       </g>
