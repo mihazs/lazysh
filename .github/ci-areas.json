@@ -7,6 +7,9 @@
     "wry-vendor": [
       "all"
     ],
+    "ssh-key-vendor": [
+      "client"
+    ],
     "client-native": [
       "client"
     ],

@@ -270,6 +270,50 @@ mod tests {
                 .join(" ")
         }
 
+        /// About one P-256 key in 256 has a scalar whose first byte is zero, which OpenSSH
+        /// stores as a 31-byte `mpint` (#2483). This fixture is such a key.
+        const SHORT_SCALAR_KEY: &str = "\
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAaAAAABNlY2RzYS
+1zaGEyLW5pc3RwMjU2AAAACG5pc3RwMjU2AAAAQQR2oWA9JGuqZN1vY0cgMjBgctQ33ynH
+NKhxu/Bd9mCbshHCfvzbGM19tnedxQDs+e+XIFHdzP0uPm78L85/hDQbAAAAqJaVDVKWlQ
+1SAAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHahYD0ka6pk3W9j
+RyAyMGBy1DffKcc0qHG78F32YJuyEcJ+/NsYzX22d53FAOz575cgUd3M/S4+bvwvzn+ENB
+sAAAAfPevqMXmb9iT1e+OanzNUGp0CBfG9CD/uoYQM4h+puwAAAAtsYXp5c2gtdGVzdAEC
+AwQFBg==
+-----END OPENSSH PRIVATE KEY-----
+";
+
+        #[test]
+        fn ecdsa_scalar_with_a_leading_zero_byte_imports() {
+            let directory = tempfile::tempdir().unwrap();
+            let private = directory.path().join("short-scalar");
+            std::fs::write(&private, SHORT_SCALAR_KEY).unwrap();
+            // ssh-keygen refuses private keys readable by others.
+            std::fs::set_permissions(
+                &private,
+                std::os::unix::fs::PermissionsExt::from_mode(0o600),
+            )
+            .unwrap();
+            let plain = inspect(SHORT_SCALAR_KEY, None)
+                .unwrap_or_else(|error| panic!("plain key should import: {error}"));
+            assert_eq!(plain.fingerprint, openssh_fingerprint(&private));
+            keygen(&[
+                "-q",
+                "-p",
+                "-P",
+                "",
+                "-N",
+                PASSPHRASE,
+                "-f",
+                private.to_str().unwrap(),
+            ]);
+            let encrypted = std::fs::read_to_string(&private).unwrap();
+            let imported = inspect(&encrypted, Some(PASSPHRASE))
+                .unwrap_or_else(|error| panic!("encrypted key should import: {error}"));
+            assert_eq!(imported.fingerprint, plain.fingerprint);
+        }
+
         #[test]
         fn imported_key_files_match_openssh_fingerprint_and_public_export() {
             let directory = tempfile::tempdir().unwrap();
@@ -307,7 +351,7 @@ mod tests {
                 let contents = std::fs::read_to_string(&private).unwrap();
                 let supplied = Some(passphrase).filter(|value| !value.is_empty());
                 let inspected = inspect(&contents, supplied)
-                    .unwrap_or_else(|_| panic!("{name} should import from its file"));
+                    .unwrap_or_else(|error| panic!("{name} should import from its file: {error}"));
                 assert_eq!(
                     inspected.fingerprint,
                     openssh_fingerprint(&public_path(&private)),
