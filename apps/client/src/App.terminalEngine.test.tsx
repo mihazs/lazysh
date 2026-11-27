@@ -79,8 +79,12 @@ it('keeps every new session on xterm.js in a build with the native engine switch
   expect(getPreferences().terminalEngine).toBe('native');
 });
 
-it('keeps a new session off the native engine while Android reports a screen reader, records why, and stops once it is off', async () => {
-  const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36');
+it.each([
+  ['Android', 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36'],
+  ['iOS', 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148'],
+  ['macOS', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15'],
+])('keeps new sessions off the native engine while %s reports a screen reader and records why', async (_platform, agent) => {
+  const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(agent);
   try {
     let screenReader = true;
     mocks.invoke.mockImplementation(async (command: string) => command === 'screen_reader_active' ? screenReader : command === 'terminal_core_available' || command === 'native_terminal_probe' ? {available: true} : undefined);

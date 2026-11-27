@@ -1,4 +1,5 @@
 import {invoke} from '@tauri-apps/api/core';
+import {isIosApp} from './isIosApp';
 import {captureAccess, protectedInvoke} from './access';
 import type {TerminalPreferences} from './terminalAdapter';
 
@@ -8,7 +9,7 @@ export type SurfaceState = {placed: boolean; ready: boolean; generation: number;
 /** One cell of the renderer's grid in device pixels. */
 export type CellSize = {width: number; height: number};
 
-/** An element's `getBoundingClientRect()` in CSS pixels and the page's `devicePixelRatio`. */
+/** A CSS rectangle relative to the platform surface host, with the page's device pixel ratio. */
 export type SurfaceAnchor = {x: number; y: number; width: number; height: number; dpr: number};
 
 /** What decides how the renderer draws a session (its colours, glyphs and cursor): the terminal preferences it is told, not the ones that are the page's own (history, keys). */
@@ -89,7 +90,11 @@ export function trackSurfaceAnchor({session, element, background, onError, frame
 
   const read = (): SurfaceAnchor | undefined => {
     const rect = element.isConnected ? element.getBoundingClientRect() : undefined;
-    return rect && rect.width > 0 && rect.height > 0 ? {x: rect.x, y: rect.y, width: rect.width, height: rect.height, dpr: window.devicePixelRatio} : undefined;
+    if (!rect || rect.width <= 0 || rect.height <= 0) return undefined;
+    // UIKit places the view in the visible WKWebView, whose origin moves when the soft keyboard pans the page.
+    const viewport = isIosApp() ? window.visualViewport : undefined;
+    return {x: rect.x - (viewport?.offsetLeft ?? 0), y: rect.y - (viewport?.offsetTop ?? 0),
+      width: rect.width, height: rect.height, dpr: window.devicePixelRatio * (viewport?.scale ?? 1)};
   };
 
   const fail = (error: unknown) => {

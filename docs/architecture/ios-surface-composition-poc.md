@@ -63,3 +63,16 @@ bun run test:ios-surface-poc
 ```
 
 The records are the JSON lines in that file; the screenshots (surface below, above, after scroll, with the keyboard, in landscape, removed) are attachments of `apps/client/src-tauri/gen/apple/surface-poc-ui.xcresult`. The pixel arithmetic can be run anywhere Swift and XCTest are: `SurfacePocAnalysis.swift` and `SurfacePocAnalysisTests.swift` use only Foundation.
+
+## Installed app verification
+
+The native-enabled iOS Simulator app admitted Metal and attached a terminal
+surface to an owned SSH session. The harness checked the known frame through
+the native core, sent input over the real Tauri bridge and received a response
+from the SSH peer. Releasing the core preserved the connection and delivered
+the next response to the WebView channel. The same run compiled the native
+runtime for iOS device and simulator and passed the simulator runtime tests.
+[Hosted run](https://github.com/mihazs/lazysh/actions/runs/45781635304/job/139779972510)
+
+Physical iPhone lifecycle, keyboard behavior, VoiceOver, and battery
+measurements remain tracked in [#1330](https://github.com/mihazs/lazysh/issues/1330).
