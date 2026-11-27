@@ -434,7 +434,9 @@ jobs:
           test ! -e vendor/libghostty-vt/zig-pkg
           test ! -L vendor/libghostty-vt/zig-pkg
           cp -aT "$HERDR_CI_ROOT/herdr-upstream/vendor/libghostty-vt/zig-pkg" vendor/libghostty-vt/zig-pkg
-      - name: Build unchanged stock Herdr and recheck every original file
+      # Both profiles of the same pinned source, each in its own Cargo profile directory: the debug executable is the one retained
+      # below, and the release executable is the stock server users get, which the coexistence case runs beside too (#1938).
+      - name: Build unchanged stock Herdr in the debug and release profiles and recheck every original file
         id: stock-build
         env:
           CARGO_TARGET_DIR: &stock-cargo-target ${{ runner.temp }}/lazysh-herdr-native/stock-target
@@ -443,6 +445,7 @@ jobs:
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/stock-source
         run: |
           sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked --bin herdr
+          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked --release --bin herdr
           manifest="$GITHUB_WORKSPACE/packages/herdr-upstream/SOURCE-MANIFEST.sha256"
           printf '%s  %s\n' 'c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a' "$manifest" | sha256sum --check --strict
           test "$(wc -l < "$manifest")" -eq 1843
@@ -467,24 +470,12 @@ jobs:
           if-no-files-found: error
           retention-days: 3
       # The managed derivative as it would ship (#1756): the release profile, built from the same copied pinned source.
-      # Its own target profile leaves the sealed debug artifacts above untouched. The acceptance below runs the
-      # managed-namespace cases too, so no separate debug run is needed. Linux x86-64 only until another host has native evidence.
+      # Its own target profile leaves the sealed debug artifacts above untouched. The acceptance runs on the sealed bytes
+      # below, so no separate debug managed run is needed. Linux x86-64 only until another host has native evidence.
       - name: Build the release-profile managed Herdr
         id: managed-build
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
-        run: |
-          sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked --release --features "$HERDR_FEATURES" --bin herdr
-          printf 'sha256=%s\n' "$(sha256sum "$CARGO_TARGET_DIR/release/herdr" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - name: Exercise the owned acceptance against that exact release executable
-        id: managed-acceptance
-        working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
-        env:
-          MANAGED_SHA256: ${{ steps.managed-build.outputs.sha256 }}
-        run: |
-          export HERDR_GUARD_SSH_FIXTURE="$CARGO_TARGET_DIR/debug/examples/guarded_ssh_fixture"
-          cargo +1.96.1 test --locked --release --features "$HERDR_FEATURES" --test guarded_input acceptance::
-          # Cargo must have reused the built executable: acceptance ran against these bytes and no others.
-          printf '%s  %s\n' "$MANAGED_SHA256" "$CARGO_TARGET_DIR/release/herdr" | sha256sum --check --strict
+        run: sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked --release --features "$HERDR_FEATURES" --bin herdr
       - name: Measure the libc floor and seal the managed executable with its receipt
         id: managed-receipt
         env:
@@ -501,18 +492,28 @@ jobs:
           path: ${{ runner.temp }}/lazysh-herdr-native/managed-artifact/
           if-no-files-found: error
           retention-days: 14
-      # Debug profile, after every artifact above is sealed. The managed build and the unchanged stock server it shares a host with (#1761): one session name, one HOME and XDG roots.
-      - name: Exercise the managed build beside an unchanged stock server of the same session name
-        id: managed-beside-stock
+      # #1761, #1938: the acceptance runs on the sealed release bytes, never on a rebuild. Both stock namespaces (debug
+      # `herdr-dev`, release `herdr`) share a host with the managed server of one session name, one HOME and XDG roots.
+      - name: Exercise the acceptance and the coexistence case on the sealed managed executable
+        id: managed-acceptance
         working-directory: ${{ runner.temp }}/lazysh-herdr-native/herdr-upstream
         env:
-          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-herdr-native/stock-artifact/herdr
-          # The retained stock executable is a debug build, which keeps upstream's debug application directory.
-          LAZYSH_TEST_HERDR_STOCK_NAMESPACE: herdr-dev
+          STOCK_TARGET: *stock-cargo-target
         run: |
-          # A renamed case must not turn this step into a zero-test pass.
-          cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input managed_and_stock -- --list --ignored | grep -c ': test$' | grep -Fx 1
-          cargo +1.96.1 test --locked --features lazysh-managed --test guarded_input managed_and_stock -- --ignored
+          sealed="$HERDR_CI_ROOT/managed-artifact"
+          verify_sealed() { printf '%s  %s\n' "$(jq -er .binarySha256 "$sealed/receipt.json")" "$sealed/herdr" | sha256sum --check --strict; }
+          verify_sealed
+          export LAZYSH_TEST_HERDR_MANAGED="$sealed/herdr"
+          export HERDR_GUARD_SSH_FIXTURE="$CARGO_TARGET_DIR/debug/examples/guarded_ssh_fixture"
+          cargo +1.96.1 test --locked --release --features "$HERDR_FEATURES" --test guarded_input acceptance::
+          # A renamed case must not turn the coexistence runs into a zero-test pass.
+          cargo +1.96.1 test --locked --release --features "$HERDR_FEATURES" --test guarded_input managed_and_stock -- --list --ignored | grep -c ': test$' | grep -Fx 1
+          for profile in debug:herdr-dev release:herdr; do
+            LAZYSH_TEST_HERDR_STOCK="$STOCK_TARGET/${profile%%:*}/herdr" LAZYSH_TEST_HERDR_STOCK_NAMESPACE="${profile#*:}" \
+              cargo +1.96.1 test --locked --release --features "$HERDR_FEATURES" --test guarded_input managed_and_stock -- --ignored
+          done
+          # Neither a case nor Cargo may have touched the sealed bytes.
+          verify_sealed
 
       # The terminal runtime for Android, with the same admitted Zig, archives and caches as above. Last, because
       # nothing sealed above depends on it. Compiling and linking only: nothing runs on Android here.
