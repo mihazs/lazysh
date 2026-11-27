@@ -1,0 +1,275 @@
+# Raw results of the Rust release profile benchmark (#2737, epic #2736). Interpretation: docs/explanation/rust-release-profile.md
+# Host: AMD Ryzen 9 5900X (24 threads), 31 GiB, Linux 7.3.x, rustc 1.99.0 stable (terminal runtime: rustc 1.96.1, Zig 0.16.0), shared with other builds and agents.
+# Builds: every command pinned to four CPUs (taskset -c 0-3, CARGO_BUILD_JOBS=4, the companion CI's setting), one at a time under a lock,
+# a fresh CARGO_TARGET_DIR each, profile set only through CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS (strip = true and panic = "abort" kept).
+# fat = lto true, cgu 1 (the current profile); thinN = lto "thin", cgu N; off16 = lto false, cgu 16.
+# wall_s, user_s, sys_s, cpu_s = user+sys; max_rss_mib = ru_maxrss of the largest single process of the build (not the sum of the tree);
+# load_before / load_after = 1, 5, 15 minute load averages around the build. *-cold: empty target dir; *-warm: dependencies kept, one source file touched.
+# agent = cargo build --release --locked -p lazysh-agent --bin lazysh-agent (x86_64-unknown-linux-gnu)
+# desktop = cargo build --release --locked -p lazysh --features tauri/custom-protocol (the binary `tauri build --no-bundle` links; stub frontend dist, native-terminal off)
+
+
+## agent.jsonl
+{"label": "agent-fat-cold", "rc": 0, "wall_s": 133.6, "user_s": 227.9, "sys_s": 10.4, "cpu_s": 238.3, "max_rss_mib": 1043, "load_before": [9.69287109375, 10.8984375, 6.958984375], "load_after": [4.7001953125, 8.654296875, 6.673828125]}
+{"label":"agent-fat-sizes","binary_bytes":13444456,"target_kib":474340}
+{"label": "agent-fat-warm", "rc": 0, "wall_s": 52.6, "user_s": 50.7, "sys_s": 1.2, "cpu_s": 51.9, "max_rss_mib": 1036, "load_before": [7.40966796875, 12.796875, 9.6669921875], "load_after": [6.0439453125, 11.52685546875, 9.4130859375]}
+{"label": "agent-thin16-cold", "rc": 0, "wall_s": 98.8, "user_s": 259.6, "sys_s": 14.3, "cpu_s": 273.9, "max_rss_mib": 982, "load_before": [13.416015625, 13.0888671875, 11.50927734375], "load_after": [9.8828125, 11.81494140625, 11.2060546875]}
+{"label":"agent-thin16-sizes","binary_bytes":15848424,"target_kib":499968}
+{"label": "agent-thin16-warm", "rc": 0, "wall_s": 26.0, "user_s": 90.3, "sys_s": 2.9, "cpu_s": 93.3, "max_rss_mib": 526, "load_before": [6.455078125, 7.375, 9.005859375], "load_after": [6.7958984375, 7.37744140625, 8.96240234375]}
+{"label": "agent-thin8-cold", "rc": 0, "wall_s": 87.6, "user_s": 234.2, "sys_s": 10.1, "cpu_s": 244.3, "max_rss_mib": 1046, "load_before": [7.9599609375, 13.80908203125, 16.12158203125], "load_after": [5.67724609375, 11.638671875, 15.1533203125]}
+{"label":"agent-thin8-sizes","binary_bytes":15448296,"target_kib":495024}
+{"label": "agent-thin8-warm", "rc": 0, "wall_s": 25.6, "user_s": 91.8, "sys_s": 2.1, "cpu_s": 93.9, "max_rss_mib": 559, "load_before": [7.330078125, 25.58984375, 26.873046875], "load_after": [8.65478515625, 24.43310546875, 26.4560546875]}
+{"label": "agent-thin4-cold", "rc": 0, "wall_s": 91.3, "user_s": 244.4, "sys_s": 9.3, "cpu_s": 253.7, "max_rss_mib": 1217, "load_before": [6.71826171875, 12.53466796875, 18.18212890625], "load_after": [7.2216796875, 11.0166015625, 17.10888671875]}
+{"label":"agent-thin4-sizes","binary_bytes":15115624,"target_kib":489808}
+{"label": "agent-thin4-warm", "rc": 0, "wall_s": 21.3, "user_s": 76.1, "sys_s": 1.5, "cpu_s": 77.6, "max_rss_mib": 677, "load_before": [25.298828125, 15.39208984375, 15.81396484375], "load_after": [19.9306640625, 14.97705078125, 15.66845703125]}
+{"label": "agent-off16-cold", "rc": 0, "wall_s": 90.7, "user_s": 268.4, "sys_s": 12.6, "cpu_s": 281.0, "max_rss_mib": 1014, "load_before": [33.4892578125, 19.9365234375, 17.212890625], "load_after": [12.54052734375, 16.470703125, 16.23291015625]}
+{"label":"agent-off16-sizes","binary_bytes":15322128,"target_kib":463448}
+{"label": "agent-off16-warm", "rc": 0, "wall_s": 4.9, "user_s": 4.8, "sys_s": 0.5, "cpu_s": 5.3, "max_rss_mib": 374, "load_before": [189.41552734375, 96.294921875, 47.6025390625], "load_after": [175.2880859375, 94.91162109375, 47.41650390625]}
+
+## desktop.jsonl
+{"label": "desktop-fat-cold", "rc": 0, "wall_s": 578.6, "user_s": 1234.4, "sys_s": 83.4, "cpu_s": 1317.8, "max_rss_mib": 3423, "load_before": [8.51708984375, 12.65966796875, 14.62353515625], "load_after": [5.8212890625, 7.75830078125, 11.35791015625]}
+{"label":"desktop-fat-sizes","binary_bytes":56638584,"target_kib":3126992}
+{"label": "desktop-thin16-cold", "rc": 0, "wall_s": 471.9, "user_s": 1531.1, "sys_s": 97.9, "cpu_s": 1629.0, "max_rss_mib": 3275, "load_before": [14.548828125, 21.8369140625, 25.30712890625], "load_after": [17.20751953125, 16.87158203125, 21.2265625]}
+{"label":"desktop-thin16-sizes","binary_bytes":64613112,"target_kib":3410336}
+{"label": "desktop-off16-cold", "rc": 0, "wall_s": 359.1, "user_s": 1142.0, "sys_s": 74.9, "cpu_s": 1216.9, "max_rss_mib": 3301, "load_before": [12.19189453125, 13.947265625, 17.17529296875], "load_after": [7.41943359375, 9.939453125, 14.3310546875]}
+{"label":"desktop-off16-sizes","binary_bytes":62063576,"target_kib":2863652}
+
+## desktop2.jsonl (second sample of the desktop builds, plus warm relinks)
+{"label": "desktop2-fat-cold", "rc": 0, "wall_s": 611.1, "user_s": 1317.2, "sys_s": 104.0, "cpu_s": 1421.1, "max_rss_mib": 3263, "load_before": [7.36376953125, 7.39453125, 8.06103515625], "load_after": [6.08984375, 7.26708984375, 8.0673828125]}
+{"label":"desktop2-fat-sizes","binary_bytes":56638584,"target_kib":3127020}
+{"label": "desktop2-fat-warm", "rc": 0, "wall_s": 295.7, "user_s": 277.3, "sys_s": 14.4, "cpu_s": 291.7, "max_rss_mib": 3214, "load_before": [6.08984375, 7.26708984375, 8.0673828125], "load_after": [4.896484375, 6.4140625, 7.49951171875]}
+{"label": "desktop2-thin16-cold", "rc": 0, "wall_s": 439.3, "user_s": 1409.1, "sys_s": 93.6, "cpu_s": 1502.7, "max_rss_mib": 3305, "load_before": [4.896484375, 6.4140625, 7.49951171875], "load_after": [8.498046875, 7.84912109375, 7.79833984375]}
+{"label":"desktop2-thin16-sizes","binary_bytes":64613112,"target_kib":3410388}
+{"label": "desktop2-thin16-warm", "rc": 0, "wall_s": 131.0, "user_s": 382.2, "sys_s": 16.2, "cpu_s": 398.4, "max_rss_mib": 3293, "load_before": [8.498046875, 7.84912109375, 7.79833984375], "load_after": [5.8212890625, 6.888671875, 7.43701171875]}
+{"label": "desktop2-off16-cold", "rc": 0, "wall_s": 421.5, "user_s": 1246.3, "sys_s": 118.2, "cpu_s": 1364.5, "max_rss_mib": 3295, "load_before": [5.8212890625, 6.888671875, 7.43701171875], "load_after": [9.39599609375, 9.8447265625, 8.703125]}
+{"label":"desktop2-off16-sizes","binary_bytes":62063576,"target_kib":2863676}
+{"label": "desktop2-off16-warm", "rc": 0, "wall_s": 65.8, "user_s": 154.8, "sys_s": 7.4, "cpu_s": 162.2, "max_rss_mib": 3364, "load_before": [9.39599609375, 9.8447265625, 8.703125], "load_after": [6.18994140625, 8.84033203125, 8.43359375]}
+
+## term.jsonl (terminal-runtime examples: def = the crate's own release profile, fat/thin16 = profile overrides)
+{"label": "term-def-build", "rc": 0, "wall_s": 71.3, "user_s": 167.2, "sys_s": 8.7, "cpu_s": 175.9, "max_rss_mib": 993, "load_before": [6.3681640625, 14.44580078125, 18.65771484375], "load_after": [5.51171875, 12.533203125, 17.68701171875]}
+{"label": "term-fat-build", "rc": 0, "wall_s": 80.7, "user_s": 195.1, "sys_s": 7.8, "cpu_s": 202.9, "max_rss_mib": 808, "load_before": [5.51171875, 12.533203125, 17.68701171875], "load_after": [5.22900390625, 10.71533203125, 16.59326171875]}
+{"label": "term-thin16-build", "rc": 0, "wall_s": 83.9, "user_s": 214.7, "sys_s": 11.4, "cpu_s": 226.1, "max_rss_mib": 869, "load_before": [5.22900390625, 10.71533203125, 16.59326171875], "load_after": [5.26123046875, 9.42626953125, 15.65283203125]}
+
+## lazysh-agent runtime: 10 interleaved rounds of 100 process runs per binary and command, cpus 8-11, ms per run (median, min, max, stdev over rounds)
+ 21:02:38 up 3 days, 16:09, 11 users,  load average: 15,39, 18,22, 20,18
+ 21:04:07 up 3 days, 16:10, 11 users,  load average: 6,37, 14,45, 18,66
+{
+ "load": [
+  6.3681640625,
+  14.44580078125,
+  18.65771484375
+ ],
+ "fat": {
+  "startup_ms": {
+   "median": 1.69,
+   "min": 1.649,
+   "max": 1.916,
+   "stdev": 0.074
+  },
+  "ingest_ms": {
+   "median": 10.664,
+   "min": 9.943,
+   "max": 21.634,
+   "stdev": 3.334
+  },
+  "ingest_cpu_ms": {
+   "median": 3.302,
+   "min": 3.269,
+   "max": 3.866,
+   "stdev": 0.17
+  },
+  "snapshot_ms": {
+   "median": 3.022,
+   "min": 2.886,
+   "max": 3.133,
+   "stdev": 0.08
+  },
+  "usage_ms": {
+   "median": 1.73,
+   "min": 1.653,
+   "max": 1.781,
+   "stdev": 0.045
+  }
+ },
+ "thin16": {
+  "startup_ms": {
+   "median": 1.764,
+   "min": 1.678,
+   "max": 1.866,
+   "stdev": 0.05
+  },
+  "ingest_ms": {
+   "median": 10.964,
+   "min": 10.396,
+   "max": 16.547,
+   "stdev": 1.722
+  },
+  "ingest_cpu_ms": {
+   "median": 3.417,
+   "min": 3.364,
+   "max": 3.573,
+   "stdev": 0.059
+  },
+  "snapshot_ms": {
+   "median": 3.069,
+   "min": 3.006,
+   "max": 3.162,
+   "stdev": 0.05
+  },
+  "usage_ms": {
+   "median": 1.806,
+   "min": 1.667,
+   "max": 1.835,
+   "stdev": 0.047
+  }
+ },
+ "thin8": {
+  "startup_ms": {
+   "median": 1.747,
+   "min": 1.637,
+   "max": 1.896,
+   "stdev": 0.064
+  },
+  "ingest_ms": {
+   "median": 10.655,
+   "min": 10.055,
+   "max": 13.461,
+   "stdev": 0.935
+  },
+  "ingest_cpu_ms": {
+   "median": 3.415,
+   "min": 3.341,
+   "max": 3.832,
+   "stdev": 0.134
+  },
+  "snapshot_ms": {
+   "median": 3.038,
+   "min": 2.961,
+   "max": 3.107,
+   "stdev": 0.043
+  },
+  "usage_ms": {
+   "median": 1.797,
+   "min": 1.728,
+   "max": 1.869,
+   "stdev": 0.048
+  }
+ },
+ "thin4": {
+  "startup_ms": {
+   "median": 1.738,
+   "min": 1.677,
+   "max": 2.007,
+   "stdev": 0.088
+  },
+  "ingest_ms": {
+   "median": 10.338,
+   "min": 9.99,
+   "max": 16.474,
+   "stdev": 1.847
+  },
+  "ingest_cpu_ms": {
+   "median": 3.4,
+   "min": 3.344,
+   "max": 3.93,
+   "stdev": 0.164
+  },
+  "snapshot_ms": {
+   "median": 3.053,
+   "min": 2.948,
+   "max": 3.157,
+   "stdev": 0.069
+  },
+  "usage_ms": {
+   "median": 1.782,
+   "min": 1.762,
+   "max": 1.847,
+   "stdev": 0.028
+  }
+ },
+ "off16": {
+  "startup_ms": {
+   "median": 1.81,
+   "min": 1.704,
+   "max": 1.92,
+   "stdev": 0.063
+  },
+  "ingest_ms": {
+   "median": 10.73,
+   "min": 10.237,
+   "max": 11.524,
+   "stdev": 0.473
+  },
+  "ingest_cpu_ms": {
+   "median": 3.413,
+   "min": 3.366,
+   "max": 3.554,
+   "stdev": 0.054
+  },
+  "snapshot_ms": {
+   "median": 3.069,
+   "min": 3.007,
+   "max": 3.117,
+   "stdev": 0.032
+  },
+  "usage_ms": {
+   "median": 1.792,
+   "min": 1.75,
+   "max": 1.865,
+   "stdev": 0.032
+  }
+ }
+}
+
+## desktop runtime sampler (tests/support/desktopRuntime.ts), 8 interleaved single runs per binary, idle window 15 s, Xvfb software rendering
+ 20:39:27 up 3 days, 15:46, 11 users,  load average: 16,42, 25,62, 32,29
+ 20:47:26 up 3 days, 15:54, 11 users,  load average: 4,47, 10,07, 21,84
+fat 1 {"coldStartMs": 414.9, "settledMs": 4665.71, "startupCpuSeconds": 0.78, "idleCpuPercent": 0.13, "rssMiB": 467.64, "pssMiB": 301.4, "peakRssMiB": 467.64}
+fat 2 {"coldStartMs": 290.05, "settledMs": 4466.27, "startupCpuSeconds": 0.53, "idleCpuPercent": 0.07, "rssMiB": 470.18, "pssMiB": 301.67, "peakRssMiB": 470.76}
+fat 3 {"coldStartMs": 423.16, "settledMs": 4634.35, "startupCpuSeconds": 0.62, "idleCpuPercent": 0.07, "rssMiB": 470.16, "pssMiB": 299.87, "peakRssMiB": 470.16}
+fat 4 {"coldStartMs": 348.98, "settledMs": 4621.64, "startupCpuSeconds": 0.63, "idleCpuPercent": 0.13, "rssMiB": 470.55, "pssMiB": 306.78, "peakRssMiB": 470.59}
+fat 5 {"coldStartMs": 367.73, "settledMs": 4582.93, "startupCpuSeconds": 0.61, "idleCpuPercent": 0.07, "rssMiB": 469.85, "pssMiB": 306.25, "peakRssMiB": 470.36}
+fat 6 {"coldStartMs": 352.11, "settledMs": 4602.47, "startupCpuSeconds": 0.67, "idleCpuPercent": 0.07, "rssMiB": 470.34, "pssMiB": 305.77, "peakRssMiB": 470.82}
+fat 7 {"coldStartMs": 285.04, "settledMs": 4477.45, "startupCpuSeconds": 0.55, "idleCpuPercent": 0.13, "rssMiB": 469.77, "pssMiB": 307.16, "peakRssMiB": 470.5}
+fat 8 {"coldStartMs": 288.17, "settledMs": 4471.36, "startupCpuSeconds": 0.52, "idleCpuPercent": 0.07, "rssMiB": 469.58, "pssMiB": 306.33, "peakRssMiB": 469.84}
+thin16 1 {"coldStartMs": 350.69, "settledMs": 4546.14, "startupCpuSeconds": 0.6, "idleCpuPercent": 0.13, "rssMiB": 472.37, "pssMiB": 304.71, "peakRssMiB": 472.96}
+thin16 2 {"coldStartMs": 289.56, "settledMs": 4479.82, "startupCpuSeconds": 0.55, "idleCpuPercent": 0, "rssMiB": 473.02, "pssMiB": 304.39, "peakRssMiB": 473.02}
+thin16 3 {"coldStartMs": 379.8, "settledMs": 4646.33, "startupCpuSeconds": 0.65, "idleCpuPercent": 0.07, "rssMiB": 473.28, "pssMiB": 303.41, "peakRssMiB": 473.28}
+thin16 4 {"coldStartMs": 345.78, "settledMs": 4621.56, "startupCpuSeconds": 0.69, "idleCpuPercent": 0.07, "rssMiB": 473.57, "pssMiB": 303.69, "peakRssMiB": 473.57}
+thin16 5 {"coldStartMs": 360.06, "settledMs": 4640.58, "startupCpuSeconds": 0.66, "idleCpuPercent": 0.13, "rssMiB": 473.26, "pssMiB": 303.09, "peakRssMiB": 473.26}
+thin16 6 {"coldStartMs": 391.58, "settledMs": 4650.64, "startupCpuSeconds": 0.66, "idleCpuPercent": 0, "rssMiB": 472.05, "pssMiB": 307.89, "peakRssMiB": 472.41}
+thin16 7 {"coldStartMs": 285.7, "settledMs": 4476.0, "startupCpuSeconds": 0.54, "idleCpuPercent": 0.13, "rssMiB": 473.06, "pssMiB": 310.68, "peakRssMiB": 473.49}
+thin16 8 {"coldStartMs": 288.75, "settledMs": 4487.74, "startupCpuSeconds": 0.54, "idleCpuPercent": 0.07, "rssMiB": 473.41, "pssMiB": 310.54, "peakRssMiB": 473.88}
+off16 1 {"coldStartMs": 319.36, "settledMs": 4504.27, "startupCpuSeconds": 0.56, "idleCpuPercent": 0.13, "rssMiB": 471.69, "pssMiB": 304.21, "peakRssMiB": 471.69}
+off16 2 {"coldStartMs": 320.53, "settledMs": 4508.69, "startupCpuSeconds": 0.56, "idleCpuPercent": 0, "rssMiB": 471.96, "pssMiB": 301.72, "peakRssMiB": 472.33}
+off16 3 {"coldStartMs": 349.73, "settledMs": 4634.69, "startupCpuSeconds": 0.68, "idleCpuPercent": 0.07, "rssMiB": 473.04, "pssMiB": 302.97, "peakRssMiB": 473.04}
+off16 4 {"coldStartMs": 348.44, "settledMs": 4606.13, "startupCpuSeconds": 0.63, "idleCpuPercent": 0, "rssMiB": 472.21, "pssMiB": 302.74, "peakRssMiB": 472.21}
+off16 5 {"coldStartMs": 418.55, "settledMs": 4714.11, "startupCpuSeconds": 0.74, "idleCpuPercent": 0.13, "rssMiB": 473.14, "pssMiB": 309.44, "peakRssMiB": 473.58}
+off16 6 {"coldStartMs": 385.32, "settledMs": 4645.12, "startupCpuSeconds": 0.76, "idleCpuPercent": 0.07, "rssMiB": 472.36, "pssMiB": 309.68, "peakRssMiB": 472.36}
+off16 7 {"coldStartMs": 288.67, "settledMs": 4484.07, "startupCpuSeconds": 0.55, "idleCpuPercent": 0.2, "rssMiB": 472.38, "pssMiB": 309.49, "peakRssMiB": 472.38}
+off16 8 {"coldStartMs": 285.55, "settledMs": 4482.79, "startupCpuSeconds": 0.55, "idleCpuPercent": 0.07, "rssMiB": 471.65, "pssMiB": 308.76, "peakRssMiB": 472.33}
+
+## terminal runtime (packages/terminal-runtime), 5 interleaved rounds per profile, cpus 8-11; parse_bench MiB/s medians and perf_gate ratios
+ 21:14:51 up 3 days, 16:21, 11 users,  load average: 7,77, 8,47, 13,11
+ 21:23:55 up 3 days, 16:30, 11 users,  load average: 4,42, 5,03, 9,17
+def 3111064
+196632
+fat 2497616
+184412
+thin16 2537792
+187152
+def 1 plain text/vt-only=572.2; plain text/framed=74.0; ANSI + truecolor/vt-only=75.6; ANSI + truecolor/framed=46.8; full-screen redraw/vt-only=339.8; full-screen redraw/framed=67.9; CJK/emoji/combining/vt-only=77.3; CJK/emoji/combining/framed=45.7 | gate: VT-only throughput=535.801; frame cost, plain=0.141; frame cost, ANSI=0.609
+def 2 plain text/vt-only=578.8; plain text/framed=72.1; ANSI + truecolor/vt-only=76.2; ANSI + truecolor/framed=46.8; full-screen redraw/vt-only=333.0; full-screen redraw/framed=68.6; CJK/emoji/combining/vt-only=77.4; CJK/emoji/combining/framed=46.3 | gate: VT-only throughput=526.278; frame cost, plain=0.159; frame cost, ANSI=0.637
+def 3 plain text/vt-only=584.6; plain text/framed=74.4; ANSI + truecolor/vt-only=76.4; ANSI + truecolor/framed=47.0; full-screen redraw/vt-only=339.3; full-screen redraw/framed=69.5; CJK/emoji/combining/vt-only=79.0; CJK/emoji/combining/framed=47.1 | gate: VT-only throughput=531.190; frame cost, plain=0.157; frame cost, ANSI=0.635
+def 4 plain text/vt-only=582.0; plain text/framed=75.0; ANSI + truecolor/vt-only=77.4; ANSI + truecolor/framed=48.0; full-screen redraw/vt-only=343.2; full-screen redraw/framed=69.9; CJK/emoji/combining/vt-only=77.8; CJK/emoji/combining/framed=46.7 | gate: VT-only throughput=532.502; frame cost, plain=0.159; frame cost, ANSI=0.634
+def 5 plain text/vt-only=580.8; plain text/framed=73.5; ANSI + truecolor/vt-only=77.3; ANSI + truecolor/framed=47.5; full-screen redraw/vt-only=341.6; full-screen redraw/framed=65.7; CJK/emoji/combining/vt-only=69.9; CJK/emoji/combining/framed=46.3 | gate: VT-only throughput=531.810; frame cost, plain=0.158; frame cost, ANSI=0.637
+fat 1 plain text/vt-only=565.9; plain text/framed=98.5; ANSI + truecolor/vt-only=74.6; ANSI + truecolor/framed=52.1; full-screen redraw/vt-only=337.4; full-screen redraw/framed=83.4; CJK/emoji/combining/vt-only=77.7; CJK/emoji/combining/framed=51.0 | gate: VT-only throughput=528.957; frame cost, plain=0.172; frame cost, ANSI=0.677
+fat 2 plain text/vt-only=585.4; plain text/framed=98.1; ANSI + truecolor/vt-only=75.4; ANSI + truecolor/framed=51.2; full-screen redraw/vt-only=326.3; full-screen redraw/framed=82.3; CJK/emoji/combining/vt-only=77.6; CJK/emoji/combining/framed=50.9 | gate: VT-only throughput=538.677; frame cost, plain=0.170; frame cost, ANSI=0.674
+fat 3 plain text/vt-only=578.9; plain text/framed=98.1; ANSI + truecolor/vt-only=75.8; ANSI + truecolor/framed=51.0; full-screen redraw/vt-only=345.9; full-screen redraw/framed=82.3; CJK/emoji/combining/vt-only=78.1; CJK/emoji/combining/framed=51.4 | gate: VT-only throughput=530.986; frame cost, plain=0.171; frame cost, ANSI=0.679
+fat 4 plain text/vt-only=577.8; plain text/framed=97.4; ANSI + truecolor/vt-only=76.1; ANSI + truecolor/framed=52.5; full-screen redraw/vt-only=348.6; full-screen redraw/framed=83.6; CJK/emoji/combining/vt-only=79.0; CJK/emoji/combining/framed=51.0 | gate: VT-only throughput=527.185; frame cost, plain=0.172; frame cost, ANSI=0.678
+fat 5 plain text/vt-only=586.7; plain text/framed=91.0; ANSI + truecolor/vt-only=73.4; ANSI + truecolor/framed=52.6; full-screen redraw/vt-only=342.2; full-screen redraw/framed=81.5; CJK/emoji/combining/vt-only=78.1; CJK/emoji/combining/framed=50.7 | gate: VT-only throughput=528.394; frame cost, plain=0.172; frame cost, ANSI=0.669
+thin16 1 plain text/vt-only=531.7; plain text/framed=83.1; ANSI + truecolor/vt-only=74.1; ANSI + truecolor/framed=47.1; full-screen redraw/vt-only=343.9; full-screen redraw/framed=74.3; CJK/emoji/combining/vt-only=78.1; CJK/emoji/combining/framed=48.5 | gate: VT-only throughput=473.429; frame cost, plain=0.182; frame cost, ANSI=0.681
+thin16 2 plain text/vt-only=568.6; plain text/framed=85.6; ANSI + truecolor/vt-only=76.5; ANSI + truecolor/framed=51.1; full-screen redraw/vt-only=343.3; full-screen redraw/framed=73.7; CJK/emoji/combining/vt-only=77.7; CJK/emoji/combining/framed=49.8 | gate: VT-only throughput=477.163; frame cost, plain=0.180; frame cost, ANSI=0.673
+thin16 3 plain text/vt-only=584.3; plain text/framed=85.6; ANSI + truecolor/vt-only=77.4; ANSI + truecolor/framed=49.2; full-screen redraw/vt-only=339.6; full-screen redraw/framed=73.8; CJK/emoji/combining/vt-only=78.0; CJK/emoji/combining/framed=49.4 | gate: VT-only throughput=467.480; frame cost, plain=0.183; frame cost, ANSI=0.668
+thin16 4 plain text/vt-only=577.7; plain text/framed=85.0; ANSI + truecolor/vt-only=77.5; ANSI + truecolor/framed=50.8; full-screen redraw/vt-only=342.5; full-screen redraw/framed=74.4; CJK/emoji/combining/vt-only=78.9; CJK/emoji/combining/framed=49.7 | gate: VT-only throughput=474.242; frame cost, plain=0.181; frame cost, ANSI=0.676
+thin16 5 plain text/vt-only=570.4; plain text/framed=85.6; ANSI + truecolor/vt-only=77.1; ANSI + truecolor/framed=51.0; full-screen redraw/vt-only=343.8; full-screen redraw/framed=72.9; CJK/emoji/combining/vt-only=79.4; CJK/emoji/combining/framed=49.6 | gate: VT-only throughput=477.087; frame cost, plain=0.180; frame cost, ANSI=0.669
