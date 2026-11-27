@@ -4,6 +4,7 @@ import {act,fireEvent,render,screen,waitFor,within} from '@testing-library/react
 import {invoke} from '@tauri-apps/api/core';
 import {cleanupNativeMocks} from './test/nativeCoreMock';
 import {chatFollowAccess} from './test/chatFollowAccess';
+import {openFolds} from './test/openFolds';
 import ChatPanel,{parseTranscript} from './ChatPanel';
 vi.mock('@tauri-apps/api/core',async original=>(await import('./test/nativeCoreMock')).mockNativeCore(original));
 afterEach(cleanupNativeMocks);
@@ -87,7 +88,7 @@ describe('a Grok Build conversation in the Agent view',()=>{
   });
 
   it('shows the turn, the tool call with its output and the plan with its steps',async()=>{
-    await openBound();
+    await openBound();await openFolds();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('Running them.')).toBeTruthy();
     expect(document.body.textContent).toContain('npm test');
