@@ -340,13 +340,19 @@ the Chrome slices [#1255](https://github.com/mihazs/lazysh/issues/1255),
   to let go, so the relay stops it, removes its profile and starts a new one, once; if that one is busy too the
   session ends with `BrowserSessionBusy`. A second client that connects to the port while the relay's session is
   open is refused by Firefox (`session not created`); that is a property of Firefox, tested on the host's own.
-- **Frames.** `browsingContext.captureScreenshot` of the viewport as JPEG quality 0.6, two requests in flight, one
-  every 50 ms at most (20 a second), and one every 250 ms once eight in a row matched the last frame. A frame
-  equal to the last one is not sent, and the outbox keeps the newest one for the device exactly as for Chrome.
-  `pause` stops every request and `resume` sends a frame even if the page did not change. The pacing is fixed and
-  chosen from the [measurements](reference/host-browser-feasibility.md#firefox-host-cost); the adaptive ladder of
-  [#1259](https://github.com/mihazs/lazysh/issues/1259) replaces it. The frame header's scroll offset is 0:
-  the capture is the viewport, and a pointer is mapped into the viewport.
+- **Frames.** `browsingContext.captureScreenshot` of the viewport, two requests in flight, paced and encoded by the
+  quality ladder's rung (the same four rungs, `quality {rung}` and Data saver pin as for Chrome): the rung's JPEG
+  quality as `format.quality`, one request per frame divisor of a 60 a second page but never more often than every
+  50 ms (20 a second: High, Balanced and Low ask every 50 ms, Minimal every 100 ms), and the rung's frame size as
+  the page's device pixel ratio (`browsingContext.setViewport` with the same viewport and `scale` times the
+  rung's percentage), because BiDi's `clip` crops and has no scale. Once eight captures in a row matched the last
+  frame the pace drops to one every 250 ms or the rung's own interval, whichever is longer. A frame equal to the
+  last one is not sent and is not counted as produced, so a still page proves nothing to the ladder; the outbox
+  keeps the newest frame for the device exactly as for Chrome. `pause` stops every request and `resume` starts
+  from the rung the ladder wants now and sends a frame even if the page did not change. Not done yet: the
+  two-second boost after input (the adapter takes no input until
+  [#1715](https://github.com/mihazs/lazysh/issues/1715)) and a single sharp still when the page stops changing.
+  The frame header's scroll offset is 0: the capture is the viewport, and a pointer is mapped into the viewport.
 - **Title and address.** Once a second, `browsingContext.getTree` gives the address and one `script.evaluate` of
   `document.title`, in a sandbox realm of the relay's own (`lazysh`) that the page's script cannot see or replace,
   gives the title. That evaluation is the only script the relay ever runs, and the allow-list refuses it with any

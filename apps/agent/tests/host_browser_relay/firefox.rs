@@ -367,11 +367,14 @@ struct OnFixturePage {
 }
 impl OnFixturePage {
     fn start(binary: &Path) -> Self {
-        let (port, server) = fixture_page(GREEN_PAGE);
+        Self::start_with(binary, GREEN_PAGE)
+    }
+    fn start_with(binary: &Path, page: &'static str) -> Self {
+        let (port, server) = fixture_page(page);
         let (fixture, home) = (Fixture::enabled(), tempfile::tempdir().unwrap());
-        let page = format!("http://127.0.0.1:{port}/");
+        let url = format!("http://127.0.0.1:{port}/");
         Self {
-            relay: real(&fixture, binary, home.path(), &page),
+            relay: real(&fixture, binary, home.path(), &url),
             fixture,
             port,
             _server: server,
@@ -558,4 +561,231 @@ fn a_real_firefox_holding_a_leaked_session_is_replaced_and_then_streams() {
     let profile = fixture.profiles().remove(0);
     relay.stop();
     assert_real_browser_is_gone(&profile);
+}
+
+/// The capture requests the stand-in Firefox received, in order.
+fn captures(fixture: &Fixture) -> Vec<Value> {
+    fixture
+        .commands()
+        .into_iter()
+        .filter(|command| command["method"] == "browsingContext.captureScreenshot")
+        .collect()
+}
+
+fn wait_for_rung(relay: &Relay, rung: &str, pinned: bool) {
+    let quality = relay.next_json("quality");
+    assert_eq!(
+        (quality["rung"].as_str(), quality["pinned"].as_bool()),
+        (Some(rung), Some(pinned))
+    );
+}
+
+/// A pinned rung (Data saver) is what the browser is asked for: the JPEG quality of each capture, how often it is
+/// captured, and the frame size (the device pixel ratio), and `auto` gives the top rung back.
+#[test]
+fn a_rung_sets_the_capture_quality_the_pace_and_the_frame_size() {
+    let fixture = fixture();
+    let mut relay = serve(&fixture, "", "160.0");
+    wait_for_rung(&relay, "high", false);
+    // Pinned: a device that acknowledges nothing would step an adaptive ladder down within a second.
+    relay.send(json!({"type": "quality", "rung": "high"}));
+    wait_for_rung(&relay, "high", true);
+    let over = |seconds: u64| {
+        let before = captures(&fixture).len();
+        std::thread::sleep(Duration::from_secs(seconds));
+        captures(&fixture).len() - before
+    };
+    assert!(over(1) > 0, "nothing was captured");
+    let last =
+        |fixture: &Fixture| captures(fixture).pop().unwrap()["params"]["format"]["quality"].clone();
+    assert_eq!(last(&fixture), json!(0.6));
+
+    relay.send(json!({"type": "quality", "rung": "minimal"}));
+    wait_for_rung(&relay, "minimal", true);
+    std::thread::sleep(QUIET);
+    let at_minimal = over(2);
+    assert_eq!(last(&fixture), json!(0.35));
+    // Every sixth frame of 60 a second: one capture every 100 ms, against one every 50 ms at the top.
+    assert!(at_minimal <= 24, "{at_minimal} captures in 2 s");
+    let resized: Vec<_> = fixture
+        .commands()
+        .into_iter()
+        .filter(|command| command["method"] == "browsingContext.setViewport")
+        .map(|command| command["params"].clone())
+        .collect();
+    // The page is laid out at the same size, and only its pixel density goes down.
+    assert_eq!(resized.last().unwrap()["devicePixelRatio"], json!(0.75));
+    assert_eq!(
+        resized.last().unwrap()["viewport"],
+        json!({"width": 412, "height": 915})
+    );
+
+    relay.send(json!({"type": "quality", "rung": "auto"}));
+    wait_for_rung(&relay, "high", false);
+    std::thread::sleep(QUIET);
+    assert_eq!(last(&fixture), json!(0.6));
+    let ratio = fixture
+        .commands()
+        .into_iter()
+        .rfind(|command| command["method"] == "browsingContext.setViewport")
+        .unwrap()["params"]["devicePixelRatio"]
+        .clone();
+    assert_eq!(ratio, json!(1.0));
+    relay.stop();
+}
+
+/// A device that acknowledges nothing is a link that cannot carry the frames: the ladder steps down within a
+/// second and settles on the lowest rung within five.
+#[test]
+fn a_device_that_acknowledges_nothing_steps_the_rung_down_to_the_lowest() {
+    let fixture = fixture();
+    let mut relay = serve(&fixture, "", "160.0");
+    relay.next("state");
+    assert_settles_on(
+        &mut relay,
+        (1000.0, Duration::from_secs(3600)),
+        Duration::from_secs(6),
+        ("minimal", true),
+    );
+    relay.stop();
+}
+
+/// A page that changes every frame with noise a JPEG cannot shrink: its frames are big enough for a slow link to
+/// matter.
+const NOISE_PAGE: &str = "<!doctype html><title>Noise</title><style>body{margin:0}canvas{display:block}</style>
+<canvas width=412 height=915></canvas>
+<script>
+const context = document.querySelector('canvas').getContext('2d');
+const draw = () => {
+  for (let i = 0; i < 400; i++) {
+    context.fillStyle = `rgb(${Math.random() * 255 | 0},${Math.random() * 255 | 0},${Math.random() * 255 | 0})`;
+    context.fillRect(Math.random() * 412, Math.random() * 915, 60, 60);
+  }
+  requestAnimationFrame(draw);
+};
+draw();
+</script>";
+
+/// A page that animates the way the feasibility measurements did (moving blocks, no heavy script), so that the
+/// cost measured is the capture's and not the page's.
+const MOVING_PAGE: &str = "<!doctype html><title>Moving</title>
+<style>body{margin:0;overflow:hidden}div{position:absolute;width:80px;height:80px;animation:m 1.3s linear infinite alternate}
+@keyframes m{from{transform:translate(0,0) rotate(0)}to{transform:translate(320px,820px) rotate(90deg)}}</style>
+<script>
+for (let i = 0; i < 20; i++) {
+  document.write(`<div style=\"left:${i * 20}px;background:hsl(${i * 18},80%,50%);animation-delay:-${i * 60}ms\"></div>`);
+}
+</script>";
+
+/// The real Firefox over shaped links, with the harness of the Chrome ladder: the rung it settles on, and how soon.
+fn real_firefox_settles_on(mbps: f64, round_trip_ms: u64, rung: &str) {
+    let Some(binary) = firefox() else {
+        return;
+    };
+    let mut shown = OnFixturePage::start_with(&binary, NOISE_PAGE);
+    shown.relay.next_during("state", WAIT * 2);
+    assert_settles_on(
+        &mut shown.relay,
+        (mbps, Duration::from_millis(round_trip_ms)),
+        Duration::from_secs(8),
+        (rung, false),
+    );
+    shown.relay.stop();
+}
+
+#[test]
+fn a_real_firefox_on_a_fast_link_keeps_the_highest_rung() {
+    real_firefox_settles_on(50.0, 10, "high");
+}
+
+#[test]
+fn a_real_firefox_on_a_slow_link_settles_on_the_lowest_rung_within_five_seconds() {
+    real_firefox_settles_on(1.5, 150, "minimal");
+}
+
+/// The CPU the relay and every process under it used, in seconds (Linux: `/proc`).
+#[cfg(target_os = "linux")]
+fn cpu_seconds(root: u32) -> f64 {
+    let processes: Vec<(u32, u32, u64)> = fs::read_dir("/proc")
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+            let text = fs::read_to_string(entry.path().join("stat")).ok()?;
+            // The command name can hold spaces and brackets: the fields start after its last bracket.
+            let fields: Vec<_> = text[text.rfind(')')? + 2..].split_whitespace().collect();
+            let (user, system) = (
+                fields[11].parse::<u64>().ok()?,
+                fields[12].parse::<u64>().ok()?,
+            );
+            Some((pid, fields[1].parse().ok()?, user + system))
+        })
+        .collect();
+    let (mut tree, mut ticks) = (vec![root], 0);
+    while let Some(pid) = tree.pop() {
+        for (child, parent, own) in &processes {
+            if *child == pid {
+                ticks += own;
+            }
+            if *parent == pid {
+                tree.push(*child);
+            }
+        }
+    }
+    // SAFETY: sysconf only reads a constant.
+    ticks as f64 / unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64
+}
+
+/// The host's cost of one rung on a page that moves every frame, as a share of one core (the relay and every
+/// Firefox process together), in a Firefox of its own: one that served other rungs before costs more (measured), so
+/// rungs are not compared inside one.
+#[cfg(target_os = "linux")]
+fn cpu_share(binary: &Path, rung: &str) -> f64 {
+    let mut shown = OnFixturePage::start_with(binary, MOVING_PAGE);
+    shown.relay.next_during("state", WAIT * 2);
+    let fast = |relay: &mut Relay, seconds| {
+        over_link(
+            relay,
+            50.0,
+            Duration::from_millis(10),
+            Duration::from_secs(seconds),
+        )
+    };
+    shown.relay.send(json!({"type": "quality", "rung": rung}));
+    // Firefox's first seconds on a page cost more than the stream does.
+    fast(&mut shown.relay, 4);
+    let pid = shown.relay.child.id();
+    let before = cpu_seconds(pid);
+    fast(&mut shown.relay, 5);
+    let share = (cpu_seconds(pid) - before) / 5.0 * 100.0;
+    shown.relay.stop();
+    share
+}
+
+/// At the highest rung, 20 captures a second of a page that moves every frame leave the host under one core.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_real_firefox_stays_under_one_core_at_the_highest_rung() {
+    let Some(binary) = firefox() else {
+        return;
+    };
+    let share = cpu_share(&binary, "high");
+    assert!(share < 100.0, "{share} percent of one core");
+}
+
+/// The table of `docs/reference/host-browser-feasibility.md`: `cargo test -p lazysh-agent --test
+/// host_browser_relay -- --ignored --nocapture cpu_by_rung`. A measurement, not a check: it asserts nothing.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "a measurement for the feasibility document"]
+fn cpu_by_rung() {
+    let Some(binary) = firefox() else {
+        return;
+    };
+    for rung in ["high", "balanced", "low", "minimal"] {
+        eprintln!(
+            "{rung}: {:.0} percent of one core",
+            cpu_share(&binary, rung)
+        );
+    }
 }

@@ -9,11 +9,12 @@
 //! Everything the relay sends goes through [`allow::bidi`]. The client sees the same wire format as for Chrome.
 use super::{
     allow, bidi, die_with_launcher, find_in,
+    ladder::{Ladder, Rung, Screencast},
     outbox::Outbox,
     own_process_group, profile,
     relay::{
-        announce_page, await_reply, bounded, major, refusal_notice, running_state, Event, Handler,
-        Running, Serve, CLIENT_CLOSED,
+        announce_page, await_reply, bounded, major, refusal_notice, report_quality, running_state,
+        Event, Handler, Running, Serve, CLIENT_CLOSED, TICK,
     },
     wire::{self, Client, Viewport},
     FIREFOX_CANDIDATES,
@@ -38,12 +39,14 @@ const START_TIMEOUT: Duration = Duration::from_secs(30);
 const PORT_FILE: &str = "WebDriverBiDiServer.json";
 /// Screenshot requests in flight at once: enough that the round trip does not pace the browser.
 const PIPELINE: usize = 2;
-/// Between screenshot requests while the page changes (at most 20 a second), and once it has stopped changing.
-// shortcut: fixed pacing. The adaptive quality ladder (#1259) replaces both and adds the boost after input.
-const BUSY_INTERVAL: Duration = Duration::from_millis(50);
+/// Between screenshot requests at most (20 a second): what a static page costs the host is measured in
+/// `docs/reference/host-browser-feasibility.md`, and 60 a second on an animated page took 73 percent of a core.
+const BASE_INTERVAL: Duration = Duration::from_millis(50);
+/// The ladder's frame divisor is against a page that changes 60 times a second, as for Chrome.
+const FRAME: Duration = Duration::from_micros(16_667);
+/// Between screenshot requests once the page has stopped changing (never shorter than the rung's own interval).
 const IDLE_INTERVAL: Duration = Duration::from_millis(250);
 const IDLE_AFTER: u32 = 8;
-const QUALITY: f64 = 0.6;
 const PAGE_POLL: Duration = Duration::from_secs(1);
 const END_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_ERRORS: u32 = 5;
@@ -385,6 +388,8 @@ enum Pending {
     Capture,
     Tree,
     Title,
+    /// The device pixel ratio that gives a rung its frame size; the reply carries nothing.
+    Viewport,
 }
 
 struct Stream<'l, 'a> {
@@ -392,6 +397,10 @@ struct Stream<'l, 'a> {
     outbox: &'l Arc<Outbox>,
     viewport: Viewport,
     paused: bool,
+    /// What the rung asks of the browser now, and what the client was last told about the rung.
+    ladder: Ladder,
+    screencast: Screencast,
+    quality: Option<(Rung, bool)>,
     sequence: u32,
     /// Client messages outside the closed set, by count: never their content.
     refused: u64,
@@ -409,11 +418,15 @@ struct Stream<'l, 'a> {
 impl<'l, 'a> Stream<'l, 'a> {
     fn new(launched: &'l mut Launched<'a>, outbox: &'l Arc<Outbox>, viewport: Viewport) -> Self {
         let now = Instant::now();
+        let mut ladder = Ladder::new(now);
         Self {
             launched,
             outbox,
             viewport,
             paused: false,
+            screencast: ladder.apply(now),
+            ladder,
+            quality: None,
             sequence: 0,
             refused: 0,
             pending: Vec::new(),
@@ -428,7 +441,7 @@ impl<'l, 'a> Stream<'l, 'a> {
     }
 
     // shortcut: no watchdog on a Firefox that stops answering; its requests wait until the channel closes, which
-    // ends it, and the page and capture polls add two entries a second meanwhile. Upgrade with the quality ladder.
+    // ends it, and the page and capture polls add two entries a second meanwhile. Upgrade when it is seen.
     fn request(&mut self, method: &str, params: Value, kind: Pending) -> Result<()> {
         let id = self.launched.link.bidi.send(method, params)?;
         self.pending.push((id, kind));
@@ -454,20 +467,30 @@ impl<'l, 'a> Stream<'l, 'a> {
     fn run(&mut self) -> Result<&'static str> {
         loop {
             let now = Instant::now();
+            if !self.paused {
+                if let Some(screencast) = self.ladder.tick(now) {
+                    self.fit(screencast)?;
+                }
+            }
+            report_quality(&self.ladder, &mut self.quality, self.outbox);
             if self.capture_due().is_some_and(|due| due <= now) {
                 let context = self.launched.context.clone();
-                let interval = if self.same >= IDLE_AFTER {
-                    IDLE_INTERVAL
-                } else {
-                    BUSY_INTERVAL
-                };
-                self.next_capture = now + interval;
+                let interval = (FRAME * self.screencast.every_nth).max(BASE_INTERVAL);
+                self.next_capture = now
+                    + if self.same >= IDLE_AFTER {
+                        interval.max(IDLE_INTERVAL)
+                    } else {
+                        interval
+                    };
                 self.request(
                     "browsingContext.captureScreenshot",
                     json!({
                         "context": context,
                         "origin": "viewport",
-                        "format": {"type": "image/jpeg", "quality": QUALITY},
+                        "format": {
+                            "type": "image/jpeg",
+                            "quality": f64::from(self.screencast.quality) / 100.0,
+                        },
                     }),
                     Pending::Capture,
                 )?;
@@ -483,7 +506,8 @@ impl<'l, 'a> Stream<'l, 'a> {
                         .into_iter()
                         .flatten()
                         .min()
-                        .map_or(PAGE_POLL, |due| due.saturating_duration_since(now));
+                        .map_or(PAGE_POLL, |due| due.saturating_duration_since(now))
+                        .min(TICK);
                     match self.launched.link.inbox.recv_timeout(wake) {
                         Ok(event) => event,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -495,6 +519,26 @@ impl<'l, 'a> Stream<'l, 'a> {
                 return Ok(reason);
             }
         }
+    }
+
+    /// Take the rung's parameters. Quality and pace apply to the next capture; the frame size is the device pixel
+    /// ratio, because BiDi's capture has a clip but no scale (a clip would cut the page the pointer maps onto).
+    fn fit(&mut self, screencast: Screencast) -> Result<()> {
+        let resized = screencast.percent != self.screencast.percent;
+        self.screencast = screencast;
+        if resized {
+            let viewport = self.viewport;
+            self.request(
+                "browsingContext.setViewport",
+                json!({
+                    "context": self.launched.context,
+                    "viewport": {"width": viewport.width, "height": viewport.height},
+                    "devicePixelRatio": viewport.scale * screencast.percent as f32 / 100.0,
+                }),
+                Pending::Viewport,
+            )?;
+        }
+        Ok(())
     }
 
     /// `getTree` has no title, so it is one read of `document.title` in the relay's own realm.
@@ -513,9 +557,9 @@ impl<'l, 'a> Stream<'l, 'a> {
     }
 
     /// No request goes out while hidden, and the first one after showing it again sends a frame, changed or not.
-    fn pause(&mut self, paused: bool) {
+    fn pause(&mut self, paused: bool) -> Result<()> {
         if paused == self.paused {
-            return;
+            return Ok(());
         }
         self.paused = paused;
         self.outbox.pause(paused);
@@ -525,6 +569,12 @@ impl<'l, 'a> Stream<'l, 'a> {
         self.polled = Instant::now();
         self.outbox
             .control(json!({"type": "state", "state": if paused { "paused" } else { "running" }}));
+        if paused {
+            return Ok(());
+        }
+        // A shown view starts from what the ladder wants now, as a restarted screencast does.
+        let screencast = self.ladder.apply(Instant::now());
+        self.fit(screencast)
     }
 
     fn refuse(&mut self) {
@@ -550,6 +600,7 @@ impl<'l, 'a> Stream<'l, 'a> {
         let result = &message["result"];
         match kind {
             Pending::Capture => self.frame(result["data"].as_str().unwrap_or_default()),
+            Pending::Viewport => {}
             Pending::Tree => {
                 let context = self.launched.context.as_str();
                 let Some(page) = result["contexts"]
@@ -608,6 +659,7 @@ impl<'l, 'a> Stream<'l, 'a> {
             return;
         }
         self.same = 0;
+        self.ladder.produced();
         self.last.clone_from(&jpeg);
         self.sequence = self.sequence.wrapping_add(1);
         self.outbox.frame(&wire::Frame {
@@ -632,10 +684,13 @@ impl Handler for Stream<'_, '_> {
         let message = serde_json::from_slice::<Client>(body).ok();
         match message {
             Some(Client::Ack { .. }) => {
-                self.outbox.ack();
+                if self.outbox.ack() {
+                    self.ladder.delivered();
+                }
             }
-            Some(Client::Pause {}) => self.pause(true),
-            Some(Client::Resume {}) => self.pause(false),
+            Some(Client::Quality { rung }) => self.ladder.choose(rung, Instant::now()),
+            Some(Client::Pause {}) => self.pause(true)?,
+            Some(Client::Resume {}) => self.pause(false)?,
             // A second open, any message outside the closed set, and Control and input (this adapter reports
             // `control: false`, #1715): counted, never forwarded.
             Some(_) | None => self.refuse(),

@@ -46,7 +46,7 @@ const MAX_BROWSER_MESSAGE: u64 = 8 << 20;
 pub(super) const MAX_TITLE: usize = 512;
 const TITLE_POLL: Duration = Duration::from_secs(1);
 /// How often the quality ladder and the idle time are looked at when nothing else wakes the relay.
-const TICK: Duration = Duration::from_millis(100);
+pub(super) const TICK: Duration = Duration::from_millis(100);
 
 pub struct Serve<'a> {
     /// The companion state directory: where the setting and the profiles live.
@@ -532,6 +532,19 @@ struct Relay {
     /// The `tabs` message the client has, so that a change that is not one is not sent.
     sent: Value,
 }
+/// Tell the client the rung it sees and whether it is pinned, when that changed since `reported`.
+pub(super) fn report_quality(
+    ladder: &Ladder,
+    reported: &mut Option<(ladder::Rung, bool)>,
+    outbox: &Outbox,
+) {
+    let quality = ladder.rung();
+    if *reported != Some(quality) {
+        *reported = Some(quality);
+        outbox.control(json!({"type": "quality", "rung": quality.0, "pinned": quality.1}));
+    }
+}
+
 impl Relay {
     /// Start the screencast at what the ladder wants now.
     fn start_screencast(&mut self) -> Result<()> {
@@ -565,14 +578,8 @@ impl Relay {
         self.send_screencast(screencast)
     }
 
-    /// Tell the client the rung it sees and whether it is pinned, when that changed.
     fn report_quality(&mut self) {
-        let quality = self.ladder.rung();
-        if self.quality != Some(quality) {
-            self.quality = Some(quality);
-            self.outbox
-                .control(json!({"type": "quality", "rung": quality.0, "pinned": quality.1}));
-        }
+        report_quality(&self.ladder, &mut self.quality, &self.outbox);
     }
 
     /// Handle events until the session ends; the value is the reason it ended.

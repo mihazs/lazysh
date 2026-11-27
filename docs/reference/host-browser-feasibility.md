@@ -212,6 +212,30 @@ Same 11-process tree, animated page unless stated:
 | Animated page, polled at 20 per second | 32 percent | 521 MB |
 | Animated page, polled at 60 per second | 73 percent | 522 MB |
 
+### Firefox host cost per rung
+
+The relay's quality ladder drives the polling ([#1717](https://github.com/mihazs/lazysh/issues/1717)). Method:
+`cargo test -p lazysh-agent --test host_browser_relay -- --ignored --nocapture cpu_by_rung` starts a real Firefox
+160.0.1 headless for each rung, on a loopback page of 20 blocks that move and rotate with a CSS animation, pins the
+rung, lets the stream run 4 seconds, then sums the user and system CPU time of the relay and every process under
+it from `/proc` over the next 5 seconds, over an acknowledging link of 50 Mbit/s and 10 ms (a device that keeps
+up). The rungs poll every 50 ms (High, Balanced, Low) and every 100 ms (Minimal).
+
+| Rung | Share of one core, three runs |
+| --- | --- |
+| High (q60, full size) | 82, 83, 89 percent |
+| Balanced (q50) | 59, 72, 78 percent |
+| Low (q40) | 56, 68, 79 percent |
+| Minimal (q35, 75 percent size, every 100 ms) | 49, 71, 72 percent |
+
+Machine: AMD Ryzen 9 5900X (12 cores, 24 threads), Linux, **with a load average of 56 to 99 from other jobs**, so
+every figure is inflated by contention and the spread between runs is as large as the difference between rungs.
+What the runs support: the highest rung stays under one core, and the lower rungs cost the same or less. They do
+not support a ranking of Balanced, Low and Minimal, and they are higher than the 32 percent the quiet-host probe
+above measured for 20 requests a second on an animated page. A Firefox that had already served other rungs cost
+more than a fresh one in the same run (measured), which is why each rung has a Firefox of its own. The
+`a_real_firefox_stays_under_one_core_at_the_highest_rung` test asserts only the 100 percent bound.
+
 ## Firefox security observations
 
 | Property | Observed on Firefox 159 |
@@ -353,9 +377,12 @@ it, because a hosted runner's speed is not a requirement.
 - The Firefox relay ([#1257](https://github.com/mihazs/lazysh/issues/1257), slice 1) was exercised on Firefox 160
   on Linux, headless, against a loopback fixture. Not tried: Firefox older than 159 (the relay refuses it),
   Firefox from a snap or a Flatpak, headed Firefox, macOS and Windows hosts, a real phone and a real network. The
-  fixed pacing (20 screenshot requests a second at most, one every 250 ms for a page that stopped changing) was
-  not measured for host cost or latency with the relay: the numbers above are the sequential and polled ones from
-  the probe. Permission, telemetry and update preferences are set in the profile; their effect was not observed.
+  ladder's pacing (20 screenshot requests a second at most, 10 at the lowest rung, one every 250 ms for a page
+  that stopped changing) was measured for host cost only on a heavily loaded host (see the table above, no quiet
+  run), and not for latency with the relay. Whether Firefox renders a page identically at a device pixel ratio
+  below 1 (media queries and `resize` events fire when the rung changes the ratio) and what the lower pixel ratio
+  costs on a real page were not examined. The shaped link is the userspace one of the Chrome ladder tests, which
+  models goodput and round trip but not radio behaviour. Permission, telemetry and update preferences are set in the profile; their effect was not observed.
 - The user's normal profile, in either browser. The approval-mode probe used throwaway profiles by design.
 - Google Chrome stable, and Chrome 144 itself: the approval mode was measured on Chromium 157 only, and whether
   Google Chrome refuses the debug flag on its default profile (136 or newer) was not tried. Edge, Brave and other
