@@ -401,10 +401,30 @@ fn a_rollout_over_the_size_bound_is_reported_as_too_large() {
         .unwrap()
         .set_len(16 * 1024 * 1024 + 1)
         .unwrap();
-    for agent in [TranscriptAgent::Codex, TranscriptAgent::Claude] {
-        let error = conversation(&path, agent, 100).unwrap_err();
-        assert_eq!(error.class(), "TooLarge");
+    let error = conversation(&path, TranscriptAgent::Codex, 100).unwrap_err();
+    assert_eq!(error.class(), "TooLarge");
+}
+
+#[test]
+fn a_claude_file_over_the_size_bound_with_too_many_records_is_reported_as_too_large() {
+    // Claude files over 16 MiB are paged from a bounded suffix, so only the record bound still refuses one: reading
+    // from the first message needs every record, and 100,001 of them are over it.
+    use lazysh_agent::transcript::{conversation_window, window::Window};
+    use std::io::Write;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let mut file = std::io::BufWriter::new(fs::File::create(&path).unwrap());
+    let text = "x".repeat(100);
+    for number in 0..=100_000u32 {
+        let parent = number.checked_sub(1).map(|previous| format!("m{previous}"));
+        let record = message(&format!("m{number}"), parent.as_deref(), "user", &text);
+        writeln!(file, "{record}").unwrap();
     }
+    drop(file);
+    assert!(fs::metadata(&path).unwrap().len() > 16 * 1024 * 1024);
+    let error = conversation_window(&path, TranscriptAgent::Claude, 100, false, &Window::Start)
+        .unwrap_err();
+    assert_eq!(error.class(), "TooLarge");
 }
 
 #[test]
