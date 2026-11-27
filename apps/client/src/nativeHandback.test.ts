@@ -23,6 +23,7 @@ type Case = {id: string; cols: number; rows: number; scrollback: number; write: 
 const fixture = resolve(process.cwd(), '../../packages/terminal-runtime/fixtures/ansi-snapshot.json');
 const {cases} = JSON.parse(readFileSync(fixture, 'utf8')) as {cases: Case[]};
 const program = cases.find(({id}) => id === 'history-styles-and-modes')!;
+const snapshot = {ansi: program.snapshot, columns: program.cols, rows: program.rows};
 
 const encode = (text: string) => new TextEncoder().encode(text);
 const data = (text: string): SshEvent => ({type: 'data', data: [...encode(text)]});
@@ -30,11 +31,11 @@ const data = (text: string): SshEvent => ({type: 'data', data: [...encode(text)]
 const tail = ['\r\nfirst', '\r\nsecond', '\r\nthird'];
 
 /** The Rust command: from its call on the transport's output goes to the new Channel; what it answers is the snapshot. */
-const release = vi.hoisted(() => ({channel: undefined as undefined | {onmessage?: (event: unknown) => void}, answer: undefined as undefined | (() => Promise<string>), before: [] as unknown[]}));
+const release = vi.hoisted(() => ({channel: undefined as undefined | {onmessage?: (event: unknown) => void}, answer: undefined as undefined | (() => Promise<typeof snapshot | null>), before: [] as unknown[]}));
 beforeEach(() => {
   invoke.mockReset();
   release.channel = undefined; release.before = [];
-  release.answer = async () => program.snapshot;
+  release.answer = async () => snapshot;
   invoke.mockImplementation(async (command: string, args: {events?: typeof release.channel}) => {
     if (command !== 'terminal_core_release') return undefined;
     release.channel = args.events;
@@ -109,6 +110,39 @@ describe('leaving the native engine for xterm.js', () => {
     await Promise.all([fresh.dispose(), reference.dispose()]);
   });
 
+  it('uses the grid that accompanies the snapshot when the native mirror is stale', async () => {
+    const {session, onEvent} = await nativeSession();
+    vi.spyOn(session.adapter, 'size').mockReturnValue({columns: 80, rows: 24});
+    const fresh = createXtermAdapter();
+    expect(await handBackToXterm(session, {onEvent, createXterm: async () => fresh})).toBe(true);
+    expect(fresh.size()).toEqual({columns: program.cols, rows: program.rows});
+    await fresh.dispose();
+  });
+
+  it('restores Mosh geometry before queued frames and keeps resize requests as intents', async () => {
+    const {session, onEvent, acknowledged} = await nativeSession();
+    const previous = session.moshResize = session.adapter.enableCanonicalResize!();
+    const fresh = createXtermAdapter({cols: 80, rows: 24});
+    release.answer = async () => ({ansi: 'restored', columns: 30, rows: 6});
+    const frame = '\x1b]7777;lazysh-mosh;1;begin;8;42;9\x1b\\next\x1b]7777;lazysh-mosh;1;end;8\x1b\\';
+    release.before = [data(frame)];
+    const snapshotSizes: {columns: number; rows: number}[] = [];
+    const write = fresh.write.bind(fresh);
+    fresh.write = (bytes, applied) => { snapshotSizes.push(fresh.size()); return write(bytes, applied); };
+    expect(await handBackToXterm(session, {onEvent, createXterm: async () => fresh})).toBe(true);
+    await vi.waitFor(() => expect(acknowledged).toEqual([frame.length]));
+    expect(snapshotSizes[0]).toEqual({columns: 30, rows: 6});
+    expect(fresh.size()).toEqual({columns: 42, rows: 9});
+    expect(session.moshResize).not.toBe(previous);
+    expect(session.moshResize?.failure).toBeNull();
+    const intent = vi.fn();
+    session.moshResize?.onResizeIntent(intent);
+    fresh.requestSize({columns: 50, rows: 12});
+    expect(intent).toHaveBeenCalledWith({cols: 50, rows: 12});
+    expect(fresh.size()).toEqual({columns: 42, rows: 9});
+    await fresh.dispose();
+  });
+
   it('records the failure as the reason when the native engine broke, so the session says why it is on xterm.js', async () => {
     const {session, onEvent} = await nativeSession();
     await handBackToXterm(session, {onEvent, createXterm: async () => createXtermAdapter(), failure: 'failed: surface lost'});
@@ -118,7 +152,7 @@ describe('leaving the native engine for xterm.js', () => {
 
   it('still moves the session when the core cannot answer, because the output already flows to xterm.js', async () => {
     const {session, onEvent, acknowledged} = await nativeSession();
-    release.answer = async () => { throw new Error('The terminal core did not finish its output'); };
+    release.answer = async () => null;
     release.before = [data(tail[0])];
     expect(await handBackToXterm(session, {onEvent, createXterm: async () => createXtermAdapter({cols: program.cols, rows: program.rows})})).toBe(false);
     expect(session.adapter.backend).toBe('xterm');
@@ -126,6 +160,18 @@ describe('leaving the native engine for xterm.js', () => {
     await vi.waitFor(() => expect(acknowledged).toEqual([tail[0].length, tail[1].length]));
     expect(shown(session.adapter).lines.join('\n')).toContain('first\nsecond');
     await session.adapter.dispose();
+  });
+
+  it('keeps the native adapter when the bridge refuses before redirecting output', async () => {
+    const {session, onEvent, core} = await nativeSession();
+    const native = session.adapter;
+    const fresh = createXtermAdapter();
+    release.answer = async () => { throw new Error('Handback refused'); };
+    await expect(handBackToXterm(session, {onEvent, createXterm: async () => fresh})).rejects.toThrow('Handback refused');
+    expect(session.adapter).toBe(native);
+    expect(core.closed).toBe(false);
+    await expect(fresh.write(encode('late'))).rejects.toThrow('disposed');
+    await native.dispose();
   });
 
   it('leaves the session on the native engine when the app is locked: nothing was sent', async () => {
@@ -138,6 +184,39 @@ describe('leaving the native engine for xterm.js', () => {
     await native.dispose();
   });
 
+  it('does not start a handback under a new lease after preparing xterm', async () => {
+    const {session, onEvent} = await nativeSession();
+    const native = session.adapter;
+    const fresh = createXtermAdapter();
+    const createXterm = async () => {
+      setLocked(true);
+      setLocked(false);
+      return fresh;
+    };
+    await expect(handBackToXterm(session, {onEvent, createXterm})).rejects.toBeInstanceOf(StaleAccessError);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(session.adapter).toBe(native);
+    await native.dispose();
+  });
+
+  it('keeps a committed channel after lock and never applies a stale snapshot', async () => {
+    const {session, onEvent, acknowledged} = await nativeSession();
+    const fresh = createXtermAdapter();
+    const write = vi.spyOn(fresh, 'write');
+    release.answer = async () => {
+      setLocked(true);
+      release.channel!.onmessage!(data(tail[0]));
+      return snapshot;
+    };
+    expect(await handBackToXterm(session, {onEvent, createXterm: async () => fresh})).toBe(false);
+    expect(session.adapter).toBe(fresh);
+    expect(write).not.toHaveBeenCalled();
+    setLocked(false);
+    await vi.waitFor(() => expect(acknowledged).toEqual([tail[0].length]));
+    expect(shown(fresh).lines.join('\n')).toContain('first');
+    await fresh.dispose();
+  });
+
   it('refuses a session that is not on the native engine', async () => {
     const {session, onEvent} = await nativeSession();
     session.adapter = createXtermAdapter();
@@ -148,7 +227,7 @@ describe('leaving the native engine for xterm.js', () => {
   it('drops the new terminal when the session was closed while it moved', async () => {
     const {session, onEvent} = await nativeSession();
     const fresh = createXtermAdapter();
-    release.answer = async () => { session.disposed = true; return program.snapshot; };
+    release.answer = async () => { session.disposed = true; return snapshot; };
     expect(await handBackToXterm(session, {onEvent, createXterm: async () => fresh})).toBe(false);
     expect(session.adapter.backend).toBe('native');
     await expect(fresh.write(encode('late'))).rejects.toThrow('disposed');

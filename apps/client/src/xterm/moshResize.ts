@@ -164,7 +164,10 @@ export function installMoshResize(terminal:Terminal):MoshResizeController {
     if(descriptor)Object.defineProperty(terminal,'resize',descriptor);else Reflect.deleteProperty(terminal,'resize');
     return true;
   };
-  const controller:MoshResizeController={requestSize:request,onResizeIntent(listener){
+  const controller:MoshResizeController={requestSize:request,restoreSize(cols,rows){
+    if(!accepting||disposed||last!==0||!validSize(cols,rows))throw unsupported();
+    canonical.apply(cols,rows);
+  },onResizeIntent(listener){
     if(accepting&&!disposed)intents.set(listener,undefined);return {dispose(){intents.delete(listener);}};
   },get failure(){return failure;},close(){
     if(closed)return closed;

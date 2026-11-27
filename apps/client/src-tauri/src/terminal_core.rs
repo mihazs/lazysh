@@ -25,12 +25,10 @@
 //! `terminal_core_select` hands the selection to the session, where a renderer host draws it. The logic is the runtime crate's (`control_*`, [`Doorbell`]), which the stdio
 //! harness shares; this module gates it behind the renderer's access lease.
 //!
-//! The way out (#1342): `terminal_core_release(events)` hands a session's transport back to the WebView. From the
-//! next chunk on, the output and the closing notice go to the new `events` Channel and the WebView acknowledges
-//! them; the core parses what it was fed before that, answers with an ANSI snapshot of its visible screen, cursor
-//! and modes (`terminal_core_ansi_snapshot` reads the same without releasing) and is freed. A chunk is never
-//! split, so a reader that replays the snapshot and then the Channel's data has every byte once, in order.
-//! Scrollback is not carried over.
+//! `terminal_core_release(events)` hands a live transport back to the WebView (#1342). The output route switches
+//! at a chunk boundary, or after the current complete Mosh frame. The receipt includes the visible ANSI screen
+//! and its grid size when the core can provide them within the current access lease. The WebView replays that
+//! screen before applying the new Channel's output and acknowledging its credits. Scrollback stays with the core.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
@@ -66,6 +64,13 @@ impl OutputSink for Channel<SshEvent> {
     }
 }
 
+#[derive(Serialize)]
+pub struct AnsiSnapshot {
+    ansi: String,
+    columns: u16,
+    rows: u16,
+}
+
 /// A terminal core as the transports and the bridge commands see it. Chunks arrive in order, at most
 /// one transport chunk each and never beyond the transport's credit window; the core returns each
 /// chunk's credit (through the [`CreditReturn`] it was built with) after parsing it.
@@ -75,7 +80,7 @@ pub(crate) trait Core: Send + Sync {
     fn viewport_text(&self) -> Result<String, String>;
     /// Bytes that rebuild the visible screen, the cursor and the modes in a fresh terminal of the same size, and
     /// how many bytes the core was fed and has not parsed yet (the snapshot is missing those).
-    fn ansi_snapshot(&self) -> Result<(String, usize), String>;
+    fn ansi_snapshot(&self) -> Result<(AnsiSnapshot, usize), String>;
     /// The renderer's grid changed: the terminal's size, so the transport's output wraps as drawn.
     fn resize(&self, cols: u32, rows: u32) -> Result<(), String>;
     /// Encode one input event for the modes the program has set and queue the bytes on the transport
@@ -533,33 +538,53 @@ pub(crate) fn close(id: &str) {
 const RELEASE_DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Hand the session's transport back to the WebView (#1342): its output goes to `events` from the next chunk on,
-/// or the next complete Mosh update. The answer is the core's ANSI snapshot once it has parsed every chunk it was fed before that. The core is
-/// freed after the transfer even if snapshotting fails. If an update blocks the transfer, the core keeps ownership.
-pub(crate) async fn release(id: &str, events: Channel<SshEvent>) -> Result<String, String> {
-    let attached = attached(id)?;
+/// At a Mosh frame boundary, output transfers after the complete update. The core keeps ownership if the
+/// transfer is refused. A missing snapshot means the transfer succeeded without a screen to restore.
+async fn release(
+    lease: &AccessLease,
+    id: &str,
+    events: Channel<SshEvent>,
+) -> Result<Option<AnsiSnapshot>, GuardedError<String>> {
+    let attached = attached(id).map_err(|error| lease.error(error))?;
     {
-        let _frame = tokio::time::timeout(RELEASE_DRAIN, attached.mosh_frame.lock())
-            .await
-            .map_err(|_| "The Mosh frame did not finish before handback".to_owned())?;
-        let mut handed = attached.handed();
-        if handed.is_some() {
-            return Err("This session is already being released".into());
-        }
-        *handed = Some(events);
+        let _frame = tokio::select! {
+            biased;
+            _ = lease.cancelled() => return Err(lease.error("App access changed before handback".into())),
+            frame = tokio::time::timeout(RELEASE_DRAIN, attached.mosh_frame.lock()) =>
+                frame.map_err(|_| lease.error("The Mosh frame did not finish before handback".into()))?,
+        };
+        // Match the output path's lock ordering. Once the route changes, always settle
+        // successfully so the renderer keeps the Channel even if access is revoked.
+        lease
+            .with_current(|| {
+                let mut handed = attached.handed();
+                if handed.is_some() {
+                    return Err("This session is already being released".to_owned());
+                }
+                *handed = Some(events);
+                Ok(())
+            })?
+            .map_err(|error| lease.error(error))?;
     }
     let started = std::time::Instant::now();
     let snapshot = loop {
+        if lease.check().is_err() {
+            break None;
+        }
         match attached.core.ansi_snapshot() {
-            Ok((snapshot, 0)) => break Ok(snapshot),
+            Ok((snapshot, 0)) => break Some(snapshot),
             Ok(_) if started.elapsed() < RELEASE_DRAIN => {
-                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                tokio::select! {
+                    biased;
+                    _ = lease.cancelled() => break None,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(2)) => {}
+                }
             }
-            Ok(_) => break Err("The terminal core did not finish its output".to_owned()),
-            Err(error) => break Err(error),
+            _ => break None,
         }
     };
     close(id);
-    snapshot
+    Ok(snapshot)
 }
 
 /// A renderer replacement ends every renderer-owned session; the cores they fed go with them,
@@ -659,19 +684,34 @@ pub async fn terminal_core_ansi_snapshot(
     session_id: String,
 ) -> AccessResult<String> {
     lease
-        .run(async { Ok(live(&session_id)?.ansi_snapshot()?.0) })
+        .run(async { Ok(live(&session_id)?.ansi_snapshot()?.0.ansi) })
         .await
 }
 
 /// Hands the session's transport back to the WebView: see [`release`]. The renderer replays the answer into its
 /// terminal first, then the data of `events`, which it acknowledges like any Channel terminal's.
+/// A successful receipt owns the output route. Snapshot text is still lease-bound.
+pub struct CommittedHandback {
+    lease: AccessLease,
+    snapshot: Option<AnsiSnapshot>,
+}
+
+impl tauri::ipc::IpcResponse for CommittedHandback {
+    fn body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> {
+        self.lease
+            .with_current(|| self.snapshot.body())
+            .unwrap_or_else(|_| None::<AnsiSnapshot>.body())
+    }
+}
+
 #[tauri::command]
 pub async fn terminal_core_release(
     lease: AccessLease,
     session_id: String,
     events: Channel<SshEvent>,
-) -> AccessResult<String> {
-    lease.run(release(&session_id, events)).await
+) -> Result<CommittedHandback, GuardedError<String>> {
+    let snapshot = release(&lease, &session_id, events).await?;
+    Ok(CommittedHandback { lease, snapshot })
 }
 
 /// The control plane (#1321) belongs to the current renderer like `terminal_core_text`: a locked app or a replaced
@@ -1290,11 +1330,17 @@ mod native {
                 .map_err(|error| error.to_string())
         }
 
-        fn ansi_snapshot(&self) -> Result<(String, usize), String> {
+        fn ansi_snapshot(&self) -> Result<(AnsiSnapshot, usize), String> {
             // Under the session lock no worker is mid-parse: nothing queued means everything fed is on the screen.
             self.0
                 .with(|runtime| {
-                    Ok::<_, RuntimeError>((runtime.ansi_snapshot()?, runtime.ingress().queued()))
+                    let size = runtime.size();
+                    let snapshot = AnsiSnapshot {
+                        ansi: runtime.ansi_snapshot()?,
+                        columns: size.cols,
+                        rows: size.rows,
+                    };
+                    Ok::<_, RuntimeError>((snapshot, runtime.ingress().queued()))
                 })
                 .map_err(|error| error.to_string())?
                 .map_err(|error| error.to_string())
@@ -2542,6 +2588,61 @@ pub(crate) mod fake {
         }
     }
 
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard keeps unrelated test rebinds away
+    async fn a_lock_during_handback_drain_keeps_the_committed_output_route() {
+        let _kept = tests_keeping_cores().read();
+        let (core, prepared) = ChecksumCore::prepared();
+        let slot = CoreSlot::default();
+        let id = "lock-during-snapshot-drain";
+        prepared.attach(id, &slot, Arc::new(|_| {}), Arc::new(|_, _| Ok(())));
+        core.queued.store(1, SeqCst);
+        let (next, mut received_events) = crate::ssh::test_support::json_events();
+        let first = Channel::new(|_| Ok(()));
+        let access = crate::ssh::test_support::unlocked_access();
+        let lease = crate::ssh::test_support::ready_lease(&access);
+        let request = terminal_core_release(lease, id.into(), next);
+        tokio::pin!(request);
+        crate::ssh::test_support::assert_pending(request.as_mut()).await;
+
+        access.lock().unwrap();
+        let receipt = request.await.unwrap();
+        let snapshot: serde_json::Value = tauri::ipc::IpcResponse::body(receipt)
+            .unwrap()
+            .deserialize()
+            .unwrap();
+        assert!(snapshot.is_null());
+        assert!(!slot.is_attached());
+        assert!(core.closed.load(SeqCst));
+        access.authorize(access.generation().unwrap()).unwrap();
+        let lease = crate::ssh::test_support::ready_lease(&access);
+        lease
+            .with_current(|| slot.route(&first).data(b"after unlock"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(received(&mut received_events).0, b"after unlock");
+    }
+
+    #[test]
+    fn a_lock_before_handback_serialization_redacts_the_snapshot_without_rejecting() {
+        let access = crate::ssh::test_support::unlocked_access();
+        let lease = crate::ssh::test_support::ready_lease(&access);
+        let receipt = CommittedHandback {
+            lease,
+            snapshot: Some(AnsiSnapshot {
+                ansi: "private screen".into(),
+                columns: 80,
+                rows: 24,
+            }),
+        };
+        access.lock().unwrap();
+        let snapshot: serde_json::Value = tauri::ipc::IpcResponse::body(receipt)
+            .unwrap()
+            .deserialize()
+            .unwrap();
+        assert!(snapshot.is_null());
+    }
+
     impl Core for ChecksumCore {
         fn feed(&self, chunk: Vec<u8>) -> Result<(), String> {
             self.feeds.fetch_add(1, SeqCst);
@@ -2566,10 +2667,14 @@ pub(crate) mod fake {
 
         /// The parsed bytes as one row of text: enough to see what the commands do with a lease.
         /// The stand-in's screen is every byte it parsed.
-        fn ansi_snapshot(&self) -> Result<(String, usize), String> {
+        fn ansi_snapshot(&self) -> Result<(AnsiSnapshot, usize), String> {
             let seen = self.seen.lock().unwrap();
             Ok((
-                String::from_utf8_lossy(&seen).into_owned(),
+                AnsiSnapshot {
+                    ansi: String::from_utf8_lossy(&seen).into_owned(),
+                    columns: 80,
+                    rows: 24,
+                },
                 self.queued.load(SeqCst),
             ))
         }
@@ -2737,13 +2842,13 @@ pub(crate) mod fake {
         let snapshot = terminal_core_release(lease, id.to_owned(), second)
             .await
             .unwrap()
-            .into_inner()
+            .snapshot
             .unwrap();
         reached(lines.load(SeqCst) + 60).await;
         stop.store(1, SeqCst);
         Released {
             delivered: transport.join().unwrap(),
-            snapshot,
+            snapshot: snapshot.ansi,
             credited,
             slot,
             first,
@@ -3187,8 +3292,12 @@ mod tests {
         );
         // Released once: there is no core left to snapshot or release.
         for result in [
-            terminal_core_release(lease(), "handed-back".into(), channel()).await,
-            terminal_core_ansi_snapshot(lease(), "handed-back".into()).await,
+            terminal_core_release(lease(), "handed-back".into(), channel())
+                .await
+                .map(|_| ()),
+            terminal_core_ansi_snapshot(lease(), "handed-back".into())
+                .await
+                .map(|_| ()),
         ] {
             assert_eq!(
                 result.err().unwrap().into_inner().unwrap(),
@@ -3213,7 +3322,8 @@ mod tests {
         let tail = b"screen\x1b]7777;lazysh-mosh;1;end;1\x1b\\";
         routed.data(opener).unwrap();
 
-        let handback = release(id, next);
+        let access = lease();
+        let handback = release(&access, id, next);
         tokio::pin!(handback);
         tokio::select! {
             biased;
@@ -3223,8 +3333,9 @@ mod tests {
 
         routed.data(tail).unwrap();
         drop(frame);
+        let snapshot = handback.await.unwrap().expect("handoff snapshot");
         assert_eq!(
-            handback.await.unwrap().as_bytes(),
+            snapshot.ansi.as_bytes(),
             [opener.as_slice(), tail.as_slice()].concat()
         );
         let next_frame =

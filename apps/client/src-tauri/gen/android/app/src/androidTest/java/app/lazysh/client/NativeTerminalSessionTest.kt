@@ -1329,6 +1329,7 @@ class NativeTerminalSessionTest {
 
             // A multiplexer in the reconnected session, drawn by the core on its new surface.
             hostTmux(fresh)
+            handsBackTheOwnedShell(fresh)
         } catch (error: Throwable) {
             evidence.put("failure", (error.message ?: error.toString()).take(700))
             throw error
@@ -1336,6 +1337,35 @@ class NativeTerminalSessionTest {
             Evidence.record("native-session", evidence)
         }
     } }
+
+    private fun NativeSessionDriver.handsBackTheOwnedShell(id: String) {
+        val before = Regex("before_[0-9]+")
+        typeIntoTheSurface("printf 'before_%s\\n' \"\$\$\"")
+        val marker = awaitRow(id, "the original shell PID before handback", before::matches)
+            .lineSequence().map(String::trim).first(before::matches)
+        val action = "Switch this session to xterm.js"
+        click("button.mobile-tools, button[aria-label='Workspace tools']")
+        act("""(() => {
+            const dialog = document.querySelector('[role=dialog]:has(.workspace-tools-content)');
+            const control = Array.from(dialog?.querySelectorAll('.workspace-tools-page button') ?? [])
+                .find(button => button.textContent.trim() === ${quoted(action)});
+            const page = control?.closest('.workspace-tools-page');
+            if (!page) return false;
+            const tab = Array.from(dialog.querySelectorAll('[role=tab]')).find(tab => tab.getAttribute('aria-controls') === page.id);
+            if (tab?.getAttribute('aria-selected') === 'false') { tab.click(); return false; }
+            return page.getAttribute('aria-hidden') !== 'true';
+        })()""", "the Workspace tools page with the engine switch")
+        click(".workspace-tools-page button", action)
+        PageDriver.poll("xterm.js replays the original shell PID", 45) { true.takeIf { marker in xtermRows() } }
+        val command = "printf 'after_%s\\n' \"\$\$\"\r"
+        PageDriver.invoke("write_stdin", "{sessionId:${quoted(id)},data:${quoted(command)}}")
+        val expected = marker.replace("before_", "after_")
+        PageDriver.poll("xterm.js receives new output from the same shell", 45) { true.takeIf { expected in xtermRows() } }
+        PageDriver.poll("the retired native surface to be removed", 30) {
+            true.takeIf { ui { id !in TerminalSurfaces.ids() } }
+        }
+        evidence.put("sameShellAfterHandback", true).put("nativeSurfaceRetiredAfterHandback", true)
+    }
 
     /** The grid the core holds, as the pane told it (columns, rows). */
     private fun NativeSessionDriver.coreGrid(session: String) = JSONObject(invoke("terminal_core_snapshot", session)).getJSONObject("state").let { it.getInt("columns") to it.getInt("rows") }

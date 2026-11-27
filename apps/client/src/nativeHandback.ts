@@ -1,5 +1,5 @@
 import {Channel} from '@tauri-apps/api/core';
-import {isAccessReady, channelSessionOutput, StaleAccessError} from './access';
+import {captureAccess, channelSessionOutput, isAccessReady, StaleAccessError} from './access';
 import type {SshEvent} from './bridge';
 import {registerSessionOutput} from './pendingSessions';
 import type {TerminalAdapter} from './terminalAdapter';
@@ -28,19 +28,44 @@ export async function handBackToXterm(session: LiveSession, {onEvent, createXter
   if (from.backend !== 'native' || !session.id) throw new Error('This session is not on the native engine.');
   // A locked app cannot send the command, and the transport stays with the core.
   if (!isAccessReady()) throw new StaleAccessError();
+  const lease = captureAccess();
   const to = await createXterm();
-  to.requestSize(from.size());
+  let canonical: ReturnType<NonNullable<TerminalAdapter['enableCanonicalResize']>> | undefined;
+  try {
+    if (session.moshResize) {
+      canonical = to.enableCanonicalResize?.();
+      if (!canonical?.restoreSize) throw new Error('This terminal cannot restore canonical Mosh geometry.');
+    }
+  } catch (error) {
+    void to.dispose();
+    throw error;
+  }
   const held: SshEvent[] = [];
   let holding = true;
   const events = new Channel<SshEvent>();
   const disposeOutput = channelSessionOutput(events, event => holding ? held.push(event) : onEvent(event));
+  let snapshot: Awaited<ReturnType<typeof releaseNativeCore>>;
+  try {
+    snapshot = await releaseNativeCore(lease, session.id, events);
+  } catch (error) {
+    disposeOutput();
+    void to.dispose();
+    throw error;
+  }
+  if (session.disposed) { disposeOutput(); void to.dispose(); return false; }
   registerSessionOutput(session.id, disposeOutput);
   let carried = false;
-  try {
-    await to.write!(new TextEncoder().encode(await releaseNativeCore(session.id, events)));
-    carried = true;
-  } catch { /* The output flows to `events` all the same: nothing is carried over, and nothing is lost. */ }
+  if (snapshot !== null) {
+    try {
+      if (canonical?.restoreSize) canonical.restoreSize(snapshot.columns, snapshot.rows);
+      else to.requestSize(snapshot);
+      await to.write!(new TextEncoder().encode(snapshot.ansi));
+      carried = true;
+    } catch { /* The new channel already owns the output, so the next redraw can fill the screen. */ }
+  }
   if (session.disposed) { void to.dispose(); return false; }
+  if (!snapshot && !canonical) to.requestSize(from.size());
+  if (canonical) session.moshResize = canonical;
   session.adapter = to;
   session.selection = failure === undefined ? {id: 'xterm', reason: SWITCHED, fallbacks: []} : {id: 'xterm', reason: 'fallback', fallbacks: [{id: 'native', reason: failure}]};
   session.leaveNative = undefined;
