@@ -10,12 +10,16 @@ name = "lazysh_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
+# Everything a product build contains. `--no-default-features` is the lightweight development build: it compiles neither
+# Whisper nor Parakeet (the two native CMake/C++ builds), see docs/reference/build-performance.md. Never use it for a release.
+default = ["local-voice"]
+local-voice = ["dep:whisper-rs", "lazysh-parakeet-runtime?/native"]
 fdroid = ["tauri-plugin-lazysh-push/fdroid"]
 # Optional interop test harness; independent of Linux and Windows x86_64 product availability.
-parakeet-acceptance = ["dep:lazysh-parakeet-runtime"]
+parakeet-acceptance = ["dep:lazysh-parakeet-runtime", "lazysh-parakeet-runtime/native"]
 # Android's Google build links the pinned prebuilt ONNX Runtime for local Parakeet. It is opt-in so the F-Droid recipe,
 # which must compile every native library from source, keeps its Whisper-only graph.
-parakeet-android = ["dep:lazysh-parakeet-runtime"]
+parakeet-android = ["dep:lazysh-parakeet-runtime", "lazysh-parakeet-runtime/native"]
 # The native terminal core (libghostty-vt, built with Zig 0.16.0) and its wgpu renderer: off by default so no
 # build needs Zig or compiles wgpu.
 native-terminal = ["dep:lazysh-terminal-runtime", "dep:lazysh-terminal-renderer-wgpu", "dep:unicode-segmentation", "dep:unicode-width", "dep:gtk", "dep:gdk", "dep:wayland-client", "dep:wayland-backend", "dep:raw-window-handle", "dep:windows-sys", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:objc2-quartz-core", "dep:objc2-ui-kit", "dep:block2"]
@@ -34,7 +38,7 @@ lazysh-account-usage = { path = "../../../packages/account-usage" }
 tauri-plugin-lazysh-display-idle = { path = "../../../packages/display-idle" }
 lazysh-common = { path = "../../../packages/common", features = ["url", "repository-review"] }
 lazysh-companion-release = { path = "../../../packages/companion-release" }
-lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", optional = true }
+lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", default-features = false, optional = true }
 lazysh-et-transport = { path = "../../../packages/et-transport" }
 lazysh-notification-client = { path = "../../../packages/notification-client" }
 lazysh-terminal-runtime = { path = "../../../packages/terminal-runtime", optional = true }
@@ -59,7 +63,7 @@ hyper = { version = "1", features = ["http1", "client", "server"] }
 httparse = "1"
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
-whisper-rs = { version = "0.16", default-features = false }
+whisper-rs = { version = "0.16", default-features = false, optional = true }
 rand = "0.10"
 tauri-plugin-lazysh-vault = { path = "../../../packages/credential-vault" }
 tauri-plugin-lazysh-apple-speech = { path = "../../../packages/apple-speech" }
@@ -113,7 +117,7 @@ jni = "0.21"
 raw-window-handle = "0.6"
 
 [target.'cfg(all(any(target_os = "linux", target_os = "windows"), target_arch = "x86_64"))'.dependencies]
-lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime" }
+lazysh-parakeet-runtime = { path = "../../../packages/parakeet-runtime", default-features = false }
 
 [dev-dependencies]
 lazysh-common = { path = "../../../packages/common", features = ["test-support"] }
