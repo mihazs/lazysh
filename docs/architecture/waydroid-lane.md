@@ -45,9 +45,11 @@ apps/client/bench/waydroid-lane.sh \
 | `--out <file>` | The evidence file (required). Written even when a step failed, with `status` `failed`; never written when the lane could not start |
 | `--label <text>` | A name for the run, recorded in the evidence |
 | `--package <id>` | The app under test (default `app.lazysh.client`): stopped at the end, and its version read for the evidence |
+| `--uninstall <package>` | Removes a package and its data before the installs that follow it (repeatable; a package that is not installed is no error). A debug APK of another CI run has another signature and does not update in place |
 | `--apk <file>` | Installs the file with `adb install -r -t` (repeatable). The evidence records its SHA-256 |
 | `--build <build.sh>` | Runs one of the build scripts that wrap `bench/android-apk.sh` (`bench/android-webview/build.sh`, `bench/android-canvas/build.sh`) with `ANDROID_HOME`, `JAVA_HOME`, a throwaway output path and, if set, `LAZYSH_WAYDROID_BUILD_ASSETS`, then installs the result |
 | `--instrument <runner> <class>` | Runs `am instrument -w -r -e class <class> <runner>` (repeatable) and counts the status codes it prints |
+| (every `--instrument`) | The lane gives the class `-e lazyshRunId <run id>`, clears `/data/local/tmp/lazysh-evidence` on the guest before it and, after it, pulls what the class left there (`app.lazysh.client.Evidence`: JSON and pictures) beside the evidence as `<evidence name>-<class>-<file>`, listed with their SHA-256 in the step's `files` |
 | `--bench <name> <command>` | Runs a shell command (repeatable). It gets `LAZYSH_BENCH_ANDROID` (the serial, which `bun run bench:terminal` already honours), `LAZYSH_LANE_OUT` (a directory for its result files) and `LAZYSH_LANE_PACKAGE`. The files it leaves there are copied next to the evidence as `<evidence name>-<name>-<file>` and listed with their SHA-256; the command's exit status decides pass or fail, and a run with no result file fails |
 
 Steps run in the order of the arguments. A failed install or build stops the run (the evidence says the rest did not run); a failed class or benchmark does not hide the ones after it.

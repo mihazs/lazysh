@@ -1,12 +1,11 @@
 package app.lazysh.client
 
 import android.content.ClipboardManager
-import android.graphics.Bitmap
 import android.os.Bundle
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
-import android.view.SurfaceView
 import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -15,15 +14,14 @@ import android.webkit.WebMessagePort
 import android.webkit.WebView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.test.uiautomator.UiDevice
 import androidx.lifecycle.Lifecycle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.uiautomator.UiDevice
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import kotlin.math.roundToInt
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -33,6 +31,7 @@ import org.junit.runner.RunWith
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
+import kotlin.math.roundToInt
 
 /**
  * The first native terminal session through the real UI (#2093, #1327): the real page of the real MainActivity chooses Native in Settings,
@@ -45,214 +44,20 @@ import org.json.JSONTokener
  */
 @RunWith(AndroidJUnit4::class)
 class NativeTerminalSessionTest {
-    private val instrumentation = InstrumentationRegistry.getInstrumentation()
-    private val scenario get() = NativeActivityFixture.scenario
-    private val fixture by lazy { ownedSshFixture() }
-    private val hostName by lazy { "Native session ${fixture.getString("nonce")}" }
-    private val evidence = JSONObject()
-    private var previousSoftwareGpu: Boolean? = null
-    private val native = "input[name='terminal-engine'][value='native']"
-    private val nativePane = ".terminal-canvas[data-terminal-surface='native']"
+    private val driver = NativeSessionDriver()
 
-    /** The page's small driver: DOM events the real UI reacts to, on elements that are on screen. Typing into a field uses the value setter React watches. */
-    private val driver = """window.__lz = {
-        visible(e) { return !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden'; },
-        find(selector, text) {
-          const shown = [...document.querySelectorAll(selector)].filter(e => this.visible(e));
-          const name = e => (e.getAttribute('aria-label') || e.textContent).trim();
-          // The exact name first: "Save host" must not be taken for "Save host settings".
-          return text === undefined ? shown[0] : shown.find(e => name(e) === text) ?? shown.find(e => name(e).startsWith(text));
-        },
-        click(selector, text) { const e = this.find(selector, text); if (!e) return false; e.click(); return true; },
-        set(selector, value) {
-          const e = this.find(selector); if (!e) return false;
-          const type = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement : e instanceof HTMLSelectElement ? HTMLSelectElement : HTMLInputElement;
-          Object.getOwnPropertyDescriptor(type.prototype, 'value').set.call(e, value);
-          e.dispatchEvent(new Event(e instanceof HTMLSelectElement ? 'change' : 'input', {bubbles: true})); return true;
-        }}; true"""
+    @Before fun theUnlockedPage() = driver.theUnlockedPage()
 
-    @Before fun theUnlockedPage() {
-        // A first connection asks for the notification permission; a system dialog would cover the page.
-        runCatching { shell("pm grant app.lazysh.client android.permission.POST_NOTIFICATIONS") }
-        PageDriver.awaitStartPage()
-        // The CI emulator offers only a software adapter; the switch exists in a debug build only, and the probe reads it when the test selects the native engine.
-        if (InstrumentationRegistry.getArguments().getString("lazyshSoftwareGpu") == "true") {
-            previousSoftwareGpu = NativeSoftwareGpu.swap(true)
-        }
-        PageDriver.js(driver)
-        // The top bar stays, and the first-run gesture tour does not cover the page (the same two settings as NativeWorkspaceTest.keepTopBar).
-        PageDriver.js("(() => { localStorage.setItem('lazysh.show-top-bar.v1', 'true'); localStorage.setItem('lazysh.gestureTour.v1', '999'); window.dispatchEvent(new Event('storage')); return true; })()")
-    }
+    @After fun leaveTheAppAsFound() = driver.leaveTheAppAsFound()
 
-    @After fun leaveTheAppAsFound() {
-        // What the case chose and saved is the app's: end the session, delete the host and give the engine choice back to Auto.
-        runCatching {
-            if (js("window.__lz.click(\"button[aria-label='Disconnect $hostName']\")") != "true" &&
-                js("Boolean(document.querySelector(${quoted(nativePane)}))") == "true"
-            ) {
-                if (js("Boolean(window.__lz.find('.workspace-tools-end'))") != "true") click("button.mobile-tools, button[aria-label='Workspace tools']")
-                click(".workspace-tools-end", "End $hostName connection")
-            }
-        }
-        runCatching {
-            revealHosts()
-            if (js("window.__lz.click(\"button[aria-label='Delete $hostName']\")") == "true") click("[role=dialog] button", "Delete host")
-        }
-        runCatching { openTerminalSettings(); choose("input[name='terminal-engine'][value='auto']"); act("window.__lz.click(\"button[aria-label='Close Preferences']\")") }
-        runCatching { scenario.moveToState(Lifecycle.State.RESUMED) }
-        previousSoftwareGpu?.let { NativeSoftwareGpu.swap(it) }
-    }
-
-    private fun shell(command: String) = android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).use { it.readBytes() }
-
-    private fun quoted(text: String) = JSONObject.quote(text)
-    private fun js(expression: String) = PageDriver.js(expression)
-    private fun until(what: String, seconds: Long, expression: String) = PageDriver.poll(what, seconds) { js(expression).takeIf { it == "true" } }
-    private fun act(expression: String, what: String = expression) = PageDriver.poll(what, 60) { js(expression).takeIf { it == "true" } }
-    private fun click(selector: String, text: String? = null) = act("window.__lz.click(${quoted(selector)}${text?.let { ", ${quoted(it)}" } ?: ""})", "a click on $selector ${text ?: ""}")
-    private fun set(selector: String, value: String) = act("window.__lz.set(${quoted(selector)}, ${quoted(value)})", "a value for $selector")
-    /** A radio button is clicked wherever it is: the choice's styling may hide the input itself. */
-    private fun choose(selector: String) = act("(() => { const r = document.querySelector(${quoted(selector)}); if (!r) return false; r.click(); return true; })()", "a click on $selector")
-    private fun text(selector: String) = (JSONTokener(js("document.querySelector(${quoted(selector)})?.textContent ?? ''")).nextValue() as? String) ?: ""
-
-    private fun <T> ui(block: (MainActivity) -> T) = PageDriver.onActivity(block)
-
-    private fun openTerminalSettings(category: String = "Terminal and accessibility") {
-        PageDriver.poll("the Preferences page", 60) {
-            if (js("window.__lz.click(\"button[aria-label='Preferences']\") || window.__lz.click(\".dialog button\", \"Preferences\")") == "true") true
-            else { js("window.__lz.click('button.mobile-tools') || window.__lz.click(\"button[aria-label='Workspace tools']\")"); null }
-        }
-        click(".settings-navigation button", category)
-    }
-
-    private fun revealHosts() = PageDriver.poll("the hosts list", 60) {
-        if (js("Boolean(window.__lz.find(\"button[aria-label='Add host']\"))") == "true") true
-        else { js("window.__lz.click(\"button[aria-label='Open hosts']\")"); js("window.__lz.click(\"button[data-workspace-mode='connections']\")"); null }
-    }
-
-    private fun chooseNative() {
-        openTerminalSettings()
-        try { until("the Native engine offered", 60, "(() => { const r = document.querySelector(${quoted(native)}); return !!r && !r.disabled; })()") }
-        catch (error: AssertionError) { throw AssertionError("${error.message}: ${text("#terminal-engine-native-off")}", error) }
-        choose(native)
-        until("Native chosen", 30, "document.querySelector(${quoted(native)}).checked")
-        evidence.put("engineChoice", "native")
-        click("button[aria-label='Close Preferences']")
-    }
-
-    /** The host through the real editor, then the connection through its dialog, trusting the host key the way a user's tap does. */
-    private fun connect(ready: String = "false") {
-        revealHosts()
-        click("button[aria-label='Add host']")
-        set("input[placeholder='Home workstation']", hostName)
-        set("input[placeholder='workstation.local']", "127.0.0.1")
-        set("input[placeholder='Your SSH username']", fixture.getString("username"))
-        set(".port-field input", fixture.getInt("port").toString())
-        // The default transport is Auto, which would try Mosh first; this case is about the native engine on the SSH route.
-        set("[role=dialog] select:has(option[value='ssh'])", "ssh")
-        click("button", "Save host")
-        connectSavedHost(trustNewKey = true, ready = ready)
-    }
-
-    private fun connectSavedHost(trustNewKey: Boolean = false, ready: String = "false") {
-        revealHosts()
-        until("the saved host", 60, "Boolean(window.__lz.find(\"button[aria-label='Connect to $hostName']\"))")
-        click("button[aria-label='Connect to $hostName']")
-        until("the connection dialog", 60, "Boolean(window.__lz.find('[role=dialog] form .destination'))")
-        click("[role=dialog] button", "Private key")
-        set("[role=dialog] form.form-stack > label > textarea", fixture.getString("privateKey"))
-        click("[role=dialog] form.form-stack button[type=submit]")
-        if (trustNewKey) {
-            val expectedKey = "document.querySelector('.fingerprint code')?.textContent === ${quoted(fixture.getString("fingerprint"))}"
-            until("the expected host key or the owned shell prompt", 60, "($expectedKey) || ($ready)")
-            if (js(expectedKey) == "true") click("button", "Trust key and connect")
-        }
-    }
-
-    private fun session(replaced: String? = null) = PageDriver.poll("the placed native session", 120) {
-        ui { TerminalSurfaces.ids().singleOrNull { it != replaced && TerminalSurfaces.state(it).let { state -> state.placed && state.ready } } }
-    }
-
-    private fun invoke(command: String, session: String) = PageDriver.invoke(command, "{sessionId:${quoted(session)}}")
-    private fun coreText(session: String) = JSONArray("[" + invoke("terminal_core_text", session) + "]").getString(0)
-    private fun awaitRow(session: String, what: String, row: (String) -> Boolean) = PageDriver.poll("the core's screen to show $what", 90) { coreText(session).takeIf { text -> text.lines().any { row(it.trim()) } } }
-
-    private fun surfaceView() = ui { activity ->
-        (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<SurfaceView>().firstOrNull() }
-    }
-
-    private fun surfacePixels() = PageDriver.pixelsOf(checkNotNull(surfaceView()) { "the placed surface" })
-
-    /** The pixels of `rows` of the bitmap that are not the pane's background, taken from its bottom right corner (no row reaches it before the screen is full). */
-    private fun ink(bitmap: Bitmap, rows: IntRange = 0 until bitmap.height): Int {
-        val background = bitmap.getPixel(bitmap.width - 1, bitmap.height - 1)
-        var count = 0
-        for (y in rows) for (x in 0 until bitmap.width) if (bitmap.getPixel(x, y) != background) count++
-        return count
-    }
-
-    private fun checksum(bitmap: Bitmap): Int {
-        val pixels = IntArray(bitmap.width * bitmap.height)
-        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-        return pixels.contentHashCode()
-    }
-
-    private fun awaitInk(what: String, enough: (Bitmap) -> Boolean): Bitmap {
-        var last = 0
-        try { return PageDriver.poll("ink for $what on the surface", 90) { surfacePixels().takeIf { bitmap -> last = ink(bitmap); enough(bitmap) } } }
-        catch (error: AssertionError) { throw AssertionError("${error.message}; the surface held $last non-background pixels", error) }
-    }
-
-    /** The surface once two captures in a row agree (the renderer has finished drawing) and `wanted` holds of it. */
-    private fun settled(what: String, wanted: (Bitmap) -> Boolean): Bitmap {
-        var last: Int? = null
-        return PageDriver.poll("a settled surface for $what", 90) {
-            val bitmap = surfacePixels()
-            val sum = checksum(bitmap)
-            val steady = sum == last
-            last = sum
-            bitmap.takeIf { steady && wanted(it) }
-        }
-    }
-
-    /** The settled surface once it differs from `other`, the one it showed before what the case just did. */
-    private fun settledAfter(what: String, other: Bitmap) = settled(what) { checksum(it) != checksum(other) }
-
-    private fun terminalEditor() = checkNotNull(ui { activity ->
-        (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<TerminalInputView>().firstOrNull() }
-    }) { "the session's keyboard editor" }
-
-    private fun typeIntoTheSurface(command: String, enter: Boolean = true) {
-        val input = terminalEditor()
-        ui {
-            val connection = checkNotNull(input.onCreateInputConnection(EditorInfo()))
-            connection.commitText(command, 1)
-            // A line break the keyboard commits as text is a carriage return, as in NativeTerminalInputTest.
-            if (enter) connection.commitText("\n", 1)
-        }
-    }
-
-    private fun surfaceBounds(): Rect {
+    private fun NativeSessionDriver.surfaceBounds(): Rect {
         val view = checkNotNull(surfaceView())
         return ui { IntArray(2).also(view::getLocationOnScreen).let { Rect(it[0], it[1], it[0] + view.width, it[1] + view.height) } }
     }
 
-    /** A finger drag over the pane, on the screen, the way a user scrolls it. */
-    private fun drag(fromFraction: Double, toFraction: Double) {
-        val bounds = surfaceBounds()
-        val x = bounds.centerX()
-        UiDevice.getInstance(instrumentation).swipe(x, bounds.top + (bounds.height() * fromFraction).roundToInt(), x, bounds.top + (bounds.height() * toFraction).roundToInt(), 20)
-    }
+    @Test fun ownedSwiftKeyHistorySuggestion() { driver.verifySwiftKeyHistorySuggestion() }
 
-    /** Chooses Native, connects to the owned shell and returns the placed native session's id once the page shows its native pane. */
-    private fun startNativeSession(): String {
-        chooseNative()
-        connect()
-        until("the native pane on the page", 120, "Boolean(document.querySelector(${quoted(nativePane)})) && !document.querySelector('.terminal-canvas .xterm-screen')")
-        return session()
-    }
-
-    @Test fun ownedSwiftKeyHistorySuggestion() {
+    private fun NativeSessionDriver.verifySwiftKeyHistorySuggestion() {
         val arguments = InstrumentationRegistry.getArguments()
         val x = arguments.getString("lazyshSwiftKeyTapX")?.toIntOrNull()
         val y = arguments.getString("lazyshSwiftKeyTapY")?.toIntOrNull()
@@ -301,7 +106,7 @@ class NativeTerminalSessionTest {
      * back when it asks again. The oracle is the keys themselves, injected by the shell as a keyboard would: where they land says who
      * holds the focus.
      */
-    private fun keyboardOwnership(id: String) {
+    private fun NativeSessionDriver.keyboardOwnership(id: String) {
         val prompt = fixture.getString("prompt").trim()
         val input = checkNotNull(ui { activity ->
             (EdgeGestureExclusion.webView(activity.window.decorView)?.parent as? ViewGroup)?.let { frame -> (0 until frame.childCount).map(frame::getChildAt).filterIsInstance<TerminalInputView>().firstOrNull() }
@@ -381,7 +186,7 @@ class NativeTerminalSessionTest {
      * the page's toolbar, then Ctrl and a letter the soft keyboard commits (the toolbar's modifier applies to the next character typed), then
      * Enter; Ctrl+D ends cat. The answer is the one row of caret notation the bytes make.
      */
-    private fun toolbarKeys(id: String) {
+    private fun NativeSessionDriver.toolbarKeys(id: String) {
         // The keys go to cat, not to the shell's line editor: wait until the shell has printed the marker and so started it.
         typeIntoTheSurface("echo catv-started; cat -vT")
         awaitRow(id, "cat to have started", { it == "catv-started" })
@@ -405,7 +210,7 @@ class NativeTerminalSessionTest {
     }
 
 
-    private fun armModifier(label: String) {
+    private fun NativeSessionDriver.armModifier(label: String) {
         click("button", label)
         PageDriver.poll("the $label toolbar modifier to arm", 15) {
             js("window.__lz.find('button', ${quoted(label)})?.getAttribute('aria-pressed') === 'true'")
@@ -418,7 +223,7 @@ class NativeTerminalSessionTest {
      * what tmux answers, and the attached client's two panes, border and status line (#2487) are in the core's text. It reads the core's text, not the DOM, runs at the end of the one case (a second case in this
      * class starts from the page the first leaves) and needs the tmux the job installs.
      */
-    private fun screenPoint(selector: String, label: String? = null): Pair<Int, Int> {
+    private fun NativeSessionDriver.screenPoint(selector: String, label: String? = null): Pair<Int, Int> {
         val point = PageDriver.poll("visible touch target $selector", 15) {
             val result = js("""
                 (() => {
@@ -439,7 +244,7 @@ class NativeTerminalSessionTest {
         }
     }
 
-    private fun verifySelectionCopy(id: String) {
+    private fun NativeSessionDriver.verifySelectionCopy(id: String) {
         val clipboard = instrumentation.targetContext.getSystemService(ClipboardManager::class.java)
         val previous = ui { clipboard.primaryClip }
         val marker = "lazysh${fixture.getString("nonce").take(8)}"
@@ -545,40 +350,7 @@ class NativeTerminalSessionTest {
         }
     }
 
-    private fun hostTmux(id: String) {
-        typeIntoTheSurface("command -v tmux >/dev/null && echo HAVE-TMUX || echo NO-TMUX")
-        val probe = awaitRow(id, "the tmux probe", { it == "HAVE-TMUX" || it == "NO-TMUX" })
-        evidence.put("tmuxOnPath", probe.lines().any { it.trim() == "HAVE-TMUX" })
-        assertEquals("the owned shell has tmux on its path", true, probe.lines().any { it.trim() == "HAVE-TMUX" })
-        // The size the remote pty has and the size the core has: a tmux client draws for the first and the core clips to the second.
-        typeIntoTheSurface("echo ptysize=\$(stty size)")
-        val ptyPattern = Regex("ptysize=[0-9]+ [0-9]+")
-        val pty = awaitRow(id, "the pty's size", ptyPattern::matches).lineSequence().map(String::trim).first(ptyPattern::matches)
-        val snapshot = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
-        val grid = "${snapshot.getInt("rows")} ${snapshot.getInt("columns")}"
-        assertEquals("the reconnected host PTY and the native grid agree", "ptysize=$grid", pty)
-        evidence.put("ptySize", pty).put("coreSnapshot", grid)
-        val nonce = fixture.getString("nonce")
-        require(nonce.matches(Regex("[a-f0-9]{32}"))) { "Invalid owned tmux socket nonce" }
-        val mux = "tmux -L lazysh-native-$nonce"
-        try {
-            // The server and a second pane, through tmux's own commands: the answers are text the core parsed.
-            typeIntoTheSurface("echo term=\$TERM; $mux -f /dev/null new-session -d -s native-mux -n check && $mux set-option -t native-mux status-left '[mux] ' && $mux set-option -t native-mux status-right '' && $mux split-window -d -h -t native-mux && echo panes=\$($mux list-panes -t native-mux | wc -l)")
-            val answered = awaitRow(id, "tmux's answer for two panes", { it == "panes=2" })
-            evidence.put("tmuxTerm", answered.lines().firstOrNull { it.trim().startsWith("term=") }?.trim() ?: "")
-            // The client attached: tmux draws its two panes with a border and its status line on the last row, as the core's text holds them.
-            // The compact status keeps the window number visible on a narrow grid.
-            typeIntoTheSurface("$mux attach -t native-mux")
-            val screen = awaitRow(id, "tmux's status line on the last row", { it.startsWith("[mux]") && it.contains("0:check") })
-            evidence.put("tmuxStatusLine", screen.lines().last { it.startsWith("[mux]") }.trim()).put("tmuxScreenRows", screen.lines().size)
-            assertEquals("the status line is the screen's last row", screen.lines().last { it.isNotBlank() }.trim(), screen.lines().last { it.startsWith("[mux]") }.trim())
-            awaitRow(id, "the border between tmux's two panes", { it.contains("│") })
-        } finally {
-            runCatching { typeIntoTheSurface("$mux kill-server") }
-        }
-    }
-
-    private fun startNativeBenchmark(port: Int): String {
+    private fun NativeSessionDriver.startNativeBenchmark(port: Int): String {
         require(port in 1..65535)
         val probe = JSONObject(PageDriver.invoke("native_terminal_probe"))
         assertEquals("the native benchmark has an adapter", true, probe.getBoolean("available"))
@@ -588,7 +360,7 @@ class NativeTerminalSessionTest {
 
     private val xtermRowsSelector = ".terminal-canvas .xterm-screen .xterm-rows"
 
-    private fun startXtermBenchmark(expectPrompt: Boolean = true) {
+    private fun NativeSessionDriver.startXtermBenchmark(expectPrompt: Boolean = true) {
         openTerminalSettings()
         choose("input[name='terminal-engine'][value='xterm']")
         click("button[aria-label='Close Preferences']")
@@ -602,14 +374,14 @@ class NativeTerminalSessionTest {
         instrumentation.sendStatus(2, Bundle().apply { putString("lazyshPackagedXterm", "true") })
     }
 
-    private fun xtermRows(): List<String> {
+    private fun NativeSessionDriver.xtermRows(): List<String> {
         val rows = JSONArray(js("""Array.from(
             window.__lz.find(${quoted(xtermRowsSelector)})?.children ?? [],
             row => row.textContent.replace(/\u00a0/g, " ").trimEnd())"""))
         return List(rows.length()) { rows.getString(it) }
     }
 
-    private fun typeIntoXterm(command: String) {
+    private fun NativeSessionDriver.typeIntoXterm(command: String) {
         click("button[aria-label='Compose']")
         set(".terminal-compose textarea", command)
         val (x, y) = screenPoint(".terminal-compose button[aria-label='Send']:not(:disabled)")
@@ -619,7 +391,7 @@ class NativeTerminalSessionTest {
     private val streamDisplayColor: Int?
         get() = InstrumentationRegistry.getArguments().getString("lazyshStreamDisplayColor")?.toInt()
 
-    private fun xtermDisplayBounds(): Rect {
+    private fun NativeSessionDriver.xtermDisplayBounds(): Rect {
         val box = JSONArray(js("""(() => {
             const r = window.__lz.find(${quoted(xtermRowsSelector)})?.getBoundingClientRect();
             return r ? [r.left, r.top, r.right, r.bottom, innerWidth] : null;
@@ -637,7 +409,7 @@ class NativeTerminalSessionTest {
         }
     }
 
-    private fun streamDisplayPixels(bounds: Rect, columns: Int, rows: Int, bottom: Boolean = false): TerminalEchoPixels {
+    private fun NativeSessionDriver.streamDisplayPixels(bounds: Rect, columns: Int, rows: Int, bottom: Boolean = false): TerminalEchoPixels {
         // The end marker paints the last cell of the first row. Include its neighbors for padding and rounding.
         val region = Rect(bounds)
         region.left = bounds.right - (bounds.width().toDouble() * 3 / columns).roundToInt()
@@ -646,7 +418,7 @@ class NativeTerminalSessionTest {
         return TerminalEchoPixels(instrumentation.uiAutomation, region)
     }
 
-    private fun closeXtermBenchmark(remaining: Int = 0) {
+    private fun NativeSessionDriver.closeXtermBenchmark(remaining: Int = 0) {
         val close = ".session-tabs button[aria-label='Disconnect $hostName']"
         val active = ".session-tab-active button[aria-label='Disconnect $hostName']"
         act("""(() => {
@@ -660,7 +432,7 @@ class NativeTerminalSessionTest {
             "document.querySelectorAll('.terminal-pane .xterm-screen').length === $remaining")
     }
 
-    private fun measureIdle(port: Int, xterm: Boolean) {
+    private fun NativeSessionDriver.measureIdle(port: Int, xterm: Boolean) {
         require(port in 1..65535)
         val prompt = fixture.getString("prompt").trim()
         val nonce = fixture.getString("nonce")
@@ -703,14 +475,14 @@ class NativeTerminalSessionTest {
         if (xterm) closeXtermBenchmark()
     }
 
-    private fun fillBenchmarkHistory(id: String, prompt: String) {
+    private fun NativeSessionDriver.fillBenchmarkHistory(id: String, prompt: String) {
         awaitRow(id, "the owned shell prompt", { it == prompt })
         typeIntoTheSurface("stty -opost; cat bench-memory.bin; printf 'lazysh-memory-filled\\r\\n'")
         awaitRow(id, "the end of 5000 lines of history", { it == "lazysh-memory-filled" })
         assertTrue("the last generated line reached the native core", coreText(id).contains("background session line 004999"))
     }
 
-    private fun streamConfiguration(port: Int, columns: Int, rows: Int) = Socket().use { socket ->
+    private fun NativeSessionDriver.streamConfiguration(port: Int, columns: Int, rows: Int) = Socket().use { socket ->
         socket.connect(InetSocketAddress("127.0.0.1", port), 5000)
         socket.soTimeout = 15_000
         val nonce = fixture.getString("nonce")
@@ -718,7 +490,7 @@ class NativeTerminalSessionTest {
         JSONObject(socket.getInputStream().bufferedReader(Charsets.UTF_8).readLine())
     }
 
-    private fun <T> measureStream(port: Int, kind: String, index: Int, measure: (java.io.BufferedReader, java.io.OutputStream) -> T): T = Socket().use { socket ->
+    private fun <T> NativeSessionDriver.measureStream(port: Int, kind: String, index: Int, measure: (java.io.BufferedReader, java.io.OutputStream) -> T): T = Socket().use { socket ->
         socket.connect(InetSocketAddress("127.0.0.1", port), 5000)
         socket.soTimeout = 60_000
         val input = socket.getInputStream().bufferedReader(Charsets.US_ASCII)
@@ -729,7 +501,7 @@ class NativeTerminalSessionTest {
         measure(input, output)
     }
 
-    private fun checkXtermStreams(port: Int) {
+    private fun NativeSessionDriver.checkXtermStreams(port: Int) {
         startXtermBenchmark(expectPrompt = false)
         val backgroundCount = InstrumentationRegistry.getArguments().getString("lazyshBackgroundSessions")?.toInt() ?: 0
         repeat(backgroundCount) { position ->
@@ -871,7 +643,7 @@ class NativeTerminalSessionTest {
         for (remaining in backgroundCount downTo 0) closeXtermBenchmark(remaining)
     }
 
-    private fun checkStreamedBenchmarkScreens(port: Int) {
+    private fun NativeSessionDriver.checkStreamedBenchmarkScreens(port: Int) {
         var id = startNativeBenchmark(port)
         val prompt = fixture.getString("prompt").trim()
         awaitRow(id, "the prompt before the streamed benchmark", { it.startsWith(prompt) })
@@ -1136,7 +908,7 @@ class NativeTerminalSessionTest {
         Evidence.record("native-streamed-benchmark", evidence)
     }
 
-    private fun closeBenchmarkSessions(ids: MutableList<String>) {
+    private fun NativeSessionDriver.closeBenchmarkSessions(ids: MutableList<String>) {
         while (ids.isNotEmpty()) {
             val id = PageDriver.poll("the active native surface before closing") {
                 ui { TerminalSurfaces.ids().singleOrNull { it in ids } }
@@ -1152,7 +924,7 @@ class NativeTerminalSessionTest {
         }
     }
 
-    private fun checkSessionMemory(port: Int, xterm: Boolean) {
+    private fun NativeSessionDriver.checkSessionMemory(port: Int, xterm: Boolean) {
         val ids = mutableListOf<String>()
         if (xterm) startXtermBenchmark() else ids.add(startNativeBenchmark(port))
         val prompt = fixture.getString("prompt").trim()
@@ -1209,7 +981,7 @@ class NativeTerminalSessionTest {
         }
     }
 
-    private fun checkXtermSshEcho() {
+    private fun NativeSessionDriver.checkXtermSshEcho() {
         val choice = "input[name='terminal-engine'][value='xterm']"
         openTerminalSettings()
         choose(choice)
@@ -1403,7 +1175,7 @@ class NativeTerminalSessionTest {
         instrumentation.sendStatus(2, android.os.Bundle().apply { putString("lazyshXtermSshEcho", record.toString()) })
     }
 
-    private fun closeOwnedXtermTab() {
+    private fun NativeSessionDriver.closeOwnedXtermTab() {
         val ownedTabClose = ".session-tabs button[aria-label='Disconnect $hostName']"
         act("""(() => {
             const buttons = document.querySelectorAll(${quoted(ownedTabClose)});
@@ -1414,7 +1186,7 @@ class NativeTerminalSessionTest {
         until("the owned xterm session to close", 30, "!document.querySelector(${quoted(ownedTabClose)})")
     }
 
-    private fun checkBuildTimeKillSwitch() {
+    private fun NativeSessionDriver.checkBuildTimeKillSwitch() {
         val override = js("localStorage.getItem('lazysh.terminal.backend')")
         js("""(() => {
             const key = 'lazysh.preferences.v1';
@@ -1426,7 +1198,7 @@ class NativeTerminalSessionTest {
         try {
             scenario.recreate()
             PageDriver.awaitStartPage()
-            PageDriver.js(driver)
+            PageDriver.js(pageScript)
             val probe = JSONObject(PageDriver.invoke("native_terminal_probe"))
             assertEquals("the app build cannot offer the native core", false, probe.getBoolean("available"))
             val cell = PageDriver.invoke("native_terminal_surface_cell", "{fontSize:14,dpr:1}")
@@ -1448,7 +1220,7 @@ class NativeTerminalSessionTest {
         }
     }
 
-    @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() {
+    @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() { with(driver) {
         if (InstrumentationRegistry.getArguments().getString("lazyshKillSwitch") == "true") {
             checkBuildTimeKillSwitch()
             return
@@ -1528,9 +1300,7 @@ class NativeTerminalSessionTest {
             Evidence.recordPicture("native-session-surface-restarted", again)
             assertEquals("the new surface shows the session as the old one did", checksum(back), checksum(again))
 
-            // The keyboard is the terminal's when it asks and the page's when a page field takes it.
             keyboardOwnership(id)
-            // Every toolbar key writes what the shell expects; the modifiers apply to the soft keyboard's next character.
             toolbarKeys(id)
             verifySelectionCopy(id)
             // Unicode text in its cells with the device's fonts (#2507).
@@ -1546,13 +1316,13 @@ class NativeTerminalSessionTest {
         } finally {
             Evidence.record("native-session", evidence)
         }
-    }
+    } }
 
     /** The grid the core holds, as the pane told it (columns, rows). */
-    private fun coreGrid(session: String) = JSONObject(invoke("terminal_core_snapshot", session)).getJSONObject("state").let { it.getInt("columns") to it.getInt("rows") }
+    private fun NativeSessionDriver.coreGrid(session: String) = JSONObject(invoke("terminal_core_snapshot", session)).getJSONObject("state").let { it.getInt("columns") to it.getInt("rows") }
 
     /** What the remote pty answers to `stty size` (rows, columns), read from the core's text under a tag that nothing else prints. */
-    private fun ptyGrid(session: String, tag: String): Pair<Int, Int> {
+    private fun NativeSessionDriver.ptyGrid(session: String, tag: String): Pair<Int, Int> {
         typeIntoTheSurface("echo $tag=\$(stty size)")
         val row = awaitRow(session, "the pty's size for $tag", { Regex("$tag=\\d+ \\d+").matches(it) }).lines().last { Regex("$tag=\\d+ \\d+").matches(it.trim()) }.trim()
         val (rows, columns) = row.substringAfter("=").split(" ").map(String::toInt)
@@ -1560,7 +1330,7 @@ class NativeTerminalSessionTest {
     }
 
     /** The cell the renderer draws for the page's configured font size, in device pixels (`native_terminal_surface_cell`). */
-    private fun cellOfTheSession(): Pair<Int, Int> {
+    private fun NativeSessionDriver.cellOfTheSession(): Pair<Int, Int> {
         val dpr = JSONTokener(js("window.devicePixelRatio")).nextValue().toString().toDouble()
         val fontSize = js("JSON.parse(localStorage.getItem('lazysh.preferences.v1'))?.fontSize ?? 14").toInt()
         return JSONObject(PageDriver.invoke("native_terminal_surface_cell", "{fontSize:$fontSize,dpr:$dpr}")).let { it.getInt("width") to it.getInt("height") }
@@ -1570,7 +1340,7 @@ class NativeTerminalSessionTest {
      * The pane holds the grid the session has (#2502): the core's grid is the whole cells of the surface, the remote pty has the same size, the
      * prompt is drawn (no blank frame) and the session still answers. `name` labels the evidence of the step.
      */
-    private fun assertThePaneHoldsItsGrid(session: String, name: String, tag: String): Pair<Int, Int> {
+    private fun NativeSessionDriver.assertThePaneHoldsItsGrid(session: String, name: String, tag: String): Pair<Int, Int> {
         val cell = cellOfTheSession()
         val bitmap = settled("$name: a drawn surface") { ink(it) > 40 }
         val (columns, rows) = coreGrid(session)
@@ -1584,7 +1354,7 @@ class NativeTerminalSessionTest {
     }
 
     /** What decides the pane's size right now, for the evidence and for a failure: the keyboard's inset, the surface on screen and the page's anchor. */
-    private fun paneState(session: String): String {
+    private fun NativeSessionDriver.paneState(session: String): String {
         val view = surfaceView()
         val screen = ui { activity ->
             val decor = activity.window.decorView
@@ -1598,7 +1368,7 @@ class NativeTerminalSessionTest {
     }
 
     /** Waits for the window orientation and a new grid. The keyboard can make a portrait surface wider than it is tall. */
-    private fun awaitTheGridToFollow(session: String, landscape: Boolean, previous: Pair<Int, Int>) =
+    private fun NativeSessionDriver.awaitTheGridToFollow(session: String, landscape: Boolean, previous: Pair<Int, Int>) =
         PageDriver.poll("the pane to be ${if (landscape) "landscape" else "portrait"} with a new grid", 90) {
             val view = surfaceView()
             val sideways = ui { activity -> activity.window.decorView.let { it.width > it.height } }
@@ -1610,7 +1380,7 @@ class NativeTerminalSessionTest {
      * whole cells of the surface, the remote pty the same size, the prompt drawn and the session taking input; the keyboard leaves the last row
      * of the pane above itself. A step of the one session case (a second case would start from the page the first leaves).
      */
-    private fun followsTheDevice(id: String): String {
+    private fun NativeSessionDriver.followsTheDevice(id: String): String {
         val device = UiDevice.getInstance(instrumentation)
         val imeSetting = "show_ime_with_hard_keyboard"
         val previousIme = shell("settings get secure $imeSetting").decodeToString().trim()
@@ -1667,7 +1437,7 @@ class NativeTerminalSessionTest {
             awaitRow(id, "the marker", { it == "before-recreate" })
             scenario.recreate()
             PageDriver.awaitStartPage()
-            PageDriver.js(driver)
+            PageDriver.js(pageScript)
             val retired = PageDriver.poll("the old core to retire", 30) {
                 invoke("terminal_core_text", id).takeIf { it == "error No native terminal core for this session" }
             }
@@ -1716,7 +1486,7 @@ class NativeTerminalSessionTest {
     }
 
     /** The pixels of `columns` cells starting at `column` of screen row `row` that are not the pane's background. */
-    private fun cellInk(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int = 1): Int {
+    private fun NativeSessionDriver.cellInk(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int = 1): Int {
         val background = bitmap.getPixel(bitmap.width - 1, bitmap.height - 1)
         var count = 0
         for (y in row * cell.second until minOf(bitmap.height, (row + 1) * cell.second))
@@ -1725,14 +1495,14 @@ class NativeTerminalSessionTest {
     }
 
     /** The picture of `columns` cells of a row, to tell two glyphs from each other (a missing glyph's box is the same for every character). */
-    private fun cellPicture(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int): Int {
+    private fun NativeSessionDriver.cellPicture(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int): Int {
         val pixels = IntArray(cell.first * columns * cell.second)
         bitmap.getPixels(pixels, 0, cell.first * columns, column * cell.first, row * cell.second, cell.first * columns, cell.second)
         return pixels.contentHashCode()
     }
 
     /** Whether some pixel of the cells is a colour and not a grey of the text colour: an emoji is drawn as it is. */
-    private fun hasColour(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int): Boolean {
+    private fun NativeSessionDriver.hasColour(bitmap: Bitmap, cell: Pair<Int, Int>, row: Int, column: Int, columns: Int): Boolean {
         for (y in row * cell.second until minOf(bitmap.height, (row + 1) * cell.second))
             for (x in column * cell.first until minOf(bitmap.width, (column + columns) * cell.first)) {
                 val p = bitmap.getPixel(x, y)
@@ -1750,7 +1520,7 @@ class NativeTerminalSessionTest {
      * core's (emoji two cells, a documented difference from xterm.js 5.5.0: `fixtures/divergences.json`, `emoji-presentation`). A step of the one
      * session case (a second case would start from the page the first leaves).
      */
-    private fun unicodeInTheirCells(id: String) {
+    private fun NativeSessionDriver.unicodeInTheirCells(id: String) {
         run {
             evidence.put("systemFonts", shell("ls /system/fonts").decodeToString().lines().filter { it.isNotBlank() }.take(200).joinToString(" "))
             typeIntoTheSurface(
