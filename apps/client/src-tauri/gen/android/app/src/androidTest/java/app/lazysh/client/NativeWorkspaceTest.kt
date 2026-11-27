@@ -719,6 +719,10 @@ class NativeWorkspaceTest {
         onView(isAssignableFrom(WebView::class.java)).perform(
             pressKey(EspressoKey.Builder().withKeyCode(KeyEvent.KEYCODE_A).withCtrlPressed(true).build()),
             pressKey(KeyEvent.KEYCODE_DEL))
+        // Typing before the renderer applies the clear lets the IME's stale view of the old value drop the first
+        // key past the prefix it shares with the new one (#2735: always the character after the shared `…/cards/`).
+        awaitDocument(scenario, "$selector cleared before typing", "document.querySelector(${JSONObject.quote(selector)})?.value===''",
+            System.nanoTime() + TimeUnit.SECONDS.toNanos(5))
         typeInto(scenario, selector, value)
     }
 
