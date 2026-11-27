@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { commandLine, moonJson, moonScript, moonTask } from './support/moon';
+import { commandLine, moonJson, moonScript, moonTask, withMoonLock } from './support/moon';
 
 const root = join(import.meta.dir, '..');
 const temporary: string[] = [];
@@ -14,8 +14,7 @@ const projects: Map<string, { source: string; dependsOn: string[]; tags: string[
   }]));
 
 test('the workspace loads with its layer and tag constraints satisfied', async () => {
-  const child = Bun.spawn([process.execPath, moonScript, 'projects'], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
-  expect(await child.exited).toBe(0);
+  expect(await withMoonLock(() => Bun.spawn([process.execPath, moonScript, 'projects'], { cwd: root, stdout: 'pipe', stderr: 'pipe' }).exited)).toBe(0);
   expect([...projects.keys()].sort()).toEqual([
     'account-usage', 'agent', 'ai-usagebar-vendor', 'apple-speech', 'apple-status', 'client', 'client-native', 'common',
     'companion-release', 'credential-vault', 'deep-link-vendor', 'display-idle', 'et-transport', 'herdr-guard', 'herdr-upstream', 'mosh-transport',
