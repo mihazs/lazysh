@@ -1,5 +1,31 @@
 # @lazysh/client
 
+## 1.104.1
+
+### Patch Changes
+
+- fix(release): declare the Debian protobuf runtime dependency ([#2785](https://github.com/mihazs/lazysh/pull/2785))
+
+  <details><summary>Details</summary>
+
+  Debian and Ubuntu installations pull in the protobuf library the Linux executable needs to start.
+
+  </details>
+- fix(zellij): Split right and Split down start in the chosen Directory ([#2793](https://github.com/mihazs/lazysh/pull/2793))
+
+  <details><summary>Details</summary>
+
+  Zellij ignores `--cwd` for a plain terminal pane, so a split in a directory other than the default `.` now runs your shell there as a command pane that closes on exit. The default `.` is unchanged.
+
+  </details>
+- fix(ci): gate the Android emulator on SystemUI readiness before native cases ([#2788](https://github.com/mihazs/lazysh/pull/2788))
+
+  <details><summary>Details</summary>
+
+  A boot-time SystemUI ANR now reboots the guest (at most twice) or fails the job early with a named cause, instead of failing the first native case with an unfocused window.
+
+  </details>
+
 ## 1.104.0
 
 ### Minor Changes

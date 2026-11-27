@@ -10,6 +10,18 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.104.1] - 2026-11-27
+
+### New
+
+- **notifications:** retain the local source of relay events ([#2789](https://github.com/mihazs/lazysh/pull/2789))
+
+### Fixed
+
+- **release:** declare the Debian protobuf runtime dependency ([#2785](https://github.com/mihazs/lazysh/pull/2785))
+- **zellij:** Split right and Split down start in the chosen Directory ([#2793](https://github.com/mihazs/lazysh/pull/2793))
+- **ci:** gate the Android emulator on SystemUI readiness before native cases ([#2788](https://github.com/mihazs/lazysh/pull/2788))
+
 ## [1.104.0] - 2026-11-27
 
 ### New

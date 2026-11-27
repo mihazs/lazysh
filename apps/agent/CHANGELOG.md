@@ -1,5 +1,11 @@
 # @lazysh/agent
 
+## 1.104.1
+
+### Patch Changes
+
+- feat(notifications): retain the local source of relay events ([#2789](https://github.com/mihazs/lazysh/pull/2789))
+
 ## 1.104.0
 
 ### Minor Changes
