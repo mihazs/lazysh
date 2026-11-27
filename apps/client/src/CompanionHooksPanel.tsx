@@ -34,7 +34,7 @@ export function parseHookDiscovery(value:unknown,expectedVersion:1|2|3|4=1):Disc
   return result;
 }
 type LocalEvent={state:'received';lastEventAt:number}|{state:'none'|'notChecked'};
-type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksKimiConfigRequired'|'HooksAmpShadow';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string;localEvent?:LocalEvent};
+type Status={supported:boolean;reason?:'HooksAclUnsupported'|'HooksDroidStandaloneRequired'|'HooksKimiConfigRequired'|'HooksAmpShadow'|'HooksForeignRecord';state:null|'prepared'|'configured'|'removed'|'conflict';installPlan?:string;removePlan?:string;localEvent?:LocalEvent};
 /** Additive and advisory: an absent, newer or malformed report from the companion reads as not checked and never fails the status. */
 function parseLocalEvent(value:unknown):LocalEvent|undefined{
   const report=value as {schemaVersion?:unknown;localEvent?:{state?:unknown;lastEventAt?:unknown}}|null|undefined;
@@ -47,7 +47,7 @@ export function parseHookStatus(value:unknown,expectedAgent?:Agent):Status {
   if(!value || typeof value!=='object')throw new LocalUiError('hooksInvalid');
   const v=value as Record<string,unknown>;
   if(v.schemaVersion!==1 || typeof v.supported!=='boolean' || v.reporting!=='notChecked' || v.trust!=='notChecked')throw new LocalUiError('hooksInvalid');
-  if(!v.supported){if(v.reason!=='HooksAclUnsupported' && v.reason!=='HooksDroidStandaloneRequired' && !(v.reason==='HooksKimiConfigRequired'&&expectedAgent==='kimi-code'))throw new LocalUiError('hooksInvalid');return {supported:false,state:null,reason:v.reason};}
+  if(!v.supported){if(v.reason!=='HooksAclUnsupported' && v.reason!=='HooksForeignRecord' && v.reason!=='HooksDroidStandaloneRequired' && !(v.reason==='HooksKimiConfigRequired'&&expectedAgent==='kimi-code'))throw new LocalUiError('hooksInvalid');return {supported:false,state:null,reason:v.reason};}
   if(![null,'prepared','configured','removed','conflict'].includes(v.state as null))throw new LocalUiError('hooksInvalid');
   if(v.reason==='HooksAmpShadow'){
     if(expectedAgent!=='amp'||v.agent!=='amp'||v.state==='conflict'||v.installPlan!==null||typeof v.removePlan!=='string'||!/^[a-f0-9]{64}$/.test(v.removePlan))throw new LocalUiError('hooksInvalid');
@@ -56,6 +56,19 @@ export function parseHookStatus(value:unknown,expectedAgent?:Agent):Status {
   if(v.state==='conflict')return {supported:true,state:'conflict',localEvent:parseLocalEvent(v.readiness)};
   if(![v.installPlan,v.removePlan].every(plan=>typeof plan==='string' && /^[a-f0-9]{64}$/.test(plan)))throw new LocalUiError('hooksInvalid');
   return {supported:true,state:v.state as Status['state'],installPlan:v.installPlan as string,removePlan:v.removePlan as string,localEvent:parseLocalEvent(v.readiness)};
+}
+/** Hook setup failures from the companion read `lazysh-agent: <Kind>: operation failed`; show what to do, never the kind. */
+const hookErrors:Readonly<Record<string,'hooksForeignRecord'|'hooksErrStale'|'hooksErrBusy'|'hooksErrConfiguration'|'hooksErrUnsafeFile'|'hooksErrBinary'|'hooksErrRecord'|'hooksErrForeignPlugin'>>={
+  HooksForeignRecord:'hooksForeignRecord',HooksForeignPlugin:'hooksErrForeignPlugin',HooksBusy:'hooksErrBusy',
+  HooksStalePlan:'hooksErrStale',HooksChangedFile:'hooksErrStale',HooksChangedBinary:'hooksErrStale',HooksChangedGroup:'hooksErrStale',HooksChangedRecord:'hooksErrStale',HooksChangedStage:'hooksErrStale',HooksConflict:'hooksErrStale',
+  HooksInvalidConfiguration:'hooksErrConfiguration',HooksInvalidRecord:'hooksErrRecord',HooksModifiedRecord:'hooksErrRecord',
+  HooksUnsafeFile:'hooksErrUnsafeFile',HooksUnsafeLock:'hooksErrUnsafeFile',HooksUnhandledAcl:'hooksErrUnsafeFile',HooksReadOnlyConfiguration:'hooksErrUnsafeFile',
+  HooksUnsafeBinary:'hooksErrBinary',HooksInvalidBinary:'hooksErrBinary',
+};
+function hookError(error:unknown):UiErrorCause{
+  const cause=captureUiError(error);
+  const kind=typeof cause==='string'?/lazysh-agent: (Hooks\w+):/.exec(cause)?.[1]:undefined;
+  return kind?new LocalUiError(hookErrors[kind]??'hooksErrGeneric'):cause;
 }
 export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionId:string;visible:boolean;reveal?:Readonly<{sessionId:string}>}) {
   useUi();const api=useProtectedApi(nativeApi),{access,mounted}=useMountedAccess();
@@ -121,7 +134,7 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
         if(value.outcome?.status==='uncertain')setUncertain(true);
         else {const refreshed=await api.companionHooks(sessionId,{agent,action:'status',profileRoot:profile});if(owns())setStatus(parseHookStatus(refreshed,agent));}
       }
-    } catch(error){if(owns()){setStatus(undefined);setError(captureUiError(error));}}
+    } catch(error){if(owns()){setStatus(undefined);setError(hookError(error));}}
     finally {if(owns())setBusy(false);if(flight.current===id)flight.current=null;}
   }
   return <details ref={disclosure} className="companion-install" onToggle={()=>setOpened(disclosure.current?.open??false)} hidden={!visible} aria-label={t('hooksTitle')}>
@@ -157,7 +170,7 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     {agent==='amp'&&!ampSupported&&<p className="agent-note" role="status">{t('hooksAmpCapability')}</p>}
     {agent==='kimi-code'&&!kimiSupported&&<p className="agent-note" role="status">{t('hooksKimiCodeCapability')}</p>}
     {status?.reason==='HooksAmpShadow'&&<p className="agent-note" role="status">{t('hooksAmpShadow')}</p>}
-    {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':status.reason==='HooksKimiConfigRequired'?'hooksKimiCodeConfigRequired':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
+    {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':status.reason==='HooksKimiConfigRequired'?'hooksKimiCodeConfigRequired':status.reason==='HooksForeignRecord'?'hooksForeignRecord':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
     {status?.supported && <ul className="agent-note" aria-label={t('hooksReadinessTitle')} style={{margin:0,paddingLeft:'1.2em'}}>
       {([['hooksReadinessCompanion',t('hooksReadinessYes')],['hooksReadinessHooks',t(status.state==='configured'?'hooksReadinessYes':status.state==='conflict'?'hooksReadinessConflict':'hooksReadinessNo')],['hooksReadinessReloaded',t('hooksReadinessNotChecked')],['hooksReadinessTrusted',t('hooksReadinessNotChecked')],['hooksReadinessEvent',status.localEvent?.state==='received'?t('hooksReadinessLastEvent',{time:formatDateTime(status.localEvent.lastEventAt)}):t(status.localEvent?.state==='none'?'hooksReadinessNone':'hooksReadinessNotChecked')],['hooksReadinessPane',t('hooksReadinessNotChecked')],['hooksReadinessRemote',t('hooksReadinessNotChecked')]] as const).map(([label,value])=><li key={label}>{t(label)}: {value}</li>)}
     </ul>}
