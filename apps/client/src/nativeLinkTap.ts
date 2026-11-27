@@ -5,7 +5,7 @@
  */
 import type {NativeCoreLink} from './nativeCoreBridge';
 import type {NativeTerminalAdapter} from './nativeTerminalAdapter';
-import type {Disposable, TerminalAdapter} from './terminalAdapter';
+import type {Disposable, TerminalAdapter, TerminalCell} from './terminalAdapter';
 import type {PathLink} from './terminalLinks';
 import {TOUCH_SELECTION_DELAY} from './terminalTouchSelection';
 
@@ -22,8 +22,10 @@ const pathLink = (link: Extract<NativeCoreLink, {kind: 'path'}>): PathLink => {
 
 export function attachLinkTaps(adapter: NativeTerminalAdapter, anchor: HTMLElement, handlers: LinkHandlers): Disposable {
   let press: {id: number; x: number; y: number; at: number} | undefined;
+  let touchCell: TerminalCell | undefined;
   let live = true;
   const down = (event: PointerEvent) => {
+    touchCell = undefined;
     // The primary button or a finger, once and without a modifier (a double click selects a word, shift extends a selection), and never
     // over a program that tracks the mouse, which owns the pointer.
     const plain = (event.button === 0 || event.button === undefined) && event.detail <= 1 && !event.shiftKey && adapter.modes().mouseTracking === 'none';
@@ -35,9 +37,16 @@ export function attachLinkTaps(adapter: NativeTerminalAdapter, anchor: HTMLEleme
     // A hold is a selection, a drag is a scroll or a selection: neither opens a link.
     if (!tap || event.pointerId !== tap.id || Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > TAP_SLOP || Date.now() - tap.at >= TOUCH_SELECTION_DELAY) return;
     const cell = adapter.cellAt(event.clientX, event.clientY);
-    if (cell) void open(cell);
+    if (event.pointerType === 'touch') touchCell = cell;
+    else if (cell) void open(cell);
   };
-  const open = async (cell: {x: number; y: number}) => {
+  const click = (event: MouseEvent) => {
+    const cell = touchCell;
+    touchCell = undefined;
+    // Let WebView target the touch's generated click before showing the consent buttons.
+    if (cell && event.detail > 0) void open(cell);
+  };
+  const open = async (cell: TerminalCell) => {
     const link = await adapter.linkAt(cell).catch(() => undefined);
     if (!live || !link) return;
     if (link.kind === 'url') handlers.openUrl(link.uri);
@@ -47,14 +56,16 @@ export function attachLinkTaps(adapter: NativeTerminalAdapter, anchor: HTMLEleme
       if (await handlers.hostPaths.exists(found).catch(() => false) && live) handlers.hostPaths.open(found);
     }
   };
-  const cancel = () => { press = undefined; };
+  const cancel = () => { press = undefined; touchCell = undefined; };
   anchor.addEventListener('pointerdown', down as EventListener);
   anchor.addEventListener('pointerup', up as EventListener);
   anchor.addEventListener('pointercancel', cancel);
+  anchor.addEventListener('click', click);
   return {dispose() {
-    live = false; press = undefined;
+    live = false; cancel();
     anchor.removeEventListener('pointerdown', down as EventListener);
     anchor.removeEventListener('pointerup', up as EventListener);
     anchor.removeEventListener('pointercancel', cancel);
+    anchor.removeEventListener('click', click);
   }};
 }
