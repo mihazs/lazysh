@@ -770,7 +770,7 @@ pub async fn herdr_action(
         .await
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) fn isolate_test_socket(command: &mut std::process::Command, home: &std::path::Path) {
     // Explicit sessions derive their socket from the isolated configuration directory.
     command
@@ -790,7 +790,6 @@ pub(crate) fn isolate_test_socket(command: &mut std::process::Command, home: &st
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
     #[test]
     fn real_fixture_commands_override_the_inherited_herdr_socket() {
         use std::{collections::HashMap, ffi::OsStr, path::Path};
