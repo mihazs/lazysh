@@ -2309,13 +2309,18 @@ test('native SSH prompt failure preserves its original error when diagnostic rea
 
 test.skipIf(process.platform!=='linux')('SSH prompt observation separates original processes and never emits their captured text',async()=>{
   const prompt='UI_PROMPT_'+'a'.repeat(32)+'>';
-  const control=new OwnedProcess(process.execPath,['-e',`process.stdout.write('private-output'.repeat(2000)+${JSON.stringify(prompt)});process.stderr.write('Permission denied private-key');setInterval(()=>{},1000)`],undefined,{PATH:'/usr/bin:/bin'});
+  const control=new OwnedProcess(process.execPath,['-e',`process.stdout.write('private-output'.repeat(2000)+${JSON.stringify(prompt)});setTimeout(()=>process.stderr.write('Permission denied private-key'),150);setInterval(()=>{},1000)`],undefined,{PATH:'/usr/bin:/bin'});
   const observer=new OwnedProcess(process.execPath,['-e',"process.stderr.write('Host key verification failed private-host');process.exit(31)"],undefined,{PATH:'/usr/bin:/bin'});
   const events:string[]=[];const emit=spyOn(console,'error').mockImplementation(text=>{events.push(text);});
   try {
     await observer.done;
-    const deadline=performance.now()+1000;
-    while(!control.stdout.includes(prompt)){expect(performance.now()).toBeLessThan(deadline);await Bun.sleep(5);}
+    // The two pipes are independent, so a loaded runner can deliver stdout before stderr: wait for both.
+    const deadline=performance.now()+5000;
+    const missing=()=>[!control.stdout.includes(prompt)&&'stdout prompt',!control.stderr.includes('Permission denied')&&'stderr auth error'].filter(Boolean);
+    while(missing().length){
+      if(performance.now()>deadline)throw new Error(`Control fixture (node, pid ${control.child.pid}, exit ${control.child.exitCode}, signal ${control.child.signalCode}) never produced: ${missing().join(', ')}; stdout ${control.stdout.length} bytes, stderr ${control.stderr.length} bytes`);
+      await Bun.sleep(5);
+    }
     await reportOwnedSshPromptFailure({prompt,daemon:control},control,observer,2);
     expect(events).toHaveLength(1);
     const state=JSON.parse(events[0]);
