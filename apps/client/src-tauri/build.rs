@@ -25,11 +25,12 @@ fn main() {
         std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default(),
         std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default(),
     );
-    if (matches!(os.as_str(), "linux" | "windows") && arch == "x86_64")
-        || (os == "android"
-            && matches!(arch.as_str(), "aarch64" | "x86_64")
-            && std::env::var_os("CARGO_FEATURE_PARAKEET_ANDROID").is_some())
-    {
+    let desktop = matches!(os.as_str(), "linux" | "windows") && arch == "x86_64";
+    let android = os == "android"
+        && matches!(arch.as_str(), "aarch64" | "x86_64")
+        && std::env::var_os("CARGO_FEATURE_PARAKEET_ANDROID").is_some();
+    // The lightweight development build (no `local-voice`) compiles no Parakeet runtime.
+    if std::env::var_os("CARGO_FEATURE_LOCAL_VOICE").is_some() && (desktop || android) {
         println!("cargo:rustc-cfg=parakeet_local");
     }
     if os == "android"

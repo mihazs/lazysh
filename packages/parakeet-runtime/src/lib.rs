@@ -1,3 +1,4 @@
+#![cfg(feature = "native")]
 //! Synchronous CPU inference. Cancellation of delivery belongs to the caller; never destroy an active recognizer.
 mod bundle;
 mod storage;

@@ -1,6 +1,8 @@
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 type Protected<T> = std::result::Result<Guarded<T>, GuardedError<String>>;
 use serde::Serialize;
+#[cfg(feature = "local-voice")]
+use std::time::{Duration, Instant};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -9,10 +11,10 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
 };
 use tauri::State;
 use tokio::sync::watch;
+#[cfg(feature = "local-voice")]
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 pub mod catalog;
 pub mod cloud;
@@ -380,6 +382,7 @@ fn remove_model(state: &VoiceState, id: &str) -> Result<()> {
     fs::remove_file(state.path(id)?).map_err(|_| "Cannot remove model".to_owned())
 }
 fn validate_audio(samples: &[f32], language: &str) -> Result<()> {
+    #[cfg(feature = "local-voice")]
     // No logging backend is enabled: suppress native diagnostics that may include dictated text.
     whisper_rs::install_logging_hooks();
     if samples.len() < 1600
@@ -388,11 +391,15 @@ fn validate_audio(samples: &[f32], language: &str) -> Result<()> {
     {
         return Err("Audio must contain 0.1–30 seconds of finite mono 16 kHz samples".into());
     }
+    #[cfg(feature = "local-voice")]
     if language != "auto" && whisper_rs::get_lang_id(language).is_none() {
         return Err("Unsupported Whisper language code".into());
     }
+    #[cfg(not(feature = "local-voice"))]
+    let _ = language;
     Ok(())
 }
+#[cfg(feature = "local-voice")]
 struct Abort {
     cancelled: Arc<AtomicBool>,
     access: Option<AccessLease>,
@@ -404,6 +411,7 @@ impl Drop for InferenceGuard {
         self.0.store(false, Ordering::Release);
     }
 }
+#[cfg(feature = "local-voice")]
 unsafe extern "C" fn abort_inference(data: *mut std::ffi::c_void) -> bool {
     let state = unsafe { &*(data as *const Abort) };
     state.cancelled.load(Ordering::Acquire)
@@ -428,6 +436,27 @@ fn infer_guarded(
         lease.check()?;
     }
     validate_audio(samples, language)?;
+    run_whisper(path, samples, language, cancel, access)
+}
+/// Lightweight development build (`--no-default-features`): Whisper is not compiled, so the command reports that.
+#[cfg(not(feature = "local-voice"))]
+fn run_whisper(
+    _path: &Path,
+    _samples: &[f32],
+    _language: &str,
+    _cancel: Arc<AtomicBool>,
+    _access: Option<AccessLease>,
+) -> Result<String> {
+    Err("Local Whisper is not part of this lightweight development build".into())
+}
+#[cfg(feature = "local-voice")]
+fn run_whisper(
+    path: &Path,
+    samples: &[f32],
+    language: &str,
+    cancel: Arc<AtomicBool>,
+    access: Option<AccessLease>,
+) -> Result<String> {
     let metadata = fs::symlink_metadata(path).map_err(|_| "Model is unavailable")?;
     if !metadata.is_file() || metadata.len() > MAX_MODEL {
         return Err("Model is unavailable or exceeds the size limit".into());
@@ -663,11 +692,28 @@ mod tests {
         import_model(&state, "extra.bin");
         assert_eq!(list(&state).unwrap().len(), 3);
     }
+    #[cfg(not(feature = "local-voice"))]
+    #[test]
+    fn the_lightweight_build_reports_that_whisper_is_not_compiled() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let error = infer(
+            file.path(),
+            &vec![0.; 1600],
+            "en",
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_err();
+        assert!(error.contains("lightweight development build"));
+    }
+    #[cfg(feature = "local-voice")]
+    #[test]
+    fn unknown_languages_are_rejected_before_native_inference() {
+        assert!(validate_audio(&vec![0.; 1600], "not-a-language").is_err());
+    }
     #[test]
     fn invalid_audio_and_models_are_rejected_before_native_inference() {
         assert!(validate_audio(&[0.; 1599], "en").is_err());
         assert!(validate_audio(&vec![f32::NAN; 1600], "en").is_err());
-        assert!(validate_audio(&vec![0.; 1600], "not-a-language").is_err());
         let file = tempfile::NamedTempFile::new().unwrap();
         assert!(infer(
             file.path(),

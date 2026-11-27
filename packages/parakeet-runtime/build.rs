@@ -1,6 +1,9 @@
 use std::{env, fs, path::PathBuf};
 
 fn main() {
+    if env::var_os("CARGO_FEATURE_NATIVE").is_none() {
+        return;
+    }
     println!("cargo:rerun-if-changed=native");
     for name in [
         "LAZYSH_PARAKEET_SOURCE_ARCHIVE",
@@ -48,7 +51,10 @@ fn main() {
         }
     }
     if env::var_os("CMAKE_BUILD_PARALLEL_LEVEL").is_none() {
-        build.env("CMAKE_BUILD_PARALLEL_LEVEL", "4");
+        // Half the CPUs between 4 and 12: this native build is the longest step of a clean build, so a machine with many CPUs
+        // finishes it sooner, and 4 CPUs (a hosted runner) keep the former 4 (docs/reference/build-performance.md).
+        let jobs = std::thread::available_parallelism().map_or(4, |n| (n.get() / 2).clamp(4, 12));
+        build.env("CMAKE_BUILD_PARALLEL_LEVEL", jobs.to_string());
     }
     let built = build.build().join("build");
     let libraries = fs::read_to_string(built.join("native-libraries-Release.txt"))

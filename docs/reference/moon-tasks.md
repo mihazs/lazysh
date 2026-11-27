@@ -85,10 +85,11 @@ Android `build-*` and `test-android-*` tasks set their constants (`WHISPER_DONT_
 ## Native crate tasks (`apps/client/src-tauri`, id `client-native`)
 
 Inherited `check-rust`, `test-rust`, `lint`, `format-check`, plus `verify-native` (an aggregate of those four
-for this crate and its direct Cargo dependencies) and the opt-in integration tasks `test-resume-policy`,
+for this crate and its direct Cargo dependencies, with `test-feature-graph`, which proves the default build keeps Whisper and Parakeet) and the opt-in integration tasks `test-resume-policy`,
 `test-openssh`, `test-openssh-connections`, `test-host-clipboard`, `test-local`, `test-mosh`, `test-et`,
 `test-multiplexers`, `test-connection-loss`, `test-tmux`, `test-voice`, `test-parakeet-product`,
-`test-voice-interop-smoke`, `test-voice-interop` and `test-voice-interop-release`.
+`test-voice-interop-smoke`, `test-voice-interop` and `test-voice-interop-release`. `check-rust-light` and `test-rust-light`
+run the [lightweight development build](build-performance.md) (`--no-default-features`: no Whisper, no Parakeet); no workflow runs them.
 
 ## Other project tasks
 
