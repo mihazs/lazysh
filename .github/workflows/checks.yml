@@ -2391,6 +2391,23 @@ jobs:
         env:
           CASE_NAME: ssh::tmux_jump_fixture::real_zellij_default_entry_creates_exact_target_and_keeps_child_after_bootstrap
         run: *exact-ignored-case
+      # The client lists, allows, denies and refuses requests from hooks that run in a pane of each private server.
+      - name: Answer Claude permission hooks running in real Zellij and Herdr panes from the client over owned OpenSSH
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: ssh::tests::openssh_real_zellij_and_herdr_hooks_are_answered_from_the_client_by_exact_pane
+        run: |
+          cargo build --locked -p lazysh-agent --bin lazysh-agent
+          # The client uploads the companion, which it caps at 64 MiB; the debug build is larger until stripped.
+          LAZYSH_TEST_AGENT_BIN="$RUNNER_TEMP/lazysh-agent-approvals"
+          cp "$GITHUB_WORKSPACE/target/debug/lazysh-agent" "$LAZYSH_TEST_AGENT_BIN"
+          strip "$LAZYSH_TEST_AGENT_BIN"
+          export LAZYSH_TEST_AGENT_BIN
+          test "$(zellij --version)" = 'zellij 0.45.1'
+          herdr --version
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact
       - name: Exercise Herdr creation and remote Git argv quoting under sh, bash, zsh and fish login shells
         if: ${{ !cancelled() }}
         env:
