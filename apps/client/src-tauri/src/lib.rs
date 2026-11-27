@@ -429,6 +429,7 @@ pub fn run() {
                 ssh::attach_tmux,
                 ssh::agent_snapshot,
                 ssh::agent_reported_history,
+                ssh::agent_relay_resolve,
                 companion::install_companion,
                 companion::install_companion_from_device,
                 companion::check_companion_update,

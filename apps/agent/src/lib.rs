@@ -824,6 +824,7 @@ fn write_event(
     relay::admit_transition(
         transaction,
         kind,
+        event,
         prior.as_deref() != Some(event.state.as_str())
             && admission == notification_policy::Admission::Queue,
         now as i64,
