@@ -120,20 +120,51 @@ async function managedRunner(releaseBytes: Uint8Array) {
   return { temp, target, run };
 }
 
-test('the managed build compiles the release profile with the managed feature and publishes the executable digest', async () => {
+test('the managed build compiles the release profile with the managed feature', async () => {
   const bytes = await readFile(versioned), runner = await managedRunner(bytes);
   const result = await runner.run(await managedStep('managed-build'));
-  expect(result).toMatchObject({ exit: 0, output: `sha256=${await sha256(versioned)}\n`, calls: ['+1.96.1 build --locked --release --features lazysh-managed --bin herdr'] });
+  expect(result).toMatchObject({ exit: 0, calls: ['+1.96.1 build --locked --release --features lazysh-managed --bin herdr'] });
 });
 
-test('the acceptance runs the release test profile and fails when Cargo changed the executable it was built from', async () => {
-  const step = await managedStep('managed-acceptance'), bytes = await readFile(versioned);
-  for (const [action, exit] of [[':', 0], ['printf changed >> "$CARGO_TARGET_DIR/release/herdr"', 1]] as const) {
-    const runner = await managedRunner(bytes);
-    const result = await runner.run(step, { CARGO_ACTION: action, MANAGED_SHA256: await sha256(versioned) });
-    expect(result.exit, action).toBe(exit);
-    expect(result.calls, action).toEqual(['+1.96.1 test --locked --release --features lazysh-managed --test guarded_input acceptance::']);
-  }
+/** A runner whose sealed managed artifact came from the receipt step, and a fake `cargo` that records the managed executable and stock server each call was given. */
+async function sealedRunner(cargoAction: string) {
+  const runner = await managedRunner(await readFile(versioned));
+  expect(await runner.run(await managedStep('managed-receipt'))).toMatchObject({ exit: 0 });
+  const env = { CARGO_ACTION: cargoAction, STOCK_TARGET: join(runner.temp, 'stock-target') };
+  return { ...runner, sealed: join(runner.temp, 'managed-artifact'), run: async () => {
+    const result = await runner.run(await managedStep('managed-acceptance'), env);
+    // The receipt step's `cargo --version` calls share the log.
+    return { ...result, calls: result.calls.filter(call => call.includes('guarded_input')) };
+  } };
+}
+const recordEnv = 'printf "%s %s %s\\n" "$LAZYSH_TEST_HERDR_MANAGED" "$LAZYSH_TEST_HERDR_STOCK" "$LAZYSH_TEST_HERDR_STOCK_NAMESPACE" >> "$CARGO_CALLS.env"; case "$*" in *--list*) echo "a: test" ;; esac';
+
+test('the acceptance runs on the sealed executable, and the coexistence case beside both the debug and the release stock', async () => {
+  const runner = await sealedRunner(recordEnv), result = await runner.run(), stock = join(runner.temp, 'stock-target');
+  const test = '+1.96.1 test --locked --release --features lazysh-managed --test guarded_input';
+  expect(result.exit).toBe(0);
+  expect(result.calls).toEqual([`${test} acceptance::`, `${test} managed_and_stock -- --list --ignored`,
+    `${test} managed_and_stock -- --ignored`, `${test} managed_and_stock -- --ignored`]);
+  const seen = (await readFile(join(runner.temp, 'calls.env'), 'utf8')).trim().split('\n');
+  expect(seen.map(line => line.split(' ')[0])).toEqual(Array(4).fill(join(runner.sealed, 'herdr')));
+  expect(seen.slice(2)).toEqual([`${join(runner.sealed, 'herdr')} ${stock}/debug/herdr herdr-dev`, `${join(runner.sealed, 'herdr')} ${stock}/release/herdr herdr`]);
+});
+
+test.each([
+  ['before the first case when the sealed bytes already differ from the receipt', 'printf changed >> "$HERDR_CI_ROOT/managed-artifact/herdr"', true],
+  ['when a case changed the sealed bytes', 'case "$*" in *acceptance::*) printf changed >> "$LAZYSH_TEST_HERDR_MANAGED" ;; esac', false],
+] as const)('the sealed acceptance fails %s', async (_, action, tamperBefore) => {
+  const runner = await sealedRunner(tamperBefore ? ':' : `${action}; ${recordEnv}`);
+  if (tamperBefore) await writeFile(join(runner.sealed, 'herdr'), 'tampered');
+  const result = await runner.run();
+  expect(result.exit).not.toBe(0);
+  if (tamperBefore) expect(result.calls).toEqual([]);
+});
+
+test('the sealed acceptance fails when the coexistence case is renamed and lists no test', async () => {
+  const runner = await sealedRunner(':'), result = await runner.run();
+  expect(result.exit).not.toBe(0);
+  expect(result.calls).toHaveLength(2);
 });
 
 test('the receipt step seals the release executable, never the debug one, beside a receipt for those bytes', async () => {
