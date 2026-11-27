@@ -32,13 +32,14 @@ import ChatHistoryControls from './ChatHistoryControls';
 import AgentStatusPanel from './AgentStatusPanel';
 import AgentPlanChip from './AgentPlanChip';
 import AgentToolCard from './AgentToolCard';
+import AgentFold from './AgentFold';
 import type {StatusItem} from './agentBackgroundWork';
 import AgentThinking from './AgentThinking';
 import AgentPasted from './AgentPasted';
 import {parseWork,type WorkItem} from './agentWork';
 import {parseSession,type AgentSessionInfo} from './agentSession';
 import AgentWorkingRow, {turnProgress, type LiveState} from './AgentWorkingRow';
-import {AgentSearch,CopyButton,messageMarkdown,type Reading} from './AgentReading';
+import {AgentSearch,CopyButton,matchingIds,messageMarkdown,type Reading} from './AgentReading';
 
 type Block = {
   type: "text" | "thinking" | "tool_use" | "tool_result" | "image";
@@ -708,6 +709,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const workSince = turnRunning ? (lastTurn?.prompt ?? lastTurn?.event)?.timestamp : undefined;
   // Conversation only hides the folded tool work, so it cannot be searched either.
   const searchable = useMemo(() => reading?.full === false ? turns.flatMap(turn => [turn.event, turn.prompt, turn.answer].filter((message): message is Message => !!message)) : flow, [reading?.full, turns, flow]);
+  // The folds that hold a match of the search draw their rows, so the search can open the one it is on.
+  const found = useMemo(() => new Set(reading?.search ? matchingIds(searchable, (reading.query ?? '').trim().toLowerCase()) : []), [reading?.search, reading?.query, searchable]);
   const turnStart = turns.at(-1)?.prompt?.timestamp;
   useEffect(() => onTurnStart?.(turnStart), [onTurnStart, turnStart]);
   function stageDraft() {
@@ -946,7 +949,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           {(()=>{
             // The turn's duration goes on its last folded run.
             const parts = foldWork(turn.activity), timed = parts.filter(Array.isArray).at(-1);
-            return parts.map(part => Array.isArray(part) ? <details key={part[0].id} className="agent-turn-activity"><summary>{activitySummary(part === timed ? {...turn, activity: part} : {key: turn.key, activity: part})}</summary>{part.map(renderMessage)}</details> : renderMessage(part));
+            return parts.map(part => Array.isArray(part) ? <AgentFold key={part[0].id} summary={activitySummary(part === timed ? {...turn, activity: part} : {key: turn.key, activity: part})} reveal={part.some(message => found.has(message.id))}>{() => part.map(renderMessage)}</AgentFold> : renderMessage(part));
           })()}
           {turn.answer && renderMessage(turn.answer)}
         </section>) : flow.map(renderMessage)}

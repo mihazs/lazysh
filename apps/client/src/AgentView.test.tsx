@@ -11,6 +11,7 @@ import {herdrBound,herdrChatReply,herdrPrepared,herdrTarget} from './test/herdrC
 import {dialogScreen,fakeTerminal,modelScreen,onTmux} from './test/agentDialogScreens';
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession,opencodeToolPage,opencodeToolSession} from './test/opencodeRecorded';
 import {copilotRecords,droidRecords,kimiRecords} from './test/recordsOnlyRecorded';
+import {openFolds} from './test/openFolds';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -256,6 +257,7 @@ describe.each([copilotRecords,kimiRecords,droidRecords])('$agent pane (records-o
     await mount([reported()]);
     expect(screen.getByText(`Partial: these are the records ${records.agent} wrote for this pane, read-only, so they can lag behind the terminal and leave out what it does not record. Answer in the terminal.`)).toBeTruthy();
     // The turn the adapter's records hold, and the state the hook reported, which the records do not carry.
+    await openFolds();
     const turn=screen.getByRole('region',{name:'Turn'});
     for(const text of texts(records.page as never))expect(within(turn).getByText(text)).toBeTruthy();
     expect(screen.getByTitle('Last reported: Waiting for you')).toBeTruthy();
@@ -986,6 +988,7 @@ describe('OpenCode pane',()=>{
   it('draws the shell command OpenCode ran as a tool card with its output, from a recorded session',async()=>{
     const found={...opencodeDiscovery,sessions:[{...opencodeDiscovery.sessions[0],sessionId:opencodeToolSession}]};
     await mount([opencodeRow(opencodeToolSession)],found,opencodeToolPage);
+    await openFolds();
     const card=screen.getByText('shell').closest('details')!;
     expect(card.getAttribute('data-status')).toBe('ok');
     expect(card.textContent).toContain('cat notes.txt');
@@ -1228,6 +1231,7 @@ describe('answering the open question of the agent',()=>{
   });
   it('shows no answer controls for a question the agent already got an answer to',async()=>{
     await open([...question([single]),{id:'r',role:'tool',blocks:[{type:'tool_result',id:'q1',text:'answered'}]}]);await bind();await advance(400);
+    await openFolds();
     expect(within(card()).queryByRole('button',{name:'Red'})).toBeNull();
   });
   it.each([['claude','Claude Code'],['codex','Codex']] as const)('shows successive and batched %s questions in order without guessing the active request',async(agent,label)=>{
@@ -1667,5 +1671,29 @@ describe('starting an agent from the empty state',()=>{
       fireEvent.click(within(dialog).getByRole('button',{name:'work'}));await advance(0);
       expect(folder(dialog)).toHaveProperty('value','/work');
     });
+  });
+});
+
+describe('draw cost of a long conversation',()=>{
+  it('draws only prompts and answers, and the tool cards of a turn once its activity is opened',async()=>{
+    const turns=Array.from({length:24},(_,index)=>turn(`Prompt ${index}`,`Answer ${index}`)).flat();
+    host('claude',[row('Claude Code','%3')],'available',[turns]);
+    render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);
+    await advance(0);
+    const timeline=screen.getByRole('region',{name:'Agent view'});
+    expect(screen.getByText('Answer 23')).toBeTruthy();
+    // Twenty-four finished turns: forty-eight bubbles, and none of the seventy-two tool calls or their results are drawn yet.
+    expect(timeline.querySelectorAll('article').length).toBe(48);
+    expect(timeline.querySelectorAll('.agent-tool').length).toBe(0);
+    const folds=timeline.querySelectorAll('details.agent-turn-activity');
+    expect(folds.length).toBe(24);
+    fireEvent.click(folds[3].querySelector('summary')!);
+    await advance(0);
+    expect(folds[3].querySelectorAll('.agent-tool').length).toBe(3);
+    expect(timeline.querySelectorAll('.agent-tool').length).toBe(3);
+    // Closing it again keeps the rows, so reopening costs nothing.
+    fireEvent.click(folds[3].querySelector('summary')!);
+    await advance(0);
+    expect(folds[3].querySelectorAll('.agent-tool').length).toBe(3);
   });
 });
