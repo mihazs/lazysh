@@ -22,19 +22,21 @@ The existing `bun run test:release` workflow also executes these checks.
 They validate the actual committed files, text encoding, character bounds and
 application-name agreement. They do not replace F-Droid metadata/build checks.
 
-There are no listing screenshots, promotional graphics or release notes yet.
-Only add screenshots from actual reviewed application captures with synthetic
-data and verified permission to redistribute. Test image fixtures are not
-product screenshots. Existing app icons need a documented provenance/license
-basis before being copied into the listing; no vendor artwork is included here.
-Create `changelogs/<versionCode>.txt` only for a corresponding reviewed release,
-using its literal Android versionCode and at most 500 characters. The presence
-of source version metadata alone does not mean a release has been published.
+The listing also has a pt-BR translation, the brand icon
+(`brand/lazysh/platform/play-store-512.png`) and six phone screenshots. The
+screenshots are the README captures in `docs/assets/readme/`: the real app on
+the Waydroid guest, connected to the owned demo host with harmless files (see
+`docs/how-to/capture-readme-media.md`). When those captures are refreshed, copy
+`terminal`, `agent-chat`, `agent-approval`, `sessions`, `files` and `hosts`
+to `images/phoneScreenshots/1.png` through `6.png`, in that order.
 
-Basic listing text does not meet the separate Latest-tab criteria: graphics,
-release notes and translated metadata remain unprovided. F-Droid acceptance,
-the Google-free build, source-build scanning, signing/tagging and the first
-real build recipe remain separate gates under
-[#333](https://github.com/mihazs/lazysh/issues/333). No store submission or
-publication is performed by adding these files. The eventual recipe and
-source checkout must also pass the supported F-Droid buildserver tools.
+`bun run release:version` writes `en-US/changelogs/<versionCode>.txt` for each
+release. It lists the release's user-facing headlines (feat, perf, fix), cut to
+F-Droid's 500-character limit, and ends with a link to the full GitHub release
+notes.
+
+F-Droid acceptance is tracked in the inclusion merge request
+[fdroiddata!59438](https://gitlab.com/fdroid/fdroiddata/-/merge_requests/59438)
+and under
+[#333](https://github.com/mihazs/lazysh/issues/333). F-Droid reads these files
+from the source tag it builds.

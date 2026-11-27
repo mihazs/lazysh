@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import changelog from '../.changeset/changelog.mjs';
 import { changelogSection } from '../.changeset/changelog-model.mjs';
-import { rotate } from '../.changeset/changelog-rotate';
+import { fastlaneChangelog, rotate } from '../.changeset/changelog-rotate';
 import { releaseNotes } from '../.changeset/release-artifacts';
 import { fragmentProblems } from '../.changeset/lint-fragments';
 import { previewPending } from '../.changeset/changelog-preview';
@@ -210,4 +210,17 @@ test('an entry that is only in another package changelog reaches the release not
   const section = changelogSection((await Bun.file(join(root, 'CHANGELOG.md')).text()).replace('## [1.1.0] - 2026-02-03', '## 1.1.0'), '1.1.0')!;
   for (const line of ['**agents:** Switch a session', '**companion:** Stream agent status']) expect(count(section, line)).toBe(1);
   expect(section).not.toContain('idb ui');
+});
+
+test('F-Droid release notes keep user-facing headlines within 500 characters', () => {
+  const section = [
+    '- docs(readme): explain setup',
+    ...Array.from({ length: 30 }, (_, i) => `- fix(ssh): keep host binding number ${i} across a restored connection ([#${i}](https://github.com/mihazs/lazysh/pull/${i}))`),
+  ].join('\n');
+  const notes = fastlaneChangelog(section, '1.2.3');
+  expect(notes.length).toBeLessThanOrEqual(501);
+  expect(notes).toStartWith('- keep host binding number 0 across a restored connection\n');
+  expect(notes).not.toContain('explain setup');
+  expect(notes).toEndWith('Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.2.3\n');
+  expect(fastlaneChangelog('- chore(ci): bump runners', '1.2.4')).toStartWith('Maintenance release.\n');
 });

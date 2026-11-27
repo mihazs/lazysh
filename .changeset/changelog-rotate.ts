@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { ownedWorkspaces } from './bun-lock';
+import { androidVersionCode, ownedWorkspaces } from './bun-lock';
 import { changelogSection, classifyLegacy, groupMarkdown, parseEntries, renderEntry } from './changelog-model.mjs';
 
 const unreleased = /^## \[Unreleased\]\s*$/m;
@@ -61,10 +61,22 @@ export async function packageSections(root: string, version: string) {
   return [sections[0], ...sections.slice(1).filter(section => section.trim())];
 }
 
+/** F-Droid's plain-text release notes for one version: its user-facing headlines, within the 500-character limit. */
+export function fastlaneChangelog(packageSection: string, version: string) {
+  const more = `Full notes: https://github.com/mihazs/lazysh/releases/tag/v${version}`;
+  const lines = [...new Set(parseEntries(packageSection).filter(entry => ['feat', 'perf', 'fix'].includes(entry.type))
+    .map(entry => `- ${entry.headline.replace(/[`*_<>]/g, '')}`))];
+  const kept: string[] = [];
+  for (const line of lines) if ([...kept, line, more].join('\n').length <= 500) kept.push(line);
+  return `${[...(kept.length ? kept : ['Maintenance release.']), more].join('\n')}\n`;
+}
+
 if (import.meta.main) {
   const [version, date = new Date().toISOString().slice(0, 10)] = process.argv.slice(2);
   const sections = await packageSections(process.cwd(), version ?? '');
   if (!sections[0].trim()) throw new Error(`apps/client/CHANGELOG.md has no section for ${version}`);
   const path = join(process.cwd(), 'CHANGELOG.md');
   await Bun.write(path, rotate(await Bun.file(path).text(), sections.join('\n'), version, date));
+  await Bun.write(join(process.cwd(), `fastlane/metadata/android/en-US/changelogs/${androidVersionCode(version)}.txt`),
+    fastlaneChangelog(sections.join('\n'), version));
 }

@@ -214,6 +214,8 @@ test('a structured fragment becomes a typed line linked to its squash-merged pul
   expect(client).not.toMatch(/^- [0-9a-f]{7}: /m);
   expect(await Bun.file(join(directory, 'apps/agent/CHANGELOG.md')).text()).toBe('# @lazysh/agent\n\n## 0.2.0\n\nNo changes in this release.\n');
   expect(await Bun.file(join(directory, 'CHANGELOG.md')).text()).toContain('### New\n\n- **ssh:** Keep the host binding when a connection is restored ([#77]');
+  expect(await Bun.file(join(directory, 'fastlane/metadata/android/en-US/changelogs/2000.txt')).text())
+    .toBe('- Keep the host binding when a connection is restored\nFull notes: https://github.com/mihazs/lazysh/releases/tag/v0.2.0\n');
 }, 60_000);
 
 test.each(['0.1.1', '2.3.4'])('owned fixture seed stays independent of source tooling version %s', async sourceVersion => {
