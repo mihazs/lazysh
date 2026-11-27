@@ -175,6 +175,284 @@ fn discovery_actions_and_attach_find_the_same_native_program() {
     assert_eq!(start(false, &path, None, "herdr"), OsStr::new("herdr"));
 }
 
+/// Real multiplexers on a local PTY: ConPTY on Windows, a Unix PTY elsewhere. The cases share
+/// one body per platform-neutral step, so a Windows run exercises what the Linux run does.
+#[cfg(any(unix, windows))]
+mod real {
+    use super::{
+        super::{
+            desktop,
+            tests::{access_lease, events, until_within},
+            LocalState,
+        },
+        *,
+    };
+    use crate::{
+        host::{
+            tests::local::{lease, ok, Isolated},
+            Cmd, Host,
+        },
+        multiplexer::{multiplexer_sessions, MultiplexerKind},
+        zellij::{zellij_action, zellij_tabs, ZellijAction},
+    };
+    use std::{future::Future, time::Duration};
+    use tauri::Manager;
+
+    /// Retries `probe` until it finds something, or fails the test after 20 seconds.
+    pub(super) async fn eventually_async<T, F: Future<Output = Option<T>>>(
+        what: &str,
+        mut probe: impl FnMut() -> F,
+    ) -> T {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Some(found) = probe().await {
+                    return found;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{what}"))
+    }
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(super) async fn eventually<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
+        eventually_async(what, || std::future::ready(probe())).await
+    }
+    pub(super) fn unique(prefix: &str) -> String {
+        format!("{prefix}{}", uuid::Uuid::new_v4().simple())
+    }
+    pub(super) async fn attach(
+        state: &LocalState,
+        value: serde_json::Value,
+    ) -> (
+        String,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+        crate::app_lock::AccessLease,
+    ) {
+        let lease = access_lease();
+        let (channel, rx) = events();
+        let connected = desktop::connect(
+            state,
+            lease.clone(),
+            None,
+            Some(entry(value).unwrap()),
+            None,
+            80,
+            24,
+            channel,
+        )
+        .await
+        .unwrap();
+        desktop::adopt(state, &connected.session_id, &lease).unwrap();
+        (connected.session_id, rx, lease)
+    }
+    /// The attached screen: the alternate screen switch a multiplexer client sends once attached.
+    async fn attached_screen(rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>) {
+        until_within(rx, "\u{1b}[?1049h", Duration::from_secs(20)).await;
+    }
+    /// The names `multiplexer_sessions` lists for the local session `host`; a session that is still starting lists none.
+    async fn listed(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        host: &str,
+        kind: MultiplexerKind,
+    ) -> Vec<String> {
+        // Boxed before awaiting: the command futures are too large for a test thread's stack in debug.
+        let sessions = Box::pin(multiplexer_sessions(
+            app.state(),
+            app.state(),
+            host.to_owned(),
+            kind,
+            lease(),
+        ))
+        .await;
+        let sessions = sessions
+            .ok()
+            .and_then(|sessions| sessions.into_inner().ok());
+        serde_json::to_value(sessions.unwrap_or_default())
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["name"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires zellij on PATH; runs an isolated temporary session on a local PTY"]
+    async fn real_local_zellij_lists_attaches_and_switches_a_tab() {
+        let home = Isolated::new();
+        let (app, host) = home.session().await;
+        let name = unique("z");
+        let (id, mut rx, _lease) = attach(
+            &app.state::<LocalState>(),
+            json!({"kind":"zellij","name":name,"createIfMissing":true}),
+        )
+        .await;
+        attached_screen(&mut rx).await;
+        eventually_async("the attached Zellij session was not listed", || async {
+            listed(&app, &host, MultiplexerKind::Zellij)
+                .await
+                .contains(&name)
+                .then_some(())
+        })
+        .await;
+        // A session that has not reported its tabs yet answers with an unreadable list.
+        let active = |count: usize, position: u64| {
+            let (app, host, name) = (&app, &host, &name);
+            async move {
+                let tabs = Box::pin(zellij_tabs(
+                    app.state(),
+                    app.state(),
+                    host.clone(),
+                    name.clone(),
+                    lease(),
+                ))
+                .await
+                .ok()?
+                .into_inner()
+                .ok()?;
+                let tabs = serde_json::to_value(tabs).unwrap();
+                let tabs = tabs.as_array().unwrap();
+                (tabs.len() == count
+                    && tabs
+                        .iter()
+                        .any(|tab| tab["active"] == true && tab["position"] == position))
+                .then_some(())
+            }
+        };
+        eventually_async("the first tab", || active(1, 0)).await;
+        let act = |action| {
+            ok(zellij_action(
+                app.state(),
+                app.state(),
+                host.clone(),
+                name.clone(),
+                action,
+                lease(),
+            ))
+        };
+        act(ZellijAction::NewTab {
+            name: "second".into(),
+            directory: home.path().to_str().unwrap().into(),
+        })
+        .await;
+        eventually_async("the new tab", || active(2, 1)).await;
+        act(ZellijAction::GoToTab { index: 1 }).await;
+        eventually_async("the first tab by number", || active(2, 0)).await;
+        desktop::disconnect(&app.state::<LocalState>(), &id);
+        // Cleanup that must not fail the test.
+        let _ = home
+            .command("zellij")
+            .args(["delete-session", "--force", &name])
+            .output();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires herdr on PATH; runs an isolated Herdr session on a local PTY"]
+    async fn real_local_herdr_lists_attaches_and_creates_a_workspace() {
+        let home = Isolated::new();
+        let (app, host) = home.session().await;
+        let name = unique("lazysh-");
+        let (id, mut rx, _lease) = attach(
+            &app.state::<LocalState>(),
+            json!({"kind":"herdr","name":name}),
+        )
+        .await;
+        attached_screen(&mut rx).await;
+        eventually_async("the attached Herdr session was not listed", || async {
+            listed(&app, &host, MultiplexerKind::Herdr)
+                .await
+                .contains(&name)
+                .then_some(())
+        })
+        .await;
+        // The workspace action of `herdr_action`, run through the same host context (that command reaches SSH sessions only).
+        let herdr = |args: &[&str]| {
+            let mut argv = vec!["herdr", "--session", &name];
+            argv.extend_from_slice(args);
+            let cmd = Cmd::new(&[], &argv).herdr();
+            let (app, host) = (&app, &host);
+            async move {
+                let host = Host::resolve(&app.state(), &app.state(), host, &lease())
+                    .await
+                    .unwrap();
+                host.run(&lease(), &cmd).await.unwrap()
+            }
+        };
+        let label = unique("ws-");
+        herdr(&[
+            "workspace",
+            "create",
+            "--no-focus",
+            "--label",
+            &label,
+            "--cwd",
+            home.path().to_str().unwrap(),
+        ])
+        .await;
+        eventually_async("the new workspace", || async {
+            herdr(&["api", "snapshot"])
+                .await
+                .contains(&label)
+                .then_some(())
+        })
+        .await;
+        desktop::disconnect(&app.state::<LocalState>(), &id);
+        herdr(&["server", "stop"]).await;
+    }
+
+    /// No native Windows tmux exists: it is neither offered nor attached, only reached through a WSL target.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "requires zellij and herdr on PATH; runs the native Windows multiplexer lookup"]
+    async fn real_windows_local_session_offers_no_tmux_and_refuses_a_tmux_attach() {
+        let home = Isolated::new();
+        let (app, host) = home.session().await;
+        let tree = ok(crate::multiplexer::multiplexer_tree(
+            app.state(),
+            app.state(),
+            host,
+            None,
+            None,
+            lease(),
+        ))
+        .await;
+        let tree = serde_json::to_value(&tree).unwrap();
+        assert_eq!(
+            (
+                &tree["tmuxAvailable"],
+                &tree["zellijAvailable"],
+                &tree["herdrAvailable"]
+            ),
+            (&false.into(), &true.into(), &true.into()),
+            "{tree}"
+        );
+        assert!(
+            tree["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| tool["kind"] != "tmux"),
+            "{tree}"
+        );
+        let (channel, _rx) = events();
+        let refused = desktop::connect(
+            &app.state::<LocalState>(),
+            access_lease(),
+            None,
+            Some(entry(json!({"kind":"tmux","name":"work"})).unwrap()),
+            None,
+            80,
+            24,
+            channel,
+        )
+        .await
+        .err()
+        .expect("a tmux attach is refused on native Windows");
+        assert!(refused.contains("WSL"), "{refused}");
+    }
+}
+
 #[cfg(unix)]
 mod runtime {
     use super::{
@@ -183,6 +461,7 @@ mod runtime {
             tests::{access_lease, events, until},
             LocalState,
         },
+        real::{attach, eventually, unique},
         *,
     };
     use crate::{
@@ -281,22 +560,6 @@ mod runtime {
         assert!(output.status.success(), "{command:?}: {output:?}");
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
-    /// Retries `probe` until it finds something, or fails the test after 20 seconds.
-    async fn eventually<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
-        tokio::time::timeout(Duration::from_secs(20), async {
-            loop {
-                if let Some(found) = probe() {
-                    return found;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .unwrap_or_else(|_| panic!("{what}"))
-    }
-    fn unique(prefix: &str) -> String {
-        format!("{prefix}{}", uuid::Uuid::new_v4().simple())
-    }
     /// One guard action on a local terminal, as the `herdr_chat` command takes it.
     async fn guard(
         app: &AppState,
@@ -340,32 +603,6 @@ mod runtime {
         let app = AppState::new(directory.path().into()).unwrap();
         (directory, app)
     }
-    async fn attach(
-        state: &LocalState,
-        value: serde_json::Value,
-    ) -> (
-        String,
-        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
-        crate::app_lock::AccessLease,
-    ) {
-        let lease = access_lease();
-        let (channel, rx) = events();
-        let connected = desktop::connect(
-            state,
-            lease.clone(),
-            None,
-            Some(entry(value).unwrap()),
-            None,
-            80,
-            24,
-            channel,
-        )
-        .await
-        .unwrap();
-        desktop::adopt(state, &connected.session_id, &lease).unwrap();
-        (connected.session_id, rx, lease)
-    }
-
     #[tokio::test]
     async fn the_pty_identity_is_the_child_and_its_terminal() {
         let state = LocalState::default();
