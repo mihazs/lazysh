@@ -11,6 +11,7 @@ import { exactlyOne, windowsNsisBinaryDigest } from '../.changeset/release-platf
 import { assertCargoReceipt, descendantsOf, edgeDriverVersion, freePorts, hostState, installWebViewArguments, launch, mainWindow, parseHostState,
   parseProcessTable, pinnedTools, powershell, processTable, protocolHandlerImage, quote, registeredProtocolHandler, removeWebViewArguments, requireOwnedWindowsRunner, sameImage, killOwned, until,
   WebDriver, WebDriverError, type HostState, type ProcessRow } from './support/windowsGui';
+import { startOwnedSshServer, type OwnedSshServer } from './support/windowsSshServer';
 
 const root = join(import.meta.dir, '..');
 const results = join(root, 'test-results/windows-gui');
@@ -123,12 +124,15 @@ test('the WebDriver client searches below an element, types into controls and se
     driver.session = 's';
     expect(await driver.find(".//button[normalize-space()='Cancel']", 'e1', 'xpath')).toBe('e2');
     await driver.type('e2', 'secret');
+    await driver.replace('e2', 'other');
     expect(await driver.property('e2', 'value')).toBe('secret');
     expect(await driver.displayed('e2')).toBe(true);
     await driver.keys('c\uE007');
     expect(calls.map(({ method, url, body }) => ({ method, url, body }))).toEqual([
       { method: 'POST', url: '/session/s/element/e1/element', body: { using: 'xpath', value: ".//button[normalize-space()='Cancel']" } },
       { method: 'POST', url: '/session/s/element/e2/value', body: { text: 'secret' } },
+      { method: 'POST', url: '/session/s/element/e2/clear', body: {} },
+      { method: 'POST', url: '/session/s/element/e2/value', body: { text: 'other' } },
       { method: 'GET', url: '/session/s/element/e2/property/value', body: undefined },
       { method: 'GET', url: '/session/s/element/e2/displayed', body: undefined },
       { method: 'POST', url: '/session/s/actions', body: { actions: [{ type: 'key', id: 'keyboard', actions: [
@@ -465,3 +469,115 @@ actual('actual Windows installed GUI opens a lazysh:// theme link through the sh
       return images.length === 1 && images[0].pid === app.pid && images[0].created === app.created ? true : undefined;
     });
   }), 900_000);
+
+const button = (label: string) => element('button', label);
+const need = async (browser: WebDriver, selector: string, within?: string, using?: 'xpath') => (await browser.find(selector, within, using))!;
+const hostName = 'Owned SSH GUI host';
+const hostEditor = '[role="dialog"][aria-label="Add a host"]';
+const connectionAlert = '[role="dialog"] .inline-error[role="alert"]';
+
+/** Add the owned server as a saved SSH host through the Add host editor, the way a user does; nothing about it is injected. */
+async function addOwnedSshHost(browser: WebDriver, server: OwnedSshServer) {
+  await browser.click(await until('Add host', () => browser.find('button[aria-label="Add host"]')));
+  const editor = await until('host editor', () => browser.find(hostEditor));
+  await browser.type(await need(browser, 'input[placeholder="Home workstation"]', editor), hostName);
+  await browser.type(await need(browser, 'input[placeholder="workstation.local"]', editor), '127.0.0.1');
+  await browser.replace(await need(browser, 'label.port-field input', editor), String(server.port));
+  await browser.type(await need(browser, 'input[placeholder="Your SSH username"]', editor), server.username);
+  await browser.click(await need(browser, ".//label[contains(., 'Preferred transport')]//option[@value='ssh']", editor, 'xpath'));
+  await browser.click(await need(browser, button('Save host'), editor, 'xpath'));
+  await until('host editor closed', async () => (await browser.find(hostEditor)) ? undefined : true).catch(async error => {
+    throw new Error(`${error.message}: ${JSON.stringify(await browser.script("return Array.from(document.querySelectorAll('[role=dialog] input,[role=dialog] select')).map(e=>({p:e.placeholder||e.type,v:e.value,invalid:!e.checkValidity()}))"))}`);
+  });
+}
+
+/** Open the saved host's connection dialog, paste `privateKey` (it is never remembered) and press Connect. */
+async function connectWithKey(browser: WebDriver, privateKey: string) {
+  await browser.click(await until('saved host', () => browser.find(`button[aria-label="Connect to ${hostName}"]`)));
+  const connect = await until('connection dialog', () => browser.find(`[role="dialog"][aria-label="Connect to ${hostName}"]`));
+  await browser.click(await need(browser, button('Private key'), connect, 'xpath'));
+  const key = await need(browser, 'textarea', connect);
+  await browser.type(key, privateKey);
+  expect((await browser.property(key, 'value') as string).replaceAll('\r\n', '\n')).toBe(privateKey);
+  await browser.click(await need(browser, button('Connect'), connect, 'xpath'));
+  return connect;
+}
+
+/** Trust is explicit: the verification dialog must show exactly the server's own fingerprint before the user accepts it. */
+async function trustHostKey(browser: WebDriver, fingerprint: string) {
+  const trust = await until('host verification', () => browser.find('[role="dialog"][aria-label="Verify this host"]'), 60_000);
+  const shown = await browser.text(await need(browser, '[data-testid="host-key-fingerprint"]', trust));
+  expect(shown).toBe(fingerprint);
+  await browser.click(await need(browser, button('Trust key and connect'), trust, 'xpath'));
+  return shown;
+}
+
+/** The text a refused connection leaves in its dialog, which stays open and has no terminal behind it. */
+async function refusal(browser: WebDriver) {
+  const alert = await until('connection refusal', () => browser.find(connectionAlert), 60_000);
+  expect(await browser.find(`.terminal-canvas[aria-label="Terminal for ${hostName}"]`)).toBeUndefined();
+  return browser.text(alert);
+}
+
+actual('actual Windows installed GUI saves a host, trusts the exact host key of an owned Windows OpenSSH server and runs a typed command in its SSH terminal', async () => {
+  const server = await startOwnedSshServer();
+  try {
+    await withInstalledGui('ssh', async ({ browser, app, owned }) => {
+      await addOwnedSshHost(browser, server);
+      await connectWithKey(browser, server.privateKey);
+      const shownFingerprint = await trustHostKey(browser, server.fingerprint);
+
+      const screen = await until('SSH terminal', async () => {
+        const alert = await browser.find(connectionAlert);
+        if (alert) throw new Error(`SSH connection failed: ${(await browser.text(alert)).slice(0, 200)}`);
+        return browser.find(`.terminal-canvas[aria-label="Terminal for ${hostName}"] .xterm-screen`);
+      }, 60_000);
+      const shown = async () => (await browser.text(screen)).replaceAll(/\s*\n\s*/g, ' ');
+      await until('remote shell prompt', async () => (await shown()).toLowerCase().includes(`${server.username.toLowerCase()}>`) ? true : undefined, 30_000);
+
+      // The Windows shell computes the answer, so it is not in the text typed.
+      await browser.click(screen);
+      await browser.keys('set /a 1234*5678\uE007');
+      await until('challenge answer', async () => (await shown()).includes('7006652') ? true : undefined, 30_000);
+      expect(server.output()).toContain(`Accepted publickey for ${server.username}`);
+      console.info(`Windows installed GUI SSH evidence: server=${server.banner}; fingerprint shown=${shownFingerprint}; typed 'set /a 1234*5678', the shell answered 7006652 on the terminal screen; log: Accepted publickey for ${server.username}`);
+      expect(await owned()).toEqual([app]);
+    });
+  } finally { await server.stop(); }
+}, 900_000);
+
+actual('actual Windows installed GUI refuses a key the owned server rejects and, once the host key is trusted, refuses a replacement server that offers another one', async () => {
+  let server: OwnedSshServer | undefined = await startOwnedSshServer();
+  try {
+    await withInstalledGui('ssh-refused', async ({ browser, app, owned }) => {
+      const { port, fingerprint } = server!;
+      await addOwnedSshHost(browser, server!);
+
+      // A key the server does not authorize: trusted host key, rejected credential, no terminal.
+      const connect = await connectWithKey(browser, (await server!.unauthorizedKey()).privateKey);
+      await trustHostKey(browser, fingerprint);
+      const rejected = await refusal(browser);
+      expect(rejected).toContain('Authentication rejected by the server');
+      // The server saw the attempt and refused it: the log names the failed key for the job user.
+      const rejectedLog = server!.output();
+      expect(rejectedLog).toContain(`Failed publickey for ${server!.username}`);
+      expect(rejectedLog).not.toContain('Accepted');
+      await browser.click(await need(browser, button('Cancel'), connect, 'xpath'));
+      await until('connection dialog closed', async () => (await browser.find(`[role="dialog"][aria-label="Connect to ${hostName}"]`)) ? undefined : true);
+
+      // The pinned key is all the application trusts: another server at the same address, with the right credential, is refused before it sees one.
+      await server!.stop();
+      server = undefined;
+      server = await startOwnedSshServer({ port });
+      expect(server.fingerprint).not.toBe(fingerprint);
+      await connectWithKey(browser, server.privateKey);
+      const refused = await refusal(browser);
+      expect(refused).toContain('The host key changed. Connection blocked.');
+      expect(refused).not.toContain(server.fingerprint);
+      expect(await browser.find('[role="dialog"][aria-label="Verify this host"]')).toBeUndefined();
+      expect(server.output()).not.toMatch(/Accepted|Failed/);
+      console.info(`Windows installed GUI SSH refusal evidence: server=${server.banner}; rejected key: ${JSON.stringify(rejected)} (server log tail ${JSON.stringify(rejectedLog.slice(-1200))}); changed host key (${fingerprint} pinned, ${server.fingerprint} offered): ${JSON.stringify(refused)}`);
+      expect(await owned()).toEqual([app]);
+    });
+  } finally { await server?.stop(); }
+}, 900_000);
