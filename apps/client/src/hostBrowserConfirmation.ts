@@ -29,3 +29,8 @@ export const confirmHostBrowser=(host:string)=>confirmed.set(host,true);
 /** Keep profile: off for every host until chosen, and chosen per host. */
 export const isHostBrowserKeepProfile=(host:string):boolean=>keepsProfile.has(host);
 export const setHostBrowserKeepProfile=(host:string,keep:boolean)=>keepsProfile.set(host,keep);
+
+const changed='lazysh:host-browser-switch';
+/** The switch was saved: whatever offers the tool reads it again. */
+export function announceHostBrowserSwitch() { window.dispatchEvent(new Event(changed)); }
+export function onHostBrowserSwitch(listener:()=>void) { window.addEventListener(changed,listener);return ()=>window.removeEventListener(changed,listener); }
