@@ -60,6 +60,181 @@ final class MoshAppIntegrationTests: XCTestCase {
     wait(for: [replied], timeout: 15)
   }
 
+  private func loadedTerminalWebView() throws -> WKWebView {
+    let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+      guard let view = self.appWebView(), let url = view.url else { return false }
+      return url.scheme != "about" && !view.isLoading
+    }, object: nil)
+    XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 30), .completed)
+    return try XCTUnwrap(appWebView())
+  }
+
+  func testNativeTerminalBuildAdmitsTheMetalRenderer() throws {
+    let view = try loadedTerminalWebView()
+    let replied = expectation(description: "Native terminal probe")
+    view.callAsyncJavaScript("""
+      const invoke = window.__TAURI_INTERNALS__.invoke;
+      const core = await invoke('terminal_core_available');
+      const probe = await invoke('native_terminal_probe');
+      return {core: core.available, admitted: probe.available, backend: probe.adapter?.backend ?? '', reason: probe.reason};
+      """, arguments: [:], in: nil, in: .page) { result in
+        defer { replied.fulfill() }
+        switch result {
+        case .success(let response):
+          let verdict = response as? [String: Any]
+          XCTAssertEqual(verdict?["core"] as? Bool, true)
+          XCTAssertEqual(verdict?["admitted"] as? Bool, true, verdict?["reason"] as? String ?? "Missing probe reply")
+          XCTAssertEqual(verdict?["backend"] as? String, "Metal")
+        case .failure(let error):
+          XCTFail("Native terminal capability IPC failed: \(error)")
+        }
+      }
+    wait(for: [replied], timeout: 15)
+  }
+
+  func testNativeTerminalAttachesAndHandsBackAnOwnedSshSession() throws {
+    let environment = ProcessInfo.processInfo.environment
+    let port = try XCTUnwrap(environment["LAZYSH_TERMINAL_FIXTURE_PORT"].flatMap(Int.init))
+    let fingerprint = try XCTUnwrap(environment["LAZYSH_TERMINAL_FIXTURE_FINGERPRINT"])
+    let password = try XCTUnwrap(environment["LAZYSH_TERMINAL_FIXTURE_PASSWORD"])
+    let view = try loadedTerminalWebView()
+    let completed = expectation(description: "Owned SSH Native terminal and handback")
+    view.callAsyncJavaScript("""
+      const ipc = window.__TAURI_INTERNALS__;
+      const waitFor = async (label, read) => {
+        for (let attempt = 0; attempt < 160; ++attempt) {
+          const value = await read();
+          if (value) return value;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw new Error('Timed out waiting for ' + label);
+      };
+      const access = await waitFor('app access', async () => {
+        const status = await ipc.invoke('app_lock_status');
+        return status.initialized && !status.locked ? status : null;
+      }).catch(() => null);
+      if (!access) return {passed: false, stage: 'initialize app access', condition: 'unavailable'};
+      const invoke = (command, args) => ipc.invoke(command, args, {headers: {'X-Lazysh-Access': access.nonce ?? ''}});
+      const host = 'Owned iOS terminal UI ' + port;
+      const engineKey = 'lazysh.terminal.backend';
+      const topBarKey = 'lazysh.show-top-bar.v1';
+      const previousEngine = localStorage.getItem(engineKey);
+      const previousTopBar = localStorage.getItem(topBarKey);
+      const restore = (key, value) => {
+        if (value === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+      };
+      const visible = element => element.getClientRects().length && !element.closest('[aria-hidden=true]');
+      const button = (scope, label) => [...scope.querySelectorAll('button')].find(element =>
+        visible(element) && !element.disabled && (element.getAttribute('aria-label') || element.textContent.trim()) === label);
+      const click = async (label, scope = document) => (await waitFor(label, () => button(scope, label))).click();
+      const setField = async (selector, value) => {
+        const input = await waitFor(selector, () => document.querySelector(selector));
+        Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value').set.call(input, value);
+        input.dispatchEvent(new Event(input.tagName === 'SELECT' ? 'change' : 'input', {bubbles: true}));
+      };
+      const surface = () => document.querySelector('[data-terminal-surface=native]');
+      const rows = () => [...document.querySelectorAll('.terminal-canvas .xterm-rows > div')].map(row => row.textContent);
+      const sendInput = async (selector, data) => {
+        const editor = await waitFor('terminal editor focus', () => {
+          const input = document.querySelector(selector);
+          if (!input || !visible(input)) return null;
+          input.focus();
+          return document.activeElement === input ? input : null;
+        });
+        editor.value = data;
+        editor.dispatchEvent(new InputEvent('input', {bubbles: true, data, inputType: 'insertText'}));
+        const enter = {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true};
+        editor.dispatchEvent(new KeyboardEvent('keydown', enter));
+        editor.dispatchEvent(new KeyboardEvent('keyup', enter));
+      };
+      let stage = 'open add-host form';
+      try {
+        localStorage.setItem(engineKey, 'native');
+        localStorage.setItem(topBarKey, 'true');
+        window.dispatchEvent(new Event('lazysh-show-top-bar'));
+        button(document, 'Open hosts')?.click();
+        await click('Add host');
+        stage = 'save fixture host';
+        await setField("input[placeholder='Home workstation']", host);
+        await setField("input[placeholder='workstation.local']", '127.0.0.1');
+        await setField("input[placeholder='Your SSH username']", 'terminal-fixture');
+        await setField('.port-field input', String(port));
+        await setField("[role=dialog] select:has(option[value='ssh'])", 'ssh');
+        await click('Save host');
+        stage = 'connect and verify host key';
+        await click('Connect to ' + host);
+        await setField("[role=dialog] input[type=password]", password);
+        await click('Connect');
+        await waitFor('the pinned host key', () => document.querySelector('.fingerprint code')?.textContent === fingerprint);
+        await click('Trust key and connect');
+        stage = 'show native terminal';
+        await waitFor('the native terminal surface', surface);
+        button(document, 'Skip')?.click();
+        stage = 'type through native editor';
+        await sendInput('[data-terminal-surface=native] [data-terminal-editor]', 'LAZYSH_IOS_NATIVE');
+        stage = 'switch engines through workspace tools';
+        await click('Workspace tools');
+        const tools = await waitFor('workspace tools', () => document.querySelector('[role=dialog]:has(.workspace-tools-content)'));
+        const action = 'Switch this session to xterm.js';
+        const control = await waitFor(action, () => [...tools.querySelectorAll('.workspace-tools-page button')].find(element => element.textContent.trim() === action));
+        const page = control.closest('.workspace-tools-page');
+        const tab = [...tools.querySelectorAll('[role=tab]')].find(item => item.getAttribute('aria-controls') === page.id);
+        if (tab?.getAttribute('aria-selected') === 'false') tab.click();
+        await click(action, tools);
+        stage = 'show xterm.js after switching';
+        await waitFor('native surface removed', () => !surface());
+        stage = 'mount the xterm.js editor';
+        await waitFor('xterm editor present', () => document.querySelector('.terminal-canvas .xterm-helper-textarea'));
+        stage = 'read the replayed native frame';
+        await waitFor('replayed frame', () => rows().some(row => row.includes('LAZYSH_IOS_FRAME')));
+        stage = 'read the native input acknowledgement after switching';
+        await waitFor('one replayed native input acknowledgement', () =>
+          rows().filter(row => row.includes('LAZYSH_IOS_ACK_NATIVE')).length === 1);
+        stage = 'type through the xterm.js editor';
+        await sendInput('.xterm-helper-textarea', 'LAZYSH_IOS_XTERM');
+        await waitFor('second acknowledgement over the same session', () =>
+          rows().filter(row => row.includes('LAZYSH_IOS_ACK_XTERM')).length === 1);
+        stage = 'read the visible fallback reason';
+        await click('Workspace tools');
+        const note = await waitFor('engine switch reason', () => [...document.querySelectorAll('[role=note]')].find(note =>
+          note.textContent.includes('xterm.js: you switched this session from the native engine')));
+        const notePage = note.closest('.workspace-tools-page');
+        const noteTab = [...document.querySelectorAll('[role=tab]')].find(item => item.getAttribute('aria-controls') === notePage?.id);
+        if (noteTab?.getAttribute('aria-selected') === 'false') noteTab.click();
+        await waitFor('visible engine switch reason', () => visible(note));
+        return {passed: true};
+      } catch (error) {
+        const type = error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : typeof error;
+        const condition = error instanceof Error && error.message.startsWith('Timed out waiting for ')
+          ? error.message.split(host).join('[fixture host]') : type;
+        return {passed: false, stage, condition};
+      } finally {
+        restore(engineKey, previousEngine);
+        restore(topBarKey, previousTopBar);
+        window.dispatchEvent(new Event('lazysh-show-top-bar'));
+        button(document, 'Close Workspace tools')?.click();
+        button(document, 'Disconnect ' + host)?.click();
+        const saved = (await invoke('list_hosts')).find(entry => entry.name === host);
+        if (saved) await invoke('delete_host', {hostId: saved.id});
+      }
+      """, arguments: ["port": port, "password": password, "fingerprint": fingerprint], in: nil, in: .page) { result in
+      defer { completed.fulfill() }
+      switch result {
+      case .success(let value):
+        let verdict = value as? [String: Any]
+        let stage = verdict?["stage"] as? String ?? "unknown stage"
+        let condition = verdict?["condition"] as? String ?? "unknown error"
+        XCTAssertEqual(verdict?["passed"] as? Bool, true, "Owned iOS terminal failed at \(stage) (\(condition))")
+      case .failure(let error):
+        let details = error as NSError
+        let line = details.userInfo["WKJavaScriptExceptionLineNumber"] as? Int ?? 0
+        XCTFail("Owned iOS terminal failed: \(error.localizedDescription) (script line \(line))")
+      }
+    }
+    wait(for: [completed], timeout: 65)
+  }
+
   private func resumeVisibility(_ view: WKWebView) -> String {
     // Traverse only native siblings, never the WKWebView or its accessibility contents.
     let allowed = [

@@ -181,3 +181,44 @@ test('configuration lists and architecture arrays retain explicit truncation mar
   expect(decoded.project.values).toHaveLength(32);
   expect(decoded.project.values[0].settings.ARCHS).toEqual(['arch0', 'arch1', 'arch2', 'arch3', 'arch4', 'arch5', 'arch6', '[truncated]']);
 });
+
+test('the native iOS app runs the Metal probe on the same simulator after installation', async () => {
+  const terminal = workflow.jobs['terminal-ios'].steps;
+  const setupBun = terminal.findIndex(step => step.uses === './.github/actions/setup-bun');
+  const runtime = terminal.findIndex(step => step.name === 'Run every test of the runtime inside the iOS simulator');
+  expect(setupBun).toBeGreaterThanOrEqual(0);
+  expect(setupBun).toBeLessThan(runtime);
+  const install = terminal.findIndex(step => step.id === 'ios-terminal-install');
+  const probe = terminal.findIndex(step => step.run?.includes('-only-testing:LazyshMoshAppTests/'));
+  expect(install).toBeGreaterThanOrEqual(0);
+  expect(probe).toBeGreaterThan(install);
+  expect(terminal[install].run).toContain('simctl install "$LAZYSH_IOS_SIMULATOR_ID"');
+  expect(terminal[probe].if).toContain("steps.ios-terminal-install.outcome == 'success'");
+  expect(terminal[probe].run).toContain('id=$LAZYSH_IOS_SIMULATOR_ID');
+  const testCase = 'LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalBuildAdmitsTheMetalRenderer';
+  expect(terminal[probe].run).toContain('-only-testing:' + testCase);
+  expect(steps.find(step => step.id === 'ios-mosh-app')?.run).toContain('-skip-testing:' + testCase);
+  const fixture = await Bun.file(join(root, 'apps/client/src-tauri/apple/MoshTests/MoshAppIntegrationTests.swift')).text();
+  expect(fixture).toContain('func testNativeTerminalBuildAdmitsTheMetalRenderer()');
+  const fixtureBuild = terminal.findIndex(step => step.id === 'ios-terminal-fixture');
+  const acceptance = terminal.findIndex(step => step.name === 'Exercise the installed iOS terminal with owned SSH');
+  expect(fixtureBuild).toBeGreaterThan(install);
+  expect(terminal[fixtureBuild].run).toContain('--manifest-path tests/support/terminal-ssh-fixture/Cargo.toml');
+  expect(terminal[acceptance].run).toContain('/terminal-fixture-target/debug/lazysh-terminal-ssh-fixture');
+  expect(acceptance).toBeGreaterThan(fixtureBuild);
+  expect(terminal[acceptance].if).toContain("steps.ios-terminal-fixture.outcome == 'success'");
+  const sshCase = 'LazyshMoshAppTests/MoshAppIntegrationTests/testNativeTerminalAttachesAndHandsBackAnOwnedSshSession';
+  expect(terminal[acceptance].run).toContain('-only-testing:' + sshCase);
+  for (const engine of ['native', 'xterm']) {
+    expect(terminal[acceptance].run).toContain(`grep -cFx 'terminal fixture received exact ${engine} input'`);
+    expect(terminal[acceptance].run).toContain(`test "$${engine}" = 1`);
+  }
+  expect(terminal[acceptance].run).toContain('test "$rejected" = 0');
+  expect(steps.find(step => step.id === 'ios-mosh-app')?.run).toContain('-skip-testing:' + sshCase);
+  expect(fixture).toContain('func testNativeTerminalAttachesAndHandsBackAnOwnedSshSession()');
+  const report = terminal.findIndex(step => step.name === 'Upload failed native iOS terminal SSH result');
+  expect(report).toBeGreaterThan(acceptance);
+  expect(report).toBeLessThan(terminal.findIndex(step => step.name === 'Delete the simulator'));
+  expect(terminal[report].if).toContain("steps.ios-terminal-ssh.outcome == 'failure'");
+  expect(terminal[report].with?.path).toContain('native-terminal-session-ios.xcresult');
+});

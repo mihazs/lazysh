@@ -2,7 +2,7 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({invoke}));
+vi.mock('@tauri-apps/api/core', () => ({invoke, isTauri: () => true}));
 
 import {applyAccessStatus} from './access';
 import {DRAW_CHECK_TRIES, nativeSurface, rgbOf, SETTLE_FRAMES, trackSurfaceAnchor} from './terminalSurfaceAnchor';
@@ -82,6 +82,28 @@ describe('trackSurfaceAnchor', () => {
     await nudge({y: 40, height: 60});
     expect(commands().map(([, , anchor]) => anchor?.y)).toEqual([0, 40]);
     await tracker.stop();
+  });
+
+  it('repositions the iOS surface when the keyboard pans the visual viewport', async () => {
+    const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('iPhone');
+    const viewport = Object.assign(new EventTarget(), {offsetLeft: 0, offsetTop: 0, scale: 1});
+    vi.stubGlobal('visualViewport', viewport);
+    const {f, tracker} = scene({x: 10, y: 120, width: 300, height: 200});
+    try {
+      await f.settle();
+      viewport.offsetTop = 70;
+      viewport.dispatchEvent(new Event('scroll'));
+      await f.settle();
+      expect(commands().map(([, , anchor]) => anchor?.y)).toEqual([120, 50]);
+      viewport.scale = 1.5;
+      viewport.dispatchEvent(new Event('resize'));
+      await f.settle();
+      expect(commands().at(-1)?.[2]).toMatchObject({y: 50, dpr: window.devicePixelRatio * 1.5});
+    } finally {
+      await tracker.stop();
+      vi.unstubAllGlobals();
+      userAgent.mockRestore();
+    }
   });
 
   it('keeps one command in flight and sends only the latest rectangle when several moves pile up', async () => {
