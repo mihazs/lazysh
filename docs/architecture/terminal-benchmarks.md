@@ -842,6 +842,23 @@ Microseconds. The change is the one in `hub.rs`: a worker's run queue is two que
 - Detached sessions are not starved: `a_detached_session_keeps_parsing_while_the_attached_one_never_idles` refills an attached session from its own credit hook so it never idles, and a detached one still finishes (it fails by timeout with the burst removed, and the other test fails on the old queue with 147,456 bytes parsed ahead of the echo against a bound of 65,536).
 - Not measured: the cost to the detached sessions (their credit latency while an attached one floods rises by construction to one turn in five on a worker; its size was not recorded), a phone, more or fewer than nine other sessions, split panes with several attached sessions (they share the priority queue and round-robin), and how many workers a device should have. Worker count stays a placeholder: the throughput table above shows the pool size is a real lever on this host and nothing else.
 
+### Typing in the attached session with nine sessions flooding (host microbenchmark, not a device baseline)
+
+Measured with `cargo run --release --example session_bench typing` in `packages/terminal-runtime` ([#1339](https://github.com/mihazs/lazysh/issues/1339)), the acceptance criterion that the active session's input latency does not regress while nine others stream. One attached session receives 2000 keys, one every millisecond: `send_key` (microseconds to the writer holding the bytes, which is the lock wait for a worker's slice on this session, the encode and the in-memory write), then the echo `feed` of 6 bytes, timed from the key to `Hooks::changed` firing ("key to changed", the screen update ready to draw). Nine more detached sessions flood plain text or CJK, emoji and combining marks on the same two workers for the whole run. Before is the commit before the attached-first queue ([#1673](https://github.com/mihazs/lazysh/pull/1673), `30871245`), after is `ab23f440`, both with this same example file (only its `COMPRESS_AFTER_MS` knob removed for the older tree), 16 KiB pump slice, Ryzen 9 5900X, Linux 7.3.4, rustc 1.96.1 release, libghostty-vt `ReleaseFast`. Three invocations each, alternating, at 1-minute load averages of 67 to 82 on 24 threads (other jobs were running), so every tail is inflated by the host; the cells are the lowest and highest p50 of the three invocations.
+
+| Row | Metric | Before: p50 | After: p50 |
+| --- | --- | --- | --- |
+| idle | key to write | 2.7 to 2.8 | 2.9 to 3.2 |
+| idle | key to changed | 14.5 to 15.9 | 16.0 to 18.1 |
+| 9 flooding plain text | key to write | 4.4 to 5.7 | 3.7 to 3.8 |
+| 9 flooding plain text | key to changed | 331 to 351 | 58 to 61 |
+| 9 flooding CJK/emoji/combining | key to write | 9.3 to 11.0 | 4.2 to 4.7 |
+| 9 flooding CJK/emoji/combining | key to changed | 2206 to 3411 | 335 to 466 |
+
+- **No regression, and the criterion holds on this host.** Under both floods `send_key` is no slower after (the p99 of key to write was 21 to 36 microseconds before and 14 to 19 after, with the maxima dominated by host noise in both), and the key to changed p50 falls by 5.7 times (plain text) and 6.6 to 7.4 times (CJK workload). The key press waits only for a slice on its own session, which is rarely running because the attached session receives little, so the attached-first queue could not have made it wait longer, and the measurement agrees.
+- The idle rows are unchanged by the change; their 0.2 to 0.4 microsecond and 1 to 2 microsecond differences at p50 are within the spread between invocations at this load, and idle key to changed has a p95 of about 2 ms in every run because of the load, in both trees.
+- Not measured, as above: a phone, the transport, the JS bridge, the render and the display, no xterm.js side by side, other numbers of sessions and workers, and a quiet host (the load average was never below 66).
+
 ### History lines to scrollback bytes (#1319)
 
 lazysh's History lines setting counts lines (100 to 20000, default 5000); libghostty-vt budgets bytes, and the rows one budget holds depend on the width and the content. `cargo run --release --example scrollback_budget` in `packages/terminal-runtime` measures it with the workloads of `tests/support/mod.rs`: 16 MiB of budget, each width fed far past the budget, then the rows the core reports. Host: AMD Ryzen 9 5900X, 31 GiB, Linux 7.3.3-1-cachyos, rustc 1.96.1, Zig 0.16.0 (the numbers are deterministic across invocations; no device was involved).
