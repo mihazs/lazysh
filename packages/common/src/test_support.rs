@@ -138,13 +138,17 @@ pub fn loopback_page(body: &'static str, seconds: u64) -> (u16, std::thread::Joi
                 std::thread::sleep(std::time::Duration::from_millis(20));
                 continue;
             };
-            let mut request = [0u8; 2048];
-            let _ = stream.read(&mut request);
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
+            // A browser opens speculative idle connections before its request; one connection that never sends
+            // must not hold up the request behind it, so each is served on its own thread.
+            std::thread::spawn(move || {
+                let mut request = [0u8; 2048];
+                let _ = stream.read(&mut request);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            });
         }
     });
     (port, server)
@@ -164,6 +168,21 @@ pub fn unfocused_herdr_pane(snapshot_json: &[u8]) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    /// A browser opens an idle connection before its request: a page that waits on that connection never answers it.
+    #[test]
+    fn loopback_page_answers_a_request_behind_an_idle_connection() {
+        use std::io::{Read, Write};
+        let (port, _server) = super::loopback_page("<title>x</title>", 10);
+        let _idle = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        stream.write_all(b"GET / HTTP/1.1\r\n\r\n").unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.ends_with("<title>x</title>"), "{response}");
+    }
     #[test]
     fn word_error_counts_insertions_deletions_and_substitutions() {
         assert_eq!(super::word_error_rate("hello world", "HELLO, world!"), 0.0);

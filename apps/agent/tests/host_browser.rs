@@ -347,6 +347,38 @@ fn the_page_address_is_never_written_by_the_launcher() {
     );
 }
 
+/// A browser given SIGTERM flushes what its pages wrote before it exits, and on a loaded host that takes seconds: a
+/// kept profile must not lose it to an early SIGKILL (#2331).
+#[test]
+fn a_browser_that_needs_seconds_to_flush_after_sigterm_is_not_killed_first() {
+    let fixture = Fixture::enabled();
+    let slow = fixture.directory.path().join("slow-browser");
+    fs::write(
+        &slow,
+        r#"#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in --user-data-dir=*) profile=${arg#--user-data-dir=};; esac
+done
+trap 'sleep 4; printf flushed > "$FAKE_BROWSER_DIR/flushed"; exit 0' TERM
+printf '4242\n/devtools/browser/fake-id\n' > "$profile/DevToolsActivePort"
+while :; do sleep 0.1; done
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&slow, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut child = launcher(
+        &fixture.state,
+        &["--binary", slow.to_str().unwrap(), "--keep-profile"],
+        true,
+    )
+    .env("FAKE_BROWSER_DIR", fixture.directory.path())
+    .spawn()
+    .unwrap();
+    first_line(&mut child);
+    stop(child);
+    assert_eq!(fixture.recorded("flushed").as_deref(), Some("flushed"));
+}
+
 /// The real browser: skipped, with a message, on a host that has none of the supported binaries.
 #[test]
 fn real_browser_serves_loopback_devtools_and_leaves_nothing_behind() {
