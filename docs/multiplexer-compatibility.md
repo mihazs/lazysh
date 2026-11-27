@@ -154,7 +154,7 @@ implemented without full evidence, *part* means partial.
 | Close | session, window (tab strip), pane | tab yes; pane, session impl → yes #1685 | workspace, tab (#1573), pane | session, window, pane |
 | Split, zoom | yes | yes | yes | yes |
 | Resize | yes | impl → yes #1685 | yes | yes |
-| History | yes | yes | part: Herdr serves the newest 1000 lines | no → #1700, #1140 |
+| History | yes | yes | part: Herdr serves the newest 1000 lines | yes (0.10.0) → #1700 |
 | OSC 52 | impl; `set-clipboard` documented → yes #1699 | impl; default → yes #1699 | impl; default over SSH → yes #1699 | no → #1147 |
 | Confirmed input | yes | no → #1145 | guarded yes; stock #655 | no → #1140 |
 | Agent state | companion hooks | hooks, no pane link → #1146 | native | no → #1146 |

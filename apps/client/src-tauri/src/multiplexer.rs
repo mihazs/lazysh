@@ -545,7 +545,9 @@ struct RmuxControlMode {
     entrypoint: String,
 }
 // shortcut: rmux stays Limited until its Jump To control client and confirmed input are verified on a real rmux (#1675).
-const RMUX_MISSING: &[&str] = &["jump", "confirmedInput", "history"];
+const RMUX_MISSING: &[&str] = &["jump", "confirmedInput"];
+// `capture-pane -p -J -S -N` is verified only on the tested 0.10.0.
+const RMUX_MISSING_HISTORY: &[&str] = &["jump", "confirmedInput", "history"];
 /// Admission from the binary contract and control mode, not from `rmux -V`; `daemon` is `stale` when the running
 /// daemon refused this client's protocol, which only a daemon restart fixes.
 fn rmux_tool(capabilities: &str, daemon: &str) -> Tool {
@@ -575,11 +577,16 @@ fn rmux_tool(capabilities: &str, daemon: &str) -> Tool {
     if daemon == "stale" {
         return unsupported(version, "daemonWire");
     }
+    let missing = if version.as_deref() == Some("0.10.0") {
+        RMUX_MISSING
+    } else {
+        RMUX_MISSING_HISTORY
+    };
     Tool {
         kind: MultiplexerKind::Rmux,
         version,
         support: Support::Degraded,
-        missing: RMUX_MISSING,
+        missing,
         reason: None,
     }
 }
@@ -1725,7 +1732,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             serde_json::to_value(&tree).unwrap()["tools"],
-            serde_json::json!([{"kind":"rmux","version":"0.10.0","support":"degraded","missing":["jump","confirmedInput","history"]}])
+            serde_json::json!([{"kind":"rmux","version":"0.10.0","support":"degraded","missing":["jump","confirmedInput"]}])
         );
     }
     #[cfg(unix)]
@@ -2085,6 +2092,16 @@ esac
                 tool(kind, line).missing.contains(&"history"),
                 missing,
                 "{line}"
+            );
+        }
+        for (version, missing) in [("0.10.0", false), ("0.11.0", true)] {
+            let capabilities = RMUX_CAPABILITIES.replace("0.10.0", version);
+            assert_eq!(
+                tool(Rmux, &format!("{capabilities}\tok"))
+                    .missing
+                    .contains(&"history"),
+                missing,
+                "rmux {version}"
             );
         }
     }
@@ -2505,9 +2522,12 @@ esac
         .unwrap();
         assert!(!again.status.success());
         assert_eq!(read_tree().sessions[0].windows.len(), 1);
-        if matches!(binary, Binary::Tmux) {
-            // History reads the pane's scrollback from tmux, not from a client: line 1 survives 5000 lines.
-            run("tmux set-option -g history-limit 50000".into());
+        {
+            // History reads the pane's scrollback from the multiplexer, not from a client: line 1 survives 5000 lines.
+            run(format!(
+                "{} set-option -g history-limit 50000",
+                server.prefix()
+            ));
             run(action_command_for(
                 &TmuxAction::CreateSession {
                     name: "history".into(),
@@ -2516,7 +2536,10 @@ esac
                 &server,
             )
             .unwrap());
-            run("tmux send-keys -t '=history:' 'seq 1 5000' Enter".into());
+            run(format!(
+                "{} send-keys -t '=history:' 'seq 1 5000' Enter",
+                server.prefix()
+            ));
             let history = crate::multiplexer_history::read_numbered_5000(
                 || {
                     run(
@@ -2530,7 +2553,7 @@ esac
             assert!(history.text.lines().any(|line| line == "1"));
             assert!(history.lines >= 5000);
             // The history session is done: the layout actions below run in the one session the test built.
-            run("tmux kill-session -t '=history:'".into());
+            run(format!("{} kill-session -t '=history:'", server.prefix()));
         }
         let action_command = |action: &TmuxAction| action_command_for(action, &server);
         // Pane title, geometry and close, each read back from the parsed tree.
