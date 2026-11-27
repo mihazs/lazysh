@@ -90,6 +90,54 @@ fn incremental_frames_match_the_reference_and_cost_one_pass_each() {
     assert!(gpu.bytes_uploaded > 0);
 }
 
+/// Edits that touch a few cells of a long row: the GPU repaints only the cells between the first
+/// and the last that changed, sends a fraction of what the whole row costs, and the picture is the
+/// reference's, pixel for pixel, across wide characters, colours, underlines and the row's edges.
+#[test]
+fn a_few_changed_cells_repaint_only_those_and_draw_the_reference_picture() {
+    let row = "\x1b[1;1H\x1b[44mblue\x1b[0m the quick brown fox 日本語 jumps \x1b[4mover\x1b[0m the lazy dog end";
+    let mut rt = runtime(60, 3, row.as_bytes());
+    let mut pair = Pair::new(60, 3);
+    pair.show(&rt.snapshot().unwrap());
+    pair.assert_same("start");
+    // The first frame paints the whole row (its other rows are blank and cost nothing).
+    let whole_row = pair.gpu.gpu_stats().instances;
+    let edits = [
+        ("first cell", "\x1b[1;1H\x1b[41mQ\x1b[0m"),
+        ("last cell", "\x1b[1;60H\x1b[7m!\x1b[0m"),
+        ("a wide character recoloured", "\x1b[1;25H\x1b[32m日\x1b[0m"),
+        ("a narrow character over half a wide one", "\x1b[1;26Hz"),
+        ("two wide characters over narrow ones", "\x1b[1;10H本語"),
+        (
+            "an underline added in the middle",
+            "\x1b[1;30H\x1b[4;58;5;196mxy\x1b[0m",
+        ),
+        ("two cells far apart", "\x1b[1;5Ha\x1b[1;50Hb"),
+    ];
+    for (what, bytes) in edits {
+        // Save and restore the cursor: only the edit is new, not the row the cursor left.
+        support::feed(&mut rt, format!("\x1b7{bytes}\x1b8").as_bytes());
+        let before = pair.gpu.gpu_stats().instances;
+        pair.show(&rt.take_frame().unwrap().unwrap());
+        let drawn = pair.gpu.gpu_stats().instances - before;
+        pair.assert_same(what);
+        assert!(
+            drawn <= whole_row,
+            "{what}: {drawn} instances for an edit, {whole_row} for a whole row"
+        );
+    }
+    // One cell is one clear and at most a background, a glyph and a decoration.
+    support::feed(&mut rt, b"\x1b7\x1b[1;20HQ\x1b8");
+    let before = pair.gpu.gpu_stats().instances;
+    pair.show(&rt.take_frame().unwrap().unwrap());
+    let one = pair.gpu.gpu_stats().instances - before;
+    assert!(
+        one <= 4 && one * 4 < whole_row,
+        "{one} instances for one cell, {whole_row} for the row"
+    );
+    pair.assert_same("one cell");
+}
+
 #[test]
 fn a_lost_device_recovers_from_a_snapshot() {
     let mut rt = runtime(20, 4, "before the loss 日本\r\nsecond".as_bytes());

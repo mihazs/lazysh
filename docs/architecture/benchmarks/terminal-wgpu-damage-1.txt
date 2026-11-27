@@ -1,0 +1,53 @@
+# Cell-run damage in the wgpu renderer (#1337)
+# Command: cargo run --release --example renderer_stats   (packages/terminal-renderer-wgpu, Zig 0.16.0 for libghostty-vt)
+# Host: AMD Radeon RX 5500 XT (RADV NAVI14), Vulkan, Mesa 26.2.6, wgpu 30.0.2, offscreen, 8x16 px cells, dot-pattern glyphs.
+# The host was busy with other agents: load average 56 to 79 at the start of every run, so the microsecond columns are
+# only comparable within a pair of runs made back to back; the instance and byte counts are deterministic.
+# BEFORE = origin/main ab23f440 plus only the new "Full-screen repaint" section of the example.
+# AFTER  = this change.
+
+## BEFORE, run 1 (host load average 79.40 60.12 64.11)
+| grid | workload | frames | rows drawn | passes | layout draws | instances | glyph hits | glyph misses | atlas upload KiB | evictions | uploaded MiB |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | 64 | 1536 | 64 | 223601 | 102297 | 100685 | 36 | 4.5 | 0 | 3.13 |
+| 80x24 | ANSI + truecolor | 64 | 1533 | 64 | 150647 | 31051 | 27986 | 21 | 2.6 | 0 | 0.95 |
+| 80x24 | full-screen redraw | 64 | 150 | 64 | 15243 | 3433 | 3222 | 21 | 2.6 | 0 | 0.11 |
+| 80x24 | CJK/emoji/combining | 64 | 87 | 64 | 7265 | 1294 | 1139 | 28 | 5.6 | 0 | 0.04 |
+| 152x38 | plain text | 64 | 2432 | 64 | 530417 | 163211 | 160717 | 36 | 4.5 | 0 | 4.99 |
+| 152x38 | ANSI + truecolor | 64 | 2429 | 64 | 413833 | 49443 | 44604 | 21 | 2.6 | 0 | 1.51 |
+| 152x38 | full-screen redraw | 64 | 164 | 64 | 28171 | 3433 | 3222 | 21 | 2.6 | 0 | 0.11 |
+| 152x38 | CJK/emoji/combining | 64 | 101 | 64 | 15783 | 1602 | 1447 | 28 | 5.6 | 0 | 0.05 |
+
+Full-screen repaint with a changing counter in every row: 300 frames, per-frame medians
+
+| grid | frames drawn | rows drawn per frame | instances per frame | uploaded KiB per frame | draw us p50 | present (GPU wait) us p50 |
+|---|---|---|---|---|---|---|
+| 80x24 | 300 | 24.0 | 997 | 31.17 | 206 | 135 |
+| 152x38 | 300 | 38.0 | 1584 | 49.49 | 352 | 208 |
+
+## BEFORE, run 2 (host load average 72.08 71.04 68.79), repaint section only
+| 80x24 | 300 | 24.0 | 997 | 31.17 | 192 | 118 |
+| 152x38 | 300 | 38.0 | 1584 | 49.49 | 290 | 182 |
+
+## AFTER, run 1 (host load average 62.15 70.85 68.45)
+| grid | workload | frames | rows drawn | passes | layout draws | instances | glyph hits | glyph misses | atlas upload KiB | evictions | uploaded MiB |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 80x24 | plain text | 64 | 1536 | 64 | 23202 | 11516 | 9904 | 36 | 4.5 | 0 | 0.36 |
+| 80x24 | ANSI + truecolor | 64 | 1533 | 64 | 58510 | 26645 | 23591 | 21 | 2.6 | 0 | 0.82 |
+| 80x24 | full-screen redraw | 64 | 150 | 64 | 15243 | 3433 | 3222 | 21 | 2.6 | 0 | 0.11 |
+| 80x24 | CJK/emoji/combining | 64 | 87 | 64 | 6554 | 1196 | 1050 | 28 | 5.6 | 0 | 0.04 |
+| 152x38 | plain text | 64 | 2432 | 64 | 40204 | 17172 | 14678 | 36 | 4.5 | 0 | 0.53 |
+| 152x38 | ANSI + truecolor | 64 | 2429 | 64 | 97506 | 42391 | 37563 | 21 | 2.6 | 0 | 1.30 |
+| 152x38 | full-screen redraw | 64 | 164 | 64 | 28171 | 3433 | 3222 | 21 | 2.6 | 0 | 0.11 |
+| 152x38 | CJK/emoji/combining | 64 | 101 | 64 | 14424 | 1504 | 1358 | 28 | 5.6 | 0 | 0.05 |
+
+Full-screen repaint with a changing counter in every row: 300 frames, per-frame medians
+
+| grid | frames drawn | rows drawn per frame | instances per frame | uploaded KiB per frame | draw us p50 | present (GPU wait) us p50 |
+|---|---|---|---|---|---|---|
+| 80x24 | 300 | 24.0 | 80 | 2.50 | 124 | 80 |
+| 152x38 | 300 | 38.0 | 127 | 3.97 | 214 | 106 |
+
+## AFTER, run 2 (host load average 56.86 65.35 66.95), repaint section only
+| 80x24 | 300 | 24.0 | 80 | 2.50 | 123 | 87 |
+| 152x38 | 300 | 38.0 | 127 | 3.97 | 221 | 124 |
