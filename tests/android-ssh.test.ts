@@ -2761,11 +2761,14 @@ test('recorded Refresh observes completed disabled transitions and rejects old c
   }
 });
 
-test('the general Android suite leaves both owned tmux cases to the fixture runner', async () => {
+test('the general Android suite leaves owned tmux and Zellij cases to their fixture runners', async () => {
   const command = commandLine(await moonTask('client:test-android'));
   const excluded = command.match(/-Pandroid[.]testInstrumentationRunnerArguments[.]notClass=([^\s]+)/)?.[1].split(',') ?? [];
   expect(excluded).toContain('app.lazysh.client.NativeWorkspaceTest#ownedTmuxThroughRealUi');
   expect(excluded).toContain('app.lazysh.client.NativeWorkspaceTest#ownedTmuxControlsWithNativeEngine');
+  expect(excluded).toContain('app.lazysh.client.NativeWorkspaceTest#ownedZellijThroughRealUi');
+  expect(excluded).toContain('app.lazysh.client.NativeWorkspaceTest#ownedZellijTabsWithNativeEngine');
+  expect((await moonTask('client:test-android-native-zellij')).env?.LAZYSH_ANDROID_UI_NATIVE_ZELLIJ).toBe('1');
   const native = await moonTask('client:test-android-native-tmux');
   expect(native.env?.LAZYSH_ANDROID_UI_NATIVE_TMUX).toBe('1');
 });

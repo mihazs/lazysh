@@ -1754,7 +1754,7 @@ jobs:
             case "$LAZYSH_ANDROID_RUNTIME_OWNER" in
             herdr-navigation) bun run test:android-herdr-navigation; exit $? ;;
             tmux) if [[ "${LAZYSH_ANDROID_UI_NATIVE_TMUX:-0}" == 1 ]]; then bun run test:android-native-tmux; else bun run test:android-tmux; fi; exit $? ;;
-            zellij) bun run test:android-zellij; exit $? ;;
+            zellij) if [[ "${LAZYSH_ANDROID_UI_NATIVE_ZELLIJ:-0}" == 1 ]]; then bun run test:android-native-zellij; else bun run test:android-zellij; fi; exit $? ;;
             terminal-core) bun run test:android-terminal-core:ci; exit $? ;;
             terminal-session) bun run test:android-native-session:ci; exit $? ;;
             ssh-parity) bun run test:android-ssh-parity; exit $? ;;
@@ -2043,7 +2043,8 @@ jobs:
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: zellij
-    steps:
+      LAZYSH_ANDROID_ZELLIJ_ARTIFACT: lazysh-android-zellij-results
+    steps: &android-owned-zellij-steps
       - *source-checkout
       - *source-bun
       - *android-toolchains
@@ -2051,6 +2052,13 @@ jobs:
       - *android-owned-host-dependencies
       - *android-owned-namespace
       - *pinned-download-cache
+      - uses: ./.github/actions/ghostty-zig
+        if: env.LAZYSH_ANDROID_UI_NATIVE_ZELLIJ == '1'
+        with:
+          link-source: 'true'
+      - name: Give the native Zellij APK the pinned NDK
+        if: env.LAZYSH_ANDROID_UI_NATIVE_ZELLIJ == '1'
+        run: echo "ANDROID_NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
       - *pinned-zellij
       - run: bun install --frozen-lockfile
       - *android-cache-identity
@@ -2060,10 +2068,22 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: lazysh-android-zellij-results
+          name: ${{ env.LAZYSH_ANDROID_ZELLIJ_ARTIFACT }}
           path: *android-runtime-result-paths
           if-no-files-found: warn
           retention-days: 3
+  native-android-terminal-zellij:
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      ANDROID_SERIAL: emulator-5580
+      LAZYSH_ANDROID_RUNTIME_OWNER: zellij
+      LAZYSH_ANDROID_UI_NATIVE_ZELLIJ: '1'
+      LAZYSH_ANDROID_ZELLIJ_ARTIFACT: lazysh-android-native-zellij-results
+    steps: *android-owned-zellij-steps
+
 
   # The Appium + WebdriverIO device suite (ADR 0002, #1412) on the same API 36 emulator, with owned SSH and stock Herdr hosts
   # and the real companion. Report-only: not a required check until it has passed 20 consecutive runs of main and the

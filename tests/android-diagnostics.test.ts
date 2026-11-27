@@ -284,6 +284,7 @@ test.each([
   { owner:'tmux', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
   { owner:'tmux', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
   { owner:'tmux', nativeTmux:true, mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
+  { owner:'zellij', nativeZellij:true, mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
   { owner:'zellij', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
   { owner:'zellij', mosh:37, instrumentation:23, qr:29, fdroid:41, sdk:31, diagnosticFailure:true, overflow:false },
   { owner:'ssh-parity', mosh:0, instrumentation:0, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false },
@@ -295,7 +296,7 @@ test.each([
   { owner:'tmux', mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false, adbServerLog:false },
   // A run still going after the watchdog's delay is captured while it runs, once, and the watchdog is gone when the run ends.
   { mosh:0, instrumentation:23, qr:0, fdroid:0, sdk:0, diagnosticFailure:false, overflow:false, watchdog:true },
-])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, voice = 0, fdroid, sdk, diagnosticFailure, overflow, adbServerLog = true, watchdog = false, nativeTmux = false }) => {
+])('emulator script preserves exits and reaps collector: %j', async ({ owner = 'guarded', mosh, instrumentation, qr, voice = 0, fdroid, sdk, diagnosticFailure, overflow, adbServerLog = true, watchdog = false, nativeTmux = false, nativeZellij = false }) => {
   expect(commands).toHaveLength(1);
   const directory = await mkdtemp(join(tmpdir(), 'lazysh-android-diagnostics-'));
   temporary.push(directory);
@@ -353,7 +354,7 @@ exit "$SDK_EXIT"
     cwd: directory,
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLECTOR_PID: marker, INVOCATIONS: invocations,
       MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), QR_EXIT: String(qr), VOICE_EXIT: String(voice), FDROID_EXIT: String(fdroid), SDK_EXIT: String(sdk),
-      ANDROID_SERIAL: 'emulator-5580', LAZYSH_ANDROID_RUNTIME_OWNER: owner, LAZYSH_ANDROID_UI_NATIVE_TMUX: nativeTmux ? '1' : '0', SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
+      ANDROID_SERIAL: 'emulator-5580', LAZYSH_ANDROID_RUNTIME_OWNER: owner, LAZYSH_ANDROID_UI_NATIVE_TMUX: nativeTmux ? '1' : '0', LAZYSH_ANDROID_UI_NATIVE_ZELLIJ: nativeZellij ? '1' : '0', SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
       RUNNER_TEMP: directory, TMPDIR: directory, QR_PID_FILE: qrPidFile, LAZYSH_DIALOG_SETTLE_SECONDS: '0',
       LAZYSH_ANDROID_WATCHDOG_SECONDS: watchdog ? '1' : '3480', INSTRUMENTATION_DELAY: watchdog ? '3' : '',
       DIAGNOSTIC_FAILURE: diagnosticFailure ? '1' : '0',
@@ -376,7 +377,7 @@ exit "$SDK_EXIT"
   expect(await Bun.file(qrPidFile).exists()).toBe(qrExpected);
   if (qrExpected) expect(await readFile(qrPidFile, 'utf8')).toBe(`${directory}/lazysh-qr-emulator.pid\n`);
   const actualInvocations=await Bun.file(invocations).exists()?(await readFile(invocations,'utf8')).trim().split('\n'):[];
-  expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='tmux'?[nativeTmux?'run test:android-native-tmux':'run test:android-tmux']:owner==='zellij'?['run test:android-zellij']:owner==='ssh-parity'?['run test:android-ssh-parity']:owner==='appium'?['run test:mobile-e2e:ci']:owner==='mosh'?['run test:android-mosh']:owner==='guarded'?['run test:android-ssh']:owner==='auxiliary'?[
+  expect(actualInvocations).toEqual(owner==='herdr-navigation'?['run test:android-herdr-navigation']:owner==='tmux'?[nativeTmux?'run test:android-native-tmux':'run test:android-tmux']:owner==='zellij'?[nativeZellij?'run test:android-native-zellij':'run test:android-zellij']:owner==='ssh-parity'?['run test:android-ssh-parity']:owner==='appium'?['run test:mobile-e2e:ci']:owner==='mosh'?['run test:android-mosh']:owner==='guarded'?['run test:android-ssh']:owner==='auxiliary'?[
     'run test:android-fdroid',...(qrExpected?['run test:android-qr']:[]),...(voiceExpected?['run test:android-voice']:[]),
     ...(sdkExpected?sdkCases.map(name=>`cargo test --locked -p lazysh-agent --lib ${name} -- --ignored --exact --nocapture`):[]),
   ]:[]);

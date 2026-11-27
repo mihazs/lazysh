@@ -3373,6 +3373,15 @@ class NativeWorkspaceTest {
         sessionView(scenario, "Terminal")
     }
 
+    private fun awaitNativeMultiplexerSurface(scenario: ActivityScenario<MainActivity>, stage: String) {
+        awaitDocument(scenario, stage, """
+            (() => {
+              const pane = Array.from(document.querySelectorAll('.terminal-pane')).find(p => p.getClientRects().length && p.getBoundingClientRect().width > 0);
+              return Boolean(pane?.querySelector(".terminal-canvas[data-terminal-surface='native']")) && !pane.querySelector('.xterm-screen');
+            })()
+        """)
+    }
+
     /**
      * tmux copy mode through the packaged UI. The prefix shortcut "Copy mode" enters it on the displayed pane; native keys
      * then move onto the marker line, select it and copy it. tmux answers with an OSC 52 write, which the terminal holds for
@@ -3512,12 +3521,7 @@ class NativeWorkspaceTest {
         fun visible(target: JSONObject, other: JSONObject, stage: String) {
             sessionView(scenario, "Terminal")
             if (native) {
-                awaitDocument(scenario, "the owned attached display uses the native terminal", """
-                    (() => {
-                      const pane = Array.from(document.querySelectorAll('.terminal-pane')).find(p => p.getClientRects().length && p.getBoundingClientRect().width > 0);
-                      return Boolean(pane?.querySelector(".terminal-canvas[data-terminal-surface='native']")) && !pane.querySelector('.xterm-screen');
-                    })()
-                """)
+                awaitNativeMultiplexerSurface(scenario, "the owned attached display uses the native terminal")
                 PageDriver.poll(stage, 45) {
                     nativeTmuxText()?.takeIf { it.contains(target.getString("marker")) && !it.contains(other.getString("marker")) }
                 }
@@ -3776,7 +3780,7 @@ class NativeWorkspaceTest {
     // packaged UI: product discovery, the session list, attach, the numbered tab control, tab-close detach and reattach. While it
     // runs, the host reads the active tab back with `zellij action list-tabs --json` and afterwards proves that the original panes
     // were never restarted.
-    private fun verifyOwnedZellij(scenario: ActivityScenario<MainActivity>, zellij: JSONObject, parent: String) {
+    private fun verifyOwnedZellij(scenario: ActivityScenario<MainActivity>, zellij: JSONObject, parent: String, native: Boolean) {
         val session = zellij.getString("name")
         require(Regex("owned-zellij-[a-f0-9]{12}").matches(session)) { "Owned Zellij fixture required" }
         val tabs = zellij.getJSONArray("tabs")
@@ -3822,7 +3826,24 @@ class NativeWorkspaceTest {
         // The visible display is the real Zellij client of the selected tab: its own marker is on screen and the other tab's is not.
         fun shows(target: JSONObject, other: JSONObject, stage: String) {
             sessionView(scenario, "Terminal")
-            awaitDocument(scenario, stage, "(()=>{$observer;return ownedVisibleHerdr(document,${JSONArray(listOf(parent, child))},1,${quote(target.getString("marker"))},${JSONArray(listOf(other.getString("marker")))});})()")
+            if (native) {
+                awaitNativeMultiplexerSurface(scenario, "the selected Zellij tab uses the native surface")
+                PageDriver.poll(stage, 45) {
+                    var id: String? = null
+                    scenario.onActivity { id = TerminalSurfaces.ids().singleOrNull() }
+                    id?.let {
+                        val result = PageDriver.invoke("terminal_core_text", "{sessionId:${quote(it)}}") { script ->
+                            evaluate(scenario, script)
+                        }
+                        // A pinned tab paints its marker on one logical line, which can wrap on narrow panes.
+                        (JSONTokener(result).nextValue() as? String)?.replace("\n", "")?.takeIf { text ->
+                            text.contains(target.getString("marker")) && !text.contains(other.getString("marker"))
+                        }
+                    }
+                }
+            } else {
+                awaitDocument(scenario, stage, "(()=>{$observer;return ownedVisibleHerdr(document,${JSONArray(listOf(parent, child))},1,${quote(target.getString("marker"))},${JSONArray(listOf(other.getString("marker")))});})()")
+            }
         }
         // Control opens the quick-tab buttons of this session; the status line confirms the action reached Zellij.
         fun numbered(target: JSONObject) {
@@ -4002,6 +4023,11 @@ class NativeWorkspaceTest {
         ownedSshUi(false, requireTmux = true, nativeTmux = true)
     }
     @Test fun ownedZellijThroughRealUi() = ownedSshUi(false, requireZellij = true)
+
+    @Test fun ownedZellijTabsWithNativeEngine() {
+        Os.setenv("LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU", "1", true)
+        ownedSshUi(false, requireZellij = true, nativeZellij = true)
+    }
 
     /**
      * Lost connection on a saved-credential tmux host (#1640). tests/support/androidLostConnection.ts runs the pinned
@@ -5060,7 +5086,7 @@ class NativeWorkspaceTest {
         closeSoftKeyboard()
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireZellij: Boolean = false, nativeTmux: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireZellij: Boolean = false, nativeTmux: Boolean = false, nativeZellij: Boolean = false) {
         require(!requireZellij || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded && !requireTmux)) { "Owned Zellij mode must be isolated" }
         require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
         require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
@@ -5439,9 +5465,17 @@ class NativeWorkspaceTest {
             println("lazysh packaged companion: actual Install and Update reused results, public version/path, original terminal shell and cleanup completed")
             verifyCompanionHookBoard()
         }
+        val enginePreferences = "lazysh.preferences.v1"
+        fun setEngine(engine: String) = evaluate(scenario, """(() => {
+            const prefs = JSON.parse(localStorage.getItem('$enginePreferences') || '{}');
+            localStorage.setItem('$enginePreferences', JSON.stringify({...prefs, terminalEngine: '$engine'}));
+            window.dispatchEvent(new StorageEvent('storage', {key: '$enginePreferences'}));
+            return true;
+        })()""")
         var primaryFailure: Throwable? = null
         android.util.Log.i("LazyshOwnedCase", "start:$nonce:pid:${android.os.Process.myPid()}")
         try {
+            if (nativeZellij) setEngine("xterm")
             addOwnedHost(scenario, name, if (useMosh) "10.0.2.2" else "127.0.0.1", fixture.getString("username"), fixture.getInt("port")) {
                 if (requireHerdrMosh) {
                     selectOwnedOption("[role=dialog] select:has(option[value='herdr'])", "herdr")
@@ -5510,7 +5544,15 @@ class NativeWorkspaceTest {
                     if (nativeTmux) evaluate(scenario, PageDriver.restoreStorageScript(key, previous))
                 }
             } else if (requireZellij) {
-                verifyOwnedZellij(scenario, fixture.getJSONObject("zellij"), name)
+                try {
+                    if (nativeZellij) setEngine("native")
+                    verifyOwnedZellij(scenario, fixture.getJSONObject("zellij"), name, nativeZellij)
+                } finally {
+                    if (nativeZellij) {
+                        setEngine("xterm")
+                        closeSoftKeyboard()
+                    }
+                }
             } else if (requireDpad) {
                 verifySshDpadPan(scenario, fixture, label)
             } else if (requireIme) {

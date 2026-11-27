@@ -77,11 +77,11 @@ internal object PageDriver {
     }
 
     /** One IPC call as the page makes it; the outcome is the JSON of the result, or `error ` and the rejection (as JSON when it is an object, such as an `SshError`). */
-    fun invoke(command: String, arguments: String = "{}"): String {
-        js("""(()=>{window.__outcome='pending';
+    fun invoke(command: String, arguments: String = "{}", evaluate: (String) -> String = ::js): String {
+        evaluate("""(()=>{window.__outcome='pending';
             window.__TAURI_INTERNALS__.invoke('app_lock_status').then(status=>window.__TAURI_INTERNALS__.invoke('$command',$arguments,{headers:{'X-Lazysh-Access':status.nonce??''}}))
               .then(value=>{window.__outcome=JSON.stringify(value??null)},error=>{window.__outcome='error '+(typeof error==='string'?error:JSON.stringify(error))});return true})()""")
-        val text = poll("the outcome of $command") { js("window.__outcome").takeIf { it != "\"pending\"" } }
+        val text = poll("the outcome of $command") { evaluate("window.__outcome").takeIf { it != "\"pending\"" } }
         // The WebView hands the outcome back as a JS string literal, so a text result keeps its quotes and newlines.
         return JSONTokener(text).nextValue() as String
     }
