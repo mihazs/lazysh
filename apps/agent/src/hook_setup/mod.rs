@@ -246,6 +246,7 @@ fn manage(command: Command) -> Result<Value> {
         Err(Error::Installation(
             reason @ ("HooksAclUnsupported"
             | "HooksDroidStandaloneRequired"
+            | "HooksForeignRecord"
             | "HooksKimiConfigRequired"),
         )) => {
             return Ok(

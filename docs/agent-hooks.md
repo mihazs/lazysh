@@ -67,6 +67,13 @@ intact; owned entry separators and whitespace may change. A foreign same-name
 plugin is never overwritten. The private prepared receipt records own
 templates and hashes/identities, never a copy of provider configuration.
 
+The receipt is bound to the agent and the physical profile path. It is also checked against the
+profile directory's device and inode when a plan is applied, but not when it is read: a profile that
+was copied, restored or remounted (a btrfs subvolume gets a new device number after a reboot) keeps
+working and is rebound by the next write. A receipt written for another folder or agent is never
+used: `status` answers `supported: false` with reason `HooksForeignRecord`, `install` and `remove`
+refuse, and nothing is changed. Delete the `.lazysh-hooks-*.json` file in the profile to start over.
+
 Cline setup installs only the existing root lifecycle plugin, bound to the inspected
 absolute companion. Select the `.cline` directory used by `--config`, `CLINE_DIR`,
 or the workspace explicitly; discovery cannot determine a running session's layer.
