@@ -211,7 +211,9 @@ jobs:
         run: |
           # Pull requests run the affected crates and their dependencies (-g); native-linux covers dependents. Main runs all.
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then verb='ci -g --downstream none'; else verb=run; fi
-          bunx moon $verb '#companion:build' '#companion:check-rust' '#companion:test-rust' '#companion:test-hooks' '#companion:lint' '#companion:format-check'
+          # No check-rust here: lint (clippy --all-targets, same features, -D warnings) compiles everything it checks and fails on any
+          # compile error, and a `cargo check` beside it rebuilds every workspace crate (verdict-agent in main-verdict.yml still runs it alone).
+          bunx moon $verb '#companion:build' '#companion:test-rust' '#companion:test-hooks' '#companion:lint' '#companion:format-check'
       - name: Upload owned concurrent hook syscall excerpts
         if: ${{ !cancelled() && (steps.agent-checks.outcome == 'success' || steps.agent-checks.outcome == 'failure') }}
         timeout-minutes: 2
