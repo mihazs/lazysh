@@ -424,7 +424,21 @@ async fn real_local_companion_serves_the_board_transcripts_and_settings_without_
     ))
     .await
     .unwrap();
-    assert_eq!(board, json!({"schemaVersion": 1, "sessions": []}));
+    assert_eq!(board["schemaVersion"], 1);
+    assert_eq!(board["sessions"], json!([]));
+    let discovery = &board["liveAgents"];
+    assert!(discovery["processes"].is_array());
+    if cfg!(target_os = "linux") {
+        assert!(matches!(
+            discovery["status"].as_str(),
+            Some("available" | "truncated")
+        ));
+    } else {
+        assert_eq!(
+            discovery,
+            &json!({"status": "unsupported", "processes": []})
+        );
+    }
 
     let found = call(crate::ssh::agent_transcripts(
         lease(),
