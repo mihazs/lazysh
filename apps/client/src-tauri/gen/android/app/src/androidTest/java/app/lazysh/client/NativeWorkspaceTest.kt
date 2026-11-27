@@ -4302,10 +4302,11 @@ class NativeWorkspaceTest {
     /**
      * Installed Wry asks for the declared CAMERA permission before the explicit Photo action opens a camera, and answers the
      * file chooser with null when it is denied. Over a staged draft this denies the real system sheet and proves that no
-     * camera opens and the draft is unchanged, then proves the ordinary Choose file input still reaches a system chooser that
-     * Back leaves unchanged. Selecting a file inside the chooser (#1752) and the Allow branch are not exercised.
+     * camera opens and the draft is unchanged, then proves the ordinary Choose file input selects an owned PNG through the real
+     * system chooser: the draft shows that file (name and size) with no upload and no error, and [restage] puts the case's own
+     * draft back because choosing replaces it. The Allow branch is not exercised.
      */
-    private fun verifyAttachmentPhotoDenied(scenario: ActivityScenario<MainActivity>, panel: String, destination: String) {
+    private fun verifyAttachmentPhotoDenied(scenario: ActivityScenario<MainActivity>, panel: String, destination: String, restage: () -> Unit) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val device = UiDevice.getInstance(instrumentation)
@@ -4336,6 +4337,9 @@ class NativeWorkspaceTest {
         assertTrue("A staged draft needs its selection and exact destination", !staged.isNull("selected") && staged.getString("destination").startsWith("./"))
         assertEquals("The draft must start without an upload or an error", 0, staged.getInt("uploaded") + staged.getInt("alerts"))
         assertEquals("The draft must start without a chosen file", "[0,0]", staged.getJSONArray("files").toString())
+        val fixtureName = "lazysh-attachment-${UUID.randomUUID()}.png"
+        val fixtureBytes = instrumentation.context.assets.open("theme-qr.png").use { it.readBytes().size }
+        var fixture: Uri? = null
         val observer = HandlerThread("owned-attachment-camera-observer").apply { start() }
         val observation = QrCameraObservation(cameras)
         camera.registerAvailabilityCallback(observation, Handler(observer.looper))
@@ -4356,32 +4360,23 @@ class NativeWorkspaceTest {
                 Thread.sleep(200)
             } while (System.nanoTime() < settled)
             println("lazysh attachment photo: real CAMERA sheet denied; permission still denied; no camera opened; draft unchanged")
+            fixture = OwnedFileChooser.stage(instrumentation, "theme-qr.png", fixtureName)
             tapOwnedControl(scenario, chooser)
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
-            var owner = context.packageName
-            while (owner == context.packageName && System.nanoTime() < deadline) {
-                Thread.sleep(200)
-                owner = device.currentPackageName ?: context.packageName
-            }
-            assertTrue("Choose file must open a chooser window", owner != context.packageName)
-            require(Regex("[A-Za-z0-9_.]{1,255}").matches(owner)) { "Owned chooser package invalid" }
-            assertTrue("The chooser window must belong to a system package",
-                device.executeShellCommand("pm list packages -s $owner").lineSequence().any { it.trim() == "package:$owner" } &&
-                    owner != "android" && owner != "com.android.systemui")
-            // A picker may consume one Back to close its own drawer or selection before it finishes.
-            repeat(3) {
-                if (device.currentPackageName == owner) {
-                    assertTrue("Back must reach the system chooser", device.pressBack())
-                    device.wait(Until.gone(By.pkg(owner)), 5_000)
-                }
-            }
-            assertTrue("Back must return from the system chooser to the app", device.wait(Until.hasObject(By.pkg(context.packageName)), 10_000) == true)
-            awaitDocument(scenario, "attachment panel after the system chooser", "Boolean(document.querySelector(${JSONObject.quote(chooser)}))")
-            assertEquals("Leaving the system chooser must leave the attachment draft unchanged", before, evaluate(scenario, draft))
-            println("lazysh attachment chooser: Choose file opened a chooser from system package $owner; Back left the draft unchanged; no file was selected in it")
+            OwnedFileChooser.choose(instrumentation, fixtureName)
+            awaitDocument(scenario, "chosen file staged in the attachment draft", "document.querySelector(${JSONObject.quote(panel)} + ' .attachment-selected > summary')?.textContent.startsWith(${JSONObject.quote(fixtureName)})")
+            val chosen = JSONObject(evaluate(scenario, draft))
+            assertEquals("The draft must show the chosen file's name and size", "$fixtureName · $fixtureBytes bytes", chosen.getString("selected"))
+            assertEquals("A chosen file starts with no destination, an upload or an error", "", chosen.getString("destination"))
+            assertEquals("A chosen file must not be uploaded or raise an error", 0, chosen.getInt("uploaded") + chosen.getInt("alerts"))
+            assertEquals("The chosen PNG offers its one editing option", 1, chosen.getInt("checkboxes"))
+            println("lazysh attachment chooser: Choose file selected the owned PNG through the real system chooser; draft shows $fixtureBytes bytes, no upload, no error")
+            restage()
         } finally {
             camera.unregisterAvailabilityCallback(observation)
             observer.quitSafely(); observer.join(5_000)
+            // A picker still open would hide the app from every later case.
+            if (OwnedFileChooser.pickerOpen(instrumentation)) OwnedFileChooser.dismiss(instrumentation)
+            fixture?.let { OwnedFileChooser.unstage(instrumentation, it) }
         }
     }
 
@@ -4426,16 +4421,20 @@ class NativeWorkspaceTest {
         fun click(text: String) = onWebView().withElement(findElement(Locator.XPATH,
             "//section[contains(@class,'attachment-panel')]//button[normalize-space(.)='$text']"))
             .perform(webScrollIntoView()).perform(webClick())
-        fun stage(name: String, upload: Boolean = true, beforeUpload: () -> Unit = {}) {
-            sessionView(scenario, "Attach")
-            awaitDocument(scenario, "fresh owned attachment panel", "document.querySelectorAll('$panel').length===1 && !document.querySelector('$panel [role=alert]') && !document.querySelector('$panel input[readonly]')")
+        fun pasteDraft(name: String) {
             instrumentation.runOnMainSync {clipboard.setPrimaryClip(ClipData.newUri(context.contentResolver, label, uri))}
             click("Paste clipboard image")
-            awaitDocument(scenario, "large protected clipboard image staged without upload", "document.querySelectorAll('$panel input[type=checkbox]').length===1 && !document.querySelector('$panel input[readonly]') && !document.querySelector('$panel [role=alert]')")
+            // The summary guard keeps a file chosen earlier in the draft from satisfying this wait before the paste lands.
+            awaitDocument(scenario, "large protected clipboard image staged without upload", "document.querySelectorAll('$panel input[type=checkbox]').length===1 && !document.querySelector('$panel input[readonly]') && !document.querySelector('$panel [role=alert]') && !document.querySelector('$panel .attachment-selected > summary')?.textContent.startsWith('lazysh-attachment-')")
             pasteOwnedText(scenario, destination, "./$name", label)
             closeSoftKeyboard()
             assertEquals("Exact owned relative upload path", "true", evaluate(scenario,
                 "document.querySelector(${JSONObject.quote(destination)})?.value===${JSONObject.quote("./$name")} && !document.querySelector('$panel [role=alert]')"))
+        }
+        fun stage(name: String, upload: Boolean = true, beforeUpload: () -> Unit = {}) {
+            sessionView(scenario, "Attach")
+            awaitDocument(scenario, "fresh owned attachment panel", "document.querySelectorAll('$panel').length===1 && !document.querySelector('$panel [role=alert]') && !document.querySelector('$panel input[readonly]')")
+            pasteDraft(name)
             beforeUpload()
             assertEquals("One enabled manual upload action", "true", evaluate(scenario,
                 "Array.from(document.querySelectorAll('$panel button')).filter(x=>x.textContent.trim()==='Upload attachment'&&!x.disabled).length===1"))
@@ -4448,7 +4447,7 @@ class NativeWorkspaceTest {
               document.querySelector('.workspace-footer')?.textContent.includes('Mosh');})()
         """
         // The first staged draft also carries the Photo denial and ordinary chooser checks; the upload below proves it survived them.
-        stage(owned.getString("newName")) { verifyAttachmentPhotoDenied(scenario, panel, destination) }
+        stage(owned.getString("newName")) { verifyAttachmentPhotoDenied(scenario, panel, destination) { pasteDraft(owned.getString("newName")) } }
         awaitDocument(scenario, "manual large image upload completed", uploadedTo(owned.getString("newName")))
         sessionView(scenario, "Terminal")
         awaitDocument(scenario, "successful upload panel retired", "!document.querySelector('$panel')")
