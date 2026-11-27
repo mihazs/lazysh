@@ -281,7 +281,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const [previewBusy,setPreviewBusy]=useState(false);
   const updatePreviewBusy=useCallback((value:boolean)=>{if(mounted.current)setPreviewBusy(value);},[]);
   const previewSource=JSON.stringify([sessionId,agent,path,view,inlineImages]);
-  useEffect(()=>{setPreview(undefined);},[previewSource]);
+  // Only reset what is set: a no-op setState from an effect leaves an update pending after every keystroke, and React throws "Maximum update depth exceeded" on the 51st rapid one, losing that character.
+  useEffect(()=>{if(preview)setPreview(undefined);},[previewSource]);
   const [discovered, setDiscovered] = useState<
     { path: string; name: string; sessionId?: string }[]
   >([]);
@@ -400,7 +401,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     setFollowing(false); request.current++;
     return () => {request.current++;};
   }, [sessionId]);
-  useEffect(() => {setFollowing(false); followRef.current = false; request.current++;}, [agent,path,view,transcriptSessionId,inlineImages]);
+  // Same rule as the preview reset above: no no-op setState per keystroke of the path field.
+  useEffect(() => {if(following)setFollowing(false); followRef.current = false; request.current++;}, [agent,path,view,transcriptSessionId,inlineImages]);
   useEffect(() => {
     if (!access.current()) {setAttachmentOpen(false);setFollowing(false); followRef.current = false; request.current++;}
   }, [accessState.epoch,access]);
@@ -688,7 +690,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     restoreScrollPosition(saved.outer);
     if (messageList.current) messageList.current.scrollTop = saved.list;
   }, [child]);
-  useEffect(() => setChild(undefined), [sessionId, path]);
+  // Same rule as the preview reset above.
+  useEffect(() => {if(child)setChild(undefined);}, [sessionId, path]);
   // The counters of the latest response go to the caller's details instead of under every answer.
   const latestUsage = useMemo(() => messages.filter(message => message.usage).at(-1)?.usage, [messages]);
   useEffect(() => onUsage?.(latestUsage), [onUsage, latestUsage]);
