@@ -87,52 +87,85 @@ mod logind {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use std::os::unix::fs::PermissionsExt;
 
         /// A `loginctl` that answers like logind does and records the arguments it was given.
+        /// A child `sh` writes and closes the script: a descriptor opened by this test process could be
+        /// inherited by a concurrent `fork` in this binary and make `exec` fail with ETXTBSY.
         fn fake(directory: &std::path::Path, session: &str, locked: &str) -> String {
             let path = directory.join("loginctl");
-            std::fs::write(
-                &path,
-                format!(
-                    "#!/bin/sh\necho \"$@\" >> '{log}'\n\
-                     case \"$1\" in\n\
-                     show-user) echo Display={session};;\n\
-                     show-session) printf 'Remote=no\\nType=wayland\\nActive=yes\\nLockedHint={locked}\\n';;\n\
-                     esac\n",
-                    log = directory.join("calls").display()
-                ),
-            )
-            .unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let script = format!(
+                "#!/bin/sh\necho \"$@\" >> '{log}'\n\
+                 case \"$1\" in\n\
+                 show-user) echo Display={session};;\n\
+                 show-session) printf 'Remote=no\\nType=wayland\\nActive=yes\\nLockedHint={locked}\\n';;\n\
+                 esac\n",
+                log = directory.join("calls").display()
+            );
+            let written = Command::new("sh")
+                .args([
+                    "-c",
+                    "printf '%s' \"$2\" > \"$1\" && chmod 700 \"$1\"",
+                    "sh",
+                ])
+                .arg(&path)
+                .arg(script)
+                .status()
+                .unwrap();
+            assert!(written.success());
             path.to_str().unwrap().to_owned()
+        }
+
+        /// Asserts the verdict and, on a mismatch, names why the program could not answer.
+        #[track_caller]
+        fn assert_desktop(program: &str, expected: Desktop) {
+            let actual = desktop(program, 1000);
+            assert_eq!(
+                actual,
+                expected,
+                "spawn: {:?}",
+                Command::new(program).arg("show-user").output().map(|_| ())
+            );
         }
 
         #[test]
         fn logind_hint_decides_and_an_unusable_answer_is_unknown() {
             let directory = tempfile::tempdir().unwrap();
             let unlocked = fake(directory.path(), "9", "no");
-            assert_eq!(desktop(&unlocked, 1000), Desktop::Unlocked);
+            assert_desktop(&unlocked, Desktop::Unlocked);
             let calls = std::fs::read_to_string(directory.path().join("calls")).unwrap();
             assert!(calls.contains("show-user 1000 -p Display"));
             assert!(calls.contains("show-session 9 -p Type -p Remote -p Active -p LockedHint"));
-            assert_eq!(
-                desktop(&fake(directory.path(), "9", "yes"), 1000),
-                Desktop::Locked
-            );
-            assert_eq!(
-                desktop(&fake(directory.path(), "9", "maybe"), 1000),
-                Desktop::Unknown
-            );
+            assert_desktop(&fake(directory.path(), "9", "yes"), Desktop::Locked);
+            assert_desktop(&fake(directory.path(), "9", "maybe"), Desktop::Unknown);
             // No display session, or one shaped like an option, is never passed on.
             for session in ["", "-p", "9;rm"] {
-                assert_eq!(
-                    desktop(&fake(directory.path(), session, "no"), 1000),
-                    Desktop::Unknown
-                );
+                assert_desktop(&fake(directory.path(), session, "no"), Desktop::Unknown);
             }
             // A host without logind notifies.
             assert_eq!(desktop("/nonexistent/loginctl", 1000), Desktop::Unknown);
+        }
+
+        #[test]
+        fn a_fresh_stub_runs_while_other_threads_spawn_processes() {
+            let busy = Arc::new(AtomicBool::new(true));
+            let spawners: Vec<_> = (0..4)
+                .map(|_| {
+                    let busy = busy.clone();
+                    std::thread::spawn(move || {
+                        while busy.load(std::sync::atomic::Ordering::Relaxed) {
+                            let _ = Command::new("true").status();
+                        }
+                    })
+                })
+                .collect();
+            let directory = tempfile::tempdir().unwrap();
+            for _ in 0..300 {
+                assert_desktop(&fake(directory.path(), "9", "no"), Desktop::Unlocked);
+            }
+            busy.store(false, std::sync::atomic::Ordering::Relaxed);
+            for spawner in spawners {
+                spawner.join().unwrap();
+            }
         }
 
         #[test]
