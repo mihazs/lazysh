@@ -1,8 +1,7 @@
 //! Recorded UI history, qualified against Codex 0.166.0. Not model context.
-use super::window::{select, Window};
+use super::window::{fit, select, Window, MAX_TEXT};
 use super::{
     codex_lineage, interaction, message_size, Error, Result, TranscriptAgent, TranscriptPage,
-    MAX_PAGE,
 };
 use serde_json::{json, Value};
 #[path = "codex_index.rs"]
@@ -11,37 +10,6 @@ use std::{
     collections::{HashMap, HashSet},
     path::Path,
 };
-
-/// The longest text one block carries. A command, its output or a reply can be megabytes, so the rest is cut and said so.
-const MAX_TEXT: usize = 262_144;
-/// What one message may serialize to: a page holds at most `MAX_PAGE`, and a message that alone exceeds it ends paging.
-const MAX_MESSAGE: usize = MAX_PAGE - MAX_PAGE / 16;
-/// Room kept under the cap for the note that says how much was left out, so that the cut text still fits `MAX_TEXT` for the client.
-const NOTE_ROOM: usize = 64;
-/// Cuts the text of a message's blocks to `cap` bytes each (the note included), at a character boundary, with a note of how much was left out.
-fn cut(message: &mut Value, cap: usize) {
-    for block in message["blocks"].as_array_mut().into_iter().flatten() {
-        let Some(full) = block["text"].as_str().filter(|text| text.len() > cap) else {
-            continue;
-        };
-        let mut end = cap.saturating_sub(NOTE_ROOM);
-        while !full.is_char_boundary(end) {
-            end -= 1;
-        }
-        let left = full.len() - end;
-        block["text"] = json!(format!("{}\n… [{left} more bytes not shown]", &full[..end]));
-    }
-}
-/// Bounds a message to a page: each text to `MAX_TEXT`, then to half that again until the serialized message fits, since
-/// escaping can make the JSON several times the text.
-fn fit(message: &mut Value) {
-    let mut cap = MAX_TEXT;
-    cut(message, cap);
-    while cap > 256 && message_size(message).map_or(true, |size| size > MAX_MESSAGE) {
-        cap /= 2;
-        cut(message, cap);
-    }
-}
 
 #[derive(Default)]
 struct Turn {
