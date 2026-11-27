@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.102.2
+
+### Patch Changes
+
+- fix(notifications): start the enabled host relay sender automatically ([#2673](https://github.com/mihazs/lazysh/pull/2673))
+
+  <details><summary>Details</summary>
+
+  Agent reports restart an absent sender. Hosts that use an external supervisor can set `LAZYSH_RELAY_AUTOSTART=0`.
+
+  </details>
+
 ## 1.102.1
 
 No changes in this release.
