@@ -1,5 +1,72 @@
 # @lazysh/client
 
+## 1.102.2
+
+### Patch Changes
+
+- feat(terminal): include the native Wayland engine in Linux packages ([#2693](https://github.com/mihazs/lazysh/pull/2693))
+
+  <details><summary>Details</summary>
+
+  The Linux x64 Debian package and AppImage include the native terminal when the release kill switch is on. X11 sessions continue to use xterm.js.
+
+  </details>
+- fix(bench): compare Android terminal streams only when their grids and bytes match ([#2595](https://github.com/mihazs/lazysh/pull/2595))
+
+  <details><summary>Details</summary>
+
+  The xterm benchmark can replay the native arm’s grid from a same-run receipt. The runner and comparator verify the fixture hashes and dimensions for W2–W4.
+
+  </details>
+- fix(terminal): stop display-scale monitoring when an xterm.js session closes ([#2621](https://github.com/mihazs/lazysh/pull/2621))
+- feat(terminal): include the native terminal engine in Windows installers ([#2693](https://github.com/mihazs/lazysh/pull/2693))
+
+  <details><summary>Details</summary>
+
+  Windows x64 installers include the native engine when the release kill switch is on.
+
+  </details>
+- fix(android): honor Private keyboard in the native terminal ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+
+  <details><summary>Details</summary>
+
+  The existing preference now applies to the Android terminal editor when it takes focus.
+
+  </details>
+- fix(android): preserve native terminal hardware keyboard right-Alt characters ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+- feat(terminal): honor Linux desktop accessibility in the terminal ([#2651](https://github.com/mihazs/lazysh/pull/2651))
+
+  <details><summary>Details</summary>
+
+  When AT-SPI reports accessibility enabled, new sessions use xterm.js with screen-reader announcements on.
+
+  </details>
+- fix(terminal): select native terminal words and rows on double and triple click ([#2703](https://github.com/mihazs/lazysh/pull/2703))
+- fix(android): keep native keyboard commits ahead of toolbar keys ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+
+  <details><summary>Details</summary>
+
+  Toolbar Enter waits for text already committed by the Android keyboard. An armed Ctrl or Alt modifier applies to that earlier text first.
+
+  </details>
+- fix(terminal): respect named keys from remapped and virtual keyboards ([#2717](https://github.com/mihazs/lazysh/pull/2717))
+- fix(bench): require a render timing for every short-output burst ([#2603](https://github.com/mihazs/lazysh/pull/2603))
+- test(herdr): isolate real integration fixtures on private sockets ([#2660](https://github.com/mihazs/lazysh/pull/2660))
+- fix(android): restore inline shell history suggestions with SwiftKey in native terminals ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+
+  <details><summary>Details</summary>
+
+  The native terminal identifies its text field to Android in the same way as the WebView terminal. SwiftKey can send the first typed character to the shell without requiring Private keyboard mode.
+
+  </details>
+- fix(android): keep the keyboard from replacing native terminal commands on Enter ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+
+  <details><summary>Details</summary>
+
+  The native terminal now asks Android keyboards to avoid automatically correcting commands. Shell-provided inline history suggestions remain available.
+
+  </details>
+
 ## 1.102.1
 
 ### Patch Changes

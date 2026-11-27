@@ -10,6 +10,32 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.102.2] - 2026-11-27
+
+### New
+
+- **terminal:** include the native Wayland engine in Linux packages ([#2693](https://github.com/mihazs/lazysh/pull/2693))
+- **terminal:** include the native terminal engine in Windows installers ([#2693](https://github.com/mihazs/lazysh/pull/2693))
+- **terminal:** honor Linux desktop accessibility in the terminal ([#2651](https://github.com/mihazs/lazysh/pull/2651))
+
+### Fixed
+
+- **bench:** compare Android terminal streams only when their grids and bytes match ([#2595](https://github.com/mihazs/lazysh/pull/2595))
+- **terminal:** stop display-scale monitoring when an xterm.js session closes ([#2621](https://github.com/mihazs/lazysh/pull/2621))
+- **android:** honor Private keyboard in the native terminal ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+- **android:** preserve native terminal hardware keyboard right-Alt characters ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+- **terminal:** select native terminal words and rows on double and triple click ([#2703](https://github.com/mihazs/lazysh/pull/2703))
+- **android:** keep native keyboard commits ahead of toolbar keys ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+- **terminal:** respect named keys from remapped and virtual keyboards ([#2717](https://github.com/mihazs/lazysh/pull/2717))
+- **bench:** require a render timing for every short-output burst ([#2603](https://github.com/mihazs/lazysh/pull/2603))
+- **android:** restore inline shell history suggestions with SwiftKey in native terminals ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+- **android:** keep the keyboard from replacing native terminal commands on Enter ([#2691](https://github.com/mihazs/lazysh/pull/2691))
+- **notifications:** start the enabled host relay sender automatically ([#2673](https://github.com/mihazs/lazysh/pull/2673))
+
+### Under the hood
+
+- **herdr:** isolate real integration fixtures on private sockets ([#2660](https://github.com/mihazs/lazysh/pull/2660))
+
 ## [1.102.1] - 2026-11-26
 
 ### Fixed
