@@ -130,11 +130,11 @@ class PublishedApkTest {
         }, waitMillis()))
     }
 
-    private fun input(hint: String, at: Stage): UiObject2 = stage(at) {
+    private fun input(hint: String, at: Stage, accept: (UiObject2) -> Boolean = { true }): UiObject2 = stage(at) {
         checkNotNull(device.wait(Condition<UiDevice, UiObject2?> { current ->
             val found = current.findObjects(By.pkg(target).clazz("android.widget.EditText").hint(hint))
             check(found.size <= 1)
-            found.singleOrNull()
+            found.singleOrNull()?.takeIf(accept)
         }, waitMillis()))
     }
 
@@ -147,9 +147,11 @@ class PublishedApkTest {
 
     private fun verifyInput(hint: String, value: String, at: Stage) {
         inputField = fieldFor(hint); inputOperation = InputOperation.READBACK; readbackMatched = null
-        val matched = input(hint, at).text == value
-        readbackMatched = matched
-        check(matched)
+        input(hint, at) { field ->
+            val matched = field.text == value
+            readbackMatched = matched
+            matched
+        }
     }
 
     private fun clearInputObservation() {
