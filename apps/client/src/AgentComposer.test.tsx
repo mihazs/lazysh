@@ -555,6 +555,67 @@ it('pastes an image into the draft as a numbered token and delivers the uploaded
   await waitFor(()=>expect(box().value).toBe('[Image #1] '));
 });
 
+it('adds selected files directly to the prompt and keeps the source picker compact',async()=>{
+  await bound(own());const sent=uploads();
+  fireEvent.click(screen.getByRole('button',{name:t('chatAddAttachment')}));
+  const picker=screen.getByLabelText(t('attachmentChooseLabel'));
+  expect(screen.queryByText(t('attachmentUpload'))).toBeNull();
+  fireEvent.change(picker,{target:{files:[png('one.png'),attachmentFile(undefined,'notes.txt','text/plain')]}});
+  await waitFor(()=>expect(box().value).toBe('[Image #1] [File #2] '));
+  expect(sent).toEqual(['one.png','notes.txt']);
+  expect(screen.queryByLabelText(t('attachmentChooseLabel'))).toBeNull();
+});
+
+it('waits for IME composition to commit before inserting an uploaded file',async()=>{
+  await bound(own());const hold:{release?:()=>void}={};uploads(hold);
+  fireEvent.click(screen.getByRole('button',{name:t('chatAddAttachment')}));
+  fireEvent.change(screen.getByLabelText(t('attachmentChooseLabel')),{target:{files:[png()]}});
+  await waitFor(()=>expect(hold.release).toBeDefined());
+  fireEvent.compositionStart(box());type('入力');
+  act(()=>hold.release!());
+  await waitFor(()=>expect(screen.queryByText(t('attachmentUploading'))).toBeNull());
+  expect(box().value).toBe('入力');expect(chips()).toEqual([]);
+  fireEvent.compositionEnd(box());
+  await waitFor(()=>expect(box().value).toBe('入力 [Image #1] '));
+  expect(chips()).toHaveLength(1);
+});
+
+it('shows upload failures and leaves the draft unchanged',async()=>{
+  await bound(own());const previous=vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='upload_reserve' ? Promise.reject(new Error('Upload failed')) : previous(command,args,options));
+  fireEvent.click(screen.getByRole('button',{name:t('chatAddAttachment')}));
+  fireEvent.change(screen.getByLabelText(t('attachmentChooseLabel')),{target:{files:[png()]}});
+  expect((await screen.findByRole('alert')).textContent).toContain('Upload failed');
+  expect(box().value).toBe('');expect(chips()).toEqual([]);
+  expect(screen.getByLabelText(t('attachmentChooseLabel'))).toBeTruthy();
+});
+
+async function releaseWithoutAttachment(hold:{release?:()=>void}) {
+  act(()=>hold.release!());
+  await waitFor(()=>expect(screen.queryByText(t('attachmentUploading'))).toBeNull());
+  expect(box().value).toBe('');expect(chips()).toEqual([]);
+}
+
+it('does not attach a delayed file to a different conversation',async()=>{
+  const first=own(),second=own();const {view,access}=mount(first);await waitFor(()=>expect(actions().map(action=>action.kind)).toContain('bind'));
+  const hold:{release?:()=>void}={};uploads(hold);
+  fireEvent.click(screen.getByRole('button',{name:t('chatAddAttachment')}));
+  fireEvent.change(screen.getByLabelText(t('attachmentChooseLabel')),{target:{files:[png()]}});
+  await waitFor(()=>expect(hold.release).toBeDefined());
+  view.rerender(<AgentComposer sessionId="ssh" conversation={second.conversation} access={access} invoke={bindProtectedInvoke(access)} shown labels={tmuxLabels} proof={{kind:'tmux',paneId:'%3'}} stage/>);
+  await releaseWithoutAttachment(hold);
+});
+
+it('cancels a pending selected-file upload without adding it to the draft',async()=>{
+  await bound(own());const hold:{release?:()=>void}={};uploads(hold);
+  fireEvent.click(screen.getByRole('button',{name:t('chatAddAttachment')}));
+  fireEvent.change(screen.getByLabelText(t('attachmentChooseLabel')),{target:{files:[png()]}});
+  expect(await screen.findByText(t('attachmentUploading'))).toBeTruthy();
+  await waitFor(()=>expect(hold.release).toBeDefined());
+  fireEvent.click(screen.getByRole('button',{name:t('attachmentCancel')}));
+  await releaseWithoutAttachment(hold);
+});
+
 it('does not send while a file uploads, and a text paste stays an ordinary paste',async()=>{
   await bound(own());const hold:{release?:()=>void}={};uploads(hold);
   type('look');
