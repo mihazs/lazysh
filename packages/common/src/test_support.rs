@@ -106,6 +106,18 @@ pub fn successful_output(command: &mut std::process::Command) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+/// Runs a tmux `kill-server`. A tmux client whose server exits before it acknowledges the command (a control client was
+/// attached) prints exactly `server exited unexpectedly` and exits 1 although the server is gone, which is what was asked;
+/// any other failure still panics.
+pub fn killed_server(command: &mut std::process::Command) {
+    let output = command.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() || stderr.trim() == "server exited unexpectedly",
+        "{stderr}"
+    );
+}
+
 /// Dev-feature adapter for the private validator observer seam; absent from normal builds.
 pub fn observe_sidecar(
     kind: crate::private_state::SidecarKind,
@@ -206,6 +218,23 @@ mod tests {
             std::path::Path::new("other"),
             b"/private/fixture"
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn killed_server_accepts_only_the_exit_before_acknowledgement_failure() {
+        let shell = |script: &str| {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", script]);
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                super::killed_server(&mut command)
+            }))
+            .is_ok()
+        };
+        assert!(shell("exit 0"));
+        assert!(shell("echo 'server exited unexpectedly' >&2; exit 1"));
+        assert!(!shell("echo 'no server running on /tmp/x' >&2; exit 1"));
+        assert!(!shell("exit 1"));
     }
 
     /// Stores opened with SQLITE_OPEN_NOFOLLOW refuse a path with a symbolic link in it, and macOS's temporary directory is behind one.
