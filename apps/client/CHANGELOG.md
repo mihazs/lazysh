@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.102.5
+
+### Patch Changes
+
+- fix(agents): show unrecognized follow-up questions with a terminal action ([#2777](https://github.com/mihazs/lazysh/pull/2777))
+- fix(chat): keep every character typed quickly into the transcript path field ([#2905](https://github.com/mihazs/lazysh/pull/2905))
+
+  <details><summary>Details</summary>
+
+  A long path entered in one burst, such as native key events, could lose a character once React hit its nested-update limit. The path field's resets now leave no update pending after each keystroke.
+
+  </details>
+
 ## 1.102.4
 
 ### Patch Changes
