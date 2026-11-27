@@ -137,8 +137,9 @@ export const api = {
   },
   openWebUrl: (url: string) => invoke<void>("open_web_url", { url }),
   inspectAuthUrl: (url: string) => invoke<AuthUrlInspection>("inspect_auth_url", { url }),
-  /** Opens a sign-in page on this device once the tunnel its redirect needs listens; a phone uses an in-app tab unless told otherwise. */
-  openAuthUrl: (url: string, browser?: 'inApp' | 'system') => invoke<AuthUrlOutcome>("open_auth_url", { url, browser }),
+  /** Opens a sign-in page on this device once the tunnel its redirect needs listens: a remote session passes the `tunnelId` of its live flow, a local one needs none. A phone uses an in-app tab unless told otherwise. */
+  openAuthUrl: (sessionId: string, url: string, options: {tunnelId?: string; browser?: 'inApp' | 'system'} = {}) =>
+    invoke<AuthUrlOutcome>("open_auth_url", { sessionId, url, ...options }),
   attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>,onEvent:(event:SshEvent)=>void) =>
     createRemoteSession('attach_multiplexer',{sessionId,...target,createIfMissing:true,cols:100,rows:30},onEvent),
   /** `reattach` (reconnect and restore) never creates the session: Zellij fails when it is gone instead of starting an empty one. */

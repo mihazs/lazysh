@@ -23,10 +23,10 @@ it('sends a pane id with a Jump To request only when a pane row was chosen',asyn
 it('asks the native side to inspect and open a sign-in page, which checks the tunnel itself',async()=>{
   invoke.mockResolvedValueOnce({host:'idp.example',warnings:[],callbackPorts:[8085]}).mockResolvedValueOnce('notified');
   expect(await api.inspectAuthUrl('https://idp.example/a')).toEqual({host:'idp.example',warnings:[],callbackPorts:[8085]});
-  expect(await api.openAuthUrl('https://idp.example/a','system')).toBe('notified');
+  expect(await api.openAuthUrl('s1','https://idp.example/a',{tunnelId:'t1',browser:'system'})).toBe('notified');
   expect(invoke.mock.calls.map(([command,args])=>[command,args])).toEqual([
     ['inspect_auth_url',{url:'https://idp.example/a'}],
-    ['open_auth_url',{url:'https://idp.example/a',browser:'system'}],
+    ['open_auth_url',{sessionId:'s1',url:'https://idp.example/a',tunnelId:'t1',browser:'system'}],
   ]);
 });
 it('sends installation through one protected native command with no renderer URL or binary data',async()=>{
