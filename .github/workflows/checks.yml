@@ -1014,6 +1014,10 @@ jobs:
         env:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/release/lazysh-agent
           LAZYSH_TEST_FAKE_SDK_BIN: ${{ github.workspace }}/target/release/examples/fake_android_sdk
+          # This binary is only driven over SSH, never shipped or size-gated (it stays far under the 64 MiB limit above), so it
+          # skips the fat LTO of the published profile: docs/reference/linkers-moon-and-android-build-measurements.md, #2768.
+          CARGO_PROFILE_RELEASE_LTO: 'false'
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
         run: |
           cargo build --release --locked -p lazysh-agent --bin lazysh-agent --example owned_terminal_receiver --example fake_android_sdk
           cases=(ssh::tests::openssh_client_environment_reaches_remote_shell ssh::tests::openssh_attachments_default_to_private_unique_tmp_files ssh::tests::openssh_companion_install_and_managed_path ssh::tests::openssh_managed_herdr_installs_and_removes_only_its_own_binary ssh::tests::openssh_companion_install_refuses_an_unsupported_architecture ssh::tests::openssh_agent_board_and_approvals_through_companion_hooks ssh::tests::openssh_account_usage_channel_cancellation_reaps_workers ssh::tests::openssh_and_mosh_deliver_checksummed_output_to_a_core ssh::tests::openssh_host_browser_streams_a_real_page_and_closing_the_channel_ends_the_browser ssh::tmux_jump_fixture::missing_mosh_executable_is_safe_for_auto_before_any_target_creation ssh::tmux_jump_fixture::real_mosh_tmux_entry_binds_exact_namespace_and_survives_receipt_and_bootstrap_closure ssh::tmux_jump_fixture::herdr_guard::real_guarded_mosh_keeps_private_claim_and_exact_display_after_bootstrap_closure companion::local::tests::real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell companion::local::tests::real_local_hooks_report_to_the_board_and_a_permission_request_is_answered companion::local::tests::real_local_companion_lists_devices_and_streams_frames_until_stopped_or_the_session_closes)
@@ -1331,6 +1335,11 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Every release-profile build here (`build:native`, the macOS bundle, the Windows installer) is only inspected or run by this
+    # job and published nowhere (release-artifacts.yml builds what ships), so none needs the fat LTO of the published profile: #2768.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: 'false'
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
     steps:
       - uses: actions/checkout@v4
       - *source-bun
