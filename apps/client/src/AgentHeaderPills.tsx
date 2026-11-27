@@ -6,12 +6,11 @@ import './AgentHeaderPills.css';
 const modeNames = {
   default: 'agentModeDefault', plan: 'agentModePlan', acceptEdits: 'agentModeAcceptEdits', auto: 'agentModeAuto', bypassPermissions: 'agentModeBypass',
 } as const;
-/** The modes an agent starts in; not worth a pill. */
-const defaultModes = ['default', 'build'];
 export const modeName = (mode: string) => Object.hasOwn(modeNames, mode) ? t(modeNames[mode as keyof typeof modeNames]) : mode;
+const permission = (session: AgentSessionInfo) => [session.approval, session.sandbox].filter(Boolean).join(' · ') || undefined;
 const compact = (tokens: number) => formatNumber(tokens, {notation: 'compact'});
 
-/** Model, mode, context and git branch in the header row. Unknown pills are not drawn; the default mode is not worth a pill (OpenCode's `build` agent is its default). */
+/** Model, mode, approval and sandbox, context and git branch in the header row. The mode is always drawn when the agent reports one, the default too, so a phone user can tell what runs unattended; an unreported field is not drawn. */
 export function AgentHeaderPills({session}: {session?: AgentSessionInfo}) {
   if (!session) return null;
   const left = contextLeft(session);
@@ -19,7 +18,8 @@ export function AgentHeaderPills({session}: {session?: AgentSessionInfo}) {
     {session.branch && <span className="agent-pill agent-pill-branch" title={t('agentSessionBranch')}><GitBranch size={11} aria-hidden="true"/> {session.branch}</span>}
     {session.worktree && <span className="agent-pill agent-pill-branch" title={t('agentSessionWorktree')}><FolderGit2 size={11} aria-hidden="true"/> {session.worktree}</span>}
     {session.model && <span className="agent-pill agent-pill-model" title={t('agentSessionModel')}>{session.model}</span>}
-    {session.mode && !defaultModes.includes(session.mode) && <span className="agent-pill" data-mode={session.mode} title={t('agentSessionMode')}>{modeName(session.mode)}</span>}
+    {session.mode && <span className="agent-pill" data-mode={session.mode} title={t('agentSessionMode')}>{modeName(session.mode)}</span>}
+    {permission(session) && <span className="agent-pill" title={t('agentSessionApproval')}>{permission(session)}</span>}
     {session.usage && <span className="agent-pill" data-low={left === undefined ? undefined : left < 10 ? 'danger' : left < 20 ? 'warn' : undefined} title={t('agentSessionContext')}>
       {left === undefined ? t('agentContextUsed', {tokens: compact(session.usage.usedTokens)}) : t('agentContextLeft', {percent: left})}</span>}
   </span>;
@@ -35,7 +35,7 @@ export function AgentSessionDetails({session}: {session?: AgentSessionInfo}) {
     [t('agentSessionWorktree'), session.worktree],
     [t('agentSessionModel'), [session.model, session.effort].filter(Boolean).join(' · ') || undefined],
     [t('agentSessionMode'), session.mode && modeName(session.mode)],
-    [t('agentSessionApproval'), [session.approval, session.sandbox].filter(Boolean).join(' · ') || undefined],
+    [t('agentSessionApproval'), permission(session)],
     [t('agentSessionContext'), session.usage && (session.usage.limitTokens
       ? t('agentContextDetail', {used: formatNumber(session.usage.usedTokens), limit: formatNumber(session.usage.limitTokens), percent: left ?? 0})
       : t('agentContextUsed', {tokens: formatNumber(session.usage.usedTokens)}))],
