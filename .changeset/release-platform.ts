@@ -341,6 +341,11 @@ export const macosCompanion = (app: string, published: PublishedCompanion, where
   const comparable = await digestFile(reference, companionMaximumBytes);
   await requireBundled(await stripped(bundled, 'bundled'), { ...published, ...comparable }, where);
 });
+/** The executable links libprotobuf-lite.so.32, which Debian ships as libprotobuf-lite32 and Ubuntu 24.04 as libprotobuf-lite32t64. */
+export function requireDebianRuntime(depends: string) {
+  const provides = (name: string) => depends.split(',').some(entry => entry.split('|').some(option => option.trim().split(/[\s(]/)[0] === name));
+  requirePlatform(provides('libprotobuf-lite32t64') && provides('libprotobuf-lite32'), 'Debian package omits protobuf-lite runtime providers');
+}
 async function desktop(target: ArtifactTarget, root: string, output: string) {
   const identity = await buildIdentity(root);
   requirePlatform(['linux-x64', 'windows-x64', 'macos-arm64', 'macos-x64'].includes(target), 'unsupported desktop target');
@@ -355,6 +360,7 @@ async function desktop(target: ArtifactTarget, root: string, output: string) {
     const deb = await exactlyOne('deb/*.deb', bundle);
     requirePlatform(await native('dpkg-deb', ['--field', deb, 'Version']) === identity.version, 'Debian version mismatch');
     requirePlatform(await native('dpkg-deb', ['--field', deb, 'Architecture']) === 'amd64', 'Debian architecture mismatch');
+    requireDebianRuntime(await native('dpkg-deb', ['--field', deb, 'Depends']));
     const image = await exactlyOne('appimage/*.AppImage', bundle);
     await debCompanion(deb, published);
     await restoreAppImageCompanion(image, published, identity.version);

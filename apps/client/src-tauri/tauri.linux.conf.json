@@ -1,5 +1,12 @@
 {
   "app": {
     "windows": [{ "label": "main", "title": "lazysh", "width": 1200, "height": 800, "minWidth": 360, "minHeight": 480, "create": false }]
+  },
+  "bundle": {
+    "linux": {
+      "deb": {
+        "depends": ["libprotobuf-lite32t64 | libprotobuf-lite32"]
+      }
+    }
   }
 }

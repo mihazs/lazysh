@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { digestFile, stagePackages, companionTargets, type CompanionTarget } from '../.changeset/release-artifacts';
 import { desktopCompanions, elfSections, publishedCompanion, requireBundled, sidecarPath, stageSidecar, type DesktopTarget } from '../.changeset/release-bundle';
-import { appImageCompanion, debCompanion, installCompanion } from '../.changeset/release-platform';
+import { appImageCompanion, debCompanion, installCompanion, requireDebianRuntime } from '../.changeset/release-platform';
 import { spawnText } from './support/gitFixture';
 
 const identity = { sha: 'a'.repeat(40), version: '0.23.0' };
@@ -79,6 +79,17 @@ test('a package whose companion is missing, linked or different from the publish
   await symlink(published.file, inside);
   await expect(requireBundled(inside, published, 'package')).rejects.toThrow('package has no lazysh-agent');
 }));
+
+test('the Debian Depends field must offer both protobuf-lite package names', async () => {
+  // The Depends field the v1.102.x packages carried.
+  expect(() => requireDebianRuntime('libwebkit2gtk-4.1-0, libgtk-3-0')).toThrow('omits protobuf-lite runtime providers');
+  expect(() => requireDebianRuntime('libgtk-3-0, libprotobuf-lite32t64')).toThrow('omits protobuf-lite runtime providers');
+  requireDebianRuntime('libwebkit2gtk-4.1-0, libgtk-3-0, libprotobuf-lite32t64 | libprotobuf-lite32');
+  requireDebianRuntime('libgtk-3-0, libprotobuf-lite32 (>= 3.21) | libprotobuf-lite32t64 (>= 3.21)');
+  // The packaging configuration feeds the same check.
+  const configuration = await Bun.file(new URL('../apps/client/src-tauri/tauri.linux.conf.json', import.meta.url)).json();
+  requireDebianRuntime(configuration.bundle.linux.deb.depends.join(', '));
+});
 
 const dpkg = Bun.which('dpkg-deb');
 async function debWith(root: string, files: Record<string, Buffer>) {
