@@ -1,6 +1,6 @@
 {
   "name": "@lazysh/client",
-  "version": "1.102.3",
+  "version": "1.102.4",
   "private": true,
   "type": "module",
   "scripts": {

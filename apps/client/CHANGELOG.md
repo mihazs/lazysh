@@ -1,5 +1,18 @@
 # @lazysh/client
 
+## 1.102.4
+
+### Patch Changes
+
+- fix(ci): allow individual iOS and macOS terminal rehearsals ([#2715](https://github.com/mihazs/lazysh/pull/2715))
+- fix(release): keep the bundled companion executable in the restored Linux AppImage ([#2867](https://github.com/mihazs/lazysh/pull/2867))
+
+  <details><summary>Details</summary>
+
+  The restored AppImage installed the published companion with the mode of its downloaded artifact, so the release check found it not executable.
+
+  </details>
+
 ## 1.102.3
 
 ### Patch Changes

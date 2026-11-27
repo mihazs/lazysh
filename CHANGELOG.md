@@ -10,6 +10,13 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.102.4] - 2026-11-27
+
+### Fixed
+
+- **ci:** allow individual iOS and macOS terminal rehearsals ([#2715](https://github.com/mihazs/lazysh/pull/2715))
+- **release:** keep the bundled companion executable in the restored Linux AppImage ([#2867](https://github.com/mihazs/lazysh/pull/2867))
+
 ## [1.102.3] - 2026-11-27
 
 ### New
