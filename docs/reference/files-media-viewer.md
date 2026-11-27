@@ -17,7 +17,16 @@ WebKitGTK aborts its web process, and so the whole window, when a media element 
 
 ## PDF
 
-PDF is not drawn inside the app. Chromium does not run its PDF viewer in a sandboxed frame, and neither WebKitGTK nor Android's WebView draws PDFs inline, so a frame cannot be a portable PDF viewer. A PDF renderer written in JavaScript would be a large parser to carry and keep patched. Files shows a note for a `.pdf` entry and the existing **Open with…** and **Download** actions hand the file to the device's own PDF viewer, outside the WebView, which the issue allows. A bundled, sandboxed renderer remains possible and is tracked separately.
+Files does not draw a PDF (decision for issue #1891). A `.pdf` entry shows a note, and **Open with…** and **Download** hand the file to the device's own PDF viewer, outside the WebView. Three options were weighed.
+
+- **Keep the device viewer (chosen).** It works on every platform the app ships on, adds no parser and no policy change to the app, and keeps the media frame's rule that nothing from a file ever runs.
+- **A bundled JavaScript renderer such as pdf.js in a `sandbox="allow-scripts"` frame (not built).**
+  - The frame has to run script, which the video and audio frame never does (its `sandbox` is empty). Isolation would rest on the opaque origin and the frame's policy alone, over a renderer that parses hostile bytes. pdf.js has had arbitrary JavaScript execution on opening a malicious PDF (GHSA-wgrm-67xf-hhpq, CVE-2024-4367, high; affected 4.1.392 and earlier, fixed in 4.2.67). Turning `isEvalSupported` off addresses that class, and the app would still own a patch cadence for a third-party parser.
+  - It is larger than estimated. `pdfjs-dist` 6.5.438 (Apache-2.0; the notice must be kept) has `build/pdf.min.mjs` at 474 KB and `build/pdf.worker.min.mjs` at 1.27 MB, about 1.75 MB minified. The `wasm/` image decoders (1.4 MB), `cmaps/` (1.7 MB) and `standard_fonts/` (0.8 MB) that pdf.js loads by URL for some images, CJK text and non-embedded fonts come on top, and a frame whose policy is `default-src 'none'` cannot fetch them.
+  - The app's policy is `script-src 'self'` with no inline script, eval or wasm, and a `srcdoc` frame inherits it (the reason `media-src` gained `data:`). The renderer therefore needs either a looser `script-src` in the privileged window or a separate bundled frame document. An opaque-origin frame cannot start a Worker from the app's origin (the worker URL must be same-origin), so the parse would run on the frame's own thread. Whether that stalls the window, and whether each WebView accepts such a frame, is not measured here.
+- **Rasterizing pages natively (not built).** It needs a PDF rasterizer for each platform (PDFium or a Rust renderer in the app, or the platform's own: `PdfRenderer` on Android, PDFKit on macOS and iOS, `Windows.Data.Pdf`, poppler on Linux), each a new native parser to ship, license and patch. Only Linux and Android can be exercised here.
+
+Revisit when a user cannot use the device hand-off (a locked-down host, a one-page read on a phone) and a renderer has been shown to draw a PDF in a frame on WebKitGTK, Chromium and Android WebView with `isEvalSupported` off, without loosening the main window's `script-src`. Not verified here: macOS, iOS and Windows WebViews.
 
 ## Verified, and what is not
 
