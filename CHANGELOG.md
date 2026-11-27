@@ -10,6 +10,19 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.103.0] - 2026-11-27
+
+### New
+
+- **terminal:** switch a live Mosh session from native to xterm.js ([#2635](https://github.com/mihazs/lazysh/pull/2635))
+
+### Fixed
+
+- **terminal:** keep the native renderer when switching to xterm.js is refused ([#2635](https://github.com/mihazs/lazysh/pull/2635))
+- **bench:** run only the Android terminal benchmark method ([#2752](https://github.com/mihazs/lazysh/pull/2752))
+- **bench:** retry transient Android display capture misses ([#2758](https://github.com/mihazs/lazysh/pull/2758))
+- **agents:** stop a Claude Code row reporting a running turn after you interrupt it with Esc ([#2780](https://github.com/mihazs/lazysh/pull/2780))
+
 ## [1.102.5] - 2026-11-27
 
 ### Fixed
