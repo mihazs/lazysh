@@ -173,6 +173,7 @@ fn main() {
         "notification_test",
         "edge_gesture_exclusion",
         "edge_gesture_insets",
+        "android_default_back",
         "native_terminal_surface_place",
         "native_terminal_surface_look",
         "native_terminal_surface_cell",

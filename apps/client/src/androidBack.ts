@@ -1,4 +1,5 @@
 import {onBackButtonPress} from '@tauri-apps/api/app';
+import {invoke} from '@tauri-apps/api/core';
 
 type BackListener = Awaited<ReturnType<typeof onBackButtonPress>>;
 
@@ -11,10 +12,15 @@ async function retire(listener: BackListener) {
   }
 }
 
-/** Native listener retirement does not release the Android WebView callback. */
-export function watchAndroidBack(handle: () => void) {
-  let callback: (() => void) | undefined = handle;
-  const ready = onBackButtonPress(() => callback?.());
+/**
+ * Native listener retirement does not release the Android WebView callback. While a listener is registered AppPlugin never finishes
+ * the activity, so `handle` returns false for a Back it has nothing to close and the default Back runs natively instead (#1578).
+ */
+export function watchAndroidBack(handle: () => boolean) {
+  let callback: (() => boolean) | undefined = handle;
+  const ready = onBackButtonPress(() => {
+    if (callback?.() === false) void invoke('android_default_back').catch(() => {});
+  });
   void ready.catch(() => { callback = undefined; });
   return () => {
     callback = undefined;

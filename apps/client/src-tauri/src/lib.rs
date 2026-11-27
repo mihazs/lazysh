@@ -317,6 +317,7 @@ pub fn run() {
                 remote_notifications::remote_notifications_forget,
                 edge_gestures::edge_gesture_exclusion,
                 edge_gestures::edge_gesture_insets,
+                edge_gestures::android_default_back,
                 native_terminal_surface::native_terminal_surface_place,
                 native_terminal_surface::native_terminal_surface_look,
                 native_terminal_surface::native_terminal_surface_cell,
