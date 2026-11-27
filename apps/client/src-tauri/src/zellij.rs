@@ -1079,12 +1079,6 @@ mod tests {
         let home = Isolated::new();
         let (app, id) = home.session().await;
         let name = format!("ls-{}", uuid::Uuid::new_v4().simple());
-        std::fs::create_dir(home.path().join("zellij")).unwrap();
-        std::fs::write(
-            home.path().join("zellij/config.kdl"),
-            "show_release_notes false\nshow_startup_tips false\n",
-        )
-        .unwrap();
         let created = home
             .command("zellij")
             .args(["attach", "--create-background", &name])
