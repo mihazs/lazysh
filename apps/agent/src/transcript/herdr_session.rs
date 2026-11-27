@@ -155,16 +155,26 @@ fn read_in_large(
     let source = super::SourceSnapshot::capture(&original)?;
     let page = match agent {
         TranscriptAgent::Claude => {
-            let bytes = super::anchored_capture(&parent, leaf)?;
-            super::conversation::project_claude_bounded(
-                bytes,
-                limit,
-                false,
-                4 * 1024 * 1024,
-                20_000,
-                Some(id),
-                window,
-            )?
+            if source.len() > 64 * 1024 * 1024 {
+                super::claude_large::read(
+                    || Ok(parent.open_file(leaf, libc::O_RDONLY)?),
+                    limit,
+                    false,
+                    window,
+                    Some(id),
+                )?
+            } else {
+                let bytes = super::anchored_capture(&parent, leaf)?;
+                super::conversation::project_claude_bounded(
+                    bytes,
+                    limit,
+                    false,
+                    4 * 1024 * 1024,
+                    20_000,
+                    Some(id),
+                    window,
+                )?
+            }
         }
         TranscriptAgent::Codex => {
             let page = super::anchored_codex_large(
@@ -322,6 +332,34 @@ mod tests {
         fs::create_dir(&duplicate).unwrap();
         fs::write(duplicate.join(format!("{ID}.jsonl")), format!("{record}\n")).unwrap();
         assert!(read_in(&root, TranscriptAgent::Claude, ID, 50, &Window::Tail).is_err());
+    }
+
+    #[test]
+    fn claude_selected_session_pages_large_conversation_without_losing_its_identity() {
+        use std::io::Write;
+        let (_temp, root, file) = claude_fixture(ID);
+        let mut output = fs::File::create(&file).unwrap();
+        let text = "x".repeat(224 * 1024);
+        for number in 0..300 {
+            let id = format!("message-{number}");
+            let parent = (number > 0).then(|| format!("message-{}", number - 1));
+            let record = json!({"type":"assistant","uuid":id,"parentUuid":parent,"sessionId":ID,"message":{"content":text}});
+            writeln!(output, "{record}").unwrap();
+        }
+        assert!(output.metadata().unwrap().len() > 64 * 1024 * 1024);
+        let tail = read_in(&root, TranscriptAgent::Claude, ID, 1, &Window::Tail).unwrap();
+        assert_eq!(tail.messages[0]["id"], "message-299");
+        assert!(tail.truncated);
+        let earlier = read_in(
+            &root,
+            TranscriptAgent::Claude,
+            ID,
+            1,
+            &Window::Before("message-299".into()),
+        )
+        .unwrap();
+        assert_eq!(earlier.messages[0]["id"], "message-298");
+        assert!(earlier.has_newer);
     }
 
     #[test]

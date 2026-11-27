@@ -12,6 +12,7 @@ mod amp_json;
 mod anchored_listing;
 mod antigravity;
 mod atif;
+mod claude_large;
 mod codex_conversation;
 mod codex_large;
 mod codex_lineage;
