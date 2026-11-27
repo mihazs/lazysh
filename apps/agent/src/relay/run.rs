@@ -30,6 +30,15 @@ pub enum RelayCommand {
         #[arg(long)]
         expected_revision: u64,
     },
+    /// Resolve one unexpired event for the currently bound source.
+    Resolve {
+        #[arg(long)]
+        event_id: String,
+        #[arg(long)]
+        account_id: String,
+        #[arg(long)]
+        source_id: String,
+    },
     /// Send unattended in this foreground process, pinned to one explicitly selected revision.
     Run {
         #[arg(long)]
@@ -54,6 +63,16 @@ fn encode(value: impl Serialize) -> Result<serde_json::Value> {
 }
 pub fn run(command: RelayCommand, directory: &Path) -> Result<serde_json::Value> {
     match command {
+        RelayCommand::Resolve {
+            event_id,
+            account_id,
+            source_id,
+        } => encode(Store::open(directory)?.relay_event_owner(
+            &event_id,
+            &account_id,
+            &source_id,
+            chrono::Utc::now().timestamp(),
+        )?),
         RelayCommand::Run { expected_revision } => encode(worker(directory, expected_revision)?),
         RelayCommand::AutoRun { expected_revision } => {
             encode(worker_automatic(directory, expected_revision)?)

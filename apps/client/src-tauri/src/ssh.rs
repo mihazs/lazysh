@@ -3806,6 +3806,50 @@ pub async fn agent_reported_history(
 }
 
 #[tauri::command]
+pub async fn agent_relay_resolve(
+    lease: AccessLease,
+    state: State<'_, AppState>,
+    local: State<'_, crate::local::LocalState>,
+    session_id: String,
+    event_id: String,
+    account_id: String,
+    source_id: String,
+) -> AccessResult<Option<RelayEventOwner>> {
+    lease
+        .run(async {
+            let command = relay_resolve_command(&event_id, &account_id, &source_id)?;
+            let host = crate::host::Host::resolve(&state, &local, &session_id, &lease).await?;
+            Ok(serde_json::from_str(
+                &host.companion(&lease, command).await?,
+            )?)
+        })
+        .await
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RelayEventOwner {
+    agent: String,
+    session_id: String,
+    pane_id: Option<String>,
+    pane_server: Option<String>,
+}
+
+fn relay_resolve_command(event_id: &str, account_id: &str, source_id: &str) -> Result<String> {
+    for id in [event_id, account_id, source_id] {
+        if !uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id) {
+            return Err(SshError::new(
+                "invalid_input",
+                "Invalid notification identifier",
+            ));
+        }
+    }
+    Ok(format!(
+        "lazysh-agent relay resolve --event-id {event_id} --account-id {account_id} --source-id {source_id}"
+    ))
+}
+
+#[tauri::command]
 pub async fn agent_transcripts(
     lease: AccessLease,
 
@@ -4169,6 +4213,21 @@ async fn attach_family_inner(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn relay_resolution_requires_canonical_ids_for_every_argument() {
+        use super::relay_resolve_command;
+        let event = "f4583e32-ccf0-46cb-9015-1bf5f5eb900d";
+        let account = "31baa7eb-2d24-4e36-aceb-a626710b7815";
+        let source = "90551809-e90d-4df6-8424-170279e41383";
+        assert_eq!(
+            relay_resolve_command(event, account, source).unwrap(),
+            format!("lazysh-agent relay resolve --event-id {event} --account-id {account} --source-id {source}")
+        );
+        assert!(relay_resolve_command("$(echo unexpected)", account, source).is_err());
+        assert!(relay_resolve_command(event, &account.to_uppercase(), source).is_err());
+        assert!(relay_resolve_command(event, account, &source.replace('-', "")).is_err());
+    }
+
     #[test]
     fn conversation_errors_only_expose_exact_known_classes() {
         use super::ExecOutput;
