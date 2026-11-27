@@ -19,29 +19,39 @@ function allowed(url:URL) {
     (url.hostname==='api.github.com' && url.pathname.startsWith('/repos/mihazs/lazysh/'))
     || ['release-assets.githubusercontent.com','objects.githubusercontent.com'].includes(url.hostname));
 }
-async function bytes(url:URL,maximum:number,binary=false,redirects=0):Promise<Buffer> {
+// Each failure names only a fixed stage; no response body, header or URL reaches the message.
+const failure=(category:string)=>new Error(`Direct public GitHub evidence request failed: ${category}`);
+function requestCategory(error:unknown) {
+  const {name,code}=(error ?? {}) as {name?:unknown;code?:unknown};
+  if(name==='TimeoutError' || name==='AbortError')return 'timeout';
+  return typeof code==='string' && /^[A-Z][A-Z0-9_]{2,40}$/.test(code)?`network error ${code}`:'network error';
+}
+export async function bytes(url:URL,maximum:number,binary=false,redirects=0,send:typeof request=request):Promise<Buffer> {
   requirePublic(allowed(url) && redirects<=3);
   const value=await new Promise<Buffer|URL>((resolve,reject)=>{
-    const fail=()=>reject(new Error('Direct public GitHub evidence request failed'));
-    const req=request(url,{signal:AbortSignal.timeout(30_000),headers:{'User-Agent':'lazysh-published-native-acceptance',Accept:binary?'application/octet-stream':'application/vnd.github+json','Accept-Encoding':'identity'}},response=>{
-      if([301,302,303,307,308].includes(response.statusCode??0) && response.headers.location) {
+    const fail=(category:string)=>reject(failure(category));
+    const req=send(url,{signal:AbortSignal.timeout(30_000),headers:{'User-Agent':'lazysh-published-native-acceptance',Accept:binary?'application/octet-stream':'application/vnd.github+json','Accept-Encoding':'identity'}},response=>{
+      const status=response.statusCode??0;
+      if([301,302,303,307,308].includes(status) && response.headers.location) {
         response.destroy();
-        try{resolve(new URL(response.headers.location,url));}catch{fail();}
+        try{resolve(new URL(response.headers.location,url));}catch{fail('invalid redirect');}
         return;
       }
-      if(response.statusCode!==200 || (response.headers['content-encoding'] && response.headers['content-encoding']!=='identity')){response.destroy();fail();return;}
+      if(status!==200){response.destroy();fail(`HTTP status ${status}`);return;}
+      if(response.headers['content-encoding'] && response.headers['content-encoding']!=='identity'){response.destroy();fail('unsupported content encoding');return;}
       const chunks:Buffer[]=[];let length=0;
-      response.on('data',(chunk:Buffer)=>{length+=chunk.length;if(length>maximum){response.destroy();fail();}else chunks.push(chunk);});
+      response.on('data',(chunk:Buffer)=>{length+=chunk.length;if(length>maximum){response.destroy();fail('response too large');}else chunks.push(chunk);});
       response.on('end',()=>resolve(Buffer.concat(chunks)));
-      response.on('error',fail);
+      response.on('error',error=>fail(`response ${requestCategory(error)}`));
     });
-    req.on('error',fail);req.end();
+    req.on('error',error=>fail(requestCategory(error)));req.end();
   });
-  return value instanceof URL?bytes(value,maximum,binary,redirects+1):value;
+  return value instanceof URL?bytes(value,maximum,binary,redirects+1,send):value;
 }
-async function json(path:string) {
-  try{return JSON.parse((await bytes(new URL(path,api),262_144)).toString('utf8'));}
-  catch{throw new Error('Direct public GitHub metadata is unavailable or invalid');}
+export async function json(path:string,send?:typeof request) {
+  const body=await bytes(new URL(path,api),262_144,false,0,send);
+  try{return JSON.parse(body.toString('utf8'));}
+  catch{throw new Error('Direct public GitHub metadata is invalid: response is not JSON');}
 }
 function asset(release:Release,name:string):Asset {
   const selected=release.assets.filter(value=>value.name===name);
