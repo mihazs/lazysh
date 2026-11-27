@@ -249,7 +249,7 @@ export type BoundRecords = Readonly<Omit<BoundConversation, 'agent'> & {agent: R
 
 /** `shown` false keeps an opened reader, its position and the unsent draft while another session view is in front.
  * `bound` opens and follows that conversation without the picker; `timeline` groups messages by turn. */
-export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,images=false,onSession,liveState,reading,onReading }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation|BoundRecords;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[])=>void;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState;reading?:Reading;onReading?:(reading:Reading)=>void }) {
+export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,terminalInput,shown=true,bound,timeline=false,onTurnStart,onUsage,allowStage=true,onBoundInvalid,onOpenCompanion,onPrompts,submission=0,images=false,onSession,liveState,reading,onReading }: { sessionId: string; onOpenTerminal?: () => void;reportedHistory?:ReportedHistorySource;terminalInput?:TerminalInputLabels;shown?:boolean;bound?:BoundConversation|BoundRecords;timeline?:boolean;onTurnStart?:(timestamp?:string)=>void;onUsage?:(usage?:Record<string,number|string>)=>void;allowStage?:boolean;onBoundInvalid?:()=>void;onOpenCompanion?:()=>void;onPrompts?:(prompts:string[],queued:string[])=>void;submission?:number;images?:boolean;onSession?:(session?:AgentSessionInfo)=>void;liveState?:LiveState;reading?:Reading;onReading?:(reading:Reading)=>void }) {
   useUi();
   const [access]=useState(()=>reportedHistory?.lease ?? captureAccess());
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
@@ -488,12 +488,17 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
     else if(scrollTo.current==='bottom' && list && !historyRef.current.newer){scrollTo.current=undefined;scrollToLatest();}
   },[messages]);
   const [updated,setUpdated] = useState(Date.now);
+  const readSubmission = useRef(submission);
   useEffect(() => {
     if (!following || !canFollow || busy || !visible || !shown || watch.live || history.newer || !access.current()) return;
     // Pages of a long session follow each other at once; once caught up, the host is asked again every few seconds.
-    const timer = setTimeout(() => autoRead.current(),recordsBound ? (more ? 0 : 5000) : 2000);
+    const catchUp = readSubmission.current !== submission;
+    const timer = setTimeout(() => {
+      readSubmission.current = submission;
+      autoRead.current();
+    }, catchUp ? 0 : recordsBound ? (more ? 0 : 5000) : 2000);
     return () => clearTimeout(timer);
-  }, [following,canFollow,busy,visible,shown,watch.live,history.newer,completed,accessState.epoch,access,recordsBound,more]);
+  }, [following,canFollow,busy,visible,shown,watch.live,history.newer,completed,accessState.epoch,access,recordsBound,more,submission]);
   const lagging = !!watchTarget && following && (watch.state === 'delayed' || watch.state === 'stale');
   const now = useNow(1000, lagging);
   async function discover() {
@@ -667,7 +672,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const liveCalls = useMemo(() => new Set(activity === 'working' || activity === 'waiting' ? turns.at(-1)?.activity.flatMap(message => message.blocks).filter(block => block.type === 'tool_use' && block.id).map(block => block.id!) : []), [activity, turns]);
   // What the person typed, for the composer's receipts: harness events and tool results are not prompts.
   const promptTexts = useMemo(() => flow.filter(message => message.role === 'user' && !message.event).map(message => message.blocks.filter(block => block.type === 'text' && !block.card).map(block => block.text ?? '').join('\n')).filter(Boolean), [flow]);
-  useEffect(() => onPrompts?.(promptTexts), [onPrompts, promptTexts]);
+  useEffect(() => onPrompts?.(promptTexts, queued.map(item=>item.text)), [onPrompts, promptTexts, queued]);
   // A sub-agent's own conversation opens in place of this one; Back restores the reader where it was.
   const [child, setChild] = useState<{path: string; title: string}>();
   const parentView = useRef<{outer: ScrollPosition; list: number} | undefined>(undefined);

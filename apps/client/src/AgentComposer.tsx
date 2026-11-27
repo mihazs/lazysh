@@ -36,11 +36,13 @@ const proves=(proof:ComposerProof)=>(destination:TerminalDestination)=>proof.kin
 /** The message box of the Agent view: always present under a followed conversation.
  * With a proof the input binds itself to the proven pane and Send goes straight to the agent's terminal; without one
  * the explicit destination confirmation stays. Stage in terminal is the path of a session that takes no confirmed input. */
-export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[],holdSend:dialogReported=false,cwd,onOpenTerminal}:{
+export default function AgentComposer({sessionId,conversation,access,invoke,shown,labels,proof,stage,prompts=[],queuedPrompts=[],onSubmitted,holdSend:dialogReported=false,cwd,onOpenTerminal}:{
   sessionId:string;conversation:BoundConversation;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;shown:boolean;
   labels?:TerminalInputLabels;proof?:ComposerProof;stage:boolean;
   /** What the conversation already holds as the person's prompts, so a receipt settles from the transcript. */
   prompts?:readonly string[];
+  queuedPrompts?:readonly string[];
+  onSubmitted?:()=>void;
   /** The agent has a dialog open (an approval, a question, a plan or a menu): Enter would answer it, so nothing is typed into it. */
   holdSend?:boolean;
   /** The host folder the agent works in: the root of `@` file mentions. Without it there is no file picker. */
@@ -65,7 +67,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const walk=useRef<Recall>({index:null,text:''});
   const [slashIndex,setSlashIndex]=useState(0),[slashClosed,setSlashClosed]=useState(false),[caret,setCaret]=useState(0);
   const wantCaret=useRef<number|undefined>(undefined);
-  const [receipt,setReceipt]=useState<{text:string;phase:SendPhase;at:number;before:number}>();
+  const [receipt,setReceipt]=useState<{text:string;phase:SendPhase;at:number;before:number;beforeQueued:number}>();
   const [stopArmed,setStopArmed]=useState(false);
   const edit=useCallback((next:string)=>{
     revision.current++;setDraft(next);setStaged(false);setSlashClosed(false);setSlashIndex(0);
@@ -144,7 +146,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const insert=(text:string,at:number)=>{edit(draft.slice(0,at)+text+draft.slice(at));wantCaret.current=at+text.length;field.current?.focus({preventScroll:true});};
   const pick=(command:SlashCommand)=>{edit(slashText(command));field.current?.focus({preventScroll:true});};
   const now=useNow(1000,receipt?.phase==='accepted');
-  const state=receipt && receiptState({phase:receipt.phase,text:receipt.text,before:receipt.before,prompts,queued:[],elapsedMs:now-receipt.at});
+  const state=receipt && receiptState({phase:receipt.phase,text:receipt.text,before:receipt.before,beforeQueued:receipt.beforeQueued,prompts,queued:queuedPrompts,elapsedMs:now-receipt.at});
   const stageable=stage && !!text.trim() && text.length<=LIMIT;
   function stageDraft() {
     window.dispatchEvent(new CustomEvent('lazysh-prompt-draft',{detail:{sessionId,text}}));setStaged(true);
@@ -169,7 +171,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   function submit() {
     if(endComposition()){submitAfterComposition.current=submissionTarget;return;}
     if(sendable){
-      setReceipt({text,phase:'pending',at:Date.now(),before:promptsLike(prompts,text)});
+      setReceipt({text,phase:'pending',at:Date.now(),before:promptsLike(prompts,text),beforeQueued:promptsLike(queuedPrompts,text)});
       control!.send();return;
     }
     if(staging && stageable)stageDraft();
@@ -178,7 +180,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   function retry() {
     if(!control || holdSend)return;
     if(receipt && draft!==receipt.text){edit(receipt.text);return;}
-    if(validTerminalDraft(text,bytes))setReceipt({text,phase:'pending',at:Date.now(),before:receipt?receipt.before:promptsLike(prompts,text)});
+    if(validTerminalDraft(text,bytes))setReceipt({text,phase:'pending',at:Date.now(),before:promptsLike(prompts,text),beforeQueued:promptsLike(queuedPrompts,text)});
     control.retry();
   }
   const problem=control?.problem,notice=!!problem && dismissed!==problem;
@@ -240,12 +242,13 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
         rememberPrompt(key,text);walk.current={index:null,text:''};
         setReceipt(previous=>previous && previous.text===text?{...previous,phase:'accepted',at:Date.now()}:previous);
         if(revision.current===sentRevision)edit('');
+        onSubmitted?.();
       }}
       onFailed={kind=>setReceipt(previous=>previous?{...previous,phase:kind}:previous)}/>}
     {picker && <p className="agent-composer-note">{t('agentComposerPickerNote',{command:`/${picker.name}`})}</p>}
     {notice && <AgentComposerNotice problem={problem} busy={!!control?.busy} canStage={stageable} onRetry={retry} onOpenTerminal={onOpenTerminal}
       onStage={()=>{stageDraft();setDismissed(problem);}} onDismiss={()=>setDismissed(problem)}/>}
-    {state && !(notice && (state==='notSent' || state==='uncertain')) && <p role="status" className="agent-composer-receipt" data-state={state}>{t(({sending:'agentReceiptSending',sent:'agentReceiptSent',queued:'agentReceiptQueued',unconfirmed:'agentReceiptUnconfirmed',notSent:'agentReceiptNotSent',uncertain:'agentReceiptUncertain'} as const)[state])}
+    {state && !(notice && (state==='notSent' || state==='uncertain')) && <p role="status" className="agent-composer-receipt" data-state={state}>{t(({sending:'agentReceiptSending',submitted:'agentReceiptSubmitted',sent:'agentReceiptSent',queued:'agentReceiptQueued',unconfirmed:'agentReceiptUnconfirmed',notSent:'agentReceiptNotSent',uncertain:'agentReceiptUncertain'} as const)[state])}
       {canRetry(state) && control && <> <button type="button" className="subtle-button" disabled={control.busy} onClick={retry}>{t('agentReceiptRetry')}</button></>}</p>}
     {modeSwitch.note}
     {attach.busy && <p role="status" className="agent-composer-note">{t('attachmentUploading')}</p>}

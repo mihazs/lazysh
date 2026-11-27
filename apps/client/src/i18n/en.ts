@@ -2513,6 +2513,7 @@ export const english = {
   agentModelAsked: "Asked the agent for its models. Choose in the list that opened: above the message box, or in the terminal.",
   agentModeUnconfirmed: "Switched once, but the terminal's mode line was not recognised. Check the terminal.",
   agentReceiptSending: "Sending…",
+  agentReceiptSubmitted: "Submitted to the terminal. Waiting for the agent…",
   agentReceiptSent: "Sent",
   agentReceiptQueued: "Sent, waiting in the agent's queue",
   agentReceiptUnconfirmed: "Not in the conversation yet. Check the terminal.",

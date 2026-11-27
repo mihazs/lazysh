@@ -1349,6 +1349,25 @@ it('shows a message typed while the agent works as a queued card until the agent
   expect(screen.queryByRole('region',{name:'Queued messages'})).toBeNull();
 });
 
+it('refreshes the fallback transcript after Send and acknowledges a new queued message',async()=>{
+  const messages=turn('First prompt','First answer');
+  const text='Run the tests after this';
+  host('claude',[row('Claude Code','%3')],'available',[[]]);
+  const fallback=vi.mocked(invoke).getMockImplementation()!;
+  let reply={...page('claude',messages),queued:[] as {text:string}[]};
+  vi.mocked(invoke).mockImplementation((command,args,options)=>command==='agent_transcript'?Promise.resolve(reply):fallback(command,args,options));
+  render(<AgentView sessionId="ssh" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);
+  await advance(0);await advance(0);
+  fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:text}});
+  const send=screen.getByRole('button',{name:'Send to the agent'}) as HTMLButtonElement;
+  expect(send.disabled).toBe(false);
+  reply={...reply,queued:[{text}]};
+  fireEvent.click(send);
+  await advance(0);await advance(25);
+  expect(screen.getByText("Sent, waiting in the agent's queue")).toBeTruthy();
+  expect(calls('agent_transcript').length).toBeGreaterThan(1);
+});
+
 describe('a dialog open in the agent',()=>{
   const sendFromComposer=async(text:string)=>{
     fireEvent.change(screen.getByRole('textbox',{name:'Draft for this terminal'}),{target:{value:text}});await advance(0);
