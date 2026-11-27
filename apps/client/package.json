@@ -47,6 +47,7 @@
   "devDependencies": {
     "@lazysh/apple-speech": "workspace:*",
     "@lazysh/apple-status": "workspace:*",
+    "@lazysh/auth-tab": "workspace:*",
     "@lazysh/credential-vault": "workspace:*",
     "@lazysh/push-registration": "workspace:*",
     "@playwright/test": "^1.55.1",

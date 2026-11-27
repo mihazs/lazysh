@@ -59,6 +59,16 @@ async fn start(
     consent: Consent,
     config: Config,
 ) -> (Result<AuthTunnel>, Log) {
+    start_with(app, session, hint, consent, config, |_| {}).await
+}
+async fn start_with(
+    app: &App,
+    session: &str,
+    hint: Hint,
+    consent: Consent,
+    config: Config,
+    on_end: impl FnOnce(u16) + Send + 'static,
+) -> (Result<AuthTunnel>, Log) {
     let (events, log) = event_log();
     let tunnel = begin(
         &access_lease(),
@@ -70,6 +80,7 @@ async fn start(
         consent,
         events,
         config,
+        on_end,
     )
     .await;
     (tunnel, log)
@@ -596,6 +607,7 @@ async fn locking_the_app_ends_every_flow_and_stopping_one_is_still_allowed() {
         allow(),
         events,
         Config::default(),
+        |_| {},
     )
     .await
     .unwrap();
@@ -623,6 +635,31 @@ async fn locking_the_app_ends_every_flow_and_stopping_one_is_still_allowed() {
     closed(port).await;
     assert!(crate::app_lock::allowed_while_locked("stop_auth_tunnel"));
     assert!(!crate::app_lock::allowed_while_locked("start_auth_tunnel"));
+}
+
+#[tokio::test]
+async fn the_end_hook_runs_once_with_the_device_port_when_the_flow_ends() {
+    let fixture = Fixture::new().await;
+    let port = free_port();
+    let (ended_tx, mut ended_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tunnel, log) = start_with(
+        &fixture.app,
+        &fixture.session,
+        hint(port),
+        allow(),
+        Config::default(),
+        move |port| ended_tx.send(port).unwrap(),
+    )
+    .await;
+    tunnel.unwrap();
+    fixture
+        .app
+        .state::<AuthTunnelState>()
+        .cancel_for_lock()
+        .await;
+    event_where(&log, ended("lockEnded")).await;
+    assert_eq!(ended_rx.recv().await, Some(port));
+    assert_eq!(ended_rx.recv().await, None, "the hook ran twice");
 }
 
 #[tokio::test]

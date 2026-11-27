@@ -11,6 +11,7 @@ export const ownedWorkspaces = {
   'packages/account-usage': '@lazysh/account-usage',
   'packages/apple-speech': '@lazysh/apple-speech',
   'packages/apple-status': '@lazysh/apple-status',
+  'packages/auth-tab': '@lazysh/auth-tab',
   'packages/common': '@lazysh/common',
   'packages/companion-release': '@lazysh/companion-release',
   'packages/credential-vault': '@lazysh/credential-vault',

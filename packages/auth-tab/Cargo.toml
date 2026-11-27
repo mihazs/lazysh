@@ -1,0 +1,13 @@
+[package]
+name = "tauri-plugin-lazysh-auth-tab"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+links = "tauri-plugin-lazysh-auth-tab"
+
+[dependencies]
+tauri = { version = "2", default-features = false }
+serde_json = "1"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
