@@ -32,6 +32,20 @@ describe('terminal backend selection', () => {
     expect(await r.select({preference: 'native', override: 'xterm'})).toMatchObject({id: 'xterm'});
   });
 
+  it('asks the probe again only when re-probed, so a device that now passes is offered and a repeat of the same question is not asked', async () => {
+    let passes = false;
+    const {r, probe} = registry();
+    probe.mockImplementation(() => passes ? {ok: true} : {ok: false, reason: 'no hardware GPU'});
+    expect(await r.refusal('native')).toBe('no hardware GPU');
+    expect(await r.refusal('native')).toBe('no hardware GPU');
+    expect(probe).toHaveBeenCalledTimes(1);
+    passes = true;
+    expect(await r.reprobe('native')).toBeUndefined();
+    expect(probe).toHaveBeenLastCalledWith({fresh: true});
+    expect(await r.refusal('native')).toBeUndefined();
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
   it('never lets an override enable a backend whose probe failed, and records why', async () => {
     for (const probe of [{ok: false, reason: 'no Vulkan'} as BackendProbe, new Error('surface crashed')]) {
       const {r} = registry({probe});

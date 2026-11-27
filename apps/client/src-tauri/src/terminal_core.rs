@@ -1067,27 +1067,43 @@ fn surface() -> Result<(), String> {
     Ok(())
 }
 
+/// The answer a slot keeps: asked once, and again only when `fresh` forgets it first (the re-probe path).
+fn kept(
+    slot: &std::sync::Mutex<Option<NativeProbe>>,
+    fresh: bool,
+    ask: impl FnOnce() -> NativeProbe,
+) -> NativeProbe {
+    let mut held = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if fresh {
+        *held = None;
+    }
+    held.get_or_insert_with(ask).clone()
+}
+
 /// The registry's second question, after `terminal_core_available` (#1336): can the renderer draw on this device?
 /// It asks for an adapter under the app's policy (`native_renderer::policy`: the shipping one, which refuses CPU
 /// rasterizers, except in a debug build on Android that asked for software) and creates its device. Each
 /// platform's surface check joins here with its host. The answer is kept for the life of the process, per policy, so
 /// the cost is paid once; a probe over its budget answers "no" for now and the kept answer serves the next start of the
-/// registry. Allowed while locked: it reads the device, nothing of the user's.
+/// registry. `fresh` is the re-probe path: it forgets the kept answer and asks the device again (a driver that was
+/// updated, a display that changed), still within the budget. Allowed while locked: it reads the device, nothing of
+/// the user's.
 #[tauri::command]
-pub async fn native_terminal_probe() -> NativeProbe {
+pub async fn native_terminal_probe(fresh: Option<bool>) -> NativeProbe {
     // One answer per policy: a shipping build has only the first, the debug switch the second.
-    static ANSWERS: [std::sync::OnceLock<NativeProbe>; 2] =
-        [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+    static ANSWERS: [std::sync::Mutex<Option<NativeProbe>>; 2] =
+        [std::sync::Mutex::new(None), std::sync::Mutex::new(None)];
     let software = native::software();
+    let fresh = fresh.unwrap_or(false);
     within(PROBE_BUDGET, move || {
-        ANSWERS[usize::from(software)]
-            .get_or_init(|| {
-                probe(terminal_core_available(), || match surface() {
-                    Ok(()) => native::gpu(),
-                    Err(why) => Gpu::refused(why),
-                })
+        kept(&ANSWERS[usize::from(software)], fresh, || {
+            probe(terminal_core_available(), || match surface() {
+                Ok(()) => native::gpu(),
+                Err(why) => Gpu::refused(why),
             })
-            .clone()
+        })
     })
     .await
 }
@@ -3481,10 +3497,26 @@ mod tests {
         assert!(late.reason.contains("longer than 20 ms"), "{}", late.reason);
     }
 
+    #[test]
+    fn a_kept_probe_answer_is_asked_once_and_asked_again_only_when_a_re_probe_forgets_it() {
+        let slot = std::sync::Mutex::new(None);
+        let answer = |reason: &str| NativeProbe {
+            available: false,
+            reason: reason.into(),
+            elapsed_ms: 1,
+            adapter: None,
+            seen: Vec::new(),
+        };
+        assert_eq!(kept(&slot, false, || answer("first")).reason, "first");
+        assert_eq!(kept(&slot, false, || answer("second")).reason, "first");
+        assert_eq!(kept(&slot, true, || answer("second")).reason, "second");
+        assert_eq!(kept(&slot, false, || answer("third")).reason, "second");
+    }
+
     #[tokio::test]
     async fn this_build_answers_the_probe_once_within_the_budget_and_repeats_the_same_answer() {
         let started = std::time::Instant::now();
-        let first = native_terminal_probe().await;
+        let first = native_terminal_probe(None).await;
         assert!(started.elapsed() < PROBE_BUDGET, "{:?}", started.elapsed());
         // Only an Android build with the core can draw here: a Linux one needs a Wayland window, which no test
         // process has, and every other build has no host. Each is refused with a reason.
@@ -3493,7 +3525,7 @@ mod tests {
         }
         assert!(!first.reason.is_empty());
         assert!(first.elapsed_ms < PROBE_BUDGET.as_millis() as u64);
-        assert_eq!(native_terminal_probe().await, first);
+        assert_eq!(native_terminal_probe(None).await, first);
         let answer = serde_json::to_value(&first).unwrap();
         assert!(answer["elapsedMs"].is_u64(), "{answer}");
         assert!(answer["seen"].is_array(), "{answer}");

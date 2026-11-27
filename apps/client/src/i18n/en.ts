@@ -2797,6 +2797,7 @@ export const english = {
   preferencesTerminalEngineAuto: "Auto",
   preferencesTerminalEngineHelp: "Applies to sessions you open from now on; a session that is already open keeps its engine. Auto lets lazysh choose for each session and records why.",
   preferencesTerminalEngineNativeOff: "Native is turned off: {{reason}}.",
+  preferencesTerminalEngineCheckAgain: "Check this device again",
   preferencesTerminalEngineFailed: "The native engine failed on this device ({{detail}}). Auto keeps xterm.js until lazysh is updated; choose Native to try it again.",
   gestureTourTitle: "Gesture tour",
   gestureHelpTitle: "Gestures",

@@ -80,6 +80,9 @@ export const defaultTerminalEngine = async (backends: Pick<typeof registry, 'sel
 /** Why a new session cannot use `id` now, as the registry would record it (undefined: it can); Settings shows it beside the choice. */
 export const backendRefusal = async (id: TerminalBackendId, screenReader: boolean) => registry.refusal(id, await readerRequirements(screenReader));
 
+/** The re-probe path: asks the device again whether `id` can run here, then answers `backendRefusal`'s answer for it. */
+export const reprobeBackend = async (id: TerminalBackendId, screenReader: boolean) => (await registry.reprobe(id)) ?? backendRefusal(id, screenReader);
+
 /** The terminal of one new session, from the backend selection rules. */
 export async function createTerminalAdapter(options: SelectOptions = {}, backends = registry) {
   return backends.create({override: developerBackendOverride(), ...options, requires: [...(options.requires ?? []), ...await readerRequirements(getPreferences().screenReader)]});

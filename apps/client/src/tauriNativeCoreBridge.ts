@@ -58,12 +58,13 @@ type ProbeAnswer = {available?: boolean; reason?: string} | null;
  * The native backend's probe: the app says whether this build has the core compiled in and a host to draw it on
  * (`terminal_core_available`, free), and only then whether the device's GPU can draw it (`native_terminal_probe`, #1336,
  * which the app bounds and answers once per process). Only an explicit yes to both passes, so no app, an app without a
- * command or an unexpected answer is a refusal with a reason. A rejected command is the registry's to record.
+ * command or an unexpected answer is a refusal with a reason. A rejected command is the registry's to record. `fresh` is the
+ * re-probe path: the app forgets its kept device answer and asks the GPU again.
  */
-export async function probeNativeCore(): Promise<BackendProbe> {
+export async function probeNativeCore({fresh = false}: {fresh?: boolean} = {}): Promise<BackendProbe> {
   if (!isTauri()) return {ok: false, reason: 'this is not the lazysh app'};
   for (const [command, silent] of [['terminal_core_available', 'the app did not report a native terminal core'], ['native_terminal_probe', 'the app did not report whether this device can draw a native terminal']] as const) {
-    const answer = await unguardedInvoke<ProbeAnswer>(command);
+    const answer = await (command === 'native_terminal_probe' && fresh ? unguardedInvoke<ProbeAnswer>(command, {fresh}) : unguardedInvoke<ProbeAnswer>(command));
     if (answer?.available !== true) return {ok: false, reason: answer?.reason || silent};
   }
   return {ok: true};

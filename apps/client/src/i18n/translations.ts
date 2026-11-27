@@ -2803,6 +2803,7 @@ const translations = {
   preferencesTerminalEngineAuto: ["Automático", "Automático"],
   preferencesTerminalEngineHelp: ["Vale para as sessões que você abrir daqui em diante; uma sessão já aberta mantém o mecanismo. Automático deixa o lazysh escolher a cada sessão e registra o motivo.", "Se aplica a las sesiones que abras desde ahora; una sesión ya abierta conserva su motor. Automático deja que lazysh elija en cada sesión y registra el motivo."],
   preferencesTerminalEngineNativeOff: ["Nativo está desativado: {{reason}}.", "Nativo está desactivado: {{reason}}."],
+  preferencesTerminalEngineCheckAgain: ["Verificar este dispositivo de novo", "Comprobar este dispositivo de nuevo"],
   preferencesTerminalEngineFailed: ["O mecanismo nativo falhou neste dispositivo ({{detail}}). O modo Automático mantém o xterm.js até o lazysh ser atualizado; escolha Nativo para tentar de novo.", "El motor nativo falló en este dispositivo ({{detail}}). Automático mantiene xterm.js hasta que se actualice lazysh; elige Nativo para probar de nuevo."],
   gestureTourTitle: ["Tour dos gestos", "Recorrido de gestos"],
   gestureHelpTitle: ["Gestos", "Gestos"],
