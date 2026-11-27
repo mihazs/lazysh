@@ -72,7 +72,7 @@ describe('guest parsers', () => {
 });
 
 /** A guest with an app (pid 100, started at tick 1000), its WebView renderer (200, started after it), a spare of ANOTHER app that was already running (300, started before), and CPU that moves between the two reads. */
-function guest(overrides: { ticks?: [first: number, second: number]; renderersAfter?: number[] } = {}) {
+function guest(overrides: { ticks?: [first: number, second: number]; renderersAfter?: number[]; extraLayer?: string } = {}) {
   const ticks = overrides.ticks ?? [100, 160];
   const calls: string[] = [];
   let reads = 0;
@@ -87,7 +87,7 @@ function guest(overrides: { ticks?: [first: number, second: number]; renderersAf
       const present = reads === 1 || (overrides.renderersAfter ?? [200]).includes(200);
       return `pid 100\n${stat(100, 'sh.webviewbench', app, 0, 1000)}\nvoluntary_ctxt_switches:\t${wake}\nvoluntary_ctxt_switches:\t5\n` + (present ? `pid 200\n${stat(200, 'ocessService0:0', renderer, 0, 1010)}\nvoluntary_ctxt_switches:\t${wake / 10}\n` : '');
     }
-    if (script.includes('--timestats -dump')) return global + layer(10151, 'TID:1#app.lazysh.webviewbench/app.lazysh.webviewbench.WebActivity#1', 12, '4ms=10 5ms=2', 3) + layer(10999, 'SurfaceView[other]#2', 99, '16ms=99');
+    if (script.includes('--timestats -dump')) return global + layer(10151, 'TID:1#app.lazysh.webviewbench/app.lazysh.webviewbench.WebActivity#1', 12, '4ms=10 5ms=2', 3) + layer(10999, 'SurfaceView[other]#2', 99, '16ms=99') + (overrides.extraLayer ?? '');
     if (script.startsWith('shell dumpsys meminfo 100')) return meminfo(100000);
     if (script.startsWith('shell dumpsys meminfo 200')) return meminfo(80000);
     return '';
@@ -106,6 +106,18 @@ describe('the probe of one measured window', () => {
     expect(calls.join('\n')).not.toMatch(/proc\/300\//);
     // SurfaceFlinger's counters are switched on for the window and off again after it, as the guest was found.
     expect(calls.filter(call => call.includes('--timestats')).map(call => call.replace(/^shell dumpsys SurfaceFlinger /, '').replace(' >/dev/null', ''))).toEqual(['--timestats -clear -enable', '--timestats -dump', '--timestats -disable']);
+  });
+
+  it.each(['missing jank count', 'missing timeline total', 'zero timeline total', 'impossible count'])('reports unknown jank for an active layer with %s', async discrepancy => {
+    const complete = layer(10151, 'SurfaceView[app]#3', 5, '16ms=5', 2);
+    const extraLayer = {
+      'missing jank count': complete.replace('jankyFrames = 2\n', ''),
+      'missing timeline total': complete.replace('totalTimelineFrames = 5\n', ''),
+      'zero timeline total': complete.replace('totalTimelineFrames = 5', 'totalTimelineFrames = 0').replace('jankyFrames = 2', 'jankyFrames = 0'),
+      'impossible count': complete.replace('jankyFrames = 2', 'jankyFrames = 6'),
+    }[discrepancy];
+    const result = await androidProbe(guest({ extraLayer }).adb, 'app.lazysh.webviewbench', () => 0).measure(async () => ({}));
+    expect(result.android).toMatchObject({ frames: 17, frameIntervalMs: { p50: 4, p95: 16 }, jankyFramePercent: null });
   });
 
   it('says so when a process it started with is gone at the end, because its CPU is lost', async () => {

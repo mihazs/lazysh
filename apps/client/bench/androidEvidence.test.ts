@@ -80,6 +80,15 @@ describe('the xterm.js arm from the baseline spec on Android', () => {
     expect(['keys-idle', 'repeat-idle', 'keys-during-output'].map(v => find(list, 'W12', v, 'inputLatencyMs')?.p50)).toEqual([5, 6, 15]);
   });
 
+  it.each(['W12', 'W9'])('keeps frame intervals but does not score %s jank when a run lacks counters', workload => {
+    const original = results.find(result => result.workload === workload
+      && result.runs.some(run => run.android?.jankyFramePercent != null))!;
+    const runs = [...original.runs, { android: window(6000, 6000, 900, 800, { p50: 4, p95: 33 }) }];
+    const measurements = fromBaseline([{ ...original, runs }], 'xterm-dom');
+    expect(measurements.find(row => row.metric === 'frameIntervalMs')?.runs).toBe(runs.length);
+    expect(measurements.find(row => row.metric === 'jankyFramePercent')).toBeUndefined();
+  });
+
   it('reports frame pacing only for sustained output, where the window is long enough to be about the workload', () => {
     expect(find(list, 'W2', null, 'frameIntervalMs')).toBeUndefined();
     expect(find(list, 'W2', null, 'jankyFramePercent')).toBeUndefined();
