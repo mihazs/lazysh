@@ -21,8 +21,12 @@ test('the shared Android runtime job and the terminal core job leave the native 
   expect(moon.tasks['test-android'].script.match(/notClass=(\S+)/)![1].split(',')).toContain('app.lazysh.client.NativeAcceptanceTest');
 });
 
-test('the direct idle benchmark lets AndroidJUnitRunner report before Activity teardown',()=>{
+test('the packaged benchmark selects only its own AndroidJUnitRunner method and reports before teardown',()=>{
   const command=nativeBenchmarkInstrumentationCommand('emulator-5554','/data/local/tmp/fixture.json',4242,true);
+  const selection=command.indexOf('class');
+  expect(command.slice(selection-1,selection+2)).toEqual([
+    '-e','class','app.lazysh.client.NativeTerminalSessionTest#aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart',
+  ]);
   const wait=command.indexOf('waitForActivitiesToComplete');
   expect(command.slice(wait-1,wait+2)).toEqual(['-e','waitForActivitiesToComplete','false']);
 });
