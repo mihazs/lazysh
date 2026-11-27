@@ -33,13 +33,23 @@ function validTmuxName(name: string) {
 function validLocalTarget(target: unknown) {
   return typeof target === 'string' && /^(pwsh|powershell|gitbash|wsl:[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/.test(target);
 }
+function validAttachment(attached: SessionIntent['attached'] & object) {
+  return ["tmux", "rmux", "herdr", "zellij"].includes(attached.kind) &&
+    typeof attached.name === "string" &&
+    attached.name.length > 0 &&
+    attached.name.length <= 200 &&
+    (!isTmuxFamily(attached.kind) || validTmuxName(attached.name)) &&
+    (attached.tmuxServer === undefined || (isTmuxFamily(attached.kind) && validTmuxServer(attached.tmuxServer)));
+}
 export function readWorkspace(): SessionIntent[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(key) || "[]");
     if (!Array.isArray(value) || value.length > 20) return [];
     return value.filter(
       (item): item is SessionIntent =>
-        (item?.local === true && Object.keys(item).every(name => name === 'local' || (name === 'target' && validLocalTarget(item.target)))) || (
+        (item?.local === true && Object.keys(item).every(name => name === 'local' || (name === 'target' && validLocalTarget(item.target)) || name === 'attached')
+          // A multiplexer attaches on this device's own shell, never in another target.
+          && (!item.attached || (item.target === undefined && ['tmux', 'herdr', 'zellij'].includes(item.attached.kind) && validAttachment(item.attached)))) || (
         !!item &&
         typeof item === "object" &&
         item.local === undefined &&
@@ -51,13 +61,7 @@ export function readWorkspace(): SessionIntent[] {
         (!item.auto || (validMosh(item.auto.mosh) && validEt(item.auto.et))) &&
         (!item.et || validEt(item.et)) &&
         (!item.mosh || validMosh(item.mosh)) &&
-        (!item.attached ||
-          (["tmux", "rmux", "herdr", "zellij"].includes(item.attached.kind) &&
-            typeof item.attached.name === "string" &&
-            item.attached.name.length > 0 &&
-            item.attached.name.length <= 200 &&
-            (!isTmuxFamily(item.attached.kind) || validTmuxName(item.attached.name)) &&
-            (item.attached.tmuxServer === undefined || (isTmuxFamily(item.attached.kind) && validTmuxServer(item.attached.tmuxServer)))))),
+        (!item.attached || validAttachment(item.attached))),
     );
   } catch {
     return [];
@@ -71,14 +75,15 @@ function restorableAttachment({attached}: LiveIntent) {
 }
 /** The saved connection intention of one live session; terminal content and credentials stay out. */
 export function sessionIntent({hostId, attached, mosh, et, auto, local, target}: LiveIntent): SessionIntent {
-  return local ? {local:true, ...(validLocalTarget(target) ? {target} : {})} : ({
+  const attachment = attached && restorableAttachment({attached})
+    ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name, ...(attached.tmuxServer === undefined ? {} : {tmuxServer:attached.tmuxServer}) } }
+    : {};
+  return local ? {local:true, ...(validLocalTarget(target) ? {target} : attachment)} : ({
     hostId,
     ...(auto ? {auto:{mosh:publicMosh(auto.mosh),et:publicEt(auto.et)}} : {}),
     ...(!auto && et ? { et: publicEt(et) } : {}),
     ...(!auto && mosh ? { mosh: publicMosh(mosh) } : {}),
-    ...(attached && restorableAttachment({attached})
-      ? { attached: { kind: attached.kind, name: attached.restoreName ?? attached.name, ...(attached.tmuxServer === undefined ? {} : {tmuxServer:attached.tmuxServer}) } }
-      : {}),
+    ...attachment,
   });
 }
 export function saveWorkspace(sessions: LiveIntent[]) {

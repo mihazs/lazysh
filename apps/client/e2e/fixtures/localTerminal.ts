@@ -101,3 +101,12 @@ export async function openToolbarTerminal(page:Page,testInfo:TestInfo,preference
   await expect.poll(()=>page.evaluate(()=>typeof window.simpleShortcutOutput)).toBe('function');
   return page.getByLabel('Terminal keys',{exact:true});
 }
+
+/** Opens the local terminal from the connections page: a phone keeps its hosts menu closed, and a session with a companion opens on Agents. */
+export async function openLocalFromConnections(page:Page,testInfo:TestInfo) {
+  if(testInfo.project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
+  const open=page.getByRole('button',{name:'Open local terminal',exact:true});
+  if(!await open.isVisible())await page.locator('[data-workspace-mode=connections]').click();
+  await open.click();
+  await expect(page.getByText('Local PTY').first()).toBeVisible();
+}

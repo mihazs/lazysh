@@ -1239,7 +1239,7 @@ describe("terminal interactions", () => {
     await waitFor(()=>expect(mocks.zellijNavigate).toHaveBeenCalledTimes(2));
     expect(mocks.write).not.toHaveBeenCalled(); expect(mocks.writeSequence).not.toHaveBeenCalled();
   });
-  it('rejects Zellij navigation on plain, local and other multiplexer terminals and ignores inactive, disconnected, selected or composing views', () => {
+  it('rejects Zellij navigation on plain, local Herdr and other multiplexer terminals and ignores inactive, disconnected, selected or composing views', () => {
     savePreferences({...defaults,bodyGestures:{...defaults.bodyGestures,swipeLeft:'nextZellijTab'}});
     const reportError=vi.fn();
     const session={id:'ssh',name:'Host',connected:true,terminal,adapter:adapterOf(terminal)} as unknown as LiveSession;
@@ -1249,9 +1249,11 @@ describe("terminal interactions", () => {
       fireEvent.pointerDown(canvas,{pointerId:1,pointerType:'touch',clientX:200,clientY:100});
       fireEvent.pointerUp(canvas,{pointerId:1,pointerType:'touch',clientX:100,clientY:100});
     };
+    // A local Herdr terminal is a plain terminal; a local Zellij one navigates like an SSH one.
+    const rejected=[['tmux',false],['herdr',false],['herdr',true]] as const;
     swipe();
-    for(const kind of ['tmux','herdr','zellij'] as const){
-      session.attached={kind,name:'test'}; session.local=kind==='zellij'?true:undefined;
+    for(const [kind,local] of rejected){
+      session.attached={kind,name:'test'}; session.local=local?true:undefined;
       view.rerender(<TerminalPane session={session} active reportError={reportError} />); swipe();
     }
     expect(reportError).toHaveBeenCalledTimes(4);

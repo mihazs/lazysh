@@ -1053,6 +1053,7 @@ export const english = {
   "appLocalShellOnThisDeviceSSHHostToolsRemote": "Local shell on this device. Files, repository review, attachments and previews use this device; agents and other SSH host tools are unavailable in this session.",
   "appLocalShellOnThisDeviceCompanion": "Local shell on this device. Files, repository review, attachments, previews, agents, transcripts and usage use this device; other SSH host tools are unavailable in this session.",
   "appLocalShellOnThisDeviceNoCompanion": "Local shell on this device. Files, repository review, attachments and previews use this device; agents, transcripts and usage need lazysh-agent, which was not found on this device: put it beside the lazysh app, install a managed copy or add it to your PATH. Other SSH host tools are unavailable in this session.",
+  "appLocalNoMultiplexer": "Sessions and Jump To need tmux, Zellij or Herdr on this device's PATH. None was found.",
   "localThisDevice": "This device",
   "appOpeningTerminal": "Opening terminal…",
   "appThisConnectionHasEnded": "This connection has ended.",

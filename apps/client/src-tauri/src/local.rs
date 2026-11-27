@@ -45,8 +45,19 @@ pub struct Tools {
     /// Which of those it is, for the companion panel; `None` exactly when `companion` is false.
     #[cfg(desktop)]
     companion_source: Option<crate::companion::local::Source>,
+    /// Multiplexers a local session can attach: on the PATH local commands receive, and never tmux
+    /// on a native Windows target, which has no tmux build.
+    tmux: bool,
+    herdr: bool,
+    zellij: bool,
     /// An Android SDK `adb` (or, on macOS, `xcrun`) resolves: the Devices view works.
     devices: bool,
+}
+/// Whether a local session can attach `tool`: it is on the PATH local commands receive, and the
+/// platform has a build of it.
+#[cfg(desktop)]
+async fn attachable(tool: &str) -> bool {
+    !(cfg!(windows) && tool == "tmux") && crate::host::local_program(tool).await
 }
 /// The login shell (`%ComSpec%` on Windows): what **Open local terminal** starts.
 #[cfg(desktop)]
@@ -66,6 +77,9 @@ pub async fn local_capability() -> Capability {
             attachments: true,
             previews: true,
             devices: crate::host::local_devices().await,
+            tmux: attachable("tmux").await,
+            herdr: attachable("herdr").await,
+            zellij: attachable("zellij").await,
         };
         let mut targets = vec![Target {
             id: DEFAULT_TARGET.into(),
@@ -1648,6 +1662,20 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use tokio::sync::mpsc;
+    /// The renderer reads these names to decide which views a local session offers.
+    #[cfg(desktop)]
+    #[tokio::test]
+    async fn the_default_target_reports_the_multiplexers_a_local_session_can_attach() {
+        let capability = serde_json::to_value(local_capability().await).unwrap();
+        let tools = &capability["targets"][0]["tools"];
+        for tool in ["tmux", "herdr", "zellij"] {
+            assert!(tools[tool].is_boolean(), "{tool} is missing from {tools}");
+        }
+        // tmux has no native Windows build.
+        if cfg!(windows) {
+            assert_eq!(tools["tmux"], false);
+        }
+    }
     pub(super) fn events() -> (
         Channel<SshEvent>,
         mpsc::UnboundedReceiver<serde_json::Value>,
