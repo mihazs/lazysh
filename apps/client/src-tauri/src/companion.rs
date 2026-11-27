@@ -163,7 +163,11 @@ pub async fn companion_version(
     access
         .run(async {
             let session = state.session(&session_id).await?;
-            let Some(unix) = resolve::detect(&session, &access).await? else {
+            // A Windows host is identified too, but the app neither sends its version there nor installs.
+            let Some(unix) = resolve::detect(&session, &access)
+                .await?
+                .and_then(resolve::Host::unix)
+            else {
                 return Ok(Version {
                     schema_version: 1,
                     version: None,

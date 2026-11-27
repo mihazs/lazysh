@@ -46,7 +46,7 @@ export default function CompanionUpdateConsent({sessionId,host,ready,companionRe
       window.dispatchEvent(new CustomEvent(companionUpdatedEvent,{detail:{sessionId}}));onInstalled();
     } catch {if(mounted.current)setPhase({sessionId,state:'failed'});}
   }
-  useEffect(()=>{if(current && consent==='always' && !phase)void install();},[current,consent,phase,sessionId]);
+  useEffect(()=>{if(current && consent==='always')void install();},[current,consent,sessionId]);
   const choose=(choice:Consent|'later')=>{
     if(choice==='later'){setDeclined(sessionId);return;}
     writeConsent(host,choice);

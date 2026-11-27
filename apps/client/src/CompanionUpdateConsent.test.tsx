@@ -72,6 +72,12 @@ describe('a host whose companion cannot update itself',()=>{
     mount();await screen.findByText(`The host companion is now version ${appVersion}.`);
     expect(install).toHaveBeenCalledOnce();expect(screen.queryByRole('button',{name:'Always'})).toBeNull();
   });
+  it('updates the next host the panel is pointed at too, not only the first one',async()=>{
+    writeConsent('host-a','always');writeConsent('host-b','always');probe('0.0.1');install.mockResolvedValue({});
+    const {view}=mount();await screen.findByText(`The host companion is now version ${appVersion}.`);
+    view.rerender(<CompanionUpdateConsent sessionId="s2" host="host-b" ready companionReplied={false} onInstalled={vi.fn()}/>);
+    await waitFor(()=>expect(install).toHaveBeenCalledTimes(2));expect(install).toHaveBeenLastCalledWith('s2',expect.any(Function));
+  });
   it('Not now hides the question for this connection only and writes nothing',async()=>{
     probe('0.0.1');const first=mount();await prompt();
     fireEvent.click(screen.getByRole('button',{name:'Not now'}));
