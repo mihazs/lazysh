@@ -1,5 +1,35 @@
 # @lazysh/client
 
+## 1.103.0
+
+### Minor Changes
+
+- feat(terminal): switch a live Mosh session from native to xterm.js ([#2635](https://github.com/mihazs/lazysh/pull/2635))
+
+### Patch Changes
+
+- fix(terminal): keep the native renderer when switching to xterm.js is refused ([#2635](https://github.com/mihazs/lazysh/pull/2635))
+
+  <details><summary>Details</summary>
+
+  A terminal that already switched keeps showing live output after unlock.
+
+  </details>
+- fix(bench): run only the Android terminal benchmark method ([#2752](https://github.com/mihazs/lazysh/pull/2752))
+
+  <details><summary>Details</summary>
+
+  The packaged benchmark collects its own AndroidJUnitRunner result when the optional SwiftKey test is present.
+
+  </details>
+- fix(bench): retry transient Android display capture misses ([#2758](https://github.com/mihazs/lazysh/pull/2758))
+
+  <details><summary>Details</summary>
+
+  The benchmark keeps the original timing window and counts only real screenshot observations. A sustained capture failure still fails the run.
+
+  </details>
+
 ## 1.102.5
 
 ### Patch Changes
