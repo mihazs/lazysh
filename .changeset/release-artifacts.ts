@@ -28,6 +28,11 @@ export const artifactTargets = {
   'macos-agent-x64': ['bin'],
   'macos-agent-arm64': ['bin'],
   'windows-agent-x64': ['exe'],
+  // The managed Herdr (#1758): the executable alone under the receipt the companion updater selects (one file named
+  // `.bin`), and the notice inventory, notice text and build receipt that bind it to its source as a second receipt.
+  // Linux x86-64 is the only built target.
+  'linux-herdr-x64': ['bin'],
+  'linux-herdr-notices-x64': ['json', 'txt', 'receipt.json'],
 } as const;
 export type ArtifactTarget = keyof typeof artifactTargets;
 const MiB = 1024 * 1024;
@@ -47,11 +52,14 @@ export const packageBudgetsMiB: { [T in ArtifactTarget]?: { [extension: string]:
   'macos-agent-x64': { bin: 16 },
   'macos-agent-arm64': { bin: 14 },
   'windows-agent-x64': { exe: 16 },
+  // No release measurement yet: the executable's ceiling is the 64 MiB the host's fetch refuses to exceed.
+  'linux-herdr-x64': { bin: 64 },
+  'linux-herdr-notices-x64': { json: 4, txt: 4, 'receipt.json': 1 },
 };
 export const packageMaximumBytes = (target: ArtifactTarget, extension: string) =>
   (packageBudgetsMiB[target]?.[extension] ?? 2048) * MiB;
 export const releaseTargets: ArtifactTarget[] = ['linux-x64', 'windows-x64', 'android-google-arm64', 'android-foss-arm64',
-  ...Object.keys(companionTargets) as CompanionTarget[]];
+  ...Object.keys(companionTargets) as CompanionTarget[], 'linux-herdr-x64', 'linux-herdr-notices-x64'];
 export type Identity = { sha: string; version: string };
 type Signing = 'unsigned' | 'ad-hoc' | 'signed';
 type ArtifactFile = { name: string; bytes: number; sha256: string };

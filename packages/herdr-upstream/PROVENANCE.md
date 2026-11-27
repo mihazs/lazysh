@@ -61,7 +61,7 @@ The retained `managed-herdr-linux-x86_64-<run>-<attempt>` artifact (14 days) hol
 | `libc` | the documented `floor` and the measured `maximum` |
 | `binarySha256` | the SHA-256 of the retained executable |
 
-This is the producer half of the release asset. It does not publish anything, add the executable to the release set or `SHA256SUMS`, include the redistribution notices or source offer ([#1757](https://github.com/mihazs/lazysh/issues/1757), [#1758](https://github.com/mihazs/lazysh/issues/1758)), or claim support for any platform: Linux x86-64 stays the only target until another host has native evidence. The build is not byte-reproducible, and its libc floor is measured on this one runner image. The receipt records those bytes and tools; it is not a signature.
+This is the producer half of the release asset. The `herdr` job of the release workflow ([#1758](https://github.com/mihazs/lazysh/issues/1758), [release artifacts](../../docs/release-artifacts.md#managed-herdr-assets)) rebuilds it from the tagged commit, binds it, the notices and this receipt to the release identity, and publishes the executable and the notice bundle in the verified release set. Publishing does not claim support for any platform: Linux x86-64 stays the only target until another host has native evidence. The build is not byte-reproducible, and its libc floor is measured on this one runner image. The receipt records those bytes and tools; it is not a signature.
 
 ### Acceptance beside a stock Herdr
 
@@ -180,7 +180,7 @@ Herdr 0.9.5 as imported here, Linux x86-64, `lazysh-managed`; the numbers are wh
 ### Not established
 
 - This is an engineering inventory of one build, not legal advice, and not a statement that any platform is supported or any binary is released.
-- Nothing is published or attached to a release: binding `notices.json` and `NOTICES.txt` to the release executable's digest and receipt ([#1756](https://github.com/mihazs/lazysh/issues/1756)) and shipping them as public assets beside it ([#1758](https://github.com/mihazs/lazysh/issues/1758)) are separate slices. The source URLs in `NOTICES.txt` use the CI checkout; a published copy must name the release tag.
+- A release publishes `notices.json`, `NOTICES.txt` and the build receipt beside the executable ([#1758](https://github.com/mihazs/lazysh/issues/1758)); `release-herdr.ts` requires the receipt, the inventory and the release to name one checkout, target, feature set and upstream source. The source URLs in `NOTICES.txt` name the checkout commit, which the release tag points at; the public check requires exactly that commit in them.
 - The release-profile build must use the same target and feature as the inventory step (`HERDR_TARGET`, `HERDR_FEATURES` in the job); a different feature set changes the dependency set.
 - The hosted run of the new job step is only observable on the pull request that introduced it; locally the same commands ran against a copy of this tree with the Zig packages of an earlier build.
 

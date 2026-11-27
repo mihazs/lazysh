@@ -25,7 +25,7 @@ on:
       platform:
         description: Private build verification only; never creates tags or releases
         type: choice
-        options: [all, desktop, android, ios, companion]
+        options: [all, desktop, android, ios, companion, herdr]
         default: all
       native-terminal:
         description: Native terminal engine kill switch for this build (default leaves it to the repository variable LAZYSH_NATIVE_TERMINAL, then on)
@@ -198,6 +198,43 @@ jobs:
         if: always()
         run: bun .changeset/release-android.ts cleanup
 
+  # The managed Herdr (#1758): one release-profile executable and its notice bundle, bound to this run's source and
+  # version. Ubuntu 22.04 is the oldest native consumer's glibc floor (packages/herdr-upstream/PROVENANCE.md). Compiled from
+  # source with no restored target/; the owned acceptance runs in checks.yml's `herdr-native` on the same commit.
+  herdr:
+    if: github.ref == 'refs/heads/main' && (inputs.platform == '' || inputs.platform == 'all' || inputs.platform == 'herdr')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TARGET_DIR: ${{ runner.temp }}/lazysh-herdr-native/target
+    steps:
+      - *checkout
+      - *bun
+      - uses: dtolnay/rust-toolchain@1.96.1
+      - *install
+      - uses: ./.github/actions/ghostty-zig
+        with:
+          link-source: 'true'
+          restore-only: 'true'
+      - name: Build the release-profile managed Herdr
+        working-directory: packages/herdr-upstream
+        run: sh "$GITHUB_WORKSPACE/.github/scripts/retry-zig-fetch.sh" cargo +1.96.1 build --locked --release --features lazysh-managed --bin herdr
+      - name: Generate notices, measure the libc floor, bind both to the exact source and stage the receipts
+        run: bun .changeset/release-herdr.ts stage "${{ runner.temp }}/herdr-release"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-herdr-x64
+          path: ${{ runner.temp }}/herdr-release/release-linux-herdr-x64
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-herdr-notices-x64
+          path: ${{ runner.temp }}/herdr-release/release-linux-herdr-notices-x64
+          if-no-files-found: error
+          retention-days: 14
+
   ios:
     if: github.ref == 'refs/heads/main' && inputs.platform == 'ios'
     runs-on: macos-15
@@ -237,7 +274,7 @@ jobs:
   # Build-only verification of the full set. The release-tag caller (no platform input)
   # aggregates inside its single publication job instead of queueing another runner here.
   aggregate:
-    needs: [desktop, android, companion]
+    needs: [desktop, android, companion, herdr]
     if: inputs.platform == 'all'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
