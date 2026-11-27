@@ -143,7 +143,7 @@ export default function AgentView({sessionId, hostKey, shown, full, onToggleFull
             const found = await conversationSource(invoke, sessionId, (agent ?? recordsAgent)!, row.sessionId);
             // The report's own pane is the evidence for OpenCode; Claude Code and Codex also name it in the reported history.
             if (found && (found.paneId === undefined || found.paneId === pane)) {
-              const source = {path: found.path,...(found.transcriptSessionId ? {transcriptSessionId: found.transcriptSessionId} : {}),report:{sessionId:row.sessionId,agent:row.agent,paneId:pane}};
+              const source = {path: found.path,...(found.reference ? {reference: true as const} : {}),...(found.transcriptSessionId ? {transcriptSessionId: found.transcriptSessionId} : {}),report:{sessionId:row.sessionId,agent:row.agent,paneId:pane}};
               if (agent) conversation=Object.freeze({agent, ...source}); else if (recordsAgent) records=Object.freeze({agent: recordsAgent, ...source});
             }
           } catch { /* A detected agent remains visible when its history is unavailable. */ }
@@ -179,7 +179,7 @@ export default function AgentView({sessionId, hostKey, shown, full, onToggleFull
       const matches=reports.filter(row=>row.sessionId===chosen.sessionId);
       if(!owns())return;
       if(!source || matches.length!==1 || matches[0].agent!==chosen.agent) {setUnavailable(true);return;}
-      setPicked({row:matches[0],conversation:Object.freeze({agent,path:source.path,...(source.transcriptSessionId ? {transcriptSessionId:source.transcriptSessionId} : {}),report:{sessionId:chosen.sessionId,agent:chosen.agent}})});
+      setPicked({row:matches[0],conversation:Object.freeze({agent,path:source.path,...(source.reference ? {reference:true as const} : {}),...(source.transcriptSessionId ? {transcriptSessionId:source.transcriptSessionId} : {}),report:{sessionId:chosen.sessionId,agent:chosen.agent}})});
     } catch {if(owns())setUnavailable(true);}
     finally {if(owns())setSelecting(false);}
   }
