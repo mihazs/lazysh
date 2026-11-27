@@ -145,8 +145,19 @@ it('treats "Gesture style: Off" as every swipe switched off', () => {
 });
 
 const gestureNavigation = {left: 32, right: 32, bottom: 20, mandatoryBottom: 24, navigation: 'gesture'} as const;
-const style = (mode: 'auto' | 'edges') => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode}});
+const style = (mode: 'auto' | 'edges', showLines = true) => savePreferences({...defaults, edgeGestures: {leftMenu: true, bottomMenu: true, viewSwitch: true, zoneWidth: 40, mode, showLines}});
 const handlesOf = () => document.querySelectorAll('.gt-handle').length;
+
+// Each of the three gesture steps with the handles the tour draws and the sentence that says where to start.
+async function walkGestureSteps(user: ReturnType<typeof userEvent.setup>, handles: number, note: 'gestureTourHandles' | 'gestureTourStrip') {
+  for (const step of tourSteps.slice(0, 3)) {
+    expect(screen.getByRole('heading', {name: t(step.title)})).toBeTruthy();
+    expect(handlesOf()).toBe(handles);
+    expect(document.querySelector('.gt-zone')).toBeNull();
+    expect(screen.getByText(t(note))).toBeTruthy();
+    await user.click(screen.getByRole('button', {name: t('gestureTourNext')}));
+  }
+}
 
 it('draws the handle and says to start from it on Android gesture navigation, and shows the edge zone elsewhere', async () => {
   const user = userEvent.setup();
@@ -158,13 +169,7 @@ it('draws the handle and says to start from it on Android gesture navigation, an
   plain.unmount();
   act(() => setGestureInsets(gestureNavigation));
   render(<GestureTour notes={all} finish={vi.fn()} />);
-  for (const step of tourSteps.slice(0, 3)) {
-    expect(screen.getByRole('heading', {name: t(step.title)})).toBeTruthy();
-    expect(handlesOf()).toBe(1);
-    expect(document.querySelector('.gt-zone')).toBeNull();
-    expect(screen.getByText(t('gestureTourHandles'))).toBeTruthy();
-    await user.click(screen.getByRole('button', {name: t('gestureTourNext')}));
-  }
+  await walkGestureSteps(user, 1, 'gestureTourHandles');
   // Typing has no handle to use: the swipe goes nowhere.
   expect(screen.getByRole('heading', {name: t('gestureTourTypingTitle')})).toBeTruthy();
   expect(handlesOf()).toBe(0);
@@ -200,4 +205,12 @@ it('never opens over a keystroke: it waits while the user types or edits text an
   guard.active = false;
   await settle();
   expect(hook.result.current.open).toBe(true);
+});
+
+it('draws no handle line in the tour while the gesture lines are hidden and tells where the swipe starts instead', async () => {
+  style('auto', false);
+  act(() => setGestureInsets(gestureNavigation));
+  render(<GestureTour notes={all} finish={vi.fn()} />);
+  await walkGestureSteps(userEvent.setup(), 0, 'gestureTourStrip');
+  expect(screen.queryByText(t('gestureTourHandles'))).toBeNull();
 });

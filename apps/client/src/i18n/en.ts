@@ -2774,6 +2774,7 @@ export const english = {
   gestureTourScreenReader: "Screen-reader mode is on. The edge swipes are off and visible buttons do the same.",
   gestureTourAndroidEdge: "With Android gesture navigation, start the side swipes low on the edge, in the lower part of the screen, and the bottom swipe just above the system gesture bar. The rest of the edge stays with the system Back gesture.",
   gestureTourHandles: "With Android gesture navigation the system keeps the very edge for Back and Home, so start each swipe from its small handle, or anywhere in the strip just inside the system's zone. A tap on a handle works too.",
+  gestureTourStrip: "With Android gesture navigation the system keeps the very edge for Back and Home, so start each swipe in the strip just inside the system's zone: low on the side edges and just above the gesture bar at the bottom. No lines are drawn there. Turn on Show gesture lines in Preferences, under Keyboard and gestures, to see where each one starts.",
   gestureTourBand: "Each swipe starts in a strip {{width}} dp deep. Change the width in Preferences, under Keyboard and gestures, then Terminal touch gestures (16 to 96 dp).",
   gestureTourProgress: "Step {{current}} of {{total}}",
   gestureTourSkip: "Skip",
