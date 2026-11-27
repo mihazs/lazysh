@@ -2636,15 +2636,12 @@ esac
                 .map(|pane| pane.path.clone())
                 .collect::<Vec<_>>()
         };
-        let mut directories = vec![
+        let directories = [
             "it's #{x};",
             "w#{pane_id}#(echo hi)##b",
             "no#(echo hi)##format",
+            "style#[b]#{literal}## and } trailing ",
         ];
-        // tmux's existing style-marker behavior is tracked separately in #2043.
-        if matches!(binary, Binary::Rmux) {
-            directories.push("style#[b]#{literal}## and } trailing ");
-        }
         for (index, odd) in directories.iter().enumerate() {
             let odd = temp.path().canonicalize().unwrap().join(odd);
             std::fs::create_dir(&odd).unwrap();
