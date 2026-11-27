@@ -127,6 +127,7 @@ or `n/a` with a reason. Rows below were read from the fixing commits; a test not
 | [#2606](https://github.com/mihazs/lazysh/issues/2606) | The Android flood benchmark could dispatch a key before the owned PTY started writing output | this change | `apps/client/bench/nativePtyFlood.test.ts` waits for the first-chunk receipt before sending a key, then verifies the marked output and exact echo offset | n/a |
 | [#2503](https://github.com/mihazs/lazysh/issues/2503) | A touch bound to opening the keyboard also opened it over Herdr navigation in a native pane | this change | unit `apps/client/src/TerminalPane.test.tsx`, `keeps Herdr navigation taps from opening the keyboard on a native pane` | n/a, the pane gesture reproduces in Vitest |
 | [#2503](https://github.com/mihazs/lazysh/issues/2503) | A touch bound to opening the keyboard also opened it over Herdr navigation in a native pane | this change | unit `apps/client/src/TerminalPane.test.tsx`, `keeps a delayed Herdr navigation tap from opening the keyboard after the pane redraws` | n/a, the pane gesture reproduces in Vitest |
+| [#2751](https://github.com/mihazs/lazysh/issues/2751) | A separate opt-in SwiftKey test caused Android to report two tests and the packaged benchmark rejected its completed measurements | Select the benchmark method explicitly | Bun: `tests/android-native-session.test.ts` checks method selection and activity teardown arguments | Paired stream replay on Waydroid |
 
 ## Adding a row
 
