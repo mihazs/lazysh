@@ -34,7 +34,7 @@ fn cut(message: &mut Value, cap: usize) {
 }
 /// Bounds a message to a page: each text to `MAX_TEXT`, then to half that again until the serialized message fits, since
 /// escaping can make the JSON several times the text.
-fn fit(message: &mut Value) {
+pub(super) fn fit(message: &mut Value) {
     let mut cap = MAX_TEXT;
     cut(message, cap);
     while cap > 256 && message_size(message).map_or(true, |size| size > MAX_MESSAGE) {
