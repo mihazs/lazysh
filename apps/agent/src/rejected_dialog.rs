@@ -1,6 +1,7 @@
 //! Claude Code runs no hook when the person rejects a permission dialog, not even `PostToolUseFailure` or `Stop`
 //! (#1795), so the row stays `needs_attention` until the next prompt. The conversation file records the rejection as
-//! the interruption marker, so a snapshot settles a row that waits at a dialog the file shows was rejected.
+//! the interruption marker, so a snapshot settles a row that waits at a dialog the file shows was rejected. Esc on a
+//! running turn sends no hook either (#1956) and leaves the row `working`; the same marker settles it.
 use crate::{notification_policy::Admission, write_event, Event, Result, SessionState, Store};
 use chrono::{DateTime, Utc};
 use rusqlite::TransactionBehavior;
@@ -98,7 +99,8 @@ fn stable_tail(
 
 impl Store {
     /// Marks done every Claude Code row that waits at a dialog (an approval, a question or a plan) its conversation
-    /// shows the person rejected, as Codex's `Interrupt` does. A row it cannot confirm is left as it is: with no
+    /// shows the person rejected, or that is `working` on a turn it shows the person interrupted (#1956), as Codex's
+    /// `Interrupt` does. A `working` row counts from its last report. A row it cannot confirm is left as it is: with no
     /// conversation file (another `CLAUDE_CONFIG_DIR` than the companion's) the row stays until the next report.
     pub fn settle_rejected_dialogs(
         &mut self,
@@ -109,7 +111,7 @@ impl Store {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let waits = transaction
-            .prepare("SELECT session_id,project,pane_id,since,server FROM sessions JOIN session_waiting USING (agent,session_id) LEFT JOIN session_pane_server USING (agent,session_id) WHERE agent=?1 AND state='needs_attention' AND kind IN ('approval','question','plan')")?
+            .prepare("SELECT session_id,project,pane_id,COALESCE(since,updated_at),server FROM sessions LEFT JOIN session_waiting USING (agent,session_id) LEFT JOIN session_pane_server USING (agent,session_id) WHERE agent=?1 AND (state='working' OR (state='needs_attention' AND kind IN ('approval','question','plan')))")?
             .query_map([AGENT], |row| {
                 Ok((
                     Event {
