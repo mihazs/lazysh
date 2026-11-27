@@ -17,6 +17,7 @@ pub mod host_features;
 pub mod installation;
 pub mod kimi_code;
 pub mod listeners;
+pub mod live_agents;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod managed_directory;
 #[cfg(windows)]
@@ -267,6 +268,8 @@ pub struct SessionSummary {
 pub struct Snapshot {
     pub schema_version: u8,
     pub sessions: Vec<SessionSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_agents: Option<live_agents::LiveAgents>,
     /// Present only when an app newer than this companion asked: what happens to this companion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<auto_update::Update>,
@@ -1107,6 +1110,7 @@ impl Store {
         Ok(Snapshot {
             schema_version: 1,
             sessions,
+            live_agents: None,
             update: None,
         })
     }

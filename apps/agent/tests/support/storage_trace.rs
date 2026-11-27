@@ -505,6 +505,7 @@ const FAILED_TESTS: &[&str] = &[
     "simultaneous_clients_have_one_winner_without_lost_updates",
     "simultaneous_initialization_and_ingest_preserve_every_event",
     "snapshot_caps_rows_and_uses_private_local_storage",
+    "snapshot_includes_and_removes_a_live_agent_process",
     "snapshot_expires_old_rows_even_without_new_events",
     "storage_trace::bounded_excerpt_preserves_lock_start_and_commit_end",
     "storage_trace::diagnostic_projection_is_finite_single_and_never_exports_raw_stderr",
