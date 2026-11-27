@@ -154,6 +154,7 @@ main_only=' companion desktop android_mosh android_herdr android_auxiliary andro
 
 native=false
 for output in \
+  "client=$(flag any client)" \
   "companion=$(flag has agent)" \
   "herdr=$herdr" \
   "terminal_runtime=$(flag any terminal_runtime)" \
