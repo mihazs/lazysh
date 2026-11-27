@@ -805,6 +805,7 @@ const translations = {
   muxBrowseRmux: ["Explorar sessões rmux", "Explorar sesiones rmux"],
   muxBrowseTmux: ["Explorar sessões tmux", "Explorar sesiones tmux"],
   muxNoRmux: ["Nenhuma sessão rmux encontrada.", "No se encontraron sesiones rmux."],
+  muxLimitedHerdrSchema: ["Este Herdr informa o esquema de API {{schema}}, mas o suporte completo exige o esquema 1. Somente a navegação está disponível.", "Este Herdr informa el esquema de API {{schema}}, pero el soporte completo requiere el esquema 1. Solo la navegación está disponible."],
   muxPersistentName: ["Nome da sessão persistente", "Nombre de la sesión persistente"],
   muxListSessions: ["Listar sessões {{kind}}", "Listar sesiones {{kind}}"],
   muxOpenSession: ["Abrir/criar sessão {{kind}}", "Abrir/crear sesión {{kind}}"],
