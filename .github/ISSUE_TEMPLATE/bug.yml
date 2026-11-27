@@ -1,0 +1,66 @@
+# Adapted from akitaonrails/ai-memory; see .github/TEMPLATES.md.
+name: Bug report
+description: Something is broken or behaving unexpectedly
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: App version and source revision from About; for companion bugs, `lazysh-agent --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Android, iOS (source or simulator), Desktop, Browser preview, Companion (lazysh-agent), Other]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of the unexpected behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What I expected
+      description: What you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - OS:
+        - Device / simulator / desktop model:
+        - Docker or remote-host environment (if relevant):
+        - Agent (Claude Code / Codex / OpenCode / other):
+        - Transport (SSH / Mosh / Eternal Terminal / local terminal):
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste relevant app or companion diagnostics. Remove credentials, tokens, host identities and private transcript contents.
+      render: shell
+  - type: textarea
+    id: regression-test
+    attributes:
+      label: Regression test
+      description: "Filled in when it is fixed: the test that fails before the fix and its row in docs/regression-tests.md, or why none applies. Leave blank when reporting."

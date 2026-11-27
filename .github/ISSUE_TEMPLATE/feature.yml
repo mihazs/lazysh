@@ -1,0 +1,36 @@
+# Adapted from akitaonrails/ai-memory; see .github/TEMPLATES.md.
+name: Feature request
+description: Suggest a new capability or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem this would solve
+      description: What are you trying to do that you can't do today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe what you'd like to happen. Be as specific as you can.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you've thought about or tried.
+  - type: textarea
+    id: breaking
+    attributes:
+      label: Would this break existing installs?
+      description: Changed on-disk format, removed/renamed surface, changed defaults? Breaking work is scheduled for the next major release.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, links, related issues, etc.
