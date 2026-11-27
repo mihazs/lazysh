@@ -10,6 +10,30 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.102.3] - 2026-11-27
+
+### New
+
+- **android:** add the native terminal engine to the GitHub FOSS APK ([#2694](https://github.com/mihazs/lazysh/pull/2694))
+
+### Fixed
+
+- **terminal:** require paired absolute memory for the same Android app ([#2708](https://github.com/mihazs/lazysh/pull/2708))
+- **terminal:** include Android session memory and churn in native rollout evidence ([#2710](https://github.com/mihazs/lazysh/pull/2710))
+- **terminal:** keep the native editor focused after tapping the terminal ([#2701](https://github.com/mihazs/lazysh/pull/2701))
+- **agents:** acknowledge sends promptly and show when the agent queued them ([#2574](https://github.com/mihazs/lazysh/pull/2574))
+- **terminal:** start native touch selection at the new word after copying ([#2705](https://github.com/mihazs/lazysh/pull/2705))
+- **release:** keep the bundled companion runnable in Linux AppImages ([#2733](https://github.com/mihazs/lazysh/pull/2733))
+- **terminal:** release closed session renderers from terminal IPC channels ([#2619](https://github.com/mihazs/lazysh/pull/2619))
+- **terminal:** discard canceled native composing text after a focus change ([#2707](https://github.com/mihazs/lazysh/pull/2707))
+- **terminal:** report mouse hover in native terminals when applications request it ([#2614](https://github.com/mihazs/lazysh/pull/2614))
+- **terminal:** keep the keyboard closed on Herdr navigation taps ([#2534](https://github.com/mihazs/lazysh/pull/2534))
+- **android:** preserve typed terminal words when SwiftKey inserts a space ([#2750](https://github.com/mihazs/lazysh/pull/2750))
+
+### Under the hood
+
+- **terminal:** verify saved actions and D-pad holds on the native engine ([#2711](https://github.com/mihazs/lazysh/pull/2711))
+
 ## [1.102.2] - 2026-11-27
 
 ### New
