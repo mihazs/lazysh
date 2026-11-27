@@ -13,6 +13,8 @@ async function openSessions(page:Page,rmux:Tool,workspace:object[]=[{hostId:'fix
   await installNativeBridge(page);
   await page.addInitScript(({rmux,workspace,tmuxTool,window1})=>{
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify(workspace));
+    // The first-run gesture tour opens over a phone session and makes the page behind it inert (gesture-tour.spec.ts covers the tour).
+    localStorage.setItem('lazysh.gestureTour.v1','999');
     const calls:{command:string;args:Record<string,unknown>}[]=[];
     (window as Window&{muxCalls?:typeof calls}).muxCalls=calls;
     window.nativeFixtureInvoke=async (command,args)=>{
