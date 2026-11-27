@@ -21,6 +21,9 @@ describe('Herdr creation validation',()=>{
     expect(validPrompt('')).toBe(true);
     expect(validPrompt('review \'this\' $(id)')).toBe(true);
     for(const prompt of ['-p','two\nlines','back\\slash'])expect(validPrompt(prompt),prompt).toBe(false);
+    // tmux and Zellij carry line breaks and tabs in the agent's argument; every other control and the other rules still apply.
+    expect(validPrompt('two\nlines\tand a tab',true)).toBe(true);
+    for(const prompt of ['-p','back\\slash','bell\u0007','x'.repeat(2001)])expect(validPrompt(prompt,true),prompt).toBe(false);
   });
 });
 
