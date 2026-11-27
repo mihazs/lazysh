@@ -64,6 +64,7 @@ class TerminalImeEditor(
     /** Where the owned suffix of [previous] and [value] begins. */
     private var owned = 0
     private var depth = 0
+    private var automaticCorrection: String? = null
 
     val inBatch: Boolean get() = depth > 0
     val text: String get() = value
@@ -90,15 +91,27 @@ class TerminalImeEditor(
     /** True while still inside an outer batch. */
     fun endBatchEdit(): Boolean {
         if (depth > 0) depth--
+        if (depth == 0) automaticCorrection = null
         settle()
         return depth > 0
     }
 
     fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
         val (start, end) = region()
-        replace(start, end, text, newCursorPosition, composing = false)
+        val committed = if (compStart >= 0 && text.toString() == automaticCorrection) value.substring(start, end) else text
+        replace(start, end, committed, newCursorPosition, composing = false)
         settle()
         return true
+    }
+
+    /** SwiftKey reports an automatic correction before committing it over an already typed word. */
+    fun ignoreAutomaticCorrection(offset: Int, oldText: CharSequence?, newText: CharSequence?) {
+        automaticCorrection = newText?.toString()?.takeIf {
+            inBatch && compStart >= owned && offset == compStart && oldText != null && oldText.length == compEnd - compStart &&
+                value.regionMatches(compStart, oldText.toString(), 0, oldText.length) &&
+                previous.regionMatches(compStart, value, compStart, oldText.length) &&
+                it != oldText.toString()
+        }
     }
 
     fun replaceText(start: Int, end: Int, text: CharSequence, newCursorPosition: Int): Boolean {
@@ -118,6 +131,7 @@ class TerminalImeEditor(
     }
 
     fun setComposingRegion(start: Int, end: Int): Boolean {
+        automaticCorrection = null
         val a = start.coerceIn(0, value.length)
         val b = end.coerceIn(0, value.length)
         compStart = if (a == b) -1 else minOf(a, b)
@@ -127,6 +141,7 @@ class TerminalImeEditor(
     }
 
     fun finishComposingText(): Boolean {
+        automaticCorrection = null
         compStart = -1
         compEnd = -1
         settle()
@@ -214,6 +229,7 @@ class TerminalImeEditor(
     /** The keyboard's connection closed while the view kept focus: what it was composing is committed as typed. */
     fun connectionClosed() {
         depth = 0
+        automaticCorrection = null
         compStart = -1
         compEnd = -1
         flush()
@@ -222,6 +238,7 @@ class TerminalImeEditor(
     /** The replacement keyboard starts from the text already delivered to the terminal. */
     fun connectionOpened() {
         depth = 0
+        automaticCorrection = null
         compStart = -1
         compEnd = -1
         if (value != previous) flush()
@@ -241,6 +258,7 @@ class TerminalImeEditor(
     private fun region(): Pair<Int, Int> = if (compStart >= 0) compStart to compEnd else selectionStart to selectionEnd
 
     private fun replace(start: Int, end: Int, text: CharSequence, cursor: Int, composing: Boolean) {
+        automaticCorrection = null
         value = value.substring(0, start) + text + value.substring(end)
         val caret = (if (cursor > 0) start + text.length + cursor - 1 else start + cursor).coerceIn(0, value.length)
         selStart = caret
@@ -251,6 +269,7 @@ class TerminalImeEditor(
 
     /** Remove [before] units before the selection and [after] units after it, keeping the selection and composing text aligned. */
     private fun delete(before: Int, after: Int) {
+        automaticCorrection = null
         val s = selectionStart
         val e = selectionEnd
         val from = maxOf(0, s - before)
@@ -314,6 +333,7 @@ class TerminalImeEditor(
 
     private fun clear() {
         depth = 0
+        automaticCorrection = null
         value = ""
         previous = ""
         selStart = 0; selEnd = 0

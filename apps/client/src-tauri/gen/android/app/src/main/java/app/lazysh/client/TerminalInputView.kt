@@ -7,6 +7,7 @@ import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.CorrectionInfo
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedText
 import android.view.inputmethod.ExtractedTextRequest
@@ -137,6 +138,13 @@ class TerminalInputView(
         override fun beginBatchEdit() = activate() && editor.beginBatchEdit()
         override fun endBatchEdit() = edit { editor.endBatchEdit() }
         override fun commitText(text: CharSequence?, newCursorPosition: Int) = edit { editor.commitText(text ?: "", newCursorPosition) }
+
+        override fun commitCorrection(correctionInfo: CorrectionInfo?): Boolean {
+            if (correctionInfo != null && activate()) {
+                editor.ignoreAutomaticCorrection(correctionInfo.offset, correctionInfo.oldText, correctionInfo.newText)
+            }
+            return false
+        }
         @RequiresApi(34)
         override fun replaceText(start: Int, end: Int, text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?) =
             edit { editor.replaceText(start, end, text, newCursorPosition) }

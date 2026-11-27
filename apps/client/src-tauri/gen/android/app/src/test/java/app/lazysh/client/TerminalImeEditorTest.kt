@@ -66,6 +66,26 @@ class TerminalImeEditorTest {
         assertTrue(editor.canDismissKeyboard)
     }
 
+    @Test fun swiftKeySpacePreservesAnAlreadyTypedWordAndExplicitSuggestionsStillWork() {
+        for (letter in "echo qwe") editor.commitText(letter.toString(), 1)
+        batch {
+            setComposingRegion(5, 8)
+            ignoreAutomaticCorrection(5, "qwe", "awe")
+            commitText("awe", 1)
+            commitText(" ", 1)
+        }
+        assertEquals("echo qwe ", remote.line)
+        assertRemoteFollowsEditor()
+
+        editor.commitText("qwe", 1)
+        batch {
+            setComposingRegion(9, 12)
+            commitText("awe", 1)
+        }
+        assertEquals("echo qwe awe", remote.line)
+        assertRemoteFollowsEditor()
+    }
+
     @Test fun anAutocorrectedWordIsTypedOnceAndNeverAsPreedit() {
         batch {
             setComposingText("teh", 1)
