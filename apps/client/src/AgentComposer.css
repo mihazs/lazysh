@@ -2,7 +2,7 @@
  * on its leading edge; Stop and Send on its trailing edge, round and 40 px, so a thumb finds them without looking. The quick
  * inserts, the receipt and the notes take the rows inside it. The ring is drawn by the field's own focus, never a border. */
 .agent-composer { flex: 0 0 auto; display: grid; gap: 6px; margin: 6px 12px 10px; padding: 6px; border: 0; border-radius: 24px; background: var(--av-row); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-text) 10%, transparent); max-height: 60%; overflow: auto; min-width: 0; }
-.agent-composer:has(> .agent-composer-row > textarea:focus-visible) { box-shadow: inset 0 0 0 2px var(--ui-focus-ring); }
+.agent-composer:has(> .agent-composer-row > textarea:focus-visible) { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ui-focus-ring) 45%, transparent); }
 @supports (backdrop-filter: blur(16px)) and (background: color-mix(in srgb, black 90%, transparent)) {
   .agent-composer {
     background: color-mix(in srgb, var(--av-row) max(78%, var(--theme-glass-opacity-floor, 0%)), transparent);
@@ -18,6 +18,7 @@
 }
 .agent-composer-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 4px; min-width: 0; }
 .agent-composer-row > textarea { order: 0; flex: 1 1 0; min-width: 0; min-height: 44px; max-height: min(40vh, 14rem); margin: 0; padding: 11px 6px; border: 0; border-radius: 0; background: transparent; outline: none; resize: none; font-family: inherit; font-size: 16px; line-height: 1.4; color: var(--theme-text); }
+.agent-composer-row > textarea:focus-visible { outline: none; }
 .agent-composer-row > textarea::placeholder { color: var(--muted); }
 .agent-composer-row > .icon-button, .agent-composer-row > .agent-composer-send { flex: 0 0 auto; width: 44px; height: 44px; min-width: 44px; min-height: 44px; margin: 0; padding: 0; border-radius: 50%; }
 .agent-composer-row > .icon-button { background: transparent; color: var(--muted); }
