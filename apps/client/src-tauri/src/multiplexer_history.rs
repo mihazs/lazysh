@@ -10,6 +10,18 @@ pub(crate) const MAX_LINES: usize = 20_000;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 /// What a host command may print: above the shown bounds so the cut is lazysh's, not a transport failure.
 const HOST_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
+/// What the host keeps of a read: twice the shown bytes, so a cut it makes is dropped again by `shape`, which reports it.
+const HOST_TAIL_BYTES: usize = 2 * MAX_BYTES;
+
+/// `command` run by `sh` with only the newest `bytes` of its stdout sent and its exit status kept, so a pane
+/// larger than `HOST_OUTPUT_LIMIT` yields its tail instead of failing the transport bound.
+fn newest_bytes(command: &str, bytes: usize) -> String {
+    // The status travels on fd 4 because a pipeline reports `tail`'s status, not the multiplexer's.
+    let script = format!(
+        "exec 3>&1; s=$( {{ {{ {command}\n echo $? >&4; }} | tail -c {bytes} >&3; }} 4>&1 ); exit \"${{s:-1}}\""
+    );
+    format!("sh -c {}", crate::ssh::quote(&script))
+}
 /// `herdr pane read` serves at most this many of the newest lines and does not say when it cut.
 pub(crate) const HERDR_LINES: usize = 1000;
 
@@ -94,15 +106,21 @@ pub async fn multiplexer_history(
                     Some(HERDR_LINES),
                 ),
             };
-            let output = crate::ssh::exec_bounded(
+            let output = crate::ssh::exec_status(
                 &session,
-                command,
+                newest_bytes(&command, HOST_TAIL_BYTES),
                 &access,
                 crate::ssh::OP_TIMEOUT,
                 HOST_OUTPUT_LIMIT,
                 None,
+                &mut |_| {},
             )
             .await
+            .and_then(|run| {
+                crate::ssh::check_exit(run.status, &run.stderr)?;
+                // The cut can split a character; that oldest line is dropped by `shape`.
+                Ok(String::from_utf8_lossy(&run.stdout).into_owned())
+            })
             .map_err(|error| match kind {
                 MultiplexerKind::Herdr => crate::herdr::missing_target(error),
                 _ => error,
@@ -176,6 +194,40 @@ mod tests {
         assert_eq!(history.text.len(), history.lines * 1024 - 1);
         assert!(history.lines >= MAX_BYTES / 1024 - 1);
         assert!(shape(&"y".repeat(MAX_BYTES + 1), None).text.is_empty());
+    }
+    fn run_sh(script: &str) -> std::process::Output {
+        std::process::Command::new("sh")
+            .args(["-c", script])
+            .output()
+            .unwrap()
+    }
+    #[test]
+    fn a_pane_over_the_transport_bound_yields_its_newest_tail_cut_and_reported() {
+        // 1.5 million numbered lines are more than HOST_OUTPUT_LIMIT: the unbounded read could not be returned.
+        let command = "seq 1 1500000";
+        assert!(run_sh(command).stdout.len() > HOST_OUTPUT_LIMIT);
+        let run = run_sh(&newest_bytes(command, HOST_TAIL_BYTES));
+        assert!(run.status.success());
+        assert_eq!(run.stdout.len(), HOST_TAIL_BYTES);
+        let history = shape(&String::from_utf8_lossy(&run.stdout), None);
+        assert!(history.truncated);
+        assert!(history.text.ends_with("\n1500000"));
+        assert!(history.text.len() <= MAX_BYTES);
+        assert!(!history.text.starts_with("1\n"));
+    }
+    #[test]
+    fn a_failing_read_keeps_its_status_and_message_and_a_short_one_stays_whole() {
+        let failed = run_sh(&newest_bytes(
+            "echo partial; echo \"can't find session\" >&2; (exit 3)",
+            4,
+        ));
+        assert_eq!(failed.status.code(), Some(3));
+        assert_eq!(
+            String::from_utf8_lossy(&failed.stderr),
+            "can't find session\n"
+        );
+        let whole = run_sh(&newest_bytes("printf 'a\\nb\\n'", HOST_TAIL_BYTES));
+        assert_eq!(String::from_utf8_lossy(&whole.stdout), "a\nb\n");
     }
     #[test]
     fn a_read_that_fills_the_multiplexers_own_limit_is_marked_cut() {
