@@ -102,7 +102,12 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
       if (Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > TOUCH_SLOP) cancelHold();
       return;
     }
-    if (!drag) return;
+    if (!drag) {
+      if (event.pointerType === 'mouse' && !event.buttons && !event.shiftKey && adapter.modes().mouseTracking === 'any') {
+        adapter.reportMouse('motion', undefined, event.clientX, event.clientY);
+      }
+      return;
+    }
     const cell = adapter.cellAt(event.clientX, event.clientY);
     if (cell && !(same(cell, drag) && !adapter.hasSelection())) adapter.select(rangeBetween(drag, cell));
     const rect = adapter.screenBounds();

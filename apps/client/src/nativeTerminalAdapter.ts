@@ -1,5 +1,5 @@
 import {isAndroidApp} from './isAndroidApp';
-import type {NativeCoreBridge, NativeCoreEvent, NativeCoreLink, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
+import type {CoreMouseInput, NativeCoreBridge, NativeCoreEvent, NativeCoreLink, NativeCoreQuery, NativeCoreSnapshot} from './nativeCoreBridge';
 import {NativeCanonicalResize} from './nativeCanonicalResize';
 import {attachLinkTaps, type LinkHandlers} from './nativeLinkTap';
 import {NativeInputCapture} from './nativeInputCapture';
@@ -365,7 +365,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   followLive() { if (!this.mirror.state.viewport.following) this.scroll({kind: 'toBottom'}); }
 
   /** Reports a mouse event to a program that tracks the mouse, in the cell under the point; false (nothing sent) when none does or the core takes no reports. */
-  reportMouse(action: 'press' | 'release' | 'motion', button: 'left' | 'middle' | 'right' | 'wheelUp' | 'wheelDown', clientX: number, clientY: number) {
+  reportMouse(action: 'press' | 'release' | 'motion', button: CoreMouseInput["button"], clientX: number, clientY: number) {
     const {mouse} = this.bridge;
     if (!mouse || this.mirror.state.modes.mouseTracking === 'none') return false;
     const cell = this.cellAt(clientX, clientY);
