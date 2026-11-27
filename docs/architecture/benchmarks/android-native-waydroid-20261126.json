@@ -1,0 +1,1053 @@
+{
+  "date": "2026-11-26",
+  "build": {
+    "appSource": "dd8397c8",
+    "imePatch": "4b5aa39f",
+    "acceptanceSource": "bd79ec48",
+    "artifactPayloadSource": "d0906a12",
+    "artifactPayloadRun": "45790224305",
+    "distribution": "side-by-side x86_64 debug build"
+  },
+  "device": {
+    "model": "WayDroid x86_64 Device",
+    "sdk": 33,
+    "abi": "x86_64"
+  },
+  "gpu": {
+    "name": "AMD Radeon Graphics (RADV NAVI14)",
+    "backend": "Vulkan",
+    "deviceType": "DiscreteGpu",
+    "driver": "radv Mesa 26.0.8"
+  },
+  "functional": {
+    "runId": "waydroid-pr2520-with-2750",
+    "sourceSha256": "b67893888fdbc40cd0c7eba572d300878ddaf5a288427f6878cb52817b407c92",
+    "cases": {
+      "engine-choice-native": {
+        "status": "pass"
+      },
+      "native-session-connects": {
+        "status": "pass"
+      },
+      "status-bar-names-native": {
+        "status": "pass"
+      },
+      "prompt-drawn": {
+        "status": "pass"
+      },
+      "soft-keyboard-opens-on-tap": {
+        "status": "pass"
+      },
+      "type-with-the-guest-keyboard": {
+        "status": "pass"
+      },
+      "enter-backspace-arrows": {
+        "status": "pass"
+      },
+      "toolbar-keys-cat-v": {
+        "status": "pass"
+      },
+      "composer-and-page-fields-take-input": {
+        "status": "pass"
+      },
+      "scroll-history-by-touch": {
+        "status": "pass"
+      },
+      "selection-and-copy": {
+        "status": "pass"
+      },
+      "paste-from-toolbar": {
+        "status": "pass"
+      },
+      "link-tap": {
+        "status": "pass"
+      },
+      "osc52-clipboard-consent": {
+        "status": "pass"
+      },
+      "pinch-zoom": {
+        "status": "pass"
+      },
+      "big-output-without-loss": {
+        "status": "pass"
+      },
+      "vim-with-mouse-mode": {
+        "status": "pass"
+      },
+      "stop-and-start": {
+        "status": "pass"
+      },
+      "rotation-and-resize": {
+        "status": "pass"
+      },
+      "tmux-status-line-and-splits": {
+        "status": "pass"
+      },
+      "mosh-session-resize": {
+        "status": "not-testable",
+        "reason": "The owned SSH fixture is reached over `adb reverse` (TCP on host loopback); Mosh needs a UDP route from the guest to the host, which this lane does not provide. Mosh canonical resize is held by the core's contract tests and the xterm.js `native-android-mosh` job."
+      },
+      "kill-switch-fallback": {
+        "status": "not-testable",
+        "reason": "The kill switch is a build-time switch of the release build (`LAZYSH_NATIVE_TERMINAL=off`); the debug APK under test is built without it. The registry and the notice are covered by Vitest and the `e2e-kill-switch` Playwright project; the runtime fallback after a failed open is `NativeTerminalFailureTest` territory."
+      },
+      "vendor-keyboards": {
+        "status": "not-testable",
+        "reason": "This run exercises com.android.inputmethod.latin; it does not cover other input methods."
+      },
+      "battery-and-thermal": {
+        "status": "not-testable",
+        "reason": "Accepted risk, not measured: Waydroid has no phone battery and a workstation does not throttle like a phone."
+      },
+      "real-gpu-and-arm64": {
+        "status": "not-testable",
+        "reason": "Accepted risk, not measured: the guest is x86_64 on the host GPU."
+      }
+    }
+  },
+  "streams": {
+    "runId": "android-native-exact-grid-20261126T221912Z",
+    "sourceSha256": "9cea7daf3b97c314d10a08ebc893cd8bac428b81b1049b26fcde37b1e722dc42",
+    "installedApks": [
+      {
+        "name": "base.apk",
+        "sha256": "0f4a9be2c5a32884be422d10fc6f0e4b645f8f95c5789999305a859509287d10"
+      }
+    ],
+    "fixture": {
+      "columns": 79,
+      "rows": 6,
+      "bytes": [
+        4194406,
+        2097297,
+        867151
+      ],
+      "sha256": {
+        "plain": "86bdd33df0f2c22c400cd8a492b88b18e61c0c9a2c52617b24fdb8210c8379d1",
+        "ansi": "ff8384d2bea23dd7ebf639dedccf0703f7d3be6ec861c9f5a2caa679d8b33b0b",
+        "redraw": "dcee39e8be47d6fcf2447241a4341bc09e65b150180f4379ace8e504e0c50c91"
+      }
+    },
+    "unit": "ms to display capture",
+    "samples": {
+      "native": {
+        "plain": [
+          437.108984,
+          419.322707,
+          433.565802,
+          408.451088,
+          432.301388
+        ],
+        "ansi": [
+          133.314847,
+          142.805237,
+          155.722297,
+          137.689787,
+          144.728419
+        ],
+        "redraw": [
+          124.428572,
+          123.604863,
+          111.999407,
+          112.454873,
+          107.602835
+        ]
+      },
+      "xterm": {
+        "plain": [
+          1418.353068,
+          1334.385958,
+          1411.141163,
+          1322.057983,
+          1427.893077
+        ],
+        "ansi": [
+          822.285392,
+          752.123343,
+          819.339697,
+          811.490626,
+          833.005946
+        ],
+        "redraw": [
+          323.586085,
+          304.036716,
+          306.056569,
+          315.403479,
+          306.796748
+        ]
+      }
+    }
+  },
+  "memory": {
+    "runId": "android-native-memory-20261126T222020Z",
+    "sourceSha256": "209a4668161eb315398359005d53bdb7afe8fa02ce3d486a3ab7b82712db353e",
+    "installedApks": [
+      {
+        "name": "base.apk",
+        "sha256": "0f4a9be2c5a32884be422d10fc6f0e4b645f8f95c5789999305a859509287d10"
+      }
+    ],
+    "unit": "PSS KiB",
+    "samples": {
+      "native": [
+        {
+          "sessions": 1,
+          "cycle": 0,
+          "pssKiB": 541702
+        },
+        {
+          "sessions": 5,
+          "cycle": 0,
+          "pssKiB": 506280
+        },
+        {
+          "sessions": 10,
+          "cycle": 0,
+          "pssKiB": 377683
+        },
+        {
+          "sessions": 0,
+          "cycle": 1,
+          "pssKiB": 388489
+        },
+        {
+          "sessions": 0,
+          "cycle": 2,
+          "pssKiB": 367993
+        },
+        {
+          "sessions": 0,
+          "cycle": 3,
+          "pssKiB": 378423
+        },
+        {
+          "sessions": 0,
+          "cycle": 4,
+          "pssKiB": 379774
+        },
+        {
+          "sessions": 0,
+          "cycle": 5,
+          "pssKiB": 383068
+        }
+      ],
+      "xterm": [
+        {
+          "sessions": 1,
+          "cycle": 0,
+          "pssKiB": 491174
+        },
+        {
+          "sessions": 5,
+          "cycle": 0,
+          "pssKiB": 576841
+        },
+        {
+          "sessions": 10,
+          "cycle": 0,
+          "pssKiB": 622670
+        },
+        {
+          "sessions": 0,
+          "cycle": 1,
+          "pssKiB": 675311
+        },
+        {
+          "sessions": 0,
+          "cycle": 2,
+          "pssKiB": 709020
+        },
+        {
+          "sessions": 0,
+          "cycle": 3,
+          "pssKiB": 757982
+        },
+        {
+          "sessions": 0,
+          "cycle": 4,
+          "pssKiB": 798785
+        },
+        {
+          "sessions": 0,
+          "cycle": 5,
+          "pssKiB": 851701
+        }
+      ]
+    }
+  },
+  "idle": {
+    "runId": "android-native-idle-20261126T222201Z",
+    "sourceSha256": "a496d4169b676cc90e535d0142751e49598a40118e9517be50002eeab16c62e1",
+    "installedApks": [
+      {
+        "name": "base.apk",
+        "sha256": "0f4a9be2c5a32884be422d10fc6f0e4b645f8f95c5789999305a859509287d10"
+      }
+    ],
+    "windowSeconds": 30,
+    "samples": {
+      "native": [
+        {
+          "variant": "blink-on",
+          "metric": "idleCpuMsPerSecond",
+          "unit": "ms CPU per s",
+          "values": [
+            8.305978825785331,
+            8.633101639435434,
+            4.318976086061408
+          ]
+        },
+        {
+          "variant": "blink-on",
+          "metric": "idleWakeupsPerSecond",
+          "unit": "1/s",
+          "values": [
+            55.085251572608314,
+            37.387970946170384,
+            13.289157187881257
+          ]
+        },
+        {
+          "variant": "blink-on",
+          "metric": "idleFramesPerSecond",
+          "unit": "1/s",
+          "values": [
+            1.8605392569759143,
+            1.8594372761860936,
+            1.8604820063033758
+          ]
+        },
+        {
+          "variant": "blink-off",
+          "metric": "idleCpuMsPerSecond",
+          "unit": "ms CPU per s",
+          "values": [
+            3.3125660253558857,
+            2.984233276979425,
+            2.986748381638652
+          ]
+        },
+        {
+          "variant": "blink-off",
+          "metric": "idleWakeupsPerSecond",
+          "unit": "1/s",
+          "values": [
+            19.080380306049904,
+            12.600096058357572,
+            14.435950511253486
+          ]
+        },
+        {
+          "variant": "blink-off",
+          "metric": "idleFramesPerSecond",
+          "unit": "1/s",
+          "values": [
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "xterm": [
+        {
+          "variant": "blink-on",
+          "metric": "idleCpuMsPerSecond",
+          "unit": "ms CPU per s",
+          "values": [
+            141.41321683981636,
+            124.09292920188118,
+            107.1858256684942
+          ]
+        },
+        {
+          "variant": "blink-on",
+          "metric": "idleWakeupsPerSecond",
+          "unit": "1/s",
+          "values": [
+            1834.2555656574864,
+            1830.4538779323063,
+            1822.6583492168943
+          ]
+        },
+        {
+          "variant": "blink-on",
+          "metric": "idleFramesPerSecond",
+          "unit": "1/s",
+          "values": [
+            2.6224516737900214,
+            2.661510545884851,
+            2.6297143564630563
+          ]
+        },
+        {
+          "variant": "blink-off",
+          "metric": "idleCpuMsPerSecond",
+          "unit": "ms CPU per s",
+          "values": [
+            6.976232275916318,
+            4.322962194706812,
+            4.659185921857493
+          ]
+        },
+        {
+          "variant": "blink-off",
+          "metric": "idleWakeupsPerSecond",
+          "unit": "1/s",
+          "values": [
+            72.38671490105551,
+            52.70688522007921,
+            53.21455920750094
+          ]
+        },
+        {
+          "variant": "blink-off",
+          "metric": "idleFramesPerSecond",
+          "unit": "1/s",
+          "values": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  },
+  "shell": {
+    "runId": "android-native-shell-latency-20261126T222832Z",
+    "sourceSha256": "0e7c0132db18e176a034e072154cba13fb0d80d4abec18256b3adec3a2f10915",
+    "installedApks": [
+      {
+        "name": "base.apk",
+        "sha256": "0f4a9be2c5a32884be422d10fc6f0e4b645f8f95c5789999305a859509287d10"
+      }
+    ],
+    "fixture": {
+      "columns": 79,
+      "rows": 6,
+      "bytes": [
+        41254
+      ],
+      "sha256": {
+        "shell": "cc212b2b91373d9ffb01e1d9beb003a96e5d2cd6639d2ebc19806cad3c300a85"
+      }
+    },
+    "unit": "ms to display capture",
+    "runSummaries": {
+      "native": [
+        {
+          "samples": 300,
+          "p50": 24.5402035,
+          "p95": 31.345157
+        },
+        {
+          "samples": 300,
+          "p50": 26.2162425,
+          "p95": 33.779134
+        },
+        {
+          "samples": 300,
+          "p50": 27.200298,
+          "p95": 37.371563
+        },
+        {
+          "samples": 300,
+          "p50": 26.067566499999998,
+          "p95": 34.957128
+        },
+        {
+          "samples": 300,
+          "p50": 24.342908,
+          "p95": 31.43718
+        }
+      ],
+      "xterm": [
+        {
+          "samples": 300,
+          "p50": 35.881124,
+          "p95": 43.207458
+        },
+        {
+          "samples": 300,
+          "p50": 36.048461,
+          "p95": 40.838993
+        },
+        {
+          "samples": 300,
+          "p50": 35.8063735,
+          "p95": 41.585882
+        },
+        {
+          "samples": 300,
+          "p50": 35.405355,
+          "p95": 41.538822
+        },
+        {
+          "samples": 300,
+          "p50": 35.4773415,
+          "p95": 41.24355
+        }
+      ]
+    }
+  },
+  "streamCounters": {
+    "runId": "android-native-stream-counters-20261126T223602Z",
+    "sourceSha256": "b41efc180b58ef2956d93d891d5f4cec28bd76a7a5f8b9e09c6d31042912556e",
+    "installedApks": [
+      {
+        "name": "base.apk",
+        "sha256": "0f4a9be2c5a32884be422d10fc6f0e4b645f8f95c5789999305a859509287d10"
+      }
+    ],
+    "fixture": {
+      "columns": 79,
+      "rows": 7,
+      "bytes": [
+        4194373,
+        2097264,
+        1010895
+      ],
+      "sha256": {
+        "plain": "ef0809b08bfeb3aef21c33af07dc7067ea85acd4891550218529022c81343aa5",
+        "ansi": "220c70d1173bde0f8ed7202e912de7262887503e2d4962a389c9b6b639d2af0b",
+        "redraw": "d23e89f78bc20c1716e950374d702b1630d1fac0a5bbcc5b31f1b0ad66b1981d"
+      }
+    },
+    "samples": {
+      "native": {
+        "plain": [
+          {
+            "windowMs": 403.2930580000002,
+            "cpuMs": 790,
+            "frames": 21,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 16
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 428.7524119999989,
+            "cpuMs": 810,
+            "frames": 22,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 17
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 443.042601000001,
+            "cpuMs": 840,
+            "frames": 23,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 20
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 425.54757699999936,
+            "cpuMs": 810,
+            "frames": 22,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 20
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 445.6190599999991,
+            "cpuMs": 820,
+            "frames": 24,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 16
+            },
+            "jankyFramePercent": null
+          }
+        ],
+        "ansi": [
+          {
+            "windowMs": 146.22574500000337,
+            "cpuMs": 250,
+            "frames": 6,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 25
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 150.1782979999989,
+            "cpuMs": 240,
+            "frames": 6,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 20
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 176.13814800000182,
+            "cpuMs": 280,
+            "frames": 7,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 20
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 155.62077000000136,
+            "cpuMs": 220,
+            "frames": 6,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 21
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 154.24072399999932,
+            "cpuMs": 240,
+            "frames": 6,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 17
+            },
+            "jankyFramePercent": null
+          }
+        ],
+        "redraw": [
+          {
+            "windowMs": 147.7142419999982,
+            "cpuMs": 230,
+            "frames": 6,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 21
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 140.941777,
+            "cpuMs": 210,
+            "frames": 6,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 20
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 143.5370750000002,
+            "cpuMs": 210,
+            "frames": 6,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 17
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 143.38395399999717,
+            "cpuMs": 210,
+            "frames": 6,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 17
+            },
+            "jankyFramePercent": null
+          },
+          {
+            "windowMs": 152.7930090000009,
+            "cpuMs": 200,
+            "frames": 6,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 17
+            },
+            "jankyFramePercent": null
+          }
+        ]
+      },
+      "xterm": {
+        "plain": [
+          {
+            "windowMs": 1536.394416,
+            "cpuMs": 4740,
+            "frames": 96,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 20
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 1298.4346409999998,
+            "cpuMs": 4400,
+            "frames": 99,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 16
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 1301.3168650000007,
+            "cpuMs": 4290,
+            "frames": 100,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 16
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 1528.761606,
+            "cpuMs": 4660,
+            "frames": 100,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 16
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 1297.992429,
+            "cpuMs": 4340,
+            "frames": 103,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 16
+            },
+            "jankyFramePercent": 0
+          }
+        ],
+        "ansi": [
+          {
+            "windowMs": 1109.362310999999,
+            "cpuMs": 2750,
+            "frames": 47,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 42
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 889.9510910000008,
+            "cpuMs": 2290,
+            "frames": 46,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 20
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 893.4270699999997,
+            "cpuMs": 2590,
+            "frames": 48,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 25
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 881.6227890000009,
+            "cpuMs": 2380,
+            "frames": 49,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 20
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 899.3348079999996,
+            "cpuMs": 2620,
+            "frames": 47,
+            "frameIntervalMs": {
+              "p50": 16,
+              "p95": 29
+            },
+            "jankyFramePercent": 0
+          }
+        ],
+        "redraw": [
+          {
+            "windowMs": 453.0263810000033,
+            "cpuMs": 1150,
+            "frames": 29,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 16
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 449.5590119999979,
+            "cpuMs": 1070,
+            "frames": 28,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 16
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 447.667472000001,
+            "cpuMs": 1120,
+            "frames": 29,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 16
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 447.2712070000016,
+            "cpuMs": 1090,
+            "frames": 28,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 16
+            },
+            "jankyFramePercent": 0
+          },
+          {
+            "windowMs": 451.31903299999976,
+            "cpuMs": 1260,
+            "frames": 31,
+            "frameIntervalMs": {
+              "p50": 12,
+              "p95": 16
+            },
+            "jankyFramePercent": 0
+          }
+        ]
+      }
+    }
+  },
+  "inputUnderOutput": {
+    "runId": "android-native-flood-taller-20261126T231231Z",
+    "sourceSha256": "3b175d3ffd23b18672e021f044b1454df543f02e7ee241b77e11896301fc412f",
+    "installedApks": [
+      {
+        "name": "base.apk",
+        "sha256": "0f4a9be2c5a32884be422d10fc6f0e4b645f8f95c5789999305a859509287d10"
+      }
+    ],
+    "fixture": {
+      "columns": 79,
+      "rows": 5,
+      "bytes": [
+        4194373
+      ],
+      "sha256": {
+        "flood": "ef0809b08bfeb3aef21c33af07dc7067ea85acd4891550218529022c81343aa5",
+        "floodMarkers": "ed6ed1bd69e2de53e73ee1e039b3e4073e67095f9cf520d0fecc747c71ed77dd",
+        "floodKeys": "5d21f71a6600f3754431bf20ce4c69e7ff23f66d3140b8a8346e5e26eab201dc"
+      }
+    },
+    "unit": "ms to display capture",
+    "runSummaries": {
+      "native": [
+        {
+          "samples": 200,
+          "p50": 77.6768195,
+          "p95": 173.325258
+        },
+        {
+          "samples": 200,
+          "p50": 50.049687,
+          "p95": 87.013599
+        },
+        {
+          "samples": 200,
+          "p50": 53.1267195,
+          "p95": 90.461278
+        },
+        {
+          "samples": 200,
+          "p50": 52.6157965,
+          "p95": 93.97258
+        },
+        {
+          "samples": 200,
+          "p50": 49.452830000000006,
+          "p95": 90.638985
+        }
+      ],
+      "xterm": [
+        {
+          "samples": 200,
+          "p50": 83.03117750000001,
+          "p95": 111.337564
+        },
+        {
+          "samples": 200,
+          "p50": 91.56101050000001,
+          "p95": 225.249709
+        },
+        {
+          "samples": 200,
+          "p50": 88.9034625,
+          "p95": 252.526187
+        },
+        {
+          "samples": 200,
+          "p50": 86.972779,
+          "p95": 258.496212
+        },
+        {
+          "samples": 200,
+          "p50": 92.0880405,
+          "p95": 327.633608
+        }
+      ]
+    }
+  },
+  "backgroundInputFive": {
+    "runId": "android-native-background-height-20261126T232846Z",
+    "sourceSha256": "5a8e055062c8f074f295722347ba3fc79dd57e7ec3c126697670fc743ed22357",
+    "installedApks": [
+      {
+        "name": "base.apk",
+        "sha256": "0f4a9be2c5a32884be422d10fc6f0e4b645f8f95c5789999305a859509287d10"
+      }
+    ],
+    "fixture": {
+      "columns": 79,
+      "rows": 5,
+      "bytes": [
+        0
+      ],
+      "sha256": {
+        "flood": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "floodMarkers": "ed6ed1bd69e2de53e73ee1e039b3e4073e67095f9cf520d0fecc747c71ed77dd",
+        "floodKeys": "5d21f71a6600f3754431bf20ce4c69e7ff23f66d3140b8a8346e5e26eab201dc",
+        "background": "4878b3abd4e2daffaf6b4437b49deedb01a5bd8ecb7d9eb9bbd6aea98af871d2"
+      }
+    },
+    "unit": "ms to display capture",
+    "runSummaries": {
+      "native": [
+        {
+          "samples": 200,
+          "p50": 35.097928,
+          "p95": 43.802534,
+          "backgroundChunks": [
+            1582,
+            1581,
+            1579,
+            1578
+          ]
+        },
+        {
+          "samples": 200,
+          "p50": 36.455359,
+          "p95": 45.199611,
+          "backgroundChunks": [
+            1603,
+            1606,
+            1604,
+            1599
+          ]
+        },
+        {
+          "samples": 200,
+          "p50": 41.82879,
+          "p95": 63.002578,
+          "backgroundChunks": [
+            1658,
+            1659,
+            1660,
+            1661
+          ]
+        },
+        {
+          "samples": 200,
+          "p50": 44.605652,
+          "p95": 53.821328,
+          "backgroundChunks": [
+            1738,
+            1740,
+            1735,
+            1737
+          ]
+        },
+        {
+          "samples": 200,
+          "p50": 42.276731,
+          "p95": 50.642778,
+          "backgroundChunks": [
+            1690,
+            1690,
+            1691,
+            1693
+          ]
+        }
+      ],
+      "xterm": [
+        {
+          "samples": 200,
+          "p50": 138.5125935,
+          "p95": 228.26812,
+          "backgroundChunks": [
+            1896,
+            1902,
+            1893,
+            1902
+          ]
+        },
+        {
+          "samples": 200,
+          "p50": 164.08369299999998,
+          "p95": 344.551488,
+          "backgroundChunks": [
+            1600,
+            1599,
+            1588,
+            1543
+          ]
+        },
+        {
+          "samples": 200,
+          "p50": 207.4274305,
+          "p95": 381.260361,
+          "backgroundChunks": [
+            1479,
+            1409,
+            1429,
+            1464
+          ]
+        },
+        {
+          "samples": 200,
+          "p50": 132.16848149999998,
+          "p95": 223.0961,
+          "backgroundChunks": [
+            1766,
+            1789,
+            1792,
+            1792
+          ]
+        },
+        {
+          "samples": 200,
+          "p50": 138.5731755,
+          "p95": 262.839867,
+          "backgroundChunks": [
+            1651,
+            1669,
+            1658,
+            1651
+          ]
+        }
+      ]
+    }
+  }
+}
