@@ -5343,7 +5343,9 @@ class NativeWorkspaceTest {
             val rows = """(state=>Array.from(document.querySelectorAll(${JSONObject.quote(board)}+" .agent-column[data-state='"+state+"'] .agent-card"))
                 .map(card=>card.querySelector('.agent-row-summary')?.textContent+'|'+card.querySelector(".row-tag[data-tone='project']")?.textContent).sort().join(','))"""
             val cards = "Array.from(document.querySelectorAll('.approval-panel:not([hidden]) .approval-card'))"
-            val approvals = """$cards.map(card=>Array.from(card.querySelectorAll('.approval-facts dd')).map(x=>x.textContent).join('|')+'|'+JSON.parse(card.querySelector('.approval-input')?.textContent||'null')?.command).sort().join(',')"""
+            // A Zellij or Herdr pane is named by its server (the host's session, pane ids and their numbers vary); a tap that answers the hook proves the exact pane, because the companion refuses any other.
+            val paneKind = """x=>x.replace(/^zellij:lazysh-approvals:[0-9]+${'$'}/,'zellij').replace(/^herdr:[A-Za-z0-9._-]+:w[0-9A-Z]+:p[0-9A-Z]+${'$'}/,'herdr')"""
+            val approvals = """$cards.map(card=>Array.from(card.querySelectorAll('.approval-facts dd')).map(x=>($paneKind)(x.textContent)).join('|')+'|'+JSON.parse(card.querySelector('.approval-input')?.textContent||'null')?.command).sort().join(',')"""
             val observe = { remaining: Long -> evaluate(scenario, "JSON.stringify({needs:$rows('needs_attention'),working:$rows('working'),done:$rows('done'),approvals:$approvals,alert:document.querySelector('.approval-panel [role=alert]')?.textContent??''})", remaining) }
             hostHooks("board")
             openReportedActivity()
@@ -5358,11 +5360,11 @@ class NativeWorkspaceTest {
             returnToTerminal()
             hostHooks("approvals")
             openReportedActivity()
-            awaitDocument(scenario, "waiting hooks listed above the board and in Needs you",
-                "$approvals==='/work/epsilon|approval-host|%9|git tag --list,/work/gamma|approval-allow|%7|git push --dry-run,/work/zeta|approval-deny|%8|git push --force'" +
-                " && $rows('needs_attention')==='Agent needs attention|beta,Bash|epsilon,Bash|gamma,Bash|zeta'" +
+            awaitDocument(scenario, "waiting hooks, two in real Zellij and Herdr panes, listed above the board and in Needs you",
+                "$approvals==='/work/epsilon|approval-host|%9|git tag --list,/work/eta|approval-zellij|zellij|git push --dry-run origin,/work/gamma|approval-allow|%7|git push --dry-run,/work/theta|approval-herdr|herdr|git push --force-with-lease,/work/zeta|approval-deny|%8|git push --force'" +
+                " && $rows('needs_attention')==='Agent needs attention|beta,Bash|epsilon,Bash|eta,Bash|gamma,Bash|theta,Bash|zeta'" +
                 " && !!(document.querySelector('.approval-panel:not([hidden])')?.compareDocumentPosition(document.querySelector(${JSONObject.quote(board)}))&Node.DOCUMENT_POSITION_FOLLOWING)", observe = observe)
-            for ((session, decision) in listOf("approval-allow" to "allow", "approval-deny" to "deny")) {
+            for ((session, decision) in listOf("approval-allow" to "allow", "approval-deny" to "deny", "approval-zellij" to "allow", "approval-herdr" to "deny")) {
                 val card = "//article[contains(@class,'approval-card')][.//dd[normalize-space(.)='$session']]"
                 val state = "(card=>document.querySelector('.approval-panel [role=alert]')?'alert':!card?'gone':card.querySelector('.approval-$decision').disabled?'busy':'ready')($cards.find(card=>card.textContent.includes('$session')))"
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
@@ -5381,9 +5383,9 @@ class NativeWorkspaceTest {
                     Thread.sleep(1_000)
                 }
             }
-            // The host ends approval-host once both decisions reached their hooks; the next refresh drops it.
+            // The host ends approval-host once the four decisions reached their hooks; the next refresh drops it.
             awaitDocument(scenario, "request answered at the host cleared", "$cards.length===0 && !document.querySelector('.approval-panel [role=alert]')", observe = observe)
-            println("lazysh companion board: real hook events rendered by state with one row per session and no aged report; device Allow and Deny accepted; host-answered request cleared")
+            println("lazysh companion board: real hook events rendered by state with one row per session and no aged report; device Allow and Deny accepted for tmux, Zellij and Herdr panes; host-answered request cleared")
         }
         fun verifyCompanionInstallation() {
             val companion = fixture.getJSONObject("companion")

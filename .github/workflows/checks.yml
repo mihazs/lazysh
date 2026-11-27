@@ -1125,14 +1125,7 @@ jobs:
       - &pinned-zellij
         name: Install the pinned official Zellij 0.45.1 release outside the checkout (the native GUI drives it)
         # Release asset digest: https://api.github.com/repos/zellij-org/zellij/releases/tags/v0.45.1
-        run: |
-          zellij_root=$(mktemp -d "$RUNNER_TEMP/lazysh-zellij-0.45.1-XXXXXX")
-          sh .github/scripts/pinned-download.sh 40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc "$zellij_root/zellij.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 120 --max-filesize 18729165 https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz
-          printf '%s  %s\n' '40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc' "$zellij_root/zellij.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file "$zellij_root/zellij.tar.gz" --directory "$zellij_root" --no-same-owner --no-same-permissions zellij
-          test "$("$zellij_root/zellij" --version)" = 'zellij 0.45.1'
-          echo "$zellij_root" >> "$GITHUB_PATH"
-          echo "LAZYSH_TEST_ZELLIJ=$zellij_root/zellij" >> "$GITHUB_ENV"
+        run: sh .github/scripts/install-pinned-zellij.sh
       - name: Exercise owned Linux native singleton GUI delivery
         id: native-gui
         env:
@@ -1199,7 +1192,7 @@ jobs:
         run: *herdr-artifact-id-guard
       - &stock-herdr-download
         uses: actions/download-artifact@v4
-        with:
+        with: &stock-herdr-download-with
           artifact-ids: ${{ needs.herdr-native.outputs.stock-id }}
           github-token: ${{ github.token }}
           merge-multiple: true
@@ -1208,19 +1201,7 @@ jobs:
         name: Verify same-run stock Herdr
         env:
           STOCK_HERDR_SHA256: ${{ needs.herdr-native.outputs.stock-sha256 }}
-        run: |
-          cd "$RUNNER_TEMP/lazysh-stock-herdr"
-          test -f herdr
-          test -s herdr
-          test "$(stat -c%s herdr)" -le 536870912
-          printf '%s  herdr\n' "$STOCK_HERDR_SHA256" | sha256sum --check --strict
-          bun -e '
-          const receipt=await Bun.file("source.json").json();
-          const expected={schemaVersion:1,sourceCommit:"2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01",archiveSha256:"cbd4354f1c44530d9f094c2797380208c50f19b4d6350b6e5206e220133c3168",
-            manifestSha256:"c303652ea2d310b78fdc9222cb30b405915890c0522239c9daf734591cb08e8a",sourceFiles:1843,binarySha256:process.env.STOCK_HERDR_SHA256,checkout:process.env.GITHUB_SHA};
-          if(Object.keys(receipt).length!==Object.keys(expected).length || Object.entries(expected).some(([key,value])=>receipt[key]!==value))throw new Error("Stock Herdr provenance mismatch");'
-          chmod 700 herdr
-          printf '%s\n' "LAZYSH_TEST_HERDR=$RUNNER_TEMP/lazysh-stock-herdr/herdr" >> "$GITHUB_ENV"
+        run: sh .github/scripts/verify-stock-herdr.sh LAZYSH_TEST_HERDR
       - name: Exercise the pinned pane input actor against the unchanged stock Herdr
         shell: bash
         env:
@@ -1231,6 +1212,10 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --locked -p lazysh-agent --test herdr_pane_input_stock -- --list --ignored | grep -c ': test$' | grep -Fx 5
           cargo test --locked -p lazysh-agent --test herdr_pane_input_stock -- --ignored --test-threads=1
+      - name: Preflight the Android waiting hooks in a real Zellij pane and a stock Herdr pane
+        env:
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: LAZYSH_TEST_SSH_USER_NAMESPACE=1 bwrap --unshare-user --unshare-net --dev-bind / / -- bun test tests/android-ssh-host.test.ts --test-name-pattern 'owned namespaced SSH preflights the Android waiting hooks'
       - name: Exercise ordinary Mosh Herdr entries from PATH and the default user installation
         shell: bash
         env:
@@ -1733,6 +1718,24 @@ jobs:
           shared-key: ${{ github.job == 'native-android-mosh' && 'android-mosh' || 'android-emulator' }}
           save-if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["native-android-runtime","native-android-mosh","native-android-auxiliary"]'), github.job) }}
       - run: bun install --frozen-lockfile
+      # The device approval hooks run in a pane of a private Zellij and a private stock Herdr server on this host (#1801).
+      # The stock Herdr goes to LAZYSH_TEST_HERDR_STOCK so it never replaces the guarded build the other cases use.
+      - name: Validate stock Herdr artifact ID
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded'
+        env:
+          HERDR_ARTIFACT_ID: ${{ needs.herdr-native.outputs.stock-id }}
+        run: *herdr-artifact-id-guard
+      - uses: actions/download-artifact@v4
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded'
+        with: *stock-herdr-download-with
+      - name: Verify same-run stock Herdr
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded'
+        env:
+          STOCK_HERDR_SHA256: ${{ needs.herdr-native.outputs.stock-sha256 }}
+        run: sh .github/scripts/verify-stock-herdr.sh LAZYSH_TEST_HERDR_STOCK
+      - name: Install the pinned official Zellij 0.45.1 release outside the checkout
+        if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded'
+        run: sh .github/scripts/install-pinned-zellij.sh
       - name: Validate producer artifact ID
         if: env.LAZYSH_ANDROID_RUNTIME_OWNER == 'guarded'
         env:
