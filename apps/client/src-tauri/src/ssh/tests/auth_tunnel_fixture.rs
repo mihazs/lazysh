@@ -377,9 +377,20 @@ async fn a_port_the_device_cannot_give_fails_closed_and_says_who_holds_it() {
     );
     drop(other_program);
 
-    // A program on the IPv6 loopback would receive the code of a browser that resolves localhost to ::1.
-    if let Ok(squatter) = std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)) {
-        let port = squatter.local_addr().unwrap().port();
+    // IPv4 and IPv6 ephemeral allocation may choose the same number. Keep the first
+    // IPv6 binding alive while reserving another so the busy-port case reaches its guard.
+    let loopback = std::net::Ipv6Addr::LOCALHOST;
+    let squatter = std::net::TcpListener::bind((loopback, fixture.host.port))
+        .or_else(|_| std::net::TcpListener::bind((loopback, 0)));
+    if let Ok(squatter) = squatter {
+        let replacement = (squatter.local_addr().unwrap().port() == fixture.host.port)
+            .then(|| std::net::TcpListener::bind((loopback, 0)).unwrap());
+        let port = replacement
+            .as_ref()
+            .unwrap_or(&squatter)
+            .local_addr()
+            .unwrap()
+            .port();
         let error = refused(&fixture, hint(port)).await;
         assert_eq!(error.kind(), "auth_tunnel_port_busy");
         assert!(
