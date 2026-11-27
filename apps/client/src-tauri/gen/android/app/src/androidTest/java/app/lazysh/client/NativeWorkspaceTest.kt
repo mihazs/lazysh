@@ -3575,10 +3575,7 @@ class NativeWorkspaceTest {
             """)
         }
         fun jump(target: JSONObject, current: JSONObject) {
-            sessionView(scenario, "Terminal")
-            keepTopBar(scenario)
-            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
-            onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='Workspaces']")).perform(webClick())
+            openOwnedWorkspaces(scenario)
             // The current marker must come from the live tmux binding, including a switch made by the numbered control.
             awaitDocument(scenario, "live tmux Jump To marks ${title(current)} current", """
                 (()=>{const panels=document.querySelectorAll(${JSONObject.quote(jumpPanel)});
@@ -3799,6 +3796,49 @@ class NativeWorkspaceTest {
         }
     }
 
+    /** The owned Zellij fixture's two tabs, checked against the shape the host writes. */
+    private fun ownedZellijTabs(zellij: JSONObject): Pair<JSONObject, JSONObject> {
+        val tabs = zellij.getJSONArray("tabs")
+        require(tabs.length() == 2) { "Owned Zellij topology required" }
+        val alpha = tabs.getJSONObject(0)
+        val beta = tabs.getJSONObject(1)
+        require(alpha.getInt("position") == 0 && alpha.getString("name") == "alpha" && beta.getInt("position") == 1 && beta.getString("name") == "beta")
+        for (tab in listOf(alpha, beta)) require(Regex("ZELLIJ_(ALPHA|BETA)_[a-f0-9]{32}").matches(tab.getString("marker")))
+        return alpha to beta
+    }
+
+    /** Opens the Workspaces view of the selected display, where its Jump To panel lists the destinations of the attached multiplexer. */
+    private fun openOwnedWorkspaces(scenario: ActivityScenario<MainActivity>) {
+        sessionView(scenario, "Terminal")
+        keepTopBar(scenario)
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Open hosts']")).perform(webClick())
+        onWebView().withElement(findElement(Locator.XPATH, "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='Workspaces']")).perform(webClick())
+    }
+
+    /**
+     * Jump To for the attached Zellij `session`: its one Current row is `current`, a click on `target` jumps there, and reopened it marks
+     * `target` current. The jump closes the panel on a phone, so the check opens it again when it is gone.
+     */
+    private fun jumpOwnedZellij(scenario: ActivityScenario<MainActivity>, session: String, current: JSONObject, target: JSONObject) {
+        val panel = "section[aria-label='Zellij Jump To']"
+        fun title(tab: JSONObject) = "${tab.getInt("position") + 1}: ${tab.getString("name")}"
+        fun marks(tab: JSONObject, stage: String) {
+            if (evaluate(scenario, present(panel)) != "true") openOwnedWorkspaces(scenario)
+            awaitDocument(scenario, "Zellij Jump To marks ${title(tab)} current $stage", """
+                (()=>{const panels=document.querySelectorAll(${JSONObject.quote(panel)});
+                  if(panels.length!==1 || panels[0].querySelector('[role=status],[role=alert]'))return false;
+                  const marked=Array.from(panels[0].querySelectorAll('button[aria-current=location]'));
+                  return marked.length===1 && marked[0].textContent.trim()===${JSONObject.quote(title(tab) + " · Current")};})()
+            """)
+        }
+        marks(current, "before the jump")
+        onWebView().withElement(findElement(Locator.XPATH, "//section[@aria-label='Zellij Jump To']//button[normalize-space(.)='${title(target)}']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "Zellij Jump To closed or moved to ${title(target)} in $session",
+            "!document.querySelector(${JSONObject.quote(panel)}) || document.querySelector(${JSONObject.quote(panel)} + ' button[aria-current=location]')?.textContent.includes(${JSONObject.quote(title(target))})")
+        marks(target, "after the jump")
+    }
+
     // The host harness owns this pinned Zellij session and the command pane of each of its two tabs. This case drives only the
     // packaged UI: product discovery, the session list, attach, the numbered tab control, tab-close detach and reattach. While it
     // runs, the host reads the active tab back with `zellij action list-tabs --json` and afterwards proves that the original panes
@@ -3806,12 +3846,7 @@ class NativeWorkspaceTest {
     private fun verifyOwnedZellij(scenario: ActivityScenario<MainActivity>, zellij: JSONObject, parent: String, native: Boolean) {
         val session = zellij.getString("name")
         require(Regex("owned-zellij-[a-f0-9]{12}").matches(session)) { "Owned Zellij fixture required" }
-        val tabs = zellij.getJSONArray("tabs")
-        require(tabs.length() == 2) { "Owned Zellij topology required" }
-        val alpha = tabs.getJSONObject(0)
-        val beta = tabs.getJSONObject(1)
-        require(alpha.getInt("position") == 0 && alpha.getString("name") == "alpha" && beta.getInt("position") == 1 && beta.getString("name") == "beta")
-        for (tab in listOf(alpha, beta)) require(Regex("ZELLIJ_(ALPHA|BETA)_[a-f0-9]{32}").matches(tab.getString("marker")))
+        val (alpha, beta) = ownedZellijTabs(zellij)
         val child = "$parent / $session"
         val observer = InstrumentationRegistry.getInstrumentation().context.assets.open("owned-visible-herdr.js").use { it.reader().readText() }
         require(observer.length <= 4096)
@@ -3898,8 +3933,10 @@ class NativeWorkspaceTest {
             shows(beta, alpha, "reattached Zellij shows the same selected tab")
             numbered(alpha)
             shows(alpha, beta, "Zellij numbered Tab 1 shows its tab")
+            jumpOwnedZellij(scenario, session, alpha, beta)
+            shows(beta, alpha, "Zellij Jump To shows its tab")
             detach("after the second attach")
-            println("lazysh Zellij: live discovery, session list, attach, numbered tabs, tab-close detach and reattach completed")
+            println("lazysh Zellij: live discovery, session list, attach, numbered tabs, Jump To current marker, tab-close detach and reattach completed")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
@@ -4103,11 +4140,26 @@ class NativeWorkspaceTest {
      * whether the pane's tty echoes typed bytes (tmux runs a plain `sleep`; a Herdr receiver records them and echoes nothing,
      * so the host's `typed` fact is the evidence that they arrived).
      */
-    private inner class RestoreTarget(val multiplexer: String, val session: String, val echoes: Boolean, val marker: (OwnedParity) -> String) {
+    private inner class RestoreTarget(val multiplexer: String, val session: String, val echoes: Boolean, val marker: (OwnedParity) -> String,
+        /** What the display shows after `prepare` and after the restore; the first display's marker unless `prepare` moves it. */
+        val restored: (OwnedParity) -> String = marker,
+        /** Runs once the first display shows, before the bytes are typed. */
+        val prepare: (ActivityScenario<MainActivity>, OwnedParity) -> Unit = { _, _ -> }) {
         val label = "$restoreHost / $session"
     }
     private val restoreTmux = RestoreTarget("tmux", "owned-tmux", true, this::ownedTmuxAlpha)
     private val restoreHerdr = RestoreTarget("herdr", "owned-guard", false, this::ownedHerdrSource)
+    // Zellij restores the tab it was on: Jump To moves from the first tab to the second before the force-stop, and the second must come back.
+    private fun zellijRestoreTabs(parity: OwnedParity) = parity.fixture.getJSONObject("zellij")
+        .also { require(it.getString("name") == "owned-zellij") { "Owned Zellij restore fixture required" } }.let { ownedZellijTabs(it) }
+    private val restoreZellij = RestoreTarget("zellij", "owned-zellij", true,
+        marker = { zellijRestoreTabs(it).first.getString("marker") }, restored = { zellijRestoreTabs(it).second.getString("marker") },
+        prepare = { scenario, parity ->
+            val (alpha, beta) = zellijRestoreTabs(parity)
+            jumpOwnedZellij(scenario, "owned-zellij", alpha, beta)
+            sessionView(scenario, "Terminal")
+            awaitDocument(scenario, "owned zellij display on the tab Jump To chose", terminalScreenContains(beta.getString("marker")))
+        })
 
     /** The bytes the pane's tty echoes back when typed through the app, checked against the shape the host writes. */
     private fun ownedRestoreToken(parity: OwnedParity) = parity.fixture.getString("restoreToken")
@@ -4152,6 +4204,7 @@ class NativeWorkspaceTest {
         ownedRestoreCase(target, keepOnSuccess = true) { scenario, parity, marker, token ->
             connectOwnedSaved(scenario, parity, restoreHost, target.multiplexer, target.session)
             awaitDocument(scenario, "owned ${target.multiplexer} display before the force-stop", terminalScreenContains(marker))
+            target.prepare(scenario, parity)
             sendOwnedCommand(scenario, token, parity.label)
             // tmux redraws what its pane echoed after the restore; a Herdr receiver echoes nothing, so only the host's byte file shows arrival.
             if (target.echoes) awaitDocument(scenario, "bytes typed into the owned ${target.multiplexer} pane", terminalScreenContains(token))
@@ -4167,7 +4220,7 @@ class NativeWorkspaceTest {
      * client, and only a click on it reattaches the same display with the saved credential.
      */
     private fun ownedRestoreAfter(target: RestoreTarget) {
-        ownedRestoreCase(target, keepOnSuccess = false) { scenario, parity, marker, token ->
+        ownedRestoreCase(target, keepOnSuccess = false) { scenario, parity, _, token ->
             val offer = "Array.from(document.querySelectorAll(${JSONObject.quote(restoreOffer)})).some(x=>x.textContent.trim()==='Restore previous workspace' && !x.disabled)"
             awaitDocument(scenario, "restore offer once the saved hosts load", offer)
             assertEquals("Relaunch alone must not open a terminal or ask for a credential", "false", evaluate(scenario,
@@ -4178,7 +4231,7 @@ class NativeWorkspaceTest {
 
             clickOwnedButton("Restore previous workspace")
             awaitDocument(scenario, "restored ${target.multiplexer} display shows what it showed before the force-stop",
-                terminalScreenContains(marker) + if (target.echoes) " && " + terminalScreenContains(token) else "")
+                terminalScreenContains(target.restored(parity)) + if (target.echoes) " && " + terminalScreenContains(token) else "")
             // The host fails `observe` itself if the original server or processes changed, or a Herdr receiver got a byte it was not typed.
             val restored = parity.awaitFact("exactly one ${target.multiplexer} client after the restore", 30) { it.getInt("clients") == 1 && (target.echoes || it.getBoolean("typed")) }
             assertTrue("Restore must use the saved credential without a dialog: $restored", evaluate(scenario, present("[role=dialog]")) == "false")
@@ -4191,6 +4244,8 @@ class NativeWorkspaceTest {
     @Test fun ownedTmuxRestoreAfterForceStop() = ownedRestoreAfter(restoreTmux)
     @Test fun ownedHerdrRestoreBeforeForceStop() = ownedRestoreBefore(restoreHerdr)
     @Test fun ownedHerdrRestoreAfterForceStop() = ownedRestoreAfter(restoreHerdr)
+    @Test fun ownedZellijRestoreBeforeForceStop() = ownedRestoreBefore(restoreZellij)
+    @Test fun ownedZellijRestoreAfterForceStop() = ownedRestoreAfter(restoreZellij)
 
     // The toolbar editor's Agents and Workspaces keys open each view for the real
     // connection, and the destination heading's back control returns to the terminal.

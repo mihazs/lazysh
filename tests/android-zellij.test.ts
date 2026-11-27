@@ -1,6 +1,6 @@
 import {expect,test} from 'bun:test';
 import {readdir,readlink,stat} from 'node:fs/promises';
-import {ZellijFixture,zellijActiveTab,zellijActiveTabSettled,zellijTabHistoryVerified} from './support/androidZellij';
+import {ZellijFixture,zellijActiveTab,zellijActiveTabSettled,zellijClientCount,zellijTabHistoryVerified} from './support/androidZellij';
 import {listening} from './support/androidSsh';
 
 test('Zellij host readback admits only the two owned tabs and reports the single active one',()=>{
@@ -37,10 +37,18 @@ test('Zellij readback retries a failing command and a command that keeps failing
   expect(reads).toBe(4);
 });
 
-test('Zellij attach history requires attach, Tab 2, detach, reattach on that tab, Tab 1 and the final detach in order',()=>{
-  expect(zellijTabHistoryVerified([null,0,1,null,1,0,null])).toBe(true);
-  for(const history of [[],[null,0,1,null],[null,0,1,null,1,0],[null,0,null,0,null],[null,0,1,null,0,1,null],[0,1,null,1,0,null],[null,0,1,null,1,0,null,0]])
+test('Zellij attach history requires attach, Tab 2, detach, reattach on that tab, Tab 1, Jump To tab 2 and the final detach in order',()=>{
+  expect(zellijTabHistoryVerified([null,0,1,null,1,0,1,null])).toBe(true);
+  for(const history of [[],[null,0,1,null],[null,0,1,null,1,0],[null,0,1,null,1,0,null],[null,0,null,0,null],[null,0,1,null,0,1,null],[0,1,null,1,0,1,null],[null,0,1,null,1,0,1,null,0]])
     expect(zellijTabHistoryVerified(history)).toBe(false);
+});
+
+test('Zellij client count is the rows under the header and refuses anything else',()=>{
+  const header='CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n';
+  expect(zellijClientCount(header)).toBe(0);
+  expect(zellijClientCount(`${header}1 terminal_1 sleep 3600\n`)).toBe(1);
+  expect(()=>zellijClientCount('')).toThrow('unreadable');
+  expect(()=>zellijClientCount('No such session\n')).toThrow('unreadable');
 });
 
 // Real pinned tools are explicit; ordinary host checks never download or guess a binary.
@@ -66,17 +74,26 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_ZELLIJ)('owne
     const [alpha,beta]=owned.metadata().tabs;
     const goTo=(number:number)=>owned.ssh.zellij(['--session',owned.name,'action','go-to-tab',String(number)]);
     await active(null);
+    expect(await owned.observeRestore()).toEqual({clients:0});
     client=await attach(alpha.marker);await active(0);
+    expect(await owned.observeRestore()).toEqual({clients:1});
     expect(client.stdout.includes(beta.marker)).toBe(false);
     await goTo(2);await active(1);
     await wait(()=>client!.stdout.includes(beta.marker));
     await client.stop();await active(null);
     client=await attach(beta.marker);await active(1);
     await goTo(1);await active(0);
+    // Jump To applies the tab id of the second tab.
+    await goTo(2);await active(1);
+    expect(await owned.paneHolds(beta.marker)).toBe(true);
+    // The restore cases type into the focused pane of this tab and read its echo back from the host.
+    await owned.ssh.zellij(['--session',owned.name,'action','write-chars','RESTORE_echo']);
+    await wait(()=>owned.paneHolds('RESTORE_echo'));
+    expect(await owned.paneHolds(alpha.marker)).toBe(false);
     await client.stop();
     // The final detach leaves the remembered session, both tabs and the single start of each pane.
     await owned.verifyDetachedAndReattached();
-    expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[null,0,1,null,1,0,null],tabs:2});
+    expect(owned.diagnostic()).toEqual({schemaVersion:1,history:[null,0,1,null,1,0,1,null],tabs:2});
   } finally {
     await client?.stop();
     await owned.stop();
