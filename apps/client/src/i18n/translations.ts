@@ -499,6 +499,7 @@ const translations = {
   themeQrCameraUnavailable: ["A captura por câmera está indisponível aqui. Escolha uma imagem PNG ou JPEG.", "La captura de cámara no está disponible aquí. Elige una imagen PNG o JPEG."],
   themeQrCameraFailed: ["Não foi possível iniciar a câmera. Você pode escolher uma imagem PNG ou JPEG.", "No se pudo iniciar la cámara. Puedes elegir una imagen PNG o JPEG."],
   themeQrEncodeFailed: ["Não foi possível codificar o quadro da câmera.", "No se pudo codificar el fotograma de cámara."],
+  themeQrReadFailed: ["Não foi possível ler a imagem QR escolhida. Escolha-a novamente.", "No se pudo leer la imagen QR elegida. Elígela de nuevo."],
   themeQrFailed: ["Não foi possível decodificar a imagem QR.", "No se pudo decodificar la imagen QR."],
   themeQrLimits: ["A importação manual mantém os limites de 8 KiB para JSON e 16 KiB para códigos de compartilhamento. Imagens QR são decodificadas localmente pelo aplicativo nativo. As cores fornecidas para o terminal não mudam; os controles do aplicativo usam cores derivadas legíveis. Links e conteúdo QR de temas exigem revisão.", "La importación manual mantiene los límites de 8 KiB para JSON y 16 KiB para códigos compartidos. La aplicación nativa decodifica las imágenes QR localmente. Los colores proporcionados del terminal no cambian; los controles usan colores derivados legibles. Los enlaces y el contenido QR de temas requieren revisión."],
 

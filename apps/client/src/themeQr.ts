@@ -3,7 +3,7 @@ import {useEffect,useRef,useState,type RefObject} from 'react';
 import {subscribeAccess,useAccessSnapshot,useMountedAccess} from './access';
 
 export const QR_IMAGE_LIMIT=192*1024;
-const errors={busy:'themeQrBusy',imageLimit:'themeQrImageLimit',invalidImage:'themeQrInvalidImage',multipleCodes:'themeQrMultiple',invalidPayload:'themeQrInvalidPayload',stopped:'themeQrStopped',cameraUnavailable:'themeQrCameraUnavailable',cameraFailed:'themeQrCameraFailed',encodeFailed:'themeQrEncodeFailed',failed:'themeQrFailed'} as const;
+const errors={busy:'themeQrBusy',imageLimit:'themeQrImageLimit',invalidImage:'themeQrInvalidImage',multipleCodes:'themeQrMultiple',invalidPayload:'themeQrInvalidPayload',stopped:'themeQrStopped',cameraUnavailable:'themeQrCameraUnavailable',cameraFailed:'themeQrCameraFailed',encodeFailed:'themeQrEncodeFailed',readFailed:'themeQrReadFailed',failed:'themeQrFailed'} as const;
 type Failure=keyof typeof errors;
 class QrFailure extends Error {constructor(readonly code:Failure){super(code);}}
 export const qrErrorKey=(error:Failure)=>errors[error];
@@ -33,6 +33,8 @@ function failure(error:unknown):Failure {
   if(error instanceof QrFailure)return error.code;
   return typeof error==='string'&&Object.hasOwn(errors,error)?error as Failure:'failed';
 }
+// A rejected read (e.g. NotReadableError) is not a decode failure, so it gets its own code.
+const read=(source:Blob)=>source.arrayBuffer().catch(()=>{throw new QrFailure('readFailed');});
 /** Retain the actual invoke future: ordinary protectedInvoke settles early on revocation. */
 export function useThemeQr(intent:RefObject<number>,cancelRef:RefObject<(()=>void)|null>,onDecoded:(payload:string)=>void){
   const {access,mounted}=useMountedAccess();useAccessSnapshot();
@@ -96,7 +98,7 @@ export function useThemeQr(intent:RefObject<number>,cancelRef:RefObject<(()=>voi
       cameraMarker('encodeEnd');
       if(!current(run))return;
       if(blob.size<1||blob.size>QR_IMAGE_LIMIT)throw new QrFailure('imageLimit');
-      const bytes=await blob.arrayBuffer();const payload=await decode(run,bytes);
+      const bytes=await read(blob);const payload=await decode(run,bytes);
       if(payload===undefined)return;
       if(payload!==null){complete(run,payload);return;}
       await waitFrame(run);
@@ -115,7 +117,7 @@ export function useThemeQr(intent:RefObject<number>,cancelRef:RefObject<(()=>voi
       try{
         if(file){
           if(file.size<1||file.size>QR_IMAGE_LIMIT)throw new QrFailure('imageLimit');
-          const bytes=await file.arrayBuffer();const payload=await decode(run,bytes);
+          const bytes=await read(file);const payload=await decode(run,bytes);
           if(payload===undefined)return;
           if(payload===null){if(current(run)){release(run);setState({phase:'idle',finishing:true,notice:'none'});}}
           else complete(run,payload);
