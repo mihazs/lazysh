@@ -74,6 +74,28 @@ async fn start(
     .await;
     (tunnel, log)
 }
+/// Starts a flow on the device port `next_port` returns. A port found free earlier can be taken
+/// before the flow binds it (the host's own connections draw from the same range), so a refusal as
+/// busy takes the next port; any other error, or five busy ports in a row, is returned (#2251).
+async fn start_on_a_free_port(
+    app: &App,
+    session: &str,
+    hint: Hint,
+    mut next_port: impl FnMut() -> u16,
+) -> (Result<AuthTunnel>, Log) {
+    let mut attempt = 1;
+    loop {
+        let config = Config {
+            limits: Limits::quick(),
+            device_port: Some(next_port()),
+        };
+        let (tunnel, log) = start(app, session, hint.clone(), allow(), config).await;
+        match &tunnel {
+            Err(error) if error.kind() == "auth_tunnel_port_busy" && attempt < 5 => attempt += 1,
+            _ => return (tunnel, log),
+        }
+    }
+}
 /// The error of a start that must be refused, with the short bounds.
 async fn refused(fixture: &Fixture, hint: Hint) -> SshError {
     start(&fixture.app, &fixture.session, hint, allow(), quick())
@@ -285,6 +307,29 @@ async fn tunnel_stop(app: &App, session: &str, id: &str) {
     crate::auth_tunnel::stop_auth_tunnel(app.state(), session.into(), id.into())
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_flow_whose_device_port_was_taken_first_binds_the_next_free_one() {
+    let fixture = Fixture::new().await;
+    let taken = std::net::TcpListener::bind((LOOPBACK, 0)).unwrap();
+    let busy = taken.local_addr().unwrap().port();
+    let mut candidates = vec![busy, busy, free_port()].into_iter();
+    let (tunnel, _log) = start_on_a_free_port(&fixture.app, &fixture.session, hint(8080), || {
+        candidates.next().unwrap()
+    })
+    .await;
+    let tunnel = tunnel.unwrap();
+    assert_ne!(tunnel.port, busy);
+    assert!(candidates.next().is_none(), "both busy ports were tried");
+    tunnel_stop(&fixture.app, &fixture.session, &tunnel.id).await;
+
+    // A port that stays busy still fails closed, and says so, after the bounded attempts.
+    let error = start_on_a_free_port(&fixture.app, &fixture.session, hint(8080), || busy)
+        .await
+        .0
+        .unwrap_err();
+    assert_eq!(error.kind(), "auth_tunnel_port_busy");
 }
 
 #[tokio::test]
@@ -673,16 +718,11 @@ impl Owned {
             .as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
-        let config = Config {
-            limits: Limits::quick(),
-            device_port: Some(free_port()),
-        };
-        let (tunnel, log) = start(
+        let (tunnel, log) = start_on_a_free_port(
             &self.app,
             &self.session,
             serde_json::from_value(value).unwrap(),
-            allow(),
-            config,
+            free_port,
         )
         .await;
         (tunnel.unwrap(), log)
