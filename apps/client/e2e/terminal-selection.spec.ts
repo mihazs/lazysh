@@ -82,6 +82,8 @@ for(const mosh of [false,true])test.describe(mosh?'Mosh terminal':'SSH terminal'
 
   test('a selection survives streaming output and finger or wheel scrolling',async({page},testInfo)=>{
     const phone=testInfo.project.name==='phone';
+    // The native desktop wheel reaches the core only with #2616 (PR #2778); until it merges the xterm arm and the phone cover this case.
+    test.skip(!phone&&requestedBackend()==='native','Native desktop wheel scrolling needs #2616.');
     await open(page,mosh);
     await scrollToRow(page,120);await settle(page);
     if(phone)await longPress(page,await cell(page,3,2));
