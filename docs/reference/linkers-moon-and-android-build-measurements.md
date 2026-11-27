@@ -146,6 +146,50 @@ Step timings from run 45856165676 (one run; the jobs queued 25 to 131 minutes be
 - **Waydroid and the x86_64 lane** consume the same APK as the emulator jobs (`docs/architecture/waydroid-lane.md`); no change.
 - **R8 and minification** are release settings and were not touched.
 
+## CI jobs that ship nothing build without fat LTO ([#2768](https://github.com/mihazs/lazysh/issues/2768))
+
+The workspace release profile (fat LTO, one codegen unit) is kept for everything that is published; see ADR 0007 and the release profile benchmark
+([#2737](https://github.com/mihazs/lazysh/issues/2737)). Two CI jobs compile it only to run or inspect the result, so they set
+`CARGO_PROFILE_RELEASE_LTO=false` and `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16` in the job or step environment (no `Cargo.toml` change):
+
+| Job | Release-profile build | Decision | Reason |
+| --- | --- | --- | --- |
+| `native-linux`, step "Exercise owned companion transfer ..." | `lazysh-agent` and two examples, driven over SSH | **relax** | the cases check protocol and file effects; the 64 MiB acceptance limit of hook setup is still met (16.2 MiB) |
+| `native-desktop` (main only; macOS and Windows) | `build:native`, the macOS `.app` bundle, the Windows NSIS installer | **relax** | the job lints localization files and installs, repairs and uninstalls the installer; nothing it builds is uploaded, and `release-artifacts.yml` builds what ships |
+| `herdr-native` | the managed Herdr release build | keep | its digest is the receipt the later jobs check |
+| `terminal-perf` | `perf_gate` in release mode | keep | it measures the shipped codegen |
+| `companion-artifacts.yml`, `native-android-release-core`, release staging, F-Droid | published companion, release APKs | keep | they build or gate a published artifact and its size ceiling |
+| `parakeet-runtime` `test-rust` (`cargo test --release`) | inference test | keep | a runtime-speed test of the model path, not a link-time cost |
+
+Measured locally: `lazysh-agent` and the two examples (`cargo build --release --locked -p lazysh-agent --bin lazysh-agent --example owned_terminal_receiver
+--example fake_android_sdk`), pinned to four CPUs (`taskset -c 0-3`, `CARGO_BUILD_JOBS=4`), rustc stable 1.99.0, dedicated target directories, under
+`flock /tmp/claude-drive/bench.lock`, one sample per cell. "Warm" keeps the dependencies and touches `apps/agent/src/main.rs` and `lib.rs`, which is what a build
+with a restored `rust-cache` pays. The load average (1, 5, 15 minutes) at the start of each run is in the third column; it is not controlled, so read the warm
+rows (a 4.7 times difference) and not the cold ones (a 27 percent difference in wall time and 26 percent more CPU).
+
+| Profile | Run | Load at start | Wall | CPU (user + system) | Peak RSS (largest process) | Target dir | `lazysh-agent` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| fat LTO (current) | cold | 1.7, 0.8, 0.6 | 139 s | 305 s | 1101 MiB | 718 MiB | 13.9 MiB |
+| fat LTO (current) | warm | 3.0, 2.0, 1.1 | 84 s | 88 s | 1101 MiB | | |
+| `lto = false`, 16 units | cold | 4.1, 2.7, 1.4 | 102 s (-27 %) | 384 s (+26 %) | 961 MiB | 705 MiB | 16.2 MiB (+16 %) |
+| `lto = false`, 16 units | warm | 7.1, 4.1, 2.1 | 18 s (-79 %) | 46 s (-48 %) | 923 MiB | | |
+
+The non-LTO `lazysh-agent` starts and prints its help. The desktop crate was measured in the release profile benchmark (four CPUs, one to two samples each): a warm
+rebuild 296 s with fat LTO against 66 s without, 579 and 611 s against 359 and 422 s cold, with a 9.6 percent larger binary.
+
+Estimated saving per run, from the last runs of `checks.yml` (`gh api`, successful jobs) and the warm ratios above; the hosted runner was not exercised:
+
+| Job | Step | Median now | Estimate after |
+| --- | --- | --- | --- |
+| `native-linux` (pull requests, n = 19) | "Exercise owned companion transfer ..." (138 to 321 s, includes 15 test cases) | 262 s | about 1 minute less (84 s to 18 s build on four CPUs) |
+| `native-desktop` macOS (main, n = 6) | `build:native` 1015 s, then the `.app` bundle 444 s | 1459 s | 25 to 60 percent less of the Rust link-bound part, so roughly 6 to 15 minutes, unmeasured on macOS |
+| `native-desktop` Windows (main, n = 3) | `build:native` 1167 s, then the NSIS installer 541 s | 1708 s | the same range, roughly 7 to 17 minutes, unmeasured on Windows |
+
+The `native-desktop` second build (444 and 541 s) is large for a step that should hit the cache of the first: `tauri build --bundles ...` links the binary again, and under fat LTO
+that link is the dominant cost, which is why the relaxed profile helps it most. Risks: the relaxed binaries are 10 to 17 percent larger and 1 to 7 percent slower, so a timing-sensitive
+case in these two jobs would see it (none of the listed cases measures speed); the first run after the change recompiles the release dependencies once, because the profile is part of
+their fingerprint, and `main` then saves the new cache.
+
 ## Limits of these numbers
 
 - One machine (24 threads, 31 GB), shared with other sessions: wall times are affected by load, which is why CPU time is the primary metric and the load average is
