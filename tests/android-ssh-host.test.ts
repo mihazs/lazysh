@@ -485,12 +485,20 @@ test.skipIf(process.env.LAZYSH_ANDROID_UI_HERDR_NAVIGATION!=='1')('actual Androi
 },1_200_000);
 
 // Separate CI owner: only the pinned tmux fixture and packaged UI decide this verdict.
-test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes',async()=>{
-  // The source-built companion lets the case open a synthetic transcript and send confirmed Chat input to the displayed pane.
+// The source-built companion lets a case open a synthetic transcript, send confirmed Chat input to the displayed pane and bind the Agent view to a reporting pane.
+const tmuxCompanion=()=>{
   const agent=process.env.LAZYSH_TEST_AGENT_BIN;
-  if(!agent)throw new Error('The tmux Chat case needs the source-built companion in LAZYSH_TEST_AGENT_BIN');
-  const owned=await TmuxFixture.start(undefined,agent);
-  await ownedAndroidAcceptance('tmux',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,owned));
+  if(!agent)throw new Error('The tmux cases need the source-built companion in LAZYSH_TEST_AGENT_BIN');
+  return agent;
+};
+const tmuxAcceptance=(owned:TmuxFixture)=>ownedAndroidAcceptance('tmux',owned,()=>androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,false,owned));
+test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android tmux discovery, window controls, Jump To and detach keep the original remote panes',async()=>{
+  await tmuxAcceptance(await TmuxFixture.start(undefined,tmuxCompanion()));
+},610_000);
+
+// The stand-in agent reports from its own tmux pane to the real companion; the packaged UI follows it as the Agent view does on desktop.
+test.skipIf(process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android Agent view follows a reporting agent pane across a mid-turn switch, a sent prompt, a typed prompt and Back',async()=>{
+  await tmuxAcceptance(await TmuxFixture.start(undefined,tmuxCompanion(),'tmux',true));
 },610_000);
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_NATIVE_TMUX!=='1')('actual Android native terminal runs the owned tmux window controls and clipboard consent',async()=>{

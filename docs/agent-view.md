@@ -546,10 +546,23 @@ Tests assert behaviour, not source text.
   becomes a turn in **Both** within 5 s (about 0.2 s measured). Both specs share their cases
   (`agentViewScenarios.ts`) and differ only in the multiplexer (`reportingAgent.ts`). The agent is a
   stand-in, not Claude Code, and Herdr's state for it comes from the drawn hint, not from Claude's
-  own hooks: provider behaviour, macOS, Windows and Android are not covered by these specs. Still to
-  add: the Android instrumentation case.
+  own hooks: provider behaviour, macOS and Windows are not covered by these specs. The
+  Android instrumentation case is below.
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
-  native input, back navigation, IME or attachments are involved.
+  native input, back navigation, IME or attachments are involved. `ownedTmuxAgentViewThroughRealUi`
+  (`native-android-tmux`, host test `actual Android Agent view follows a reporting agent pane ...`)
+  runs the stand-in in window `alpha` of the owned pinned tmux server, with the real companion beside
+  it, and drives only the packaged UI on a phone-sized window: a prompt typed through the terminal's
+  soft-keyboard input starts a `hold ...` turn; Terminal, Agent, Terminal and Agent again keep the one
+  xterm node (marked in the DOM) and its scroll height while the view shows the running turn and
+  **Working**; a prompt sent from the Agent view composer becomes a turn and ends the held one;
+  Android Back from the bound Agent view shows the same node and the prompt once; a second typed
+  prompt becomes a turn within 5 s of showing the Agent view (a phone has no **Both**, so the view is
+  shown after typing, not beside it). The host then reads the stand-in's own log and key log: each
+  of the three prompts logged once and in order, no key other than the prompts (so none from any
+  view switch), the pane showing each prompt once, one display client attached and detached, and
+  the original server and pane processes alive throughout. The pane identity, scrollback length and
+  cursor are not sampled at the moment of the switch on Android, as the native Linux case does.
 - **Co-existence cases, required in every slice**:
   1. Switch Terminal → Agent → Terminal while a turn is running; the connection id,
      PTY and scrollback length are unchanged and no bytes were written by the switch.
