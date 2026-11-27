@@ -331,6 +331,8 @@ if [[ -n "$INSTRUMENTATION_DELAY" ]]; then sleep "$INSTRUMENTATION_DELAY"; fi
 exit "$INSTRUMENTATION_EXIT"
 `);
   await writeFile(fakeAdb, `#!/bin/bash
+if [[ "$*" == 'logcat -b events -d -s am_anr' ]]; then exit 0; fi
+if [[ "$*" == 'shell pidof com.android.systemui' ]]; then printf '4242\\n'; exit 0; fi
 if [[ "$1" == logcat ]]; then
   printf '%s\\n' "$$" > "$COLLECTOR_PID"
   printf 'ActivityManager: bounded fixture collector\\n'
@@ -349,13 +351,13 @@ exit "$SDK_EXIT"
 `);
   await Promise.all([fakeBun, fakeAdb, fakeCargo].map(path => chmod(path, 0o755)));
   await mkdir(join(directory, '.github/scripts'), { recursive: true });
-  await copyFile(new URL('../.github/scripts/android-dismiss-error-dialogs.sh', import.meta.url), join(directory, '.github/scripts/android-dismiss-error-dialogs.sh'));
+  for (const name of ['android-await-systemui.sh', 'android-dismiss-error-dialogs.sh']) await copyFile(new URL(`../.github/scripts/${name}`, import.meta.url), join(directory, `.github/scripts/${name}`));
   const child = Bun.spawn(['sh', '-c', commands[0]], {
     cwd: directory,
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, COLLECTOR_PID: marker, INVOCATIONS: invocations,
       MOSH_EXIT: String(mosh), INSTRUMENTATION_EXIT: String(instrumentation), QR_EXIT: String(qr), VOICE_EXIT: String(voice), FDROID_EXIT: String(fdroid), SDK_EXIT: String(sdk),
       ANDROID_SERIAL: 'emulator-5580', LAZYSH_ANDROID_RUNTIME_OWNER: owner, LAZYSH_ANDROID_UI_NATIVE_TMUX: nativeTmux ? '1' : '0', LAZYSH_ANDROID_UI_NATIVE_ZELLIJ: nativeZellij ? '1' : '0', SDK_SERIAL: sdkSerial, SDK_ARGUMENTS: sdkArguments,
-      RUNNER_TEMP: directory, TMPDIR: directory, QR_PID_FILE: qrPidFile, LAZYSH_DIALOG_SETTLE_SECONDS: '0',
+      RUNNER_TEMP: directory, TMPDIR: directory, QR_PID_FILE: qrPidFile, LAZYSH_DIALOG_SETTLE_SECONDS: '0', LAZYSH_SYSTEMUI_POLL_SECONDS: '0',
       LAZYSH_ANDROID_WATCHDOG_SECONDS: watchdog ? '1' : '3480', INSTRUMENTATION_DELAY: watchdog ? '3' : '',
       DIAGNOSTIC_FAILURE: diagnosticFailure ? '1' : '0',
       DIAGNOSTIC_OVERFLOW: overflow ? '1' : '0' },
@@ -364,8 +366,8 @@ exit "$SDK_EXIT"
   const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   const expectedExit = owner==='mosh' ? mosh : owner==='guarded' ? instrumentation : owner==='auxiliary' ? fdroid || qr || voice || sdk : ['herdr-navigation','tmux','zellij','ssh-parity','appium'].includes(owner) ? instrumentation : 1;
   expect(exit).toBe(expectedExit);
-  // The fake device has no dialog to dismiss (or, with a failing adb, no readable hierarchy); the receipt is the only output.
-  expect(stdout).toBe(`android error dialogs: focus unavailable\n${diagnosticFailure ? 'android error dialogs: view hierarchy unavailable' : 'android error dialogs: none present'}\n`);
+  // The fake device has a settled SystemUI and no dialog to dismiss (or, with a failing adb, no readable hierarchy); the two receipts are the only output.
+  expect(stdout).toBe(`android systemui gate: settled after 0 reboot(s)\nandroid error dialogs: focus unavailable\n${diagnosticFailure ? 'android error dialogs: view hierarchy unavailable' : 'android error dialogs: none present'}\n`);
   if (!overflow) expect(stderr).toBe(['mosh','guarded','auxiliary','herdr-navigation','tmux','zellij','ssh-parity','appium'].includes(owner)?'':'Unknown Android runtime owner\n');
   // The first failing case stops the run: the cases after it are not started.
   const sdkCases = ['devices::tests::android_owned_emulator_inventory_and_screenshot',
@@ -424,4 +426,20 @@ exit "$SDK_EXIT"
     expect((await stat(join(diagnostics, 'lastanr-traces.txt'))).size).toBe(1024 * 1024);
     expect(status).toContain('lastanr-traces exit=153');
   }
+});
+
+test.skipIf(process.platform!=='linux')('emulator script stops before collecting or starting any native case when SystemUI never settles',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'lazysh-android-gate-'));temporary.push(directory);
+  const bin=join(directory,'bin'),invocations=join(directory,'invocations.txt');
+  await mkdir(bin);await mkdir(join(directory,'.github/scripts'),{recursive:true});
+  await writeFile(join(bin,'adb'),"#!/bin/sh\necho \"$*\" >> \"$INVOCATIONS\"\nif [ \"$*\" = 'logcat -b events -d -s am_anr' ]; then echo '11-13 16:43:47.100 635 1494 I am_anr  : [0,971,com.android.systemui,1,failed to complete startup]'; fi\n",{mode:0o755});
+  await writeFile(join(bin,'bun'),"#!/bin/sh\necho \"bun $*\" >> \"$INVOCATIONS\"\n",{mode:0o755});
+  await copyFile(new URL('../.github/scripts/android-await-systemui.sh',import.meta.url),join(directory,'.github/scripts/android-await-systemui.sh'));
+  const child=Bun.spawn(['sh','-c',commands[0]],{cwd:directory,stdout:'pipe',stderr:'pipe',env:{...process.env,PATH:`${bin}:${process.env.PATH}`,INVOCATIONS:invocations,
+    ANDROID_SERIAL:'emulator-5580',LAZYSH_ANDROID_RUNTIME_OWNER:'guarded',RUNNER_TEMP:directory,LAZYSH_SYSTEMUI_REBOOTS:'0',LAZYSH_SYSTEMUI_POLLS:'0'}});
+  const [exit,stdout]=await Promise.all([child.exited,new Response(child.stdout).text()]);
+  expect(exit).toBe(1);
+  expect(stdout).toContain('android systemui gate: still unsettled after 0 reboot(s); no native case was started');
+  expect((await readFile(invocations,'utf8')).split('\n').filter(Boolean)).toEqual(['logcat -b events -d -s am_anr']);
+  expect(await readdir(directory)).not.toContain('apps');
 });
