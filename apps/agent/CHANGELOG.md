@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.104.0
+
+### Minor Changes
+
+- feat(agents): show running agent processes on Linux hosts ([#2542](https://github.com/mihazs/lazysh/pull/2542))
+
+  <details><summary>Details</summary>
+
+  The Agents page lists same-user processes recognized by executable name, including agents started outside a multiplexer. Process discovery is read-only and does not infer a conversation or input destination.
+
+  </details>
+
 ## 1.103.0
 
 ### Patch Changes

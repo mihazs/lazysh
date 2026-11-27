@@ -1,5 +1,75 @@
 # @lazysh/client
 
+## 1.104.0
+
+### Minor Changes
+
+- feat(agents): show running agent processes on Linux hosts ([#2542](https://github.com/mihazs/lazysh/pull/2542))
+
+  <details><summary>Details</summary>
+
+  The Agents page lists same-user processes recognized by executable name, including agents started outside a multiplexer. Process discovery is read-only and does not infer a conversation or input destination.
+
+  </details>
+- feat(settings): move agent image previews to Preferences ([#2538](https://github.com/mihazs/lazysh/pull/2538))
+
+  <details><summary>Details</summary>
+
+  Choose which agents load image previews under Agents and notifications. Existing choices carry over.
+
+  </details>
+
+### Patch Changes
+
+- feat(terminal): add an opt-in Metal terminal surface on iOS ([#2692](https://github.com/mihazs/lazysh/pull/2692))
+
+  <details><summary>Details</summary>
+
+  New VoiceOver sessions use the accessible terminal backend. Turning on VoiceOver in an open native session exposes the current terminal rows.
+
+  </details>
+- fix(android): keep native terminal link taps inside the consent prompt ([#2697](https://github.com/mihazs/lazysh/pull/2697))
+- perf(terminal): the native renderer repaints only the changed cells of a row ([#2830](https://github.com/mihazs/lazysh/pull/2830))
+
+  <details><summary>Details</summary>
+
+  A full-screen repaint in which only a counter changes per row sends 92 % fewer instances and bytes to the GPU in the benchmark on the host GPU, with the same pixels.
+
+  </details>
+- fix(terminal): preserve mouse modifiers and report desktop wheel events in native terminals ([#2778](https://github.com/mihazs/lazysh/pull/2778))
+- perf(agents): draw the Agent view's folded tool activity only when it is opened ([#2829](https://github.com/mihazs/lazysh/pull/2829))
+
+  <details><summary>Details</summary>
+
+  A 100-message conversation puts about 400 elements in the page instead of about 1,500 and costs about 40 % less main-thread script at 4x CPU slowdown.
+
+  </details>
+- fix(agent): soften the focused message composer outline ([#2656](https://github.com/mihazs/lazysh/pull/2656))
+- fix(agents): open long Claude Code conversations in the Agent view and page back through them ([#2782](https://github.com/mihazs/lazysh/pull/2782))
+
+  <details><summary>Details</summary>
+
+  A Claude Code transcript over 16 MiB (64 MiB when Herdr selects it) no longer reports "too large to open here". The companion reads the newest page and then the older or newer ones from a bounded part of the file, keeps the queued prompts and session state, and cuts a block over 256 KiB with a note instead of refusing the conversation.
+
+  </details>
+- fix(android): reopen Lazysh when the System WebView renderer exits ([#2763](https://github.com/mihazs/lazysh/pull/2763))
+
+  <details><summary>Details</summary>
+
+  Android rebuilds the Lazysh interface after its renderer exits, so saved connections remain available for reconnecting.
+
+  </details>
+- fix(ci): wait for exact Android connection form text in the published APK check ([#2719](https://github.com/mihazs/lazysh/pull/2719))
+- fix(theme): say the QR image could not be read instead of blaming decoding ([#2774](https://github.com/mihazs/lazysh/pull/2774))
+
+  <details><summary>Details</summary>
+
+  When the page cannot read the chosen QR image file, the error now asks you to choose it again rather than saying the image could not be decoded.
+
+  </details>
+- fix(terminal): report incomplete Android frame-pacing counters as unmeasured ([#2713](https://github.com/mihazs/lazysh/pull/2713))
+- feat(agents): attach files directly from the compact prompt composer ([#2775](https://github.com/mihazs/lazysh/pull/2775))
+
 ## 1.103.0
 
 ### Minor Changes

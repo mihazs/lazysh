@@ -10,6 +10,31 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.104.0] - 2026-11-27
+
+### New
+
+- **agents:** show running agent processes on Linux hosts ([#2542](https://github.com/mihazs/lazysh/pull/2542))
+- **settings:** move agent image previews to Preferences ([#2538](https://github.com/mihazs/lazysh/pull/2538))
+- **terminal:** add an opt-in Metal terminal surface on iOS ([#2692](https://github.com/mihazs/lazysh/pull/2692))
+- **agents:** attach files directly from the compact prompt composer ([#2775](https://github.com/mihazs/lazysh/pull/2775))
+
+### Improved
+
+- **terminal:** the native renderer repaints only the changed cells of a row ([#2830](https://github.com/mihazs/lazysh/pull/2830))
+- **agents:** draw the Agent view's folded tool activity only when it is opened ([#2829](https://github.com/mihazs/lazysh/pull/2829))
+
+### Fixed
+
+- **android:** keep native terminal link taps inside the consent prompt ([#2697](https://github.com/mihazs/lazysh/pull/2697))
+- **terminal:** preserve mouse modifiers and report desktop wheel events in native terminals ([#2778](https://github.com/mihazs/lazysh/pull/2778))
+- **agent:** soften the focused message composer outline ([#2656](https://github.com/mihazs/lazysh/pull/2656))
+- **agents:** open long Claude Code conversations in the Agent view and page back through them ([#2782](https://github.com/mihazs/lazysh/pull/2782))
+- **android:** reopen Lazysh when the System WebView renderer exits ([#2763](https://github.com/mihazs/lazysh/pull/2763))
+- **ci:** wait for exact Android connection form text in the published APK check ([#2719](https://github.com/mihazs/lazysh/pull/2719))
+- **theme:** say the QR image could not be read instead of blaming decoding ([#2774](https://github.com/mihazs/lazysh/pull/2774))
+- **terminal:** report incomplete Android frame-pacing counters as unmeasured ([#2713](https://github.com/mihazs/lazysh/pull/2713))
+
 ## [1.103.0] - 2026-11-27
 
 ### New
