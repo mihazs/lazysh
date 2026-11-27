@@ -70,10 +70,16 @@ const ALLOWED: [&str; 27] = [
 
 /// The only WebDriver BiDi commands the Firefox adapter sends (docs/host-browser.md, "Adapters and
 /// capabilities"). The same closed-list rule as [`ALLOWED`]: a command that a later Firefox adds is not reachable.
-const BIDI_ALLOWED: [&str; 8] = [
+const BIDI_ALLOWED: [&str; 14] = [
+    "browsingContext.activate",
     "browsingContext.captureScreenshot",
+    "browsingContext.close",
+    "browsingContext.create",
     "browsingContext.getTree",
+    "browsingContext.navigate",
+    "browsingContext.reload",
     "browsingContext.setViewport",
+    "browsingContext.traverseHistory",
     "input.performActions",
     "input.releaseActions",
     "script.evaluate",
@@ -83,6 +89,9 @@ const BIDI_ALLOWED: [&str; 8] = [
 
 /// The one script the relay ever runs in a page: it reads the title, because `browsingContext.getTree` has none.
 pub const TITLE_EXPRESSION: &str = "document.title";
+
+/// What a navigation may wait for before Firefox answers.
+const WAITS: [&str; 3] = ["none", "interactive", "complete"];
 
 /// Editing commands that read or write the host's clipboard; a key event may carry them.
 const CLIPBOARD_COMMANDS: [&str; 4] = ["copy", "cut", "paste", "pasteandmatchstyle"];
@@ -181,6 +190,15 @@ pub fn bidi(method: &str, params: &Value) -> Result<(), Refusal> {
         }
         "input.performActions" => bidi_actions(params),
         "input.releaseActions" if !is_context_only(params) => Err(Refusal::Unlisted),
+        "browsingContext.navigate" if address(text(params, "url")).is_err() => {
+            Err(Refusal::Address)
+        }
+        "browsingContext.activate"
+        | "browsingContext.close"
+        | "browsingContext.create"
+        | "browsingContext.navigate"
+        | "browsingContext.reload"
+        | "browsingContext.traverseHistory" => tab_command(method, params),
         _ => Ok(()),
     }
 }
@@ -299,6 +317,36 @@ fn bidi_action(kind: &str, action: &Value, held: &mut Vec<char>) -> Result<(), R
         _ => false,
     };
     ok.then_some(()).ok_or(Refusal::Unlisted)
+}
+
+/// The page and tab commands take exactly the parameters the relay sends, and nothing a client could add: a
+/// context to act on, a fixed wait, one history step, and a plain new tab (no user context, no reference tab).
+fn tab_command(method: &str, params: &Value) -> Result<(), Refusal> {
+    let wait = params
+        .get("wait")
+        .is_none_or(|wait| wait.as_str().is_some_and(|wait| WAITS.contains(&wait)));
+    let context = params["context"].is_string();
+    let (keys, valid): (&[&str], bool) = match method {
+        "browsingContext.navigate" => (&["context", "url", "wait"], context && wait),
+        "browsingContext.reload" => (&["context", "wait"], context && wait),
+        "browsingContext.traverseHistory" => (
+            &["context", "delta"],
+            context && matches!(params["delta"].as_i64(), Some(-1 | 1)),
+        ),
+        "browsingContext.create" => (
+            &["type", "background"],
+            params["type"] == "tab" && params.get("background").is_none_or(Value::is_boolean),
+        ),
+        _ => (&["context"], context),
+    };
+    let only_keys = params
+        .as_object()
+        .is_some_and(|map| map.keys().all(|key| keys.contains(&key.as_str())));
+    if valid && only_keys {
+        Ok(())
+    } else {
+        Err(Refusal::Unlisted)
+    }
 }
 
 #[cfg(test)]
@@ -610,6 +658,108 @@ mod tests {
                 Refusal::Script,
             ),
             ("script.evaluate", none.clone(), Refusal::Script),
+            // Addresses that are not web pages or blank, however Firefox would treat them (`file:` opens).
+            (
+                "browsingContext.navigate",
+                json!({"context":"c","url":"file:///etc/hostname","wait":"none"}),
+                Refusal::Address,
+            ),
+            (
+                "browsingContext.navigate",
+                json!({"context":"c","url":"javascript:alert(1)"}),
+                Refusal::Address,
+            ),
+            (
+                "browsingContext.navigate",
+                json!({"context":"c","url":"data:text/html,x"}),
+                Refusal::Address,
+            ),
+            (
+                "browsingContext.navigate",
+                json!({"context":"c"}),
+                Refusal::Address,
+            ),
+            // Parameters outside what the relay sends.
+            (
+                "browsingContext.navigate",
+                json!({"context":"c","url":"https://a.test/","wait":"forever"}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.navigate",
+                json!({"context":1,"url":"https://a.test/"}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.navigate",
+                json!({"context":"c","url":"https://a.test/","referrer":"x"}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.reload",
+                json!({"context":"c","ignoreCache":true}),
+                Refusal::Unlisted,
+            ),
+            ("browsingContext.reload", none.clone(), Refusal::Unlisted),
+            (
+                "browsingContext.traverseHistory",
+                json!({"context":"c","delta":5}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.traverseHistory",
+                json!({"context":"c","delta":0}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.traverseHistory",
+                json!({"context":"c","delta":-1.5}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.create",
+                json!({"type":"window"}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.create",
+                json!({"type":"tab","userContext":"u"}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.create",
+                json!({"type":"tab","referenceContext":"c"}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.create",
+                json!({"type":"tab","background":"yes"}),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.close",
+                json!({"context":"c","promptUnload":true}),
+                Refusal::Unlisted,
+            ),
+            ("browsingContext.close", none.clone(), Refusal::Unlisted),
+            ("browsingContext.activate", none.clone(), Refusal::Unlisted),
+            // Nothing else of the domain: no stop exists, and the rest stays closed.
+            ("browsingContext.stop", none.clone(), Refusal::Unlisted),
+            (
+                "browsingContext.setBypassCSP",
+                none.clone(),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.handleUserPrompt",
+                none.clone(),
+                Refusal::Unlisted,
+            ),
+            (
+                "browsingContext.locateNodes",
+                none.clone(),
+                Refusal::Unlisted,
+            ),
         ] {
             assert_eq!(bidi(method, &params), Err(refusal), "{method} {params}");
         }
@@ -622,6 +772,32 @@ mod tests {
             ("session.new", json!({"capabilities":{}})),
             ("session.end", json!({})),
             ("browsingContext.getTree", json!({})),
+            (
+                "browsingContext.navigate",
+                json!({"context":"c","url":"https://example.com/a?b=1","wait":"none"}),
+            ),
+            (
+                "browsingContext.navigate",
+                json!({"context":"c","url":"about:blank"}),
+            ),
+            (
+                "browsingContext.reload",
+                json!({"context":"c","wait":"complete"}),
+            ),
+            (
+                "browsingContext.traverseHistory",
+                json!({"context":"c","delta":-1}),
+            ),
+            (
+                "browsingContext.traverseHistory",
+                json!({"context":"c","delta":1}),
+            ),
+            (
+                "browsingContext.create",
+                json!({"type":"tab","background":true}),
+            ),
+            ("browsingContext.activate", json!({"context":"c"})),
+            ("browsingContext.close", json!({"context":"c"})),
             (
                 "browsingContext.setViewport",
                 json!({"context":"c","viewport":{"width":412,"height":915}}),

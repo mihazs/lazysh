@@ -5,59 +5,63 @@ use super::*;
 use std::sync::{Arc, Mutex};
 
 static NOTHING: Value = Value::Null;
-/// The calls that are the relay's own reading of the browser: the poll, the history request and the
-/// acknowledgements. A message of the client never causes them by itself.
-const READING: [&str; 3] = [
+/// The calls that are the relay's own reading of the browser: the poll, the history request, the
+/// acknowledgements, and for Firefox the tree, the screenshots and the titles. A message of the client never
+/// causes them by itself.
+const READING: [&str; 6] = [
     "Target.getTargets",
     "Page.getNavigationHistory",
     "Page.screencastFrameAck",
+    "browsingContext.getTree",
+    "browsingContext.captureScreenshot",
+    "script.evaluate",
 ];
 
 /// What a client knows from the relay's messages so far: the newest tab list, and every dialog, notice and refusal.
 #[derive(Debug, Default)]
-struct Known {
-    state: Value,
-    tabs: Value,
+pub(super) struct Known {
+    pub(super) state: Value,
+    pub(super) tabs: Value,
     /// How many tab lists the relay has sent.
-    tab_lists: u32,
-    dialogs: Vec<Value>,
-    dialogs_closed: u32,
-    notices: Vec<(String, u64)>,
-    refusals: Vec<(String, u64)>,
-    frames: u32,
+    pub(super) tab_lists: u32,
+    pub(super) dialogs: Vec<Value>,
+    pub(super) dialogs_closed: u32,
+    pub(super) notices: Vec<(String, u64)>,
+    pub(super) refusals: Vec<(String, u64)>,
+    pub(super) frames: u32,
     /// The middle pixel of the newest frame that was a picture.
-    center: Option<[u8; 3]>,
-    closed: Option<Value>,
+    pub(super) center: Option<[u8; 3]>,
+    pub(super) closed: Option<Value>,
 }
 impl Known {
-    fn tabs(&self) -> &[Value] {
+    pub(super) fn tabs(&self) -> &[Value] {
         self.tabs["tabs"].as_array().map_or(&[], Vec::as_slice)
     }
-    fn shown(&self) -> &Value {
+    pub(super) fn shown(&self) -> &Value {
         let active = &self.tabs["activeId"];
         self.tabs()
             .iter()
             .find(|tab| tab["id"] == *active)
             .unwrap_or(&NOTHING)
     }
-    fn ids(&self) -> Vec<&str> {
+    pub(super) fn ids(&self) -> Vec<&str> {
         self.tabs()
             .iter()
             .filter_map(|tab| tab["id"].as_str())
             .collect()
     }
     /// The shown page's title and address.
-    fn at(&self, title: &str, url: &str) -> bool {
+    pub(super) fn at(&self, title: &str, url: &str) -> bool {
         self.shown()["title"] == title && self.shown()["url"] == url
     }
-    fn refused(&self, reason: &str, count: u64) -> bool {
+    pub(super) fn refused(&self, reason: &str, count: u64) -> bool {
         self.refusals.contains(&(reason.to_string(), count))
     }
-    fn noticed(&self, kind: &str, count: u64) -> bool {
+    pub(super) fn noticed(&self, kind: &str, count: u64) -> bool {
         self.notices.contains(&(kind.to_string(), count))
     }
     /// The newest frame is mostly the color `(red, green, blue)`, give or take what a JPEG does to it.
-    fn shows(&self, color: [u8; 3]) -> bool {
+    pub(super) fn shows(&self, color: [u8; 3]) -> bool {
         self.center.is_some_and(|pixel| {
             pixel
                 .iter()
@@ -68,21 +72,21 @@ impl Known {
 }
 
 /// A relay and what its client has been told, keeping up the way the app does: each frame is acknowledged.
-struct Client {
-    relay: Relay,
-    known: Known,
+pub(super) struct Client {
+    pub(super) relay: Relay,
+    pub(super) known: Known,
 }
 impl Client {
-    fn new(relay: Relay) -> Self {
+    pub(super) fn new(relay: Relay) -> Self {
         Self {
             relay,
             known: Known::default(),
         }
     }
-    fn send(&mut self, message: Value) {
+    pub(super) fn send(&mut self, message: Value) {
         self.relay.send(message);
     }
-    fn absorb(&mut self, message: Message) {
+    pub(super) fn absorb(&mut self, message: Message) {
         let known = &mut self.known;
         match message {
             Message::Frame { sequence, jpeg, .. } => {
@@ -119,7 +123,7 @@ impl Client {
         }
     }
     /// Read messages until what the client knows satisfies `done`; `what` is named when it never does.
-    fn until(&mut self, what: &str, done: impl Fn(&Known) -> bool) {
+    pub(super) fn until(&mut self, what: &str, done: impl Fn(&Known) -> bool) {
         let deadline = Instant::now() + WAIT * 2;
         while !done(&self.known) {
             let wait = deadline.saturating_duration_since(Instant::now());
@@ -131,13 +135,32 @@ impl Client {
     }
     /// Wait until the relay has handled everything sent so far: it answers a request for the list after the
     /// messages before it, and messages are handled in order.
-    fn settled(&mut self) {
+    pub(super) fn settled(&mut self) {
         let lists = self.known.tab_lists;
         self.send(json!({"type": "tabs"}));
         self.until("the relay answered", |known| known.tab_lists > lists);
     }
+    /// The last message that is valid ends what came before it: eight refused addresses and four other refused
+    /// messages were counted, and the valid address opened.
+    pub(super) fn ends_with_a_valid_address(&mut self) {
+        self.send(json!({"type": "navigate", "url": "http://127.0.0.1:3000/last"}));
+        self.until("the refusals were counted", |known| {
+            known.refused("AddressRefused", 8) && known.refused("OperationRefused", 4)
+        });
+        self.until("the valid address was opened", |known| {
+            known.shown()["url"] == "http://127.0.0.1:3000/last"
+        });
+    }
+    /// A reload asks the site again: the page at `count` tells how many times it was asked.
+    pub(super) fn reloads_the_counting_page(&mut self, site: &Site, count: &str) {
+        self.send(json!({"type": "navigate", "url": count}));
+        self.until("the first count", |known| known.at("count=1", count));
+        self.send(json!({"type": "reload"}));
+        self.until("the second count", |known| known.at("count=2", count));
+        assert!(site.asked("/count") >= 2);
+    }
     /// A tap at a point, with Control on.
-    fn tap(&mut self, x: u32, y: u32) {
+    pub(super) fn tap(&mut self, x: u32, y: u32) {
         self.relay.tap(x, y);
     }
 }
@@ -154,14 +177,14 @@ impl Fixture {
         client
     }
     /// Every call the browser received is one the allow-list passes.
-    fn assert_allowed(&self) {
+    pub(super) fn assert_allowed(&self) {
         for call in self.commands() {
             let method = call["method"].as_str().unwrap();
             assert_eq!(allow::command(method, &call["params"]), Ok(()), "{method}");
         }
     }
     /// The calls the browser has received, less the relay's own reading.
-    fn made(&self) -> Vec<Value> {
+    pub(super) fn made(&self) -> Vec<Value> {
         let own = |call: &Value| READING.contains(&call["method"].as_str().unwrap());
         self.commands()
             .into_iter()
@@ -169,7 +192,7 @@ impl Fixture {
             .collect()
     }
     /// The calls received after the first `before`, once there are `count` of them.
-    fn made_after(&self, before: usize, count: usize) -> Vec<Value> {
+    pub(super) fn made_after(&self, before: usize, count: usize) -> Vec<Value> {
         let deadline = Instant::now() + WAIT;
         loop {
             let calls = self.made().split_off(before);
@@ -182,7 +205,7 @@ impl Fixture {
 }
 
 /// Each call as its method, and the page session it went to when it went to one: `Page.reload@S1`.
-fn named(calls: &[Value]) -> Vec<String> {
+pub(super) fn named(calls: &[Value]) -> Vec<String> {
     calls
         .iter()
         .map(|call| match call["sessionId"].as_str() {
@@ -193,7 +216,7 @@ fn named(calls: &[Value]) -> Vec<String> {
 }
 
 /// The parameters of the one call of `method` in `calls`.
-fn params<'a>(calls: &'a [Value], method: &str) -> &'a Value {
+pub(super) fn params<'a>(calls: &'a [Value], method: &str) -> &'a Value {
     let mut found = calls.iter().filter(|call| call["method"] == method);
     let call = found
         .next()
@@ -310,14 +333,7 @@ fn an_address_outside_the_allowed_set_or_a_tab_that_is_not_listed_is_dropped_and
         json!({"type": "navigate", "url": "https://a.test/", "method": "Network.getCookies"}),
     );
     client.send(json!({"type": "reload", "ignoreCache": true}));
-    // The last message that is valid ends what came before it.
-    client.send(json!({"type": "navigate", "url": "http://127.0.0.1:3000/last"}));
-    client.until("the refusals were counted", |known| {
-        known.refused("AddressRefused", 8) && known.refused("OperationRefused", 4)
-    });
-    client.until("the valid address was opened", |known| {
-        known.shown()["url"] == "http://127.0.0.1:3000/last"
-    });
+    client.ends_with_a_valid_address();
     assert_eq!(
         named(&fixture.made().split_off(before)),
         ["Page.navigate@S1"]
@@ -607,16 +623,16 @@ const NEXT: &str = "<!doctype html><title>Next</title><body style=\"margin:0;bac
 const QUESTION: &str = "<!doctype html><title>asked</title><style>body{margin:0}button{display:block;width:412px;height:200px}</style>
 <button onclick=\"document.title = 'answer=' + confirm('Delete everything?')\"></button>";
 const PAYLOAD: &str = "payload-bytes-that-must-not-reach-a-disk";
-const YELLOW: [u8; 3] = [200, 200, 0];
-const GREEN: [u8; 3] = [0, 200, 0];
+pub(super) const YELLOW: [u8; 3] = [200, 200, 0];
+pub(super) const GREEN: [u8; 3] = [0, 200, 0];
 
 /// A loopback site, and what the browser asked it for.
-struct Site {
+pub(super) struct Site {
     port: u16,
     asked: Arc<Mutex<Vec<String>>>,
 }
 impl Site {
-    fn start() -> Self {
+    pub(super) fn start() -> Self {
         let asked = Arc::new(Mutex::new(Vec::new()));
         let seen = asked.clone();
         let (port, _) = serve_pages(move |path| {
@@ -647,10 +663,10 @@ impl Site {
         });
         Self { port, asked }
     }
-    fn url(&self, path: &str) -> String {
+    pub(super) fn url(&self, path: &str) -> String {
         format!("http://127.0.0.1:{}{path}", self.port)
     }
-    fn asked(&self, path: &str) -> usize {
+    pub(super) fn asked(&self, path: &str) -> usize {
         self.asked
             .lock()
             .unwrap()
@@ -728,13 +744,8 @@ fn a_real_browser_opens_a_second_tab_through_a_link_switches_goes_back_and_reloa
     client.send(json!({"type": "forward"}));
     client.until("forward again", |known| known.at("Next", &next));
 
-    // A reload asks the site again: the page counts how many times it was asked.
     let count = site.url("/count");
-    client.send(json!({"type": "navigate", "url": count}));
-    client.until("the first count", |known| known.at("count=1", &count));
-    client.send(json!({"type": "reload"}));
-    client.until("the second count", |known| known.at("count=2", &count));
-    assert!(site.asked("/count") >= 2);
+    client.reloads_the_counting_page(&site, &count);
 
     // Closing the tab that is not shown leaves the view where it is.
     client.send(json!({"type": "closeTab", "id": second}));

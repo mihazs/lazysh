@@ -212,11 +212,11 @@ impl Relay {
             Message::Json(_) => unreachable!(),
         }
     }
-    /// Whether no frame and no control other than page and quality information arrives within `wait`.
+    /// Whether no frame and no control other than page, tab list and quality information arrives within `wait`.
     fn quiet(&self, wait: Duration) -> bool {
         let deadline = Instant::now() + wait;
         while let Some(message) = self.within(deadline.saturating_duration_since(Instant::now())) {
-            if !["page", "quality"].contains(&message.kind()) {
+            if !["page", "tabs", "quality"].contains(&message.kind()) {
                 return false;
             }
         }

@@ -1,6 +1,7 @@
 //! The Firefox adapter of the host browser relay, driven the way the Chrome one is: through the real relay process
 //! and its standard input and output, over a stand-in Firefox that speaks WebDriver BiDi (exact commands, leaked
 //! sessions, versions) and over a real Firefox where the host has one.
+use super::navigation::{named, params, Client, Site, GREEN, YELLOW};
 use super::*;
 use lazysh_agent::host_browser::bidi;
 use std::{
@@ -764,5 +765,311 @@ fn a_real_firefox_holding_a_leaked_session_is_replaced_and_then_streams() {
     wait_gone(fixture.pid("leaked-pid"));
     let profile = fixture.profiles().remove(0);
     relay.stop();
+    assert_real_browser_is_gone(&profile);
+}
+
+const START: &str = "http://127.0.0.1:3000/start";
+const MAGENTA: [u8; 3] = [200, 0, 200];
+
+/// A client of the stand-in Firefox, once its first frame and tab list are in.
+fn client(fixture: &Fixture, mode: &str) -> Client {
+    let mut client = Client::new(serve(fixture, mode, "160.0"));
+    client.until("the first page", |known| {
+        known.frames > 0 && !known.tabs().is_empty()
+    });
+    client
+}
+
+/// Wait until the stand-in's newest screenshot is of `context`: that is the page that streams.
+fn streams(fixture: &Fixture, context: &str) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let newest = fixture
+            .commands()
+            .into_iter()
+            .rfind(|call| call["method"] == "browsingContext.captureScreenshot");
+        if newest.is_some_and(|call| call["params"]["context"] == context) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{context} never streamed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn navigation_messages_become_exactly_their_commands_and_stop_is_refused() {
+    let fixture = fixture();
+    let mut client = client(&fixture, "");
+    assert_eq!(
+        client.known.state["capabilities"],
+        json!({
+            "view": true,
+            "control": true,
+            "pinch": false,
+            "composition": false,
+            "navigation": true,
+            "tabs": true,
+            "stop": false,
+            "unavailable": {"pinch": "NoPagePinch", "composition": "NoTextInsertion"},
+        })
+    );
+    client.until("its title", |known| known.at("Fixture page", START));
+    let address = "https://example.com/a";
+    // Navigation is not input: Control stays off through all of it.
+    for (message, wanted, page) in [
+        (
+            json!({"type": "navigate", "url": address}),
+            json!({"context": "C1", "url": address, "wait": "none"}),
+            ("Title of example.com/a", address),
+        ),
+        (
+            json!({"type": "back"}),
+            json!({"context": "C1", "delta": -1}),
+            ("Fixture page", START),
+        ),
+        (
+            json!({"type": "forward"}),
+            json!({"context": "C1", "delta": 1}),
+            ("Title of example.com/a", address),
+        ),
+        (
+            json!({"type": "reload"}),
+            json!({"context": "C1", "wait": "none"}),
+            ("Title of example.com/a", address),
+        ),
+    ] {
+        let before = fixture.made().len();
+        let method = format!(
+            "browsingContext.{}",
+            match message["type"].as_str().unwrap() {
+                "navigate" => "navigate",
+                "reload" => "reload",
+                _ => "traverseHistory",
+            }
+        );
+        client.send(message);
+        let calls = fixture.made_after(before, 1);
+        assert_eq!(named(&calls), [method.as_str()]);
+        assert_eq!(params(&calls, &method), &wanted);
+        client.until("the page followed", |known| known.at(page.0, page.1));
+    }
+    // Firefox has no command to stop a load: refused and counted, nothing sent.
+    let before = fixture.made().len();
+    client.send(json!({"type": "stop"}));
+    client.until("the refusal", |known| known.refused("OperationRefused", 1));
+    assert_eq!(fixture.made().len(), before);
+    // The end of the history is Firefox's error, which the relay takes as nothing to do.
+    client.send(json!({"type": "back"}));
+    client.send(json!({"type": "back"}));
+    client.settled();
+    assert!(client.known.closed.is_none());
+    assert_every_command_is_allowed(&fixture, allow::bidi);
+    client.relay.stop();
+}
+
+#[test]
+fn an_address_outside_the_allowed_set_or_a_tab_never_listed_never_reaches_firefox() {
+    let fixture = fixture();
+    let mut client = client(&fixture, "");
+    let before = fixture.made().len();
+    let long = format!("https://a.test/{}", "a".repeat(2100));
+    for address in [
+        "file:///etc/hostname",
+        "javascript:alert(1)",
+        "data:text/html,hi",
+        "about:config",
+        "view-source:https://a.test/",
+        "https://a.test/ a space",
+        "",
+        long.as_str(),
+    ] {
+        client.send(json!({"type": "navigate", "url": address}));
+    }
+    // A tab Firefox was never listed, and messages that name a field or a method the closed set lacks.
+    client.send(json!({"type": "activateTab", "id": "C9"}));
+    client.send(json!({"type": "closeTab", "id": "C9"}));
+    client.send(json!({"type": "navigate", "url": "https://a.test/", "context": "C9"}));
+    client.send(json!({"type": "reload", "ignoreCache": true}));
+    client.ends_with_a_valid_address();
+    let calls = fixture.made().split_off(before);
+    assert_eq!(named(&calls), ["browsingContext.navigate"]);
+    let sent = fixture.recorded("commands").unwrap();
+    for never in ["C9", "file:", "javascript:", "data:", "about:config"] {
+        assert!(!sent.contains(never), "{never} reached Firefox");
+    }
+    assert_every_command_is_allowed(&fixture, allow::bidi);
+    client.relay.stop();
+}
+
+#[test]
+fn a_popup_is_a_tab_and_switching_opening_and_closing_tabs_change_what_streams() {
+    let fixture = fixture();
+    let mut client = client(&fixture, "");
+    let before = fixture.made().len();
+    client.send(json!({"type": "navigate", "url": "http://fake.test/popup"}));
+    // The page Firefox lists with the shown one as its opener takes the view, like in a browser.
+    client.until("the popup is shown", |known| {
+        known.ids() == ["C1", "C2"]
+            && known.tabs["activeId"] == "C2"
+            && known.shown()["title"] == "Title of 127.0.0.1:3000/popped"
+    });
+    let calls = fixture.made_after(before, 3);
+    assert_eq!(
+        named(&calls),
+        [
+            "browsingContext.navigate",
+            "browsingContext.activate",
+            "browsingContext.setViewport"
+        ]
+    );
+    assert_eq!(
+        params(&calls, "browsingContext.setViewport"),
+        &json!({"context": "C2", "viewport": {"width": 412, "height": 915}, "devicePixelRatio": 1.0})
+    );
+    streams(&fixture, "C2");
+
+    let before = fixture.made().len();
+    client.send(json!({"type": "activateTab", "id": "C1"}));
+    client.until("the first tab", |known| known.tabs["activeId"] == "C1");
+    let calls = fixture.made_after(before, 2);
+    assert_eq!(
+        named(&calls),
+        ["browsingContext.activate", "browsingContext.setViewport"]
+    );
+    assert_eq!(
+        params(&calls, "browsingContext.activate"),
+        &json!({"context": "C1"})
+    );
+    streams(&fixture, "C1");
+    // Showing the page that is shown is not a switch.
+    let made = fixture.made().len();
+    client.send(json!({"type": "activateTab", "id": "C1"}));
+    client.settled();
+    assert_eq!(fixture.made().len(), made);
+
+    client.send(json!({"type": "newTab"}));
+    client.until("the new tab", |known| {
+        known.ids() == ["C1", "C2", "C3"] && known.tabs["activeId"] == "C3"
+    });
+    assert_eq!(
+        params(&fixture.made(), "browsingContext.create"),
+        &json!({"type": "tab", "background": true})
+    );
+    streams(&fixture, "C3");
+
+    // Closing the shown tab shows the last one; closing one that is not shown leaves the view alone.
+    client.send(json!({"type": "closeTab", "id": "C3"}));
+    client.until("the last tab is back", |known| {
+        known.ids() == ["C1", "C2"] && known.tabs["activeId"] == "C2"
+    });
+    streams(&fixture, "C2");
+    client.send(json!({"type": "closeTab", "id": "C1"}));
+    client.until("the first tab is gone", |known| {
+        known.ids() == ["C2"] && known.tabs["activeId"] == "C2"
+    });
+    // A browser keeps a page: the last one is replaced by a blank one first, and the session goes on.
+    client.send(json!({"type": "closeTab", "id": "C2"}));
+    client.until("a blank page replaces it", |known| {
+        known.ids() == ["C4"] && known.tabs["activeId"] == "C4"
+    });
+    streams(&fixture, "C4");
+    let calls = fixture.made();
+    let created = calls
+        .iter()
+        .rposition(|call| call["method"] == "browsingContext.create")
+        .unwrap();
+    let closed = calls
+        .iter()
+        .position(|call| {
+            call["method"] == "browsingContext.close" && call["params"]["context"] == "C2"
+        })
+        .unwrap();
+    assert!(created < closed, "the blank page was made after the close");
+    assert!(client.known.closed.is_none());
+    assert_every_command_is_allowed(&fixture, allow::bidi);
+    client.relay.stop();
+}
+
+#[test]
+fn a_page_that_opens_windows_without_end_is_held_to_sixteen_tabs() {
+    let fixture = fixture();
+    let mut client = client(&fixture, "");
+    client.send(json!({"type": "navigate", "url": "http://fake.test/popups"}));
+    client.until("the list is full", |known| known.tabs().len() == 16);
+    // The rest are closed again, and the list stays at the limit while Firefox keeps listing them.
+    let deadline = Instant::now() + WAIT;
+    while fixture
+        .made()
+        .iter()
+        .filter(|call| call["method"] == "browsingContext.close")
+        .count()
+        < 5
+    {
+        assert!(Instant::now() < deadline, "the extra pages were not closed");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    client.settled();
+    assert_eq!(client.known.tabs().len(), 16);
+    assert!(client.known.closed.is_none());
+    client.relay.stop();
+}
+
+/// The real Firefox: two pages, then history, a reload, a second tab, and an address it must never be sent.
+#[test]
+fn a_real_firefox_navigates_goes_back_and_forward_reloads_and_switches_tabs() {
+    let Some(binary) = firefox() else {
+        return;
+    };
+    let site = Site::start();
+    let (fixture, home) = (Fixture::enabled(), tempfile::tempdir().unwrap());
+    let mut client = Client::new(real(&fixture, &binary, home.path(), &site.url("/start")));
+    let (start, next, count) = (site.url("/start"), site.url("/next"), site.url("/count"));
+    client.until("the start page", |known| {
+        known.at("Start", &start) && known.shows(YELLOW)
+    });
+    assert_eq!(client.known.state["capabilities"]["navigation"], true);
+    assert_eq!(client.known.state["capabilities"]["tabs"], true);
+    let profile = fixture.profiles().remove(0);
+
+    client.send(json!({"type": "navigate", "url": next}));
+    client.until("the next page", |known| {
+        known.at("Next", &next) && known.shows(MAGENTA)
+    });
+    client.send(json!({"type": "back"}));
+    client.until("back", |known| {
+        known.at("Start", &start) && known.shows(YELLOW)
+    });
+    client.send(json!({"type": "forward"}));
+    client.until("forward", |known| {
+        known.at("Next", &next) && known.shows(MAGENTA)
+    });
+    client.reloads_the_counting_page(&site, &count);
+
+    // An address that is not a web page is refused by the relay: Firefox would have opened it.
+    client.send(json!({"type": "navigate", "url": "file:///etc/hostname"}));
+    client.until("the refusal", |known| known.refused("AddressRefused", 1));
+    client.settled();
+    assert!(client.known.at("count=2", &count));
+
+    // A second tab takes the view and streams its own pixels; the first is shown again on request.
+    let first = client.known.tabs()[0]["id"].as_str().unwrap().to_string();
+    client.send(json!({"type": "newTab"}));
+    client.until("the second tab", |known| known.tabs().len() == 2);
+    let second = client.known.tabs["activeId"].as_str().unwrap().to_string();
+    assert_ne!(first, second);
+    let popup = site.url("/popup");
+    client.send(json!({"type": "navigate", "url": popup}));
+    client.until("the popup page", |known| {
+        known.at("Popup", &popup) && known.shows(GREEN)
+    });
+    client.send(json!({"type": "activateTab", "id": first}));
+    client.until("the first tab again", |known| {
+        known.tabs["activeId"] == first.as_str() && known.at("count=2", &count)
+    });
+    client.send(json!({"type": "closeTab", "id": second}));
+    client.until("one tab", |known| known.ids() == [first.as_str()]);
+    assert!(client.known.closed.is_none());
+    assert_eq!(client.known.refusals, [("AddressRefused".to_string(), 1)]);
+    client.relay.stop();
     assert_real_browser_is_gone(&profile);
 }
