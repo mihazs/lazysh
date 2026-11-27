@@ -1579,9 +1579,11 @@ mod native {
         use std::time::{Duration, Instant};
 
         /// The cost on this machine's own drivers, with CPU rasterizers allowed so that a runner without a GPU
-        /// still creates a device, the expensive half. The shipping policy refuses that adapter.
+        /// still creates a device, the expensive half. The shipping policy refuses that adapter. The cost is
+        /// printed, not asserted: it measures runner load, and the 2 s answer deadline is covered by the
+        /// deterministic `within(PROBE_BUDGET, ..)` tests.
         #[test]
-        fn the_real_gpu_probe_answers_within_the_budget_and_never_offers_a_software_rasterizer() {
+        fn the_real_gpu_probe_never_offers_a_software_rasterizer() {
             let policy = lazysh_terminal_renderer_wgpu::Policy::for_platform();
             let started = Instant::now();
             let lenient = gpu_under(&policy.clone().with_software());
@@ -1590,7 +1592,6 @@ mod native {
                 "native terminal GPU probe: {:?} of {:?} in {cost:?}",
                 lenient.chosen, lenient.seen
             );
-            assert!(cost < PROBE_BUDGET, "{cost:?}");
             let strict = gpu();
             // This host has no Android debug switch: the shipping policy, whatever the machine offers.
             assert!(!software());
