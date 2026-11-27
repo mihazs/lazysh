@@ -1862,7 +1862,10 @@ mod tests {
                 "tool_response":{"file":{"content":"x".repeat(kilobytes * 1024)}}});
             let bytes = serde_json::to_vec(&payload).unwrap();
             assert!(bytes.len() > MAX_INPUT);
-            assert!(read_event(bytes.as_slice(), Agent::Claude, None).is_ok(), "{kilobytes} KiB");
+            assert!(
+                read_event(bytes.as_slice(), Agent::Claude, None).is_ok(),
+                "{kilobytes} KiB"
+            );
         }
     }
 }
