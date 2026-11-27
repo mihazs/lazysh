@@ -316,14 +316,19 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const answered = useMemo(() => new Set(messages.flatMap(message => message.blocks
     .filter(block => block.id && ((block.type === 'tool_result' && block.isError !== true) || block.status === 'completed'))
     .map(block => block.id!))), [messages]);
-  // The newest unanswered question is the dialog that may still be open: it stays out of the folded activity, and only it can be answered here.
+  // A single unanswered question may be the dialog that is open. With several calls the transcript
+  // does not establish which one owns the terminal, so leave them visible but do not guess an answer target.
   // The Agent view draws a call and its result as one card; a result whose call is not loaded keeps its own block.
   const toolResults = useMemo(() => timeline ? new Map(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_result' && block.id).map(block => [block.id!, block])) : new Map<string, Block>(), [timeline, messages]);
   // A plan call is drawn as the pinned plan chip, so its result ("Todos have been modified") is not a row of its own either.
   const toolCalls = useMemo(() => new Set(messages.flatMap(message => message.blocks).filter(block => block.type === 'tool_use' && block.id && (!block.card || block.card.kind === 'plan')).map(block => block.id!)), [messages]);
   // A message whose blocks are all results of loaded calls draws nothing of its own; the call's card carries its anchor so search and copy still find it.
   const resultAnchors = useMemo(() => new Map(messages.filter(message => timeline && message.blocks.length > 0 && message.blocks.every(block => block.type === 'tool_result' && block.id && toolCalls.has(block.id))).flatMap(message => message.blocks.map(block => [block.id!, message.id] as const))), [timeline, messages, toolCalls]);
-  const pendingQuestion = useMemo(() => timeline ? messages.flatMap(message => message.blocks).filter(block => block.card?.kind==='question' && block.id && !answered.has(block.id)).at(-1)?.id : undefined, [timeline, messages, answered]);
+  const pendingQuestion = useMemo(() => {
+    if (!timeline) return undefined;
+    const pending = messages.flatMap(message => message.blocks).filter(block => block.card?.kind==='question' && block.id && !answered.has(block.id));
+    return pending.length === 1 ? pending[0].id : undefined;
+  }, [timeline, messages, answered]);
   const answerer = useDialogAnswerer(sessionId);
   const stopper = useTaskStopper(sessionId);
   const previewRetained = preview && messages.some(message=>message.id===preview.messageId && message.blocks[preview.blockIndex]?.imagePreview?.data===preview.image.data);
