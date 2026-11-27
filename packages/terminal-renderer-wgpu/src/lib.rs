@@ -289,11 +289,11 @@ fn atlas_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 fn split_row<'a>(
     draws: Vec<Draw<'a>>,
     m: CellMetrics,
-    top: u32,
+    (left, top): (u32, u32),
     bg: RgbColor,
 ) -> (Vec<Rect>, Vec<Draw<'a>>) {
     let (mut runs, mut rest) = (Vec::<Rect>::new(), Vec::new());
-    let mut next = 0;
+    let mut next = left;
     for draw in draws {
         match draw {
             Draw::Rect(r)
@@ -797,15 +797,33 @@ impl Gpu {
         let mut clear = plan.repaint_all;
         self.begin_batch();
         self.scratch.clear();
-        for &y in &plan.rows {
+        for (&y, span) in plan.rows.iter().zip(&plan.spans) {
             let top = u32::from(y) * m.cell_height;
+            // A repaint of everything has cleared the target: every cell of the row is drawn.
+            let (left, right) = if plan.repaint_all {
+                (0, width)
+            } else {
+                (
+                    u32::from(span.start) * m.cell_width,
+                    (u32::from(span.end) * m.cell_width).min(width),
+                )
+            };
             if !plan.repaint_all {
                 self.scratch
-                    .push(Instance::solid(0, top, width, m.cell_height, bg));
+                    .push(Instance::solid(left, top, right - left, m.cell_height, bg));
             }
-            let drawn = row_draws(&core.screen, y, &core.appearance);
+            let mut drawn = row_draws(&core.screen, y, &core.appearance);
+            // Every draw lies inside its cell, so the cells of the span are the draws whose
+            // origin is in it.
+            drawn.retain(|d| {
+                let x = match d {
+                    Draw::Rect(r) => r.x,
+                    Draw::Glyph(g) => g.x,
+                };
+                (left..right).contains(&x)
+            });
             self.stats.layout_draws += drawn.len() as u64;
-            let (backgrounds, draws) = split_row(drawn, m, top, bg);
+            let (backgrounds, draws) = split_row(drawn, m, (left, top), bg);
             self.scratch.extend(
                 backgrounds
                     .into_iter()

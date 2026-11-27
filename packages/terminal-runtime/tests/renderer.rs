@@ -817,6 +817,34 @@ fn rewriting_a_row_with_the_same_cells_marks_nothing_dirty() {
     assert_eq!(tick(&mut rt, &mut r), 1, "one letter changed");
 }
 
+/// The columns a draw has to repaint, row by row, from what a renderer would be asked to draw.
+fn damage(rt: &mut TerminalRuntime, core: &mut RendererCore) -> Vec<(u16, std::ops::Range<u16>)> {
+    core.apply(&rt.take_frame().unwrap().unwrap()).unwrap();
+    let plan = core.begin_draw().unwrap().unwrap();
+    plan.rows.into_iter().zip(plan.spans).collect()
+}
+
+#[test]
+fn a_row_that_changed_in_a_few_cells_is_drawn_only_between_them_and_wide_characters_stay_whole() {
+    let mut rt = support::runtime(20, 3);
+    feed(
+        &mut rt,
+        "0123456789abcdefghij\r\n日本語 narrow\r\nrow three".as_bytes(),
+    );
+    let mut core = RendererCore::new(Default::default()).unwrap();
+    core.apply(&rt.snapshot().unwrap()).unwrap();
+    core.begin_draw().unwrap().unwrap();
+    // Edits between a save and a restore leave the cursor where it was: it adds no stale row.
+    feed(&mut rt, b"\x1b7\x1b[1;4HX\x1b[1;9HY\x1b8");
+    assert_eq!(damage(&mut rt, &mut core), [(0, 3..9)], "from X to Y");
+    // Recolouring a wide character repaints the character, whichever of its cells differ.
+    feed(&mut rt, "\x1b7\x1b[2;1H\x1b[31m日\x1b[0m\x1b8".as_bytes());
+    assert_eq!(damage(&mut rt, &mut core), [(1, 0..2)]);
+    // A narrow character over a wide one repaints both of its cells.
+    feed(&mut rt, "\x1b7\x1b[2;3Hz\x1b8".as_bytes());
+    assert_eq!(damage(&mut rt, &mut core), [(1, 2..4)]);
+}
+
 #[test]
 fn an_unsupported_backend_is_told_apart_from_a_lost_device() {
     let unsupported = RenderError::Unsupported("no adapter");

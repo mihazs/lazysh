@@ -67,6 +67,8 @@ fn main() {
         }
     }
 
+    damage_table();
+
     println!("\nIdle screen: {IDLE_CALLS} draw + present calls with nothing changed\n");
     let mut r = renderer(80, 24, 2048);
     let mut rt = runtime(80, 24);
@@ -155,6 +157,69 @@ fn main() {
     }
 
     blink_and_recovery();
+}
+
+const DAMAGE_FRAMES: u64 = 300;
+
+/// A full-screen TUI repaint in which every row is rewritten each frame and only a counter at the
+/// end of each row changes (a status screen, a dashboard): every row is dirty, a few cells differ.
+fn tui_repaint(cols: u16, rows: u16, frame: u64) -> Vec<u8> {
+    let mut out = b"\x1b[H".to_vec();
+    for row in 1..=rows {
+        let label = format!(
+            "row {row} status \u{2595}\u{2588}\u{2588}\u{2588}\u{258f} steady text of the screen"
+        );
+        out.extend(
+            format!(
+                "\x1b[{row};1H\x1b[{}m{label}\x1b[0m\x1b[{row};{}H{:>8}",
+                30 + row % 8,
+                cols - 8,
+                frame * 31 + u64::from(row)
+            )
+            .into_bytes(),
+        );
+    }
+    out
+}
+
+/// What one frame of that repaint costs the GPU path: instances and bytes sent, and the time to
+/// build and submit the frame (draw) and until the GPU is idle again (present).
+fn damage_table() {
+    println!("\nFull-screen repaint with a changing counter in every row: {DAMAGE_FRAMES} frames, per-frame medians\n");
+    println!("| grid | frames drawn | rows drawn per frame | instances per frame | uploaded KiB per frame | draw us p50 | present (GPU wait) us p50 |");
+    println!("|---|---|---|---|---|---|---|");
+    for (grid, (cols, rows)) in [("80x24", (80, 24)), ("152x38", (152, 38))] {
+        let (mut r, mut rt) = (renderer(cols, rows, 2048), runtime(cols, rows));
+        feed(&mut rt, &tui_repaint(cols, rows, 0));
+        show(&mut r, &mut rt);
+        let (before, base) = (r.gpu_stats(), r.stats());
+        let (mut draw, mut present) = (Vec::new(), Vec::new());
+        for n in 1..=DAMAGE_FRAMES {
+            feed(&mut rt, &tui_repaint(cols, rows, n));
+            r.apply(&rt.take_frame().unwrap().unwrap()).unwrap();
+            let t = Instant::now();
+            r.draw().unwrap();
+            let d = t.elapsed();
+            r.present().unwrap();
+            draw.push(d.as_secs_f64() * 1e6);
+            present.push((t.elapsed() - d).as_secs_f64() * 1e6);
+        }
+        let (gpu, stats) = (r.gpu_stats(), r.stats());
+        let (draw, present) = (median(draw), median(present));
+        let per = |v: u64| v as f64 / DAMAGE_FRAMES as f64;
+        println!(
+            "| {grid} | {} | {:.1} | {:.0} | {:.2} | {draw:.0} | {present:.0} |",
+            stats.frames_drawn - base.frames_drawn,
+            per(stats.rows_drawn - base.rows_drawn),
+            per(gpu.instances - before.instances),
+            per(stats.bytes_uploaded - base.bytes_uploaded) / 1024.0,
+        );
+    }
+}
+
+fn median(mut v: Vec<f64>) -> f64 {
+    v.sort_by(f64::total_cmp);
+    v[v.len() / 2]
 }
 
 const BLINK_SECONDS: u64 = 10;

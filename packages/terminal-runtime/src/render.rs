@@ -14,6 +14,7 @@ use crate::frame::{Cell, Frame};
 use crate::size::MAX_CELLS;
 use ghostty_vt::{CellWide, CursorVisualStyle, RenderCursor, RgbColor};
 use std::fmt;
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -339,6 +340,9 @@ pub enum Resume {
 pub struct DrawPlan {
     /// Ascending grid rows whose content changed.
     pub rows: Vec<u16>,
+    /// For each of `rows`, the columns that changed: a renderer that can paint part of a row repaints
+    /// only these (whole wide characters included); one that cannot repaints the row.
+    pub spans: Vec<Range<u16>>,
     /// Everything is stale (first draw, resize, new appearance, resume): clear the whole surface.
     pub repaint_all: bool,
     /// When `begin_draw` ran, for the draw time that `finish_draw` counts.
@@ -439,13 +443,14 @@ impl RendererCore {
         if !self.screen.has_content() {
             return Ok(None);
         }
-        let rows = self.screen.take_dirty();
+        let (rows, spans): (Vec<_>, Vec<_>) = self.screen.take_damage().into_iter().unzip();
         if rows.is_empty() && !self.repaint_all {
             return Ok(None);
         }
         let repaint_all = std::mem::take(&mut self.repaint_all);
         Ok(Some(DrawPlan {
             rows,
+            spans,
             repaint_all,
             started,
         }))
@@ -525,7 +530,8 @@ pub struct Screen {
     cells: Vec<Cell>,
     cursor: Option<RenderCursor>,
     overlay: Overlay,
-    dirty: Vec<bool>,
+    /// Per row, the columns stale since the last draw; empty when the row is clean.
+    damage: Vec<Range<u16>>,
 }
 
 impl Screen {
@@ -539,7 +545,7 @@ impl Screen {
 
     /// Whether any row is marked for redrawing.
     pub fn has_dirty(&self) -> bool {
-        self.dirty.iter().any(|&stale| stale)
+        self.damage.iter().any(|span| span.start < span.end)
     }
 
     pub fn cols(&self) -> u16 {
@@ -590,14 +596,14 @@ impl Screen {
             self.cols = cols;
             self.rows = rows;
             self.cells = vec![blank(); usize::from(cols) * usize::from(rows)];
-            self.dirty = vec![true; usize::from(rows)];
+            self.damage = vec![0..cols; usize::from(rows)];
         }
         for row in &frame.dirty {
             let start = usize::from(row.y) * usize::from(cols);
             let held = &mut self.cells[start..start + usize::from(cols)];
-            if *held != row.cells[..] {
+            if let Some(span) = changed_span(held, &row.cells) {
                 held.clone_from_slice(&row.cells);
-                self.dirty[usize::from(row.y)] = true;
+                self.mark_span(row.y, span);
             }
         }
         if self.cursor != Some(frame.cursor) {
@@ -632,7 +638,8 @@ impl Screen {
     }
 
     pub fn invalidate(&mut self) {
-        self.dirty.fill(true);
+        let cols = self.cols;
+        self.damage.fill(0..cols);
     }
 
     /// Device loss: the copy is dropped, so the next incremental frame is refused.
@@ -645,11 +652,15 @@ impl Screen {
 
     /// Rows to redraw, ascending; clears the marks.
     pub fn take_dirty(&mut self) -> Vec<u16> {
-        let rows = (0..self.rows)
-            .filter(|&y| self.dirty[usize::from(y)])
-            .collect();
-        self.dirty.fill(false);
-        rows
+        self.take_damage().into_iter().map(|(y, _)| y).collect()
+    }
+
+    /// Rows to redraw, ascending, each with the columns that are stale; clears the marks.
+    pub fn take_damage(&mut self) -> Vec<(u16, Range<u16>)> {
+        (0..self.rows)
+            .map(|y| (y, std::mem::take(&mut self.damage[usize::from(y)])))
+            .filter(|(_, span)| span.start < span.end)
+            .collect()
     }
 
     /// Whether the cursor is visible on the grid and blinking, so its phase changes the picture.
@@ -695,8 +706,17 @@ impl Screen {
     }
 
     fn mark_row(&mut self, y: u16) {
-        if let Some(mark) = self.dirty.get_mut(usize::from(y)) {
-            *mark = true;
+        self.mark_span(y, 0..self.cols);
+    }
+
+    /// Add `span` to the stale columns of row `y`: the smallest span that holds both.
+    fn mark_span(&mut self, y: u16, span: Range<u16>) {
+        if let Some(held) = self.damage.get_mut(usize::from(y)) {
+            *held = if held.start >= held.end {
+                span
+            } else {
+                held.start.min(span.start)..held.end.max(span.end)
+            };
         }
     }
 
@@ -705,6 +725,18 @@ impl Screen {
             self.mark_row(at.y);
         }
     }
+}
+
+/// The columns where `new` differs from `old`, widened to whole wide characters of either row (a
+/// wide cell and its spacer are one draw), or `None` when the rows are equal.
+fn changed_span(old: &[Cell], new: &[Cell]) -> Option<Range<u16>> {
+    let first = old.iter().zip(new).position(|(a, b)| a != b)?;
+    let last = old.iter().zip(new).rposition(|(a, b)| a != b)?;
+    let tail = |cells: &[Cell], x: usize| cells[x].wide == CellWide::SpacerTail;
+    let head = |cells: &[Cell], x: usize| cells[x].wide == CellWide::Wide;
+    let start = first - usize::from(first > 0 && (tail(old, first) || tail(new, first)));
+    let end = last + 1 + usize::from(head(old, last) || head(new, last));
+    Some(start as u16..end.min(new.len()) as u16)
 }
 
 fn blank() -> Cell {

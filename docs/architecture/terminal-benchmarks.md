@@ -1139,6 +1139,34 @@ What this says, and does not say:
 - **The first GPU context still costs 64 MiB of resident memory** on this driver against 7 to 8 MiB for an xterm.js session; the renderer's own GPU memory (5 to 16 MiB by window size) is small next to it.
 - Not shown: any text (rasterization, shaping, font fallback and their atlas pressure: real glyph masks are larger and more varied than dot patterns), a window surface and presentation timing, Android (Vulkan or OpenGL ES drivers, surface loss), Apple, Windows, energy and thermals, a long-lived session's memory beyond 4,000 frames, and a CI run on real hardware (CI has only software adapters).
 
+### Cell-run damage: bytes and GPU time of a full-screen repaint (host GPU, not a device)
+
+Measured with `cargo run --release --example renderer_stats` in [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) ([#1337](https://github.com/mihazs/lazysh/issues/1337)); raw output of both sides [`terminal-wgpu-damage-1.txt`](benchmarks/terminal-wgpu-damage-1.txt). Same host, backend and offscreen dot-pattern setup as the sections around it, but **the host was busy (load average 57 to 79)**, so only the counts are exact; the microseconds are medians of 300 frames from two back-to-back runs per side.
+
+Before this change a row that differed anywhere was cleared and redrawn whole. The core already compared cells (an application that rewrites the same text costs no redraw); `Screen` now also keeps the columns between the first and the last cell that differ (widened to whole wide characters), `DrawPlan::spans` carries them, and the wgpu renderer clears and draws only those cells. Anything that marks a row without a cell diff (cursor move, blink phase, selection, a resize or new appearance) still repaints the whole row. The CPU reference renderer ignores the spans and still repaints rows, which is what makes it the oracle for the change.
+
+**Workload.** A TUI repaint of the whole screen every frame (a status screen: 24 or 38 rows of static colored text, each rewritten from `\x1b[row;1H`) in which only an 8-column counter at the end of each row changes. Every row is dirty and about a tenth of its cells differ. One frame per repaint, 300 frames.
+
+| grid | metric | before | after | change |
+|---|---|---|---|---|
+| 80x24 | instances per frame | 997 | 80 | -92 % |
+| 80x24 | uploaded per frame (instances plus new glyph masks) | 31.17 KiB | 2.50 KiB | -92 % |
+| 80x24 | draw, p50 (run 1 / run 2) | 206 / 192 us | 124 / 123 us | -40 % / -36 % |
+| 80x24 | present, waiting for the GPU, p50 (run 1 / run 2) | 135 / 118 us | 80 / 87 us | -41 % / -26 % |
+| 152x38 | instances per frame | 1,584 | 127 | -92 % |
+| 152x38 | uploaded per frame | 49.49 KiB | 3.97 KiB | -92 % |
+| 152x38 | draw, p50 (run 1 / run 2) | 352 / 290 us | 214 / 221 us | -39 % / -24 % |
+| 152x38 | present, waiting for the GPU, p50 (run 1 / run 2) | 208 / 182 us | 106 / 124 us | -49 % / -32 % |
+
+The same change on the four standing workloads (one run each side; counts are exact): plain text, 80x24, 3.13 to 0.36 MiB uploaded and 102,297 to 11,516 instances, and at 152x38 4.99 to 0.53 MiB (consecutive numbered lines differ in a few digits); ANSI plus truecolor 0.95 to 0.82 MiB and 1.51 to 1.30 MiB (almost every cell differs); the full-screen redraw of identical text (already free through the cell comparison) and the CJK stream are unchanged to within 0.01 MiB.
+
+What this says, and does not say:
+
+- **"GPU time" here is the wait in `present`** (submit until the queue is idle), which includes queue latency and the driver's fixed cost; no timestamp query was used, so it is not the shader time. Because the work shrank 12 times and the wait only by a quarter to a half, most of what remains is that fixed cost.
+- **Correctness**: `tests/vs_reference.rs` (`a_few_changed_cells_repaint_only_those_and_draw_the_reference_picture`) draws seven kinds of edit (first and last cell, recolored and replaced wide characters, an added underline, two far-apart cells) and compares every picture with the CPU reference pixel for pixel; the existing goldens, lifecycle and text tests pass unchanged.
+- **Atlas upload budget per frame and a different eviction policy were not built.** A frame's glyph masks are bytes of the order of a few KiB in these workloads (2.6 to 5.6 KiB for the whole run) and a screen that holds more distinct clusters than the atlas is already split into passes (`atlas_spills`); no workload measured here spent a frame's time on atlas uploads, so a budget would only add deferred glyphs. Revisit with real fonts and a CJK-heavy screen on a device.
+- Not shown: a phone GPU, Android, Apple, Windows, energy, and the window-surface path.
+
 ### Cursor blink, display scale and device loss (host GPU, not a device)
 
 Measured with `cargo run --release --example renderer_stats` in [`packages/terminal-renderer-wgpu`](../../packages/terminal-renderer-wgpu/README.md) ([#1326](https://github.com/mihazs/lazysh/issues/1326)); raw output [`terminal-wgpu-renderer-stats-2.txt`](benchmarks/terminal-wgpu-renderer-stats-2.txt) (it repeats the tables of the section above, from a second run, then adds these two). Same host and offscreen, dot-pattern setup as above (load average 6.5 at the start); one run.
