@@ -8,12 +8,12 @@
 //!
 //! Everything the relay sends goes through [`allow::bidi`]. The client sees the same wire format as for Chrome.
 use super::{
-    allow, bidi, die_with_launcher, find_in,
+    allow, bidi, die_with_launcher, find_in, input,
     outbox::Outbox,
     own_process_group, profile,
     relay::{
-        announce_page, await_reply, bounded, major, refusal_notice, running_state, Event, Handler,
-        Running, Serve, CLIENT_CLOSED,
+        announce_page, await_reply, bounded, major, refuse, running_state, Event, Handler, Running,
+        Serve, CLIENT_CLOSED,
     },
     wire::{self, Client, Viewport},
     FIREFOX_CANDIDATES,
@@ -22,7 +22,7 @@ use crate::{Error, Result};
 use base64::Engine;
 use serde_json::{json, Value};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fs,
     process::{Command, Stdio},
     sync::{
@@ -376,7 +376,17 @@ pub(super) fn session(
     outbox.control(running_state(
         &launched.product,
         viewport,
-        json!({"view": true, "control": false, "navigation": false, "tabs": false}),
+        json!({
+            "view": true,
+            "control": true,
+            "pinch": false,
+            "composition": false,
+            "navigation": false,
+            "tabs": false,
+            // Why, so that the viewer can say it and hide the control: Firefox did not scale the page when two
+            // touch pointers spread (headless probe), and BiDi has neither `insertText` nor composition.
+            "unavailable": {"pinch": "NoPagePinch", "composition": "NoTextInsertion"},
+        }),
     ));
     Stream::new(&mut launched, outbox, viewport).run()
 }
@@ -385,6 +395,9 @@ enum Pending {
     Capture,
     Tree,
     Title,
+    /// An `input.performActions`; when it fails, what it left held is released.
+    Input,
+    Release,
 }
 
 struct Stream<'l, 'a> {
@@ -393,8 +406,11 @@ struct Stream<'l, 'a> {
     viewport: Viewport,
     paused: bool,
     sequence: u32,
-    /// Client messages outside the closed set, by count: never their content.
-    refused: u64,
+    /// Refused client messages, by reason and count: never their content.
+    refused: BTreeMap<&'static str, u64>,
+    /// Control is off when a session starts, and only the client turns it on.
+    control: bool,
+    limit: input::Limit,
     pending: Vec<(u64, Pending)>,
     /// The last frame sent, and how many captures in a row matched it.
     last: Vec<u8>,
@@ -415,7 +431,9 @@ impl<'l, 'a> Stream<'l, 'a> {
             viewport,
             paused: false,
             sequence: 0,
-            refused: 0,
+            refused: BTreeMap::new(),
+            control: false,
+            limit: input::Limit::new(now),
             pending: Vec::new(),
             last: Vec::new(),
             same: 0,
@@ -527,11 +545,30 @@ impl<'l, 'a> Stream<'l, 'a> {
             .control(json!({"type": "state", "state": if paused { "paused" } else { "running" }}));
     }
 
-    fn refuse(&mut self) {
-        self.refused += 1;
-        if let Some(notice) = refusal_notice(allow::Refusal::Unlisted.reason(), self.refused) {
-            self.outbox.control(notice);
+    /// One input message: refused while Control is off, outside the bounds or in a flood, else its call.
+    fn input(&mut self, message: &Client) -> Result<()> {
+        if !self.control {
+            self.refuse(input::CONTROL_OFF);
+            return Ok(());
         }
+        match input::bidi_commands(message, self.viewport) {
+            Err(reason) => self.refuse(reason),
+            Ok(_) if !self.limit.take(Instant::now()) => self.refuse(input::RATE_LIMITED),
+            Ok(calls) => {
+                for (method, mut params) in calls {
+                    params["context"] = self.launched.context.clone().into();
+                    self.request(method, params, Pending::Input)?;
+                }
+                // The page is about to change: look at it soon, not after the idle interval.
+                self.same = 0;
+                self.next_capture = self.next_capture.min(Instant::now() + BUSY_INTERVAL);
+            }
+        }
+        Ok(())
+    }
+
+    fn refuse(&mut self, reason: &'static str) {
+        refuse(self.outbox, &mut self.refused, reason);
     }
 
     /// `Some(reason)` ends the session: the page is gone.
@@ -563,6 +600,7 @@ impl<'l, 'a> Stream<'l, 'a> {
                 self.read.1 = page["url"].as_str().unwrap_or_default().to_string();
                 self.publish();
             }
+            Pending::Input | Pending::Release => {}
             Pending::Title => {
                 if result["result"]["type"] == "string" {
                     self.read.0 = result["result"]["value"]
@@ -579,11 +617,22 @@ impl<'l, 'a> Stream<'l, 'a> {
     /// A page that is gone ends the session; a title that could not be read is only a title; anything else
     /// a few times in a row is the browser failing.
     fn failed(&mut self, kind: &Pending, message: &Value) -> Result<Option<&'static str>> {
-        if matches!(kind, Pending::Title) {
+        if matches!(kind, Pending::Title | Pending::Release) {
             return Ok(None);
         }
         if message["error"] == "no such frame" {
             return Ok(Some("PageClosed"));
+        }
+        // A sequence that Firefox rejected may have pressed a key or a button already: let go of everything, and do
+        // not count it as the browser failing.
+        if matches!(kind, Pending::Input) {
+            let context = self.launched.context.clone();
+            self.request(
+                "input.releaseActions",
+                json!({"context": context}),
+                Pending::Release,
+            )?;
+            return Ok(None);
         }
         self.errors += 1;
         if self.errors >= MAX_ERRORS {
@@ -636,9 +685,11 @@ impl Handler for Stream<'_, '_> {
             }
             Some(Client::Pause {}) => self.pause(true),
             Some(Client::Resume {}) => self.pause(false),
-            // A second open, any message outside the closed set, and Control and input (this adapter reports
-            // `control: false`, #1715): counted, never forwarded.
-            Some(_) | None => self.refuse(),
+            Some(Client::Control { on }) => self.control = on,
+            // A second open, or any message outside the closed set: counted, never forwarded.
+            Some(Client::Open { .. }) | None => self.refuse(allow::Refusal::Unlisted.reason()),
+            // What is left is input; `input::bidi_commands` refuses a message that is not.
+            Some(message) => self.input(&message)?,
         }
         Ok(())
     }

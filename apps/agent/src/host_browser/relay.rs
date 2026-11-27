@@ -371,12 +371,18 @@ pub(super) fn running_state(browser: &str, viewport: Viewport, capabilities: Val
     })
 }
 
-/// What to tell the client about its `count`th refused message: the first and every doubling after it, so that a
-/// flood stays small.
-pub(super) fn refusal_notice(reason: &str, count: u64) -> Option<Value> {
-    count
-        .is_power_of_two()
-        .then(|| json!({"type": "refused", "reason": reason, "count": count}))
+/// Count a refused message of `reason`, and tell the client about the first refusal of a reason and every doubling
+/// after it, so that a flood stays small.
+pub(super) fn refuse(
+    outbox: &Outbox,
+    refused: &mut BTreeMap<&'static str, u64>,
+    reason: &'static str,
+) {
+    let count = refused.entry(reason).or_default();
+    *count += 1;
+    if count.is_power_of_two() {
+        outbox.control(json!({"type": "refused", "reason": reason, "count": *count}));
+    }
 }
 
 /// "HeadlessChrome/120.0.6099.109", "Chrome/120.0.6099.109" and "Firefox/160.0" are versions 120 and 160.
@@ -682,12 +688,8 @@ impl Relay {
         Ok(())
     }
 
-    /// Tell the client about the first refusal of a reason and every doubling after it, so a flood stays small.
     fn refuse(&mut self, reason: &'static str) {
-        if let Some(count) = tally(&mut self.refused, reason) {
-            self.outbox
-                .control(json!({"type": "refused", "reason": reason, "count": count}));
-        }
+        refuse(&self.outbox, &mut self.refused, reason);
     }
 
     /// The browser refused to do `kind` for the page: a download or a file chooser, denied before it began.

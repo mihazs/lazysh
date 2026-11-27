@@ -590,6 +590,69 @@ fn one_of_each_input() -> [Value; 5] {
     ]
 }
 
+/// The messages of a tap on the viewport's button, a wheel, a pinch, typed text and two keys, and a right press.
+/// `pinch` is left out for an adapter that has no page pinch.
+fn session_input(pinch: bool) -> Vec<Value> {
+    let at = |kind, button, clicks| pointer(kind, button, clicks, 200, 300);
+    let mut messages = vec![
+        at("move", "none", 0),
+        at("press", "left", 1),
+        at("release", "left", 1),
+        json!({"type": "wheel", "x": 200, "y": 300, "deltaX": 0, "deltaY": 120.5}),
+        json!({"type": "text", "text": "ação 日本 😀"}),
+        json!({"type": "key", "key": "Enter", "modifiers": 0}),
+        json!({"type": "key", "key": "a", "modifiers": 2}),
+        at("press", "right", 1),
+    ];
+    if pinch {
+        messages.insert(4, json!({"type": "pinch", "scale": 2.5}));
+    }
+    messages
+}
+
+/// Turning Control off stops forwarding at once and on again resumes it. `forwarded(n)` waits for `n` calls at the
+/// browser and says how many arrived.
+fn assert_control_gates_input(relay: &mut Relay, forwarded: impl Fn(usize) -> usize) {
+    let [pointer, wheel, ..] = one_of_each_input();
+    relay.send(pointer);
+    assert_eq!(forwarded(1), 1);
+    relay.control(false);
+    relay.send(wheel.clone());
+    assert_eq!(relay.refused(), ("ControlOff".to_string(), 1));
+    assert_eq!(
+        forwarded(0),
+        1,
+        "input was forwarded after Control went off"
+    );
+    relay.control(true);
+    relay.send(wheel);
+    assert_eq!(forwarded(2), 2);
+}
+
+/// A real browser on `INPUT_PAGE` takes a tap, typed text and a scroll only while Control is on, and a tap that
+/// came while it was off did not click. `after_tap` runs once the first tap has shown.
+fn drive_input_page(relay: &mut Relay, after_tap: impl FnOnce(&mut Relay)) {
+    relay.title("clicks=0;scroll=0;text=[]");
+
+    // On the button, with Control off: refused. A click that got through would show as a second one below.
+    relay.tap(200, 100);
+    assert_eq!(relay.refused(), ("ControlOff".to_string(), 1));
+
+    relay.control(true);
+    relay.tap(200, 100);
+    relay.title("clicks=1;scroll=0;text=[]");
+    after_tap(relay);
+    // Into the input, where the phone's keyboard puts accents, CJK and emoji as text, and a key deletes the emoji.
+    relay.tap(200, 270);
+    relay.send(json!({"type": "text", "text": "ação 日本 😀"}));
+    relay.title("clicks=1;scroll=0;text=[ação 日本 😀]");
+    relay.send(json!({"type": "key", "key": "Backspace", "modifiers": 0}));
+    relay.title("clicks=1;scroll=0;text=[ação 日本 ]");
+    // A drag of the page: the wheel, at a point of the spacer.
+    relay.send(json!({"type": "wheel", "x": 200, "y": 600, "deltaX": 0, "deltaY": 400}));
+    relay.title("clicks=1;scroll=1;text=[ação 日本 ]");
+}
+
 #[test]
 fn with_control_off_which_is_how_a_session_starts_every_input_is_refused_and_counted() {
     let (fixture, mut relay) = Fixture::started(false);
@@ -611,18 +674,7 @@ fn with_control_off_which_is_how_a_session_starts_every_input_is_refused_and_cou
 #[test]
 fn with_control_on_each_message_becomes_exactly_its_calls_in_order() {
     let (fixture, mut relay) = Fixture::started(true);
-    let at = |kind, button, clicks| pointer(kind, button, clicks, 200, 300);
-    for message in [
-        at("move", "none", 0),
-        at("press", "left", 1),
-        at("release", "left", 1),
-        json!({"type": "wheel", "x": 200, "y": 300, "deltaX": 0, "deltaY": 120.5}),
-        json!({"type": "pinch", "scale": 2.5}),
-        json!({"type": "text", "text": "ação 日本 😀"}),
-        json!({"type": "key", "key": "Enter", "modifiers": 0}),
-        json!({"type": "key", "key": "a", "modifiers": 2}),
-        at("press", "right", 1),
-    ] {
+    for message in session_input(true) {
         relay.send(message);
     }
     let key = |kind: &str, name: &str, code: &str, virtual_key: u32, modifiers: u32| json!({"type": kind, "key": name, "code": code, "windowsVirtualKeyCode": virtual_key, "modifiers": modifiers});
@@ -682,22 +734,8 @@ fn with_control_on_each_message_becomes_exactly_its_calls_in_order() {
 #[test]
 fn turning_control_off_stops_forwarding_at_once_and_on_again_resumes_it() {
     let (fixture, mut relay) = Fixture::started(true);
-    let [pointer, wheel, ..] = one_of_each_input();
-    relay.send(pointer.clone());
-    assert_eq!(fixture.input_calls(1).len(), 1);
-    relay.control(false);
-    relay.send(wheel.clone());
-    assert_eq!(relay.refused(), ("ControlOff".to_string(), 1));
-    assert_eq!(
-        fixture.input_calls(0).len(),
-        1,
-        "input was forwarded after Control went off"
-    );
-    relay.control(true);
-    relay.send(wheel);
-    let calls = fixture.input_calls(2);
-    assert_eq!(calls[1]["params"]["type"], "mouseWheel");
-    assert_eq!(calls.len(), 2);
+    assert_control_gates_input(&mut relay, |count| fixture.input_calls(count).len());
+    assert_eq!(fixture.input_calls(2)[1]["params"]["type"], "mouseWheel");
     relay.stop();
 }
 
@@ -1263,7 +1301,8 @@ input{display:block;box-sizing:border-box;width:412px;height:100px;margin-top:20
 let clicks = 0;
 const input = document.querySelector('input');
 const report = () => { document.title = `clicks=${clicks};scroll=${scrollY > 0 ? 1 : 0};text=[${input.value}]`; };
-document.querySelector('button').onclick = () => { clicks++; report(); };
+const button = document.querySelector('button');
+button.onclick = () => { clicks++; button.style.background = '#0000c8'; report(); };
 input.oninput = report;
 onscroll = report;
 </script>";
@@ -1480,24 +1519,7 @@ fn a_real_browser_takes_a_tap_typed_text_and_a_scroll_only_while_control_is_on()
     let Some((_fixture, mut relay, _)) = real_relay(INPUT_PAGE) else {
         return;
     };
-    relay.title("clicks=0;scroll=0;text=[]");
-
-    // On the button, with Control off: refused. A click that got through would show as a second one below.
-    relay.tap(200, 100);
-    assert_eq!(relay.refused(), ("ControlOff".to_string(), 1));
-
-    relay.control(true);
-    relay.tap(200, 100);
-    relay.title("clicks=1;scroll=0;text=[]");
-    // Into the input, where the phone's keyboard puts accents, CJK and emoji as text, and a key deletes the emoji.
-    relay.tap(200, 270);
-    relay.send(json!({"type": "text", "text": "ação 日本 😀"}));
-    relay.title("clicks=1;scroll=0;text=[ação 日本 😀]");
-    relay.send(json!({"type": "key", "key": "Backspace", "modifiers": 0}));
-    relay.title("clicks=1;scroll=0;text=[ação 日本 ]");
-    // A drag of the page: the wheel, at a point of the spacer.
-    relay.send(json!({"type": "wheel", "x": 200, "y": 600, "deltaX": 0, "deltaY": 400}));
-    relay.title("clicks=1;scroll=1;text=[ação 日本 ]");
+    drive_input_page(&mut relay, |_| {});
     relay.stop();
 }
 

@@ -252,7 +252,9 @@ page left),
 `BrowserExited`, `PageCrashed`, `ProtocolViolation`, `IdleReleased` (the view was hidden for the idle time, below), or the class of a failure before the stream started
 (`HostBrowserDisabled`, `BrowserNotFound`, `AddressRefused`, `ViewportInvalid`, and so on).
 
-`control {on}` turns Control on or off, and `capabilities.control` in `state` says the relay accepts it. Control is
+`control {on}` turns Control on or off, and `capabilities.control` in `state` says the relay accepts it. A
+capability the browser lacks is `false`, and `capabilities.unavailable` names why for each one that the viewer
+should hide (Firefox: `pinch: "NoPagePinch"`, `composition: "NoTextInsertion"`). Control is
 off when a session starts, and the relay never turns it on. While it is off, each input message is refused with
 `ControlOff` and never forwarded; turning it off stops forwarding at once. Input messages are in the page's CSS
 pixels, the space of a frame's `width` and `height`, and have no other fields:
@@ -266,7 +268,8 @@ pixels, the space of a frame's `width` and `height`, and have no other fields:
 | `text` | `text` of at most 4 KiB, inserted as typed (accents, CJK, emoji) | `Input.insertText` |
 
 The mapping is `inputCommands` in `apps/client/src/hostBrowser/cdp.ts`, so the prototype and the relay stay equal,
-and every call still passes the allow-list. A value outside a bound is refused with `InputOutOfRange`. An editing
+and every call still passes the allow-list. Firefox takes the same messages, the same bounds and the same refusal
+classes and counts (see "The Firefox adapter"). A value outside a bound is refused with `InputOutOfRange`. An editing
 shortcut that moves the clipboard (Control or Meta with C, X or V, and Shift with Delete) is refused with
 `PermissionRefused`, and a key event never carries editing commands. A flood is refused with `InputRateLimited`:
 the relay forwards at most 240 input messages a second, with a burst of the same size, which a hand on a phone
@@ -315,11 +318,11 @@ launcher applies the address rule to its first page.
 ### The Firefox adapter
 
 Slice 1 of [#1257](https://github.com/mihazs/lazysh/issues/1257): the view of a Firefox, with the same relay, wire
-format and client messages as Chrome (`apps/agent/src/host_browser/firefox.rs`, `bidi.rs`). It is view-only for
-now: the capability record says `control`, `navigation` and `tabs` are false, because their client messages are
-the Chrome slices [#1255](https://github.com/mihazs/lazysh/issues/1255),
-[#1256](https://github.com/mihazs/lazysh/issues/1256) and
-[#1259](https://github.com/mihazs/lazysh/issues/1259), and the Firefox adapter follows each of them.
+format and client messages as Chrome (`apps/agent/src/host_browser/firefox.rs`, `bidi.rs`), and slice 2,
+[#1715](https://github.com/mihazs/lazysh/issues/1715): its input. The capability record still says `navigation` and
+`tabs` are false, because their client messages are the Chrome slices
+[#1256](https://github.com/mihazs/lazysh/issues/1256) and [#1259](https://github.com/mihazs/lazysh/issues/1259),
+and the Firefox adapter follows each of them.
 
 - **Start.** `open {"browser": "firefox"}` runs `firefox --headless --no-remote --profile <private>
   --remote-debugging-port 0 <url>` (`firefox` or `firefox-esr` on `PATH`, or `--binary`; `--headless` is left out
@@ -351,9 +354,32 @@ the Chrome slices [#1255](https://github.com/mihazs/lazysh/issues/1255),
   `document.title`, in a sandbox realm of the relay's own (`lazysh`) that the page's script cannot see or replace,
   gives the title. That evaluation is the only script the relay ever runs, and the allow-list refuses it with any
   other expression.
+- **Input.** `control {on}` and the input messages of the Chrome relay, with the same bounds
+  (`input::check`), the same refusal classes and counts, the same token bucket and Control off at the start. Each
+  message is one `input.performActions` in the page's context (`input::bidi_commands`), written without waiting
+  for the reply: a `pointer` is a mouse (a held touch gave no context menu in Firefox, a right click did) that
+  moves to the point and presses or releases `left` or `right`, the input state of the session keeping the
+  position and the pressed button between messages, so a tap is the three messages the client already sends; a
+  `wheel` is one `scroll` action in whole pixels (a drag is not assumed to move the page 1:1); a `key` is a key
+  down and a key up of the key's WebDriver value (Enter is U+E006, Backspace U+E003), held modifiers pressed
+  before it and released after it; `text` is one key down and up per character, because BiDi has no
+  `insertText` and no composition (accents, CJK and an emoji were typed this way, and one Backspace deletes an
+  emoji). A character of the private-use block U+E000 to U+E0FF is not text, it is a key (U+E009 holds Control
+  down), so a `text` that has one is refused with `InputOutOfRange`. After a tap, a drag or a key the capture
+  returns to the 50 ms interval at once instead of waiting out the idle interval. When Firefox rejects a
+  sequence the relay sends `input.releaseActions` so that nothing it pressed stays held, and that is not counted
+  as the browser failing. `pinch` is refused with `OperationRefused` and counted: the capability record says
+  `pinch: false` and `composition: false`, and `unavailable` gives the reasons (`NoPagePinch`: two touch pointers
+  spreading did not scale the page in the headless probe, so pinch is the viewer's local zoom of the frame
+  only; `NoTextInsertion`: no `insertText` and no composition in BiDi), so that a viewer can hide the control
+  and say why. Turning Control off while a button is held leaves it held until the next click, as in Chrome.
 - **What the phone cannot reach.** Every command passes `allow::bidi` before it is written: only
-  `session.new`, `session.end`, `browsingContext.getTree`, `setViewport` and `captureScreenshot`, and the title
-  evaluation. Refused by class: `storage.*` and `network.*` (cookies and interception), the rest of `script.*`
+  `session.new`, `session.end`, `browsingContext.getTree`, `setViewport` and `captureScreenshot`, the title
+  evaluation, and `input.performActions` and `input.releaseActions` inside bounds (at most three action sources,
+  mouse pointers only, coordinates inside the 2048 pixel viewport and relative to it, wheel deltas within 10000,
+  a tick of at most a second, one key per value, no key of the private-use block but the named keys and
+  modifiers, at most 8200 actions, and no Control or Meta chord of C, X or V and no Shift with Delete, which
+  would reach the host's clipboard). Refused by class: `storage.*` and `network.*` (cookies and interception), the rest of `script.*`
   and `webExtension.*`, `input.setFiles` and `browsingContext.startScreencast` (which writes a video file to the
   host and returns no frames), `permissions.*` and geolocation overrides; anything else is `OperationRefused`.
 - **Profile preferences.** The relay writes `user.js` in the private profile. A download goes nowhere: the profile
@@ -364,8 +390,7 @@ the Chrome slices [#1255](https://github.com/mihazs/lazysh/issues/1255),
   checks are off; these were set, and their effect on the network was not observed. Firefox keeps its crash
   reports and a few cache files in the host user's own directories (`~/.config/mozilla`, `~/.cache/mozilla`),
   outside the profile; the crash reporter is turned off for the relay's Firefox.
-- **Not yet.** Input (taps, scrolling, text; a `control` message and every input message is refused as
-  `OperationRefused` and counted while the capability record says `control: false`), tabs, navigation, history, dialogs, the file chooser report and the
+- **Not yet.** Page pinch and composition (not available), tabs, navigation, history, dialogs, the file chooser report and the
   quality ladder for Firefox, a reconnect after the WebSocket drops (a Firefox whose connection dropped holds a
   leaked session, so the relay ends the session instead), a Firefox older than 159, Firefox from a snap or a
   Flatpak (its profile and port may sit behind the sandbox), Windows and macOS hosts, and a headed Firefox were not
@@ -427,7 +452,7 @@ answers, input) is sent without waiting.
 | Capability | Chrome / Chromium adapter | Firefox adapter |
 | --- | --- | --- |
 | Frames | `Page.startScreencast`, acknowledged by the relay, on change only | `browsingContext.captureScreenshot` polled, pipelined 2 to 3 deep, repeats skipped |
-| Pointer | `Input.dispatchMouseEvent`, `dispatchTouchEvent` | `input.performActions` |
+| Pointer | `Input.dispatchMouseEvent`, `dispatchTouchEvent` | `input.performActions`, a mouse pointer |
 | Scroll | wheel events | wheel action |
 | Pinch | two-point touch events or `Emulation.setPageScaleFactor` | local zoom of the frame only |
 | Text | `Input.insertText`, key events, IME composition | one key action per character, no composition |
