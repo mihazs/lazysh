@@ -29,3 +29,8 @@ export async function screenBox(element: () => ChainablePromiseElement) {
   const origin = await inNative(() => $('android=new UiSelector().className("android.webkit.WebView")', {strict: false}).getLocation());
   return {x: origin.x + box.x * ratio, y: origin.y + (box.y + scrollY) * ratio, width: box.width * ratio, height: box.height * ratio};
 }
+
+/** Taps at a point on the screen with UiAutomator2's own touch injection, as a finger does (the WebView's `click` is DevTools input). */
+export const tapAt = ({x, y}: ScreenPoint) => inNative(() => browser.execute('mobile: clickGesture', {x, y}));
+/** Holds a finger down at a point for `ms`, then lifts it. */
+export const holdAt = ({x, y}: ScreenPoint, ms: number) => inNative(() => browser.execute('mobile: longClickGesture', {x, y, duration: ms}));
