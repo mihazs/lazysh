@@ -365,19 +365,20 @@ export class NativeTerminalAdapter implements TerminalAdapter {
   followLive() { if (!this.mirror.state.viewport.following) this.scroll({kind: 'toBottom'}); }
 
   /** Reports a mouse event to a program that tracks the mouse, in the cell under the point; false (nothing sent) when none does or the core takes no reports. */
-  reportMouse(action: 'press' | 'release' | 'motion', button: CoreMouseInput["button"], clientX: number, clientY: number) {
+  reportMouse(action: 'press' | 'release' | 'motion', button: CoreMouseInput['button'], clientX: number, clientY: number, modifiers?: Pick<MouseEvent, 'shiftKey' | 'ctrlKey' | 'altKey' | 'metaKey'>) {
     const {mouse} = this.bridge;
     if (!mouse || this.mirror.state.modes.mouseTracking === 'none') return false;
     const cell = this.cellAt(clientX, clientY);
-    const input = {type: 'mouse' as const, action, button, mods: {shift: false, ctrl: false, alt: false, meta: false},
+    const mods = {shift: !!modifiers?.shiftKey, ctrl: !!modifiers?.ctrlKey, alt: !!modifiers?.altKey, meta: !!modifiers?.metaKey};
+    const input = {type: 'mouse' as const, action, button, mods,
       x: cell?.x ?? 0, y: cell ? cell.y - this.mirror.state.viewport.top : 0};
     this.send(() => mouse.call(this.bridge, input));
     return true;
   }
 
-  wheel({clientX, clientY, deltaY, unit}: Parameters<TerminalAdapter['wheel']>[0]) {
+  wheel({clientX, clientY, deltaY, unit}: Parameters<TerminalAdapter['wheel']>[0], modifiers?: WheelEvent) {
     // A program that tracks the mouse gets a report per notch and nothing scrolls, as under xterm.js.
-    if (this.mirror.state.modes.mouseTracking !== 'none') { if (deltaY) this.reportMouse('press', deltaY < 0 ? 'wheelUp' : 'wheelDown', clientX, clientY); return; }
+    if (this.mirror.state.modes.mouseTracking !== 'none') { if (deltaY) this.reportMouse('press', deltaY < 0 ? 'wheelUp' : 'wheelDown', clientX, clientY, modifiers); return; }
     const lines = unit === 'line' ? deltaY : deltaY / (this.metrics().cellHeight || 16);
     this.scroll({kind: 'lines', delta: Math.round(lines) || Math.sign(lines)});
   }
