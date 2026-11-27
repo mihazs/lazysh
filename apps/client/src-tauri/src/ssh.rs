@@ -4272,6 +4272,8 @@ mod tests {
     #[path = "auth_listeners_fixture.rs"]
     mod auth_listeners_fixture;
     #[cfg(unix)]
+    #[path = "auth_signin_fixture.rs"]
+    mod auth_signin_fixture;
     #[path = "auth_tunnel_fixture.rs"]
     mod auth_tunnel_fixture;
     #[cfg(unix)]
@@ -8078,6 +8080,13 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[ignore = "requires owned OpenSSH and python3"]
+    async fn openssh_sign_in_completes_through_the_tunnel_with_a_fake_provider_and_fake_clis() {
+        openssh_interoperability(OpenSshCheck::SignIn).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     #[ignore = "requires owned OpenSSH and a current-source companion binary with listeners"]
     async fn openssh_auth_listener_check_uses_the_companion_then_falls_back_to_ss() {
         openssh_interoperability(OpenSshCheck::AuthListeners).await;
@@ -8166,6 +8175,7 @@ mod tests {
         Clipboard,
         TranscriptImages,
         TranscriptWatch,
+        SignIn,
         AuthListeners,
         HostBrowser,
         HerdrEvents,
@@ -8261,6 +8271,8 @@ mod tests {
             OpenSshCheck::CompanionInstall | OpenSshCheck::CompanionUnsupportedArchitecture
         ) {
             companion_fixture::environment(dir.path())
+        } else if matches!(check, OpenSshCheck::SignIn) {
+            auth_signin_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::HerdrEvents) {
             herdr_events_fixture::environment(dir.path())
         } else if matches!(
@@ -8342,6 +8354,16 @@ mod tests {
         #[cfg(target_os = "linux")]
         if matches!(check, OpenSshCheck::AgentBoard) {
             agent_board_fixture::verify(&app, &id, dir.path()).await;
+            return;
+        }
+        if matches!(check, OpenSshCheck::SignIn) {
+            Box::pin(auth_signin_fixture::verify(
+                &app,
+                &host,
+                &user_key,
+                dir.path(),
+            ))
+            .await;
             return;
         }
         if matches!(check, OpenSshCheck::AuthListeners) {

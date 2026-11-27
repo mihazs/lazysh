@@ -1090,6 +1090,11 @@ jobs:
           case_name=ssh::tests::openssh_auth_listener_check_uses_the_companion_then_falls_back_to_ss
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+      - name: Exercise a fake-provider sign-in through the tunnel over owned SSH
+        run: |
+          case_name=ssh::tests::openssh_sign_in_completes_through_the_tunnel_with_a_fake_provider_and_fake_clis
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
       - name: Check standalone Parakeet runtime and native ownership boundary
         run: bunx moon run parakeet-runtime:test-rust parakeet-runtime:lint parakeet-runtime:format-check
       - name: Check combined native voice startup and clean shutdown without models

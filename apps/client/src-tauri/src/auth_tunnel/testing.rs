@@ -2,7 +2,6 @@
 //! one `aws sso login` or `codex login` starts on the host's loopback, and the device's side, a
 //! browser's request. The server records every request it receives, so a test can prove what
 //! reached the host and, as important, what did not.
-use super::TunnelEvent;
 use std::{
     net::IpAddr,
     sync::{
@@ -48,8 +47,8 @@ pub(crate) fn status(response: &[u8]) -> String {
         .to_owned()
 }
 
-/// A channel that records what a flow reports, as the renderer would receive it.
-pub(crate) fn event_log() -> (Channel<TunnelEvent>, Arc<Mutex<Vec<serde_json::Value>>>) {
+/// A channel that records what it is sent, as the renderer would receive it.
+pub(crate) fn event_log<T>() -> (Channel<T>, Arc<Mutex<Vec<serde_json::Value>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = seen.clone();
     let channel = Channel::new(move |body| {
