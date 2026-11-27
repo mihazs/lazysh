@@ -215,6 +215,19 @@ impl Host {
         }
         Ok(Self::Remote(state.session(id).await?))
     }
+    /// This device's own shell. `cancel` ends its commands: a session's close signal, or, for a
+    /// check that runs before any local terminal exists, a channel whose sender the caller keeps open.
+    #[cfg(desktop)]
+    pub(crate) fn device(local: &LocalState, cancel: tokio::sync::watch::Receiver<bool>) -> Self {
+        #[cfg(not(test))]
+        let _ = local;
+        Self::Local(LocalHost {
+            cancel,
+            wsl: None,
+            #[cfg(test)]
+            env: local.test_env(),
+        })
+    }
     /// Resolves a session for a tool that names `dir`; local Windows sessions refuse
     /// UNC and device paths here, before Git could open an SMB share with them, and a WSL
     /// session takes Linux paths only, as `git -C` runs inside the distribution.
@@ -975,7 +988,7 @@ fn on_path(path: &std::ffi::OsStr, program: &str) -> bool {
 /// The PATH Herdr runs with: a Herdr on the PATH always wins; otherwise its owner-checked
 /// user install directory is appended, as the remote `with_path` wrapper does.
 #[cfg(desktop)]
-fn with_herdr_install(
+pub(crate) fn with_herdr_install(
     path: Option<std::ffi::OsString>,
     home: Option<std::path::PathBuf>,
 ) -> Option<std::ffi::OsString> {
