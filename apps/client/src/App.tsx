@@ -1706,10 +1706,13 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
     if(terminalBack.current?.sessionId===activeId && terminalBack.current.close())return;
     returnToContext();
   };
+  const backOpen = useRef(false);
+  backOpen.current=canHandleBack;
+  // Registered for the whole session: a Back with no listener finishes the app before a just-opened page can register one (#1578).
   useEffect(()=>{
-    if(!native || !canHandleBack)return;
-    return watchAndroidBack(() => handleBack.current());
-  },[canHandleBack]);
+    if(!native)return;
+    return watchAndroidBack(() => backOpen.current ? (handleBack.current(), true) : false);
+  },[]);
   function chooseLiveSession(id:string) {
     agentDrawerOffset.current=undefined;
     if(pendingMuxRequest || !sessionsRef.current.some(session=>session.id===id && session.connected))return;
