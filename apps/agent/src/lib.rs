@@ -91,6 +91,8 @@ fn wait_for_storage_until(deadline: Instant) -> bool {
 }
 
 pub const MAX_INPUT: usize = 256 * 1024;
+/// A hook payload carries the agent's whole tool result (a large `Read` is several hundred KiB), which `normalize` never reads.
+pub const MAX_HOOK_INPUT: usize = 32 * 1024 * 1024;
 const RETENTION_SECONDS: f64 = 7.0 * 86400.0;
 const ACTIVE_TURN_SECONDS: i64 = 10 * 60;
 const HOOK_EVENTS: [&str; 8] = [
@@ -304,7 +306,7 @@ pub(crate) fn read_bounded_json(mut input: impl Read, maximum: usize) -> Result<
     serde_json::from_slice(&bytes).map_err(|_| Error::InvalidEvent)
 }
 pub fn read_event(input: impl Read, agent: Agent, pane: Option<&str>) -> Result<Option<Event>> {
-    let payload = read_bounded_json(input, MAX_INPUT)?;
+    let payload = read_bounded_json(input, MAX_HOOK_INPUT)?;
     normalize(&payload, agent, pane)
 }
 pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Option<Event>> {
@@ -1847,11 +1849,21 @@ mod tests {
             assert!(normalize(&json!({"schemaVersion":schema,"sessionId":"s","agent":"Test","project":"/work","state":"done","summary":"Done"}),Agent::Generic,None).is_err());
         }
         assert!(read_event(
-            io::repeat(b'x').take(MAX_INPUT as u64 + 1),
+            io::repeat(b'x').take(MAX_HOOK_INPUT as u64 + 1),
             Agent::Generic,
             None
         )
         .is_err());
+    }
+    #[test]
+    fn a_hook_payload_with_a_large_tool_result_is_ingested() {
+        for kilobytes in [300, 4096] {
+            let payload = json!({"session_id":"s","cwd":"/work","hook_event_name":"PostToolUse","tool_name":"Read",
+                "tool_response":{"file":{"content":"x".repeat(kilobytes * 1024)}}});
+            let bytes = serde_json::to_vec(&payload).unwrap();
+            assert!(bytes.len() > MAX_INPUT);
+            assert!(read_event(bytes.as_slice(), Agent::Claude, None).is_ok(), "{kilobytes} KiB");
+        }
     }
 }
 
