@@ -123,8 +123,20 @@ test('a switched-off gesture and the kept top bar say where to turn them on',asy
   await expect(notes).toHaveCount(0);
 });
 
-test('on Android gesture navigation the tour draws the handle and says to start from it; Edge swipes keep the rows rule',async({page},testInfo)=>{
+test('on Android gesture navigation with the gesture lines hidden the tour draws no handle and says to start in the strip',async({page},testInfo)=>{
   test.skip(!phone(testInfo),'phones only');
+  const dialog=await connectToTour(page);
+  await reportGestureInsets(page,oneUi);
+  await expect(dialog.locator('.gt-copy')).toContainText('start each swipe in the strip just inside the system\'s zone');
+  await expect(dialog.locator('.gt-copy')).toContainText('Turn on Show gesture lines');
+  await expect(dialog.locator('.gt-copy')).toContainText('Each swipe starts in a strip 40 dp deep');
+  await expect(dialog.locator('.gt-handle')).toHaveCount(0);
+  await expect(dialog.locator('.gt-zone')).toHaveCount(0);
+});
+
+test('on Android gesture navigation with the gesture lines shown the tour draws the handle and says to start from it',async({page},testInfo)=>{
+  test.skip(!phone(testInfo),'phones only');
+  await seed(page,{'lazysh.preferences.v1':JSON.stringify({version:1,edgeGestures:{showLines:true}})});
   const dialog=await connectToTour(page);
   await expect(dialog.locator('.gt-handle')).toHaveCount(0);
   await reportGestureInsets(page,oneUi);
