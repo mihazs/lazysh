@@ -26,5 +26,5 @@ Release packages are held to size ceilings (`.changeset/release-artifacts.ts`) a
 
 - Published builds are unchanged byte for byte in their inputs. Nothing in `Cargo.toml`, the workflows or the F-Droid recipe changes.
 - Build cost stays. A warm desktop rebuild takes about five minutes on four CPUs, of which about four are the fat link.
-- A split, thin or `lto = false` only for CI jobs that ship nothing, remains open. It needs an audit of which `checks.yml` jobs may build different codegen from the one that ships (several build the release binary on purpose, and the APK size gate needs the real library). It is tracked as a follow-up and is not part of this decision.
+- A split, thin or `lto = false` only for CI jobs that ship nothing, remains open. It needs an audit of which `checks.yml` jobs may build different codegen from the one that ships (several build the release binary on purpose, and the APK size gate needs the real library). It is tracked as [#2768](https://github.com/mihazs/lazysh/issues/2768) and is not part of this decision.
 - Not covered by the evidence: Android, iOS, macOS and Windows builds, any device, any connected session. A later change to the profile must measure those before it is adopted.

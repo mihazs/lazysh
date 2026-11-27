@@ -91,7 +91,7 @@ No profile is adopted ([ADR 0007](../architecture/adr-0007-keep-fat-lto-release-
 | `lto = false`, 16 units for every release build | The cheapest build (desktop -38 % cold, -78 % warm, CPU -8 %) but binaries grow 10 to 14 %, the CLI is 1 to 7 % slower, and the terminal frame path is 11 to 32 % slower. |
 | `thin` with one unit | Not measured; it removes the parallelism that makes thin cheaper in wall time, so it cannot beat the rows above. |
 | `opt-level`, `panic`, `strip` variants | Not measured: `panic = "abort"` and `strip = true` are already the cheap settings, and `opt-level = "s"` trades speed for size, which the measurements above give no reason to want. |
-| Thin or `lto = false` only for test builds that ship nothing | Would win (the same numbers apply, without the size and run-time costs), but it needs a per-job audit: several `checks.yml` jobs build the release binary precisely so the test runs against the codegen that ships, and the APK size gate must see the real `.so`. Recorded as a follow-up, not done here. |
+| Thin or `lto = false` only for test builds that ship nothing | Would win (the same numbers apply, without the size and run-time costs), but it needs a per-job audit: several `checks.yml` jobs build the release binary precisely so the test runs against the codegen that ships, and the APK size gate must see the real `.so`. Recorded as [#2768](https://github.com/mihazs/lazysh/issues/2768), not done here. |
 
 ## Limits of this evidence
 
