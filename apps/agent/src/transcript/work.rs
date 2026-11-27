@@ -71,6 +71,29 @@ fn workflow_name(script: &Value) -> String {
         .unwrap_or_else(|| "Workflow".to_owned())
 }
 
+/// The title of a `Workflow` call: the inline script's `meta.name`, else the `scriptPath` file name without its
+/// extension and Claude Code's `-wf_<run>` suffix, else a named or saved workflow, else `Workflow`.
+fn workflow_title(input: &Value) -> String {
+    let named = workflow_name(&input["script"]);
+    if named != "Workflow" {
+        return named;
+    }
+    let from_path = input["scriptPath"].as_str().and_then(|path| {
+        let stem = Path::new(path).file_stem()?.to_str()?;
+        Some(stem.split("-wf_").next().unwrap_or(stem))
+    });
+    from_path
+        .into_iter()
+        .chain(
+            ["workflow", "name"]
+                .iter()
+                .filter_map(|key| input[*key].as_str()),
+        )
+        .map(str::trim)
+        .find(|name| !name.is_empty())
+        .map_or(named, |name| clip(name, 120))
+}
+
 fn first_line(text: &str) -> Option<String> {
     text.lines()
         .map(str::trim)
@@ -121,7 +144,7 @@ fn start(block: &Value, at: Option<&str>) -> Option<Task> {
         ),
         "Bash" if input["run_in_background"] == true => ("shell", describe("Bash"), None),
         "Monitor" => ("monitor", describe("Monitor"), None),
-        "Workflow" => ("workflow", workflow_name(&input["script"]), None),
+        "Workflow" => ("workflow", workflow_title(input), None),
         _ => return None,
     };
     Some(Task {
@@ -144,7 +167,10 @@ fn start(block: &Value, at: Option<&str>) -> Option<Task> {
         timeout_ms: input["timeout_ms"].as_u64(),
         tokens: None,
         duration_ms: None,
-        run_id: None,
+        // A resumed run is known from the call itself; the launch result overrides it with the run it names.
+        run_id: (kind == "workflow")
+            .then(|| input["resumeFromRunId"].as_str().map(str::to_owned))
+            .flatten(),
     })
 }
 
