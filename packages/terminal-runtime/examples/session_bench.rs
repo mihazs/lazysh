@@ -178,6 +178,26 @@ fn input_latency() {
     }
 }
 
+/// `count` detached sessions on `hub` that loop over `data(PER_SESSION)` until `stop` is set.
+fn flood_threads(
+    hub: &Hub,
+    count: usize,
+    data: Option<fn(usize) -> Vec<u8>>,
+    stop: &Arc<AtomicBool>,
+) -> Vec<std::thread::JoinHandle<()>> {
+    (0..count)
+        .map(|n| {
+            let flooder = session(hub, &format!("flood{n}"), config(80, 24, 4 << 20));
+            let (stop, data) = (stop.clone(), data.unwrap()(PER_SESSION));
+            std::thread::spawn(move || {
+                while !stop.load(Relaxed) {
+                    data.chunks(CHUNK).for_each(|c| flooder.send(c));
+                }
+            })
+        })
+        .collect()
+}
+
 /// What typing feels like once the program has echoed: microseconds from `feed` of a small chunk
 /// to `changed` firing on the attached session, which is when its screen update is ready to draw.
 /// Idle, then while nine other sessions flood the same workers (they loop over the data until the
@@ -217,17 +237,7 @@ fn screen_update_latency() {
         let (probe, changes) = session_watched(&hub, "probe", config(80, 24, 1 << 20));
         probe.session.attach().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
-        let floods: Vec<_> = (0..if flood.is_some() { 9 } else { 0 })
-            .map(|n| {
-                let flooder = session(&hub, &format!("flood{n}"), config(80, 24, 4 << 20));
-                let (stop, data) = (stop.clone(), flood.unwrap()(PER_SESSION));
-                std::thread::spawn(move || {
-                    while !stop.load(Relaxed) {
-                        data.chunks(CHUNK).for_each(|c| flooder.send(c));
-                    }
-                })
-            })
-            .collect();
+        let floods = flood_threads(&hub, if flood.is_some() { 9 } else { 0 }, flood, &stop);
         std::thread::sleep(std::time::Duration::from_millis(50));
         let mut samples: Vec<f64> = (0..ECHOES)
             .map(|_| {
@@ -247,6 +257,67 @@ fn screen_update_latency() {
         samples.sort_by(f64::total_cmp);
         let [p50, p95, p99, max] = [0.50, 0.95, 0.99, 1.0].map(|p| percentile(&samples, p));
         println!("| {name} | {p50:.1} | {p95:.1} | {p99:.1} | {max:.1} |");
+    }
+}
+
+/// The criterion of #1339: what typing in the attached session costs while nine others stream.
+/// A key press (`send_key`, microseconds to the writer holding the bytes: the lock wait for a
+/// worker's slice on this session, encode, in-memory write), then the echo fed back a moment
+/// later, timed from the key to `changed` firing. Idle, then with nine detached sessions
+/// flooding the same two workers, with plain text and with the slowest-to-parse workload.
+fn typing_latency() {
+    const KEYS: usize = 2_000;
+    let key = KeyInput {
+        key: ffi::GhosttyKey_GHOSTTY_KEY_ARROW_UP,
+        mods: 0,
+        text: None,
+        composing: false,
+        repeat: false,
+        release: false,
+    };
+    println!("\n| attached session typing, microseconds ({KEYS} keys) | metric | p50 | p95 | p99 | max |\n|---|---|---|---|---|---|");
+    type Flood = Option<fn(usize) -> Vec<u8>>;
+    let cases: [(&str, usize, Flood); 3] = [
+        ("idle", 0, None),
+        ("9 other sessions flooding plain text", 9, Some(plain)),
+        (
+            "9 other sessions flooding CJK/emoji/combining",
+            9,
+            Some(unicode),
+        ),
+    ];
+    for (name, others, flood) in cases {
+        let hub = Hub::new(hub_config());
+        let (probe, changes) = session_watched(&hub, "probe", config(80, 24, 1 << 20));
+        probe.session.attach().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let floods = flood_threads(&hub, others, flood, &stop);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let (mut writes, mut screens): (Vec<f64>, Vec<f64>) = (0..KEYS)
+            .map(|_| {
+                let seen = changes.load(SeqCst);
+                let at = Instant::now();
+                probe.session.send_key(&key).unwrap();
+                let written = at.elapsed().as_secs_f64() * 1e6;
+                probe.send(b"echo\r\n");
+                while changes.load(SeqCst) == seen {
+                    std::hint::spin_loop();
+                }
+                let shown = at.elapsed().as_secs_f64() * 1e6;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                (written, shown)
+            })
+            .unzip();
+        stop.store(true, Relaxed);
+        floods.into_iter().for_each(|t| t.join().unwrap());
+        for (metric, samples) in [
+            ("key to write", &mut writes),
+            ("key to changed", &mut screens),
+        ] {
+            samples.sort_by(f64::total_cmp);
+            let [p50, p95, p99, max] = [0.50, 0.95, 0.99, 1.0].map(|p| percentile(samples, p));
+            println!("| {name} | {metric} | {p50:.1} | {p95:.1} | {p99:.1} | {max:.1} |");
+        }
     }
 }
 
@@ -295,7 +366,7 @@ fn memory() {
     println!("\nchurn, 100 sessions x 1 MiB each, created and closed per round: RSS before {start} KiB, after rounds {rounds:?} KiB");
 }
 
-/// `session_bench [section]` runs one section (throughput, input, screen, memory) or all of them.
+/// `session_bench [section]` runs one section (throughput, input, screen, typing, memory) or all of them.
 fn main() {
     let only = std::env::args().nth(1);
     let wanted = |name: &str| only.as_deref().is_none_or(|only| only == name);
@@ -312,6 +383,9 @@ fn main() {
     }
     if wanted("screen") {
         screen_update_latency();
+    }
+    if wanted("typing") {
+        typing_latency();
     }
     if wanted("memory") {
         memory();

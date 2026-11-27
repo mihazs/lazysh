@@ -20,7 +20,7 @@ const expected = variants.flatMap(variant => Array.from({ length: samplesPerVari
 export function nativeBenchmarkInstrumentationCommand(serial: string, fixture: string, port: number, softwareGpu: boolean, portArgument = 'lazyshIdleBenchPort', extra: string[] = []) {
   return ['adb', '-s', serial, 'shell', 'am', 'instrument', '-w', '-r',
     '-e', 'waitForActivitiesToComplete', 'false',
-    '-e', 'class', 'app.lazysh.client.NativeTerminalSessionTest',
+    '-e', 'class', 'app.lazysh.client.NativeTerminalSessionTest#aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart',
     '-e', 'lazyshSshFixture', fixture,
     ...extra,
     '-e', portArgument, String(port),

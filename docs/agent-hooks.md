@@ -258,6 +258,13 @@ file, for example because `CLAUDE_CONFIG_DIR` is set in the agent's terminal but
 snapshot (the Agent view's conversation list has the same limit), the row stays as the hooks left it until the
 next prompt or `SessionEnd`. A row nobody reads stays as it is until the next snapshot.
 
+Esc on a running Claude Code turn sends no hook either ([#1956](https://github.com/mihazs/lazysh/issues/1956)),
+so the row would report `working` until the next prompt. The same snapshot read marks a `working` Claude Code
+row done, summary "Turn interrupted", when the last main-thread record of its conversation file is the
+interruption marker written after the row's last report. A newer prompt or tool call, a sub-agent's records
+and a marker older than the last report settle nothing; a turn a background agent keeps running after the
+marker is therefore also shown as done until its next report.
+
 Codex reports main-thread prompt/tool activity as working, permission requests as
 needing attention and Stop, Interrupt or SessionEnd as completed. SessionStart
 does not imply an active turn. Codex subagent hooks use the parent's session ID;

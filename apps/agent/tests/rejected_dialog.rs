@@ -218,3 +218,50 @@ fn incomplete_trailing_record_cannot_settle_an_earlier_rejection() {
     host.append(&rejection());
     assert_eq!(host.row()["state"], "done");
 }
+
+fn interruption(offset: Duration, sidechain: bool) -> Value {
+    json!({"type":"user","isSidechain":sidechain,"timestamp":at(offset),"sessionId":SESSION,
+        "message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}})
+}
+
+// Esc on a running turn sends no hook either (#1956).
+#[test]
+fn an_interrupted_turn_stops_the_row_working_and_the_next_prompt_moves_it_on() {
+    let host = Host::new();
+    host.hook("UserPromptSubmit", None);
+    host.append(&[asks("Bash", Duration::zero())]);
+    assert_eq!(host.row()["state"], "working");
+
+    host.append(&[interruption(Duration::zero(), false)]);
+    let settled = host.row();
+    assert_eq!(settled["state"], "done");
+    assert_eq!(settled["summary"], "Turn interrupted");
+    assert_eq!(
+        host.row()["eventCount"],
+        settled["eventCount"],
+        "settled once"
+    );
+
+    host.hook("UserPromptSubmit", None);
+    assert_eq!(host.row()["state"], "working");
+}
+
+#[test]
+fn a_working_row_is_settled_only_by_a_main_thread_marker_newer_than_its_last_report() {
+    let host = Host::new();
+    host.append(&[interruption(Duration::seconds(-60), false)]);
+    host.hook("UserPromptSubmit", None);
+    // The marker is older than the last report: an earlier turn's interruption.
+    assert_eq!(host.row()["state"], "working");
+
+    // A sub-agent's interruption is not the main turn's.
+    host.append(&[interruption(Duration::zero(), true)]);
+    assert_eq!(host.row()["state"], "working");
+
+    // The conversation went on after the marker: a turn is running.
+    host.append(&[
+        interruption(Duration::zero(), false),
+        asks("Bash", Duration::zero()),
+    ]);
+    assert_eq!(host.row()["state"], "working");
+}

@@ -126,6 +126,9 @@ async fn connection(
 
 fn spawn_actor(directory: &Path, socket: &Path) -> Actor {
     fake_herdr::install(directory, "owned", socket);
+    start_actor(directory)
+}
+fn start_actor(directory: &Path) -> Actor {
     let mut command = Command::new(binary::path());
     command
         .env_clear()
@@ -133,15 +136,27 @@ fn spawn_actor(directory: &Path, socket: &Path) -> Actor {
         .env("PATH", directory);
     Actor::spawn(command, "owned")
 }
+/// The actor's `ready` line. Looking the session up runs the `herdr` stand-in inside a 3 s budget; a starved CI runner can
+/// miss it, and the actor then ends before any line. Nothing was pinned or written yet, so the start is tried again.
+async fn started(directory: &Path, case: &str) -> Actor {
+    for _ in 0..3 {
+        let mut actor = start_actor(directory);
+        let Some(ready) = actor.line().await else {
+            continue;
+        };
+        assert_eq!(ready["event"], "ready", "{case}");
+        // The pin is the process that serves the socket, here this test.
+        assert_eq!(ready["pid"], std::process::id(), "{case}");
+        return actor;
+    }
+    panic!("{case}: the actor ended three times before it was ready");
+}
 async fn ready(case: &str, input: Input) -> (tempfile::TempDir, Server, Actor) {
     let directory = tempfile::tempdir().unwrap();
     let socket = directory.path().join("owned.sock");
     let server = Server::start(&socket, input);
-    let mut actor = spawn_actor(directory.path(), &socket);
-    let ready = actor.line().await.expect("ready");
-    assert_eq!(ready["event"], "ready", "{case}");
-    // The pin is the process that serves the socket, here this test.
-    assert_eq!(ready["pid"], std::process::id(), "{case}");
+    fake_herdr::install(directory.path(), "owned", &socket);
+    let actor = started(directory.path(), case).await;
     (directory, server, actor)
 }
 fn send(id: u64, text: &str) -> Value {
@@ -314,4 +329,28 @@ async fn malformed_requests_retire_and_a_missing_server_never_becomes_ready() {
         json!({"event":"retired","reason":"server_unreachable"})
     );
     assert!(absent.ended_with_failure().await);
+}
+
+#[tokio::test]
+async fn a_start_the_session_lookup_missed_is_tried_again_before_the_actor_is_judged() {
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("owned.sock");
+    let _server = Server::start(&socket, Input::Accept);
+    fake_herdr::install(directory.path(), "owned", &socket);
+    // The first `herdr session list` fails the way a starved runner makes it fail; later ones answer.
+    std::fs::rename(
+        directory.path().join("herdr"),
+        directory.path().join("herdr-real"),
+    )
+    .unwrap();
+    let shim = directory.path().join("herdr");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\nif [ ! -e \"$HOME/failed\" ]; then : > \"$HOME/failed\"; exit 75; fi\nexec \"$HOME/herdr-real\" \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let actor = started(directory.path(), "retry").await;
+    assert!(directory.path().join("failed").exists());
+    assert!(actor.exit_success().await);
 }
