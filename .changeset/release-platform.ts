@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { copyFile, lstat, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -301,6 +301,12 @@ export const appImageCompanion = (image: string, published: PublishedCompanion, 
   }
 });
 
+/** `copyFile` gives the destination the source's mode, and the published companion is a downloaded artifact that kept none: install it executable. */
+export async function installCompanion(source: string, destination: string) {
+  await copyFile(source, destination);
+  await chmod(destination, 0o755);
+}
+
 export async function restoreAppImageCompanion(image: string, published: PublishedCompanion, version: string) {
   const directory = await mkdtemp(join(dirname(resolve(image)), '.lazysh-appimage-'));
   try {
@@ -309,7 +315,7 @@ export async function restoreAppImageCompanion(image: string, published: Publish
     const installed = join(appDir, 'usr/bin/lazysh-agent');
     await requireBundledImage(installed, published, 'AppImage');
     // linuxdeploy's RUNPATH rewrite can break the static PIE even when its code sections match.
-    await copyFile(published.file, installed);
+    await installCompanion(published.file, installed);
     const cache = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
     const packer = join(cache, 'tauri/linuxdeploy-plugin-appimage.AppImage');
     const candidate = join(directory, 'restored.AppImage');
