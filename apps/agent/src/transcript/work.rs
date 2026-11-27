@@ -207,11 +207,14 @@ fn settle(task: &mut Task, body: &str, at: Option<&str>) {
 }
 
 /// Tasks in launch order, the newest `MAX_TASKS`.
-pub(super) fn tasks<'a>(records: impl IntoIterator<Item = &'a Value>) -> Vec<Value> {
+pub(super) fn tasks<T: std::borrow::Borrow<Value>>(
+    records: impl IntoIterator<Item = T>,
+) -> Vec<Value> {
     let mut tasks: Vec<Task> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut stops: HashMap<String, String> = HashMap::new();
-    for record in records {
+    for value in records {
+        let record = value.borrow();
         let at = record["timestamp"].as_str();
         let content = &record["message"]["content"];
         if let Some(body) = content.as_str() {
