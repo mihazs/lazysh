@@ -136,6 +136,15 @@ describe('a bound conversation with a live watch',()=>{
     await send(delta(1,2,[],{activity:'waiting'}));expect(row()).toMatch(/^Waiting for you · /);
     await send(delta(1,3,[],{activity:null}));expect(row()).toBeUndefined();
   });
+  it('counts the working clock from when the new turn began, not from the previous finished turn the transcript still ends on',async()=>{
+    vi.setSystemTime(new Date('2026-11-13T12:00:00Z'));
+    const old=(id:string,role:string,value:string)=>({...text(id,role,value),timestamp:'2026-11-13T10:00:00Z'});
+    render_();await advance(0);await send(hello);
+    await send(snapshot(1,1,[entry(old('p1','user','Question')),entry(old('a1','assistant','Answer'))],'working'));
+    expect(document.querySelector('.agent-working-row')?.textContent).toMatch(/^Working · 0:0\d/);
+    await advance(5000);
+    expect(document.querySelector('.agent-working-row')?.textContent).toMatch(/^Working · 0:0[5-9]/);
+  });
   it('passes the session facts of the stream to the header and keeps them when a delta carries none',async()=>{
     const sessions:unknown[]=[];
     render(<ChatPanel sessionId="host" shown bound={{agent:'claude',path:'/host/session.jsonl'}} timeline onSession={session=>sessions.push(session)}/>);
