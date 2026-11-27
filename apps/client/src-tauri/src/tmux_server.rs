@@ -29,6 +29,9 @@ impl Binary {
     /// with its delimiter and escape character encoded so names cannot become formats or styles.
     pub(crate) fn literal_directory(self, value: &str) -> String {
         match self {
+            // tmux (3.2a to 3.8) turns a doubled `#` before `[` into a style and starts in Home, and has no `l:` modifier
+            // on every version: each `#` becomes a conditional that the format engine emits only after parsing.
+            Self::Tmux if value.contains("#[") => value.replace('#', "#{?#{==:1,1},##,}"),
             Self::Tmux => value.replace('#', "##"),
             Self::Rmux => format!("#{{l:{}}}", value.replace('#', "##").replace('}', "#}")),
         }
@@ -200,7 +203,11 @@ mod tests {
             assert_eq!(Binary::Rmux.literal_name(typed), typed);
             assert_eq!(
                 Binary::Tmux.literal_directory(typed),
-                typed.replace('#', "##")
+                if typed.contains("#[") {
+                    typed.replace('#', "#{?#{==:1,1},##,}")
+                } else {
+                    typed.replace('#', "##")
+                }
             );
             assert_eq!(Binary::Tmux.literal_name(typed), typed.replace('#', "##"));
         }
