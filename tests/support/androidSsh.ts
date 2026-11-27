@@ -753,8 +753,9 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       await tmux.verifySplitAndZoom();
       await tmux.verifyCopied();
       await tmux.verifyGestures();
+      await tmux.verifyPaneAndSessionClose();
       await tmux.verifyDetachedAndReattached();
-      console.log('Owned packaged tmux: discovery, numbered window, Jump To, copy mode and copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom and two-finger window swipes, detach and reattach verified against the original server and pane processes');
+      console.log('Owned packaged tmux: discovery, numbered window, Jump To, copy mode and copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom, two-finger window swipes, a closed split pane and a created and closed session, detach and reattach verified against the original server and pane processes');
       await tmux.verifyDefaultSession();
       console.log('Owned packaged tmux default: the saved create-if-missing session was created once in the login directory, attached, detached and attached again, with the original session and panes untouched');
       if(tmux.metadata().chat) {
