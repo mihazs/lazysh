@@ -30,6 +30,7 @@
     "packages/mosh-transport/vendor-android/**",
     "packages/portable-pty-vendor/**",
     "packages/wry-vendor/**",
+    "packages/ssh-key-vendor/**",
     "bun.lock",
     "Cargo.lock",
     "apps/agent/CHANGELOG.md",

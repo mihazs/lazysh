@@ -1,11 +1,12 @@
 [workspace]
 members = ["apps/client/src-tauri", "apps/agent", "apps/share-service", "apps/transcription-service", "apps/notification-service", "packages/credential-vault", "packages/mosh-transport", "packages/et-transport", "packages/apple-speech", "packages/apple-status", "packages/push-registration", "packages/parakeet-runtime", "packages/common", "packages/account-usage", "packages/notification-client", "packages/display-idle", "packages/companion-release"]
 resolver = "2"
-exclude = ["packages/ai-usagebar-vendor", "packages/portable-pty-vendor", "packages/deep-link-vendor", "packages/wry-vendor", "packages/herdr-upstream", "packages/terminal-runtime", "packages/terminal-renderer-wgpu"]
+exclude = ["packages/ai-usagebar-vendor", "packages/portable-pty-vendor", "packages/deep-link-vendor", "packages/wry-vendor", "packages/ssh-key-vendor", "packages/herdr-upstream", "packages/terminal-runtime", "packages/terminal-renderer-wgpu"]
 
 [patch.crates-io]
 tauri-plugin-deep-link = { path = "packages/deep-link-vendor" }
 wry = { path = "packages/wry-vendor" }
+ssh-key = { path = "packages/ssh-key-vendor" }
 
 # Dev and test builds keep file and line for panics and backtraces but not variable-level debuginfo: the 12 GB debug target of
 # the app's tests shrinks to 7 GB and a clean build compiles faster (docs/reference/build-performance.md). A debugger session
