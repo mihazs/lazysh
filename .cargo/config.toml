@@ -11,3 +11,6 @@ GGML_F16C = "OFF"
 # wry splices this into the generated Android RustWebView, which cannot be subclassed: the terminal-only private
 # keyboard mode shapes the keyboard's EditorInfo here (apps/client/src-tauri/gen/android .../PrivateKeyboardPlugin.kt).
 WRY_RUSTWEBVIEW_CLASS_EXTENSION = 'override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo): android.view.inputmethod.InputConnection? = PrivateKeyboard.shape(super.onCreateInputConnection(outAttrs), outAttrs)'
+
+# Keep Wry's navigation, request and IPC callbacks when handling a dead Android renderer.
+WRY_RUSTWEBVIEWCLIENT_CLASS_EXTENSION = 'override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean = (view.context as? MainActivity)?.recoverWebView(view) ?: super.onRenderProcessGone(view, detail)'

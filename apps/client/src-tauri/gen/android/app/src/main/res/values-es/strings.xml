@@ -9,4 +9,5 @@
     <string name="auth_notification_channel">Solicitudes de inicio de sesión</string>
     <string name="auth_notification_title">El inicio de sesión está esperando</string>
     <string name="auth_notification_text">Abrir la página de inicio de sesión de %1$s en este dispositivo</string>
+    <string name="webview_recovery_reconnect">Lazysh se está abriendo de nuevo. Vuelve a conectarte para reanudar tus sesiones de terminal.</string>
 </resources>
