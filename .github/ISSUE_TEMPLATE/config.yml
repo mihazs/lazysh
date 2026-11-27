@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/mihazs/lazysh/discussions/categories/q-a
+    about: Questions and usage help belong in Discussions, not issues.
+  - name: Report a security vulnerability
+    url: https://github.com/mihazs/lazysh/security/policy
+    about: Follow the security policy; do not post exploit details publicly.

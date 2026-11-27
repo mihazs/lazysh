@@ -194,7 +194,7 @@ Start with the [documentation map](docs/README.md), organized by the outcome you
 **Interested in an open-source mobile SSH client for remote development and AI-agent workflows?** [Star lazysh on GitHub](https://github.com/mihazs/lazysh) to follow its progress, try a release, or share feedback.
 
 - [Browse the public roadmap](docs/roadmap.md) to see planned and in-progress work.
-- [Report a bug or suggest a feature](https://github.com/mihazs/lazysh/issues/new/choose); bug reports ask for the app version, platform and reproduction steps.
+- [Report a bug or suggest a feature](https://github.com/mihazs/lazysh/issues/new/choose); bug reports ask for the app version, platform and reproduction steps. Questions go to [Q&A discussions](https://github.com/mihazs/lazysh/discussions/categories/q-a).
 - Looking for a first contribution? See issues labelled [good first issue](https://github.com/mihazs/lazysh/labels/good%20first%20issue) or [help wanted](https://github.com/mihazs/lazysh/labels/help%20wanted).
 - [Read the contribution guide](CONTRIBUTING.md) before opening a pull request, and the [code of conduct](CODE_OF_CONDUCT.md).
 

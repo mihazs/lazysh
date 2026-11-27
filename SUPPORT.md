@@ -4,9 +4,8 @@ lazysh is a development preview. Start with the [installation guide](docs/instal
 [connections](docs/connections.md) and [public roadmap](https://github.com/mihazs/lazysh/issues/1).
 Search [existing issues](https://github.com/mihazs/lazysh/issues) before opening a report.
 
-Use the bug template for a reproducible failure and the feature template for a
-bounded proposal. Questions can use a clearly titled issue while Discussions
-are unavailable. Include the exact version, OS/device, APK flavor, transport,
+Use the bug form for a reproducible failure and the feature form for a
+bounded proposal. Ask questions in the [Q&A discussions](https://github.com/mihazs/lazysh/discussions/categories/q-a). Include the exact version, OS/device, APK flavor, transport,
 steps, expected result and actual result. State whether you used a published
 installer, source build or browser preview. A browser preview cannot test SSH.
 
@@ -18,7 +17,7 @@ export. Follow [SECURITY.md](SECURITY.md) for suspected vulnerabilities.
 
 The example below is **illustrative and fictional**. It does not report an observed
 defect, and its version, revision, distribution and symptom are invented. Copy only
-its structure: one answer for each field of the [bug template](.github/ISSUE_TEMPLATE/bug.md),
+its structure: one answer for each field of the [bug form](.github/ISSUE_TEMPLATE/bug.yml),
 with `None` or `Not run` and the reason in place of a blank.
 
 > **Version**
