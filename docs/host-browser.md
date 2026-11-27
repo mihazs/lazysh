@@ -441,8 +441,8 @@ answers, input) is sent without waiting.
 The app runs the relay over the verified SSH session with six Tauri commands in `apps/client/src-tauri/src/host_browser.rs`
 ([#1704](https://github.com/mihazs/lazysh/issues/1704), slice 2 of [#1254](https://github.com/mihazs/lazysh/issues/1254)),
 shaped like the Devices tool's `device_stream_*`. They are in the permission manifest (`build.rs`) and the main capability.
-The viewer that uses them is the next slice ([#1705](https://github.com/mihazs/lazysh/issues/1705)); nothing in the app calls
-them yet.
+The [viewer](#viewer) is their only caller
+([#1705](https://github.com/mihazs/lazysh/issues/1705), slice 3 of [#1254](https://github.com/mihazs/lazysh/issues/1254)).
 
 | Command | Does |
 | --- | --- |
@@ -481,6 +481,34 @@ helpers and its profile. A browser whose channel ended holds no slot.
 **Data.** The app keeps no page text or frame outside memory and writes none to a log, to its storage or to a crash
 report. An error names an operation and a reason; the text of a message that fails to parse is dropped, because
 serde's own message quotes the value.
+
+### Viewer
+
+The **Host browser** tool (`apps/client/src/HostBrowserPanel.tsx` and `apps/client/src/hostBrowser/`) shows the relay's page
+on a canvas, view-only: no tap, key or text is sent, and the relay would refuse them while Control is off.
+
+| Part | Behavior |
+| --- | --- |
+| Offered | Beside Preview, only for a connected SSH session whose host's switch reads on **and** whose host this device confirmed. The device-local confirmation is checked first, so a device that never turned the browser on makes no host call; the switch is then read once per session and again after each save in host settings. A failed read leaves the answer as it was. |
+| Start and stop | Opening the tool starts one browser (`host_browser_start`) the size of the tool's stage in CSS pixels, within the relay's bounds, at scale 1. It keeps running, paused, while another tool shows and ends on **Stop browser**, when the session changes or ends, when the switch is read as off, and on lock or a dropped connection (the app's bridge closes the channel). **Start again** opens a new one. |
+| Frames | One pull at a time. A frame is decoded off the page's own flow with `createImageBitmap`, drawn, and then acknowledged with its decode time, so a slow device receives fewer frames. A frame that is not drawn is not acknowledged (resuming forgets it, see "Relay wire format"). |
+| Pause when hidden | The viewer sends `pause` as soon as the tool is not the one shown, the page is hidden (the app is in the background or the screen is off) and `resume` when it is shown again. A frame already on its way is neither decoded nor drawn, or, when it was being decoded, dropped before drawing. |
+| Page text | The page's title and address are untrusted: they are React text in a definition list, never HTML, an attribute or a link, and they are bounded by the app before they arrive. |
+
+States, each in the tool's live region (`role="status"`): **Starting** (until the first frame is on the canvas), **Live**,
+**Paused**, **Closed** and **Failed**. A `closed` message shows its reason in words that say what to do, in en, pt-BR and es:
+`HostBrowserDisabled`, `BrowserNotFound`, `BrowserVersionUnsupported` (with the version the relay names), `PageClosed`,
+`BrowserExited`, `PageCrashed`, `AddressRefused`, `ViewportInvalid`, `HostBrowserUnsupported`, `ProtocolViolation`, the
+timeouts, and the app's own `Disconnected`, `ConnectFailed`, `ChannelFailed`, `ChannelEnded`, `HostCommandFailed`,
+`CompanionRequired` and `Stopped`. A reason that is not in that list is shown as its code, which the app already limited to
+64 letters and digits. A failed command or a message the viewer cannot read is **Failed**. A reason is announced as an alert,
+except the user's own stop. The button is one control that is **Stop browser** while it runs and **Start again** afterwards,
+so keyboard focus stays on it. On a phone (390 by 844) and on a desktop (1280 by 800) the picture keeps its shape inside the
+tool; there is no sideways scroll.
+
+Not in this slice: the browser opens `about:blank` (an address bar is [#1256](https://github.com/mihazs/lazysh/issues/1256)),
+the size is fixed when the browser starts, `refused` counts and the relay's capabilities are read but not shown, and a quality
+ladder is [#1259](https://github.com/mihazs/lazysh/issues/1259).
 
 ## Input mapping for a phone
 
@@ -654,7 +682,7 @@ Design from those facts:
 | --- | --- | --- | --- |
 | 1 | This specification, the feasibility measurements, and a developer-flagged Chrome prototype with a CI test (done) | [#1250](https://github.com/mihazs/lazysh/issues/1250) | No. Prototype off by default and hidden. |
 | 2 | Opt-in gate, managed profile, lifecycle, limits | [#1258](https://github.com/mihazs/lazysh/issues/1258) slices A to C | With the viewer below |
-| 2 | Chrome relay and viewer, view-only. The host relay (`host-browser serve`) is done; the app's bridge and viewer are the remaining slices. | [#1254](https://github.com/mihazs/lazysh/issues/1254) | Yes, off until enabled |
+| 2 | Chrome relay and viewer, view-only. The host relay (`host-browser serve`), the app's bridge and the viewer are done. | [#1254](https://github.com/mihazs/lazysh/issues/1254) | Yes, off until enabled |
 | 3 | Chrome input. The relay's `control` and input messages are done ([#1709](https://github.com/mihazs/lazysh/issues/1709)); the app's wiring of them is the remaining slice ([#1710](https://github.com/mihazs/lazysh/issues/1710)). | [#1255](https://github.com/mihazs/lazysh/issues/1255) | Yes |
 | 4 | Address bar, tabs, navigation, open on device | [#1256](https://github.com/mihazs/lazysh/issues/1256) | Yes |
 | 5 | Adaptive rate and quality, pause when hidden | [#1259](https://github.com/mihazs/lazysh/issues/1259) | Yes |

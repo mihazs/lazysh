@@ -358,3 +358,39 @@ describe('the navigation page and Android Back on a phone',()=>{
     // A hundred open and close cycles take about 5 s: past the default timeout on a loaded runner.
   },30_000);
 });
+
+const confirmedHostKey='lazysh.hostBrowserConfirmed.v1';
+function hostBrowserSwitch(confirmed:boolean,enabled:()=>boolean) {
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key===confirmedHostKey && confirmed ? JSON.stringify(['home']) : null);
+  mocks.invoke.mockImplementation(async command=>command==='get_host_browser_settings'?{schemaVersion:1,revision:1,hostBrowserEnabled:enabled()}:false);
+}
+it.each([['confirmed on this device and on in the host\'s settings',true,true,true],['on in the host but never confirmed here',false,true,false],['confirmed here but off in the host',true,false,false]])('offers the Host browser tool only for a host whose switch is on and confirmed: %s',async(_name,confirmed,enabled,offered)=>{
+  hostBrowserSwitch(confirmed,()=>enabled);
+  const user=await connectForNavigation('browser-host');
+  await user.click(screen.getByRole('button',{name:'Workspace tools'}));
+  const dialog=screen.getByRole('dialog',{name:'Workspace tools'});
+  await user.click(within(dialog).getByRole('button',{name:'Next tools page'}));
+  await waitFor(()=>expect(within(within(dialog).getByRole('tabpanel')).queryByRole('button',{name:'Host browser'})!==null).toBe(offered));
+  expect(mocks.invoke.mock.calls.some(([command])=>command==='get_host_browser_settings')).toBe(confirmed);
+});
+it('keeps an opened Host browser running while another tool shows, and ends it when the switch is turned off',async()=>{
+  let enabled=true;
+  hostBrowserSwitch(true,()=>enabled);
+  const user=await connectForNavigation('browser-host');
+  await waitFor(()=>expect(mocks.invoke).toHaveBeenCalledWith('get_host_browser_settings',{sessionId:'browser-host'},expect.anything()));
+  expect(mocks.hostBrowser).not.toHaveBeenCalled();
+  await chooseWorkspaceTool(user,'Host browser');
+  expect((await screen.findByText('Host browser for browser-host')).hidden).toBe(false);
+  expect(mocks.hostBrowser.mock.calls).toEqual([['mount','browser-host']]);
+  await chooseWorkspaceTool(user,'Usage');
+  await waitFor(()=>expect(screen.getByText('Host browser for browser-host').hidden).toBe(true));
+  await chooseWorkspaceTool(user,'Host browser');
+  await waitFor(()=>expect(screen.getByText('Host browser for browser-host').hidden).toBe(false));
+  expect(mocks.hostBrowser.mock.calls).toEqual([['mount','browser-host']]);
+  enabled=false;
+  const {announceHostBrowserSwitch}=await import('./hostBrowserConfirmation');
+  await act(async()=>announceHostBrowserSwitch());
+  await waitFor(()=>expect(mocks.hostBrowser.mock.calls).toEqual([['mount','browser-host'],['unmount','browser-host']]));
+  expect(screen.queryByText('Host browser for browser-host')).toBeNull();
+  expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
+});

@@ -148,12 +148,23 @@ jobs:
         id: playwright-chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/client
+      # e2e/host-browser-viewer.spec.ts drives the real relay (`lazysh-agent host-browser serve`) with the Chromium above;
+      # with CI set it fails instead of skipping when the companion binary is missing.
+      - if: steps.e2e.outputs.client == 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.e2e.outputs.client == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - if: steps.e2e.outputs.client == 'true'
+        run: cargo build --locked -p lazysh-agent --bin lazysh-agent
       # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six named terminal specs ask
       # for xterm.js through the developer override, and a terminal of another backend fails them.
       - if: steps.e2e.outputs.client == 'true'
         run: bunx moon run client:test-e2e
         env:
           LAZYSH_E2E_TERMINAL_BACKEND: xterm
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent
       # The native arm: skipped, with the backend registry's reason in the log, until the native backend is registered; then it runs.
       - if: steps.e2e.outputs.client == 'true'
         run: bun run test:e2e:terminal
