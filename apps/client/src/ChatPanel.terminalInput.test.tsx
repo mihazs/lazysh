@@ -38,15 +38,22 @@ it('keeps Stage/form/CtrlEnter defaults and performs no destination IPC until th
     expect(draft).toHaveProperty('value','');expect(actions().at(-1)).toEqual({kind:'input',receipt:tmuxChatReceipt,source:tmuxChatSource,operation:1,input:{kind:'send',text:'literal unsent draft'}});
   } finally {window.removeEventListener('lazysh-prompt-draft',staged);}
 });
-it('enables finished IME input after a same-value composition end without dispatching during composition',async()=>{
+it('ends an open IME composition before sending the committed draft once',async()=>{
   await opened();await confirmed();const draft=screen.getByLabelText('Draft for this terminal');
+  draft.focus();
   fireEvent.compositionStart(draft);fireEvent.change(draft,{target:{value:'完成'}});
-  expect(screen.getByRole('button',{name:t('chatTerminalSend')})).toHaveProperty('disabled',true);
-  fireEvent.compositionEnd(draft,{data:'完成'});
-  expect(actions().filter(action=>action.kind==='input')).toHaveLength(0);
+  draft.addEventListener('blur',()=>{fireEvent.change(draft,{target:{value:'完成済'}});fireEvent.compositionEnd(draft,{data:'完成済'});},{once:true});
   expect(screen.getByRole('button',{name:t('chatTerminalSend')})).toHaveProperty('disabled',false);
-  expect(screen.getByRole('button',{name:t('chatTerminalStop')})).toHaveProperty('disabled',false);
-  fireEvent.click(screen.getByRole('button',{name:t('chatTerminalSend')}));await screen.findByText(t('chatTerminalSent'));
+  const send=screen.getByRole('button',{name:t('chatTerminalSend')});fireEvent.click(send);fireEvent.click(send);await screen.findByText(t('chatTerminalSent'));
+  expect(actions().filter(action=>action.kind==='input')).toEqual([{kind:'input',receipt:tmuxChatReceipt,source:tmuxChatSource,operation:1,input:{kind:'send',text:'完成済'}}]);
+});
+it('ends an open IME composition before requesting stop once',async()=>{
+  await opened();await confirmed();const draft=screen.getByLabelText('Draft for this terminal');
+  draft.focus();fireEvent.compositionStart(draft);fireEvent.change(draft,{target:{value:'未完成'}});
+  const stop=screen.getByRole('button',{name:t('chatTerminalStop')});expect(stop).toHaveProperty('disabled',false);
+  fireEvent.click(stop);
+  await waitFor(()=>expect(actions().filter(action=>action.kind==='input')).toEqual([{kind:'input',receipt:tmuxChatReceipt,source:tmuxChatSource,operation:1,input:{kind:'request_stop'}}]));
+  expect(draft).toHaveProperty('value','未完成');
 });
 it.each(['original','first\n\tsecond'])('preserves edited-away-and-back draft after delayed acknowledgement for %j',async text=>{
   await opened();await confirmed();let finish!:(value:unknown)=>void;

@@ -21,7 +21,7 @@ beforeEach(()=>{generation+=10;access();vi.mocked(invoke).mockReset().mockImplem
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 function fixture(overrides:Partial<ComponentProps<typeof ChatTerminalInput>>={}) {
   const lease=captureAccess(),sent=vi.fn();
-  const props:ComponentProps<typeof ChatTerminalInput>={sessionId:'ssh-display',source,labels:{backend:'tmux' as const,hostLabel:'Connected host',terminalLabel:'Agent terminal'},access:lease,invoke:bindProtectedInvoke(lease),draft:'  你好 😀  ',draftRevision:7,composing:{current:false},compositionActive:false,onSent:sent,...overrides};
+  const props:ComponentProps<typeof ChatTerminalInput>={sessionId:'ssh-display',source,labels:{backend:'tmux' as const,hostLabel:'Connected host',terminalLabel:'Agent terminal'},access:lease,invoke:bindProtectedInvoke(lease),draft:'  你好 😀  ',draftRevision:7,composing:{current:false},onSent:sent,...overrides};
   return {props,sent,view:render(<ChatTerminalInput {...props}/>)};
 }
 const recordedSources=[source,{...tmuxChatReaderSource('codex'),view:'conversation' as const}];

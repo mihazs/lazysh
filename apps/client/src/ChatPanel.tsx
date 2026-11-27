@@ -5,6 +5,7 @@ import './AgentRows.css';
 import './AgentChrome.css';
 import './ChatPanel.css';
 import {shellPath} from './attachment';
+import {endComposition} from './endComposition';
 import {zellijPane} from './agentPaneIdentity';
 import ChatTerminalInput,{parseTerminalSnapshot,validTerminalSource,type TerminalSource,type TerminalInputLabels} from './ChatTerminalInput';
 import {parseSnapshot,type ReportedHistorySource} from './AgentPanel';
@@ -379,7 +380,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const draftRevision=useRef(0);
   const [draftStatus, setDraftStatus] = useState<"" | "chatDraftTooLong" | "chatDraftStaged" | "chatAttachmentTooLong">("");
   const composing = useRef(false);
-  const [compositionActive,setCompositionActive]=useState(false);
+  const draftField = useRef<HTMLTextAreaElement>(null);
+  const [,setCompositionActive]=useState(false);
   const request = useRef(0);
   // Grok Build's conversation is a recorded display with no Follow of its own; the Agent view still follows it for the pane.
   const conversation = (['claude','opencode','codex','gemini'].includes(opened?.agent??'') || (!!bound && opened?.agent==='grok-acp')) && opened?.view === 'conversation';
@@ -985,11 +987,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
           }}/>
         </div>}
         <form className="form-stack chat-composer" aria-label={t("chatDraft")} onSubmit={event => { event.preventDefault(); stageDraft(); }}>
-          <textarea id={draftId} rows={bound ? Math.min(6, draft.split('\n').length) : 4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} />
+          <textarea ref={draftField} id={draftId} rows={bound ? Math.min(6, draft.split('\n').length) : 4} maxLength={65536} value={draft} onChange={event => { draftRevision.current++;setDraft(event.target.value); setDraftStatus(""); }} onCompositionStart={() => { composing.current = true;setCompositionActive(true); }} onCompositionEnd={() => { composing.current = false;setCompositionActive(false); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); stageDraft(); } }} />
           <div className="chat-draft-commands">{bound && draftTools}{onOpenTerminal && !bound && <button type="button" className="icon-button" aria-label={t("chatOpenTerminal")} title={t("chatOpenTerminal")} onClick={onOpenTerminal}><Terminal size={18} aria-hidden="true"/></button>}{(!bound || draft) && <button type="button" className="icon-button" aria-label={t("chatClearDraft")} title={t("chatClearDraft")} disabled={!draft} onClick={() => { draftRevision.current++;setDraft(""); setDraftStatus(""); }}><Trash2 size={18} aria-hidden="true"/></button>}{allowStage && <button type="submit" className="primary-button chat-stage" disabled={!draft.trim() || draft.length > 65536}>{t("chatStage")}</button>}</div>
           {shown && terminalInput && terminalSource && sourceMatches && !inputOpen.pending && access.current() && <ChatTerminalInput
             key={`${terminalInputKey}:${inputOpen.generation}`} sessionId={sessionId} source={terminalSource} labels={terminalInput} notes={!bound || draftHelpOpen}
-            access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing} compositionActive={compositionActive}
+            access={access} invoke={invoke} draft={draft} draftRevision={draftRevision.current} composing={composing}
+            endComposition={()=>endComposition(draftField.current,composing,draft,value=>{draftRevision.current++;setDraft(value);setCompositionActive(false);})}
             onSent={(text,revision)=>{
               if(draftRevision.current===revision){draftRevision.current++;setDraft(current=>current===text?'':current);setDraftStatus('');}
             }}

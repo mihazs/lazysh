@@ -15,6 +15,7 @@ import type {AccessLease,bindProtectedInvoke} from './access';
 import {formatNumber,t,useUi} from './i18n/core';
 import AgentComposerPalette,{type Suggestion} from './AgentComposerPalette';
 import {useModeSwitch} from './AgentComposerMode';
+import {endComposition as finishComposition} from './endComposition';
 import {promptsOf,recall,rememberPrompt,type Recall} from './agentComposerHistory';
 import {matchSlash,pickerCommand,promptMode,slashText,type SlashCommand} from './agentSlashCommands';
 import {mentionAt,mentionText} from './agentFileMention';
@@ -164,12 +165,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
   const submitAfterComposition=useRef<string|undefined>(undefined);
   const submissionTarget=JSON.stringify([key,proofKey,stock,zellij,source,labels?.backend]);
   function endComposition() {
-    if(!composing.current)return false;
-    const element=field.current;
-    element?.blur();
-    // A WebView may end it on blur without a compositionend.
-    if(composing.current){composing.current=false;setCompositionActive(false);attach.compose.end(element?.value ?? draft);}
-    return true;
+    return finishComposition(field.current,composing,draft,value=>{setCompositionActive(false);attach.compose.end(value);});
   }
   useEffect(()=>{
     const pending=submitAfterComposition.current;
@@ -252,7 +248,7 @@ export default function AgentComposer({sessionId,conversation,access,invoke,show
       {(automatic || staging) && <button type="submit" className="primary-button agent-composer-send" disabled={!canSubmit || !access.current()} aria-label={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')} title={t(sendable || bindingPending ? 'agentComposerSend' : 'chatStage')}>{control?.busy ? <LoaderCircle size={18} aria-hidden="true"/> : <SendHorizontal size={18} aria-hidden="true"/>}</button>}
     </form>
     {live && labels && source && <ChatTerminalInput sessionId={sessionId} source={source} labels={labels} notes={false} long access={access} invoke={invoke} stock={stock} zellij={zellij}
-      draft={text} draftRevision={revision.current} composing={composing} compositionActive={compositionActive}
+      draft={text} draftRevision={revision.current} composing={composing} endComposition={endComposition}
       proves={proofCheck} onControl={proofCheck?setControl:undefined}
       onSent={(text,sentRevision)=>{
         rememberPrompt(key,text);walk.current={index:null,text:''};

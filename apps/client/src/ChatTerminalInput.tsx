@@ -143,9 +143,9 @@ export type TerminalProblem=Readonly<{key:FailureKey|'agentComposerWrongPane';ra
  * returns true (evidence the caller already holds, such as the pane a hook report names). A destination it rejects is
  * never confirmed, and Send and Stop move to the caller through `onControl`. Without `proves` the explicit Choose and
  * Confirm steps stay. */
-export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,compositionActive,onSent,notes=true,long=false,proves,onControl,onFailed,stock,zellij}:{
+export default function ChatTerminalInput({sessionId,source,labels,access,invoke,draft,draftRevision,composing,endComposition,onSent,notes=true,long=false,proves,onControl,onFailed,stock,zellij}:{
   sessionId:string;source:TerminalSource;labels:TerminalInputLabels;access:AccessLease;invoke:ReturnType<typeof bindProtectedInvoke>;
-  draft:string;draftRevision:number;composing:RefObject<boolean>;compositionActive:boolean;onSent:(text:string,revision:number)=>void;notes?:boolean;
+  draft:string;draftRevision:number;composing:RefObject<boolean>;endComposition?:()=>boolean;onSent:(text:string,revision:number)=>void;notes?:boolean;
   /** Let a tmux terminal take a prompt of up to 64 KiB, sent as one bounded paste past the 4 KiB `send` takes. */
   long?:boolean;
   proves?:(destination:TerminalDestination)=>boolean;onControl?:(control:TerminalControl|undefined)=>void;
@@ -267,6 +267,14 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
   const problemKey=problem&&JSON.stringify(problem);
   useEffect(()=>{onControl?.({ready,busy,failed:refused,problem,send:()=>void latestInput.current('send'),stop:()=>void stopAgent(),answer:body=>latestInput.current(body),cycleMode:async()=>{landed.current=undefined;return await latestInput.current({kind:'cycle_mode'})?landed.current:undefined;},retry:()=>{retrying.current=true;void choose();}});},[onControl,ready,busy,refused,problemKey]);
   useEffect(()=>()=>onControl?.(undefined),[onControl]);
+  const afterComposition=useRef<{kind:'send'|'request_stop';binding:Binding|undefined;context:string}|undefined>(undefined);
+  useEffect(()=>{const pending=afterComposition.current;if(pending && !composing.current){afterComposition.current=undefined;if(pending.binding && owned.current===pending.binding && current(pending.context))void input(pending.kind);}});
+  function manualInput(kind:'send'|'request_stop') {
+    if(afterComposition.current)return;
+    const pending={kind,binding:owned.current,context};
+    if(endComposition?.()){afterComposition.current=pending;return;}
+    void input(kind);
+  }
   async function input(kind:'send'|'request_stop'|DialogAnswer):Promise<boolean> {
     const permission=owned.current,body=typeof kind==='string'?kind==='send'?{kind,text:draft}:{kind}:kind;
     if(flight.current || !permission || !access.current() || composing.current)return false;
@@ -316,8 +324,8 @@ export default function ChatTerminalInput({sessionId,source,labels,access,invoke
       {!binding && <button type="button" disabled={busy} onClick={()=>{retire();setSnapshot(undefined);}}>{t('chatTerminalCancel')}</button>}
     </div>}
     {binding && !auto && <div className="button-row" style={{flexWrap:'wrap'}}>
-      <button type="button" disabled={busy || !validTerminalDraft(draft) || compositionActive || !access.current()} onClick={()=>void input('send')}>{t('chatTerminalSend')}</button>
-      <button type="button" disabled={busy || compositionActive || !access.current()} onClick={()=>void input('request_stop')}>{t('chatTerminalStop')}</button>
+      <button type="button" disabled={busy || !validTerminalDraft(draft) || !access.current()} onClick={()=>manualInput('send')}>{t('chatTerminalSend')}</button>
+      <button type="button" disabled={busy || !access.current()} onClick={()=>manualInput('request_stop')}>{t('chatTerminalStop')}</button>
       <button type="button" disabled={busy} onClick={()=>{retire();setBinding(undefined);setSnapshot(undefined);setStatus('');}}>{t('chatTerminalClear')}</button>
     </div>}
     {!sourceValid && <p>{t('chatTerminalInvalid')}</p>}
