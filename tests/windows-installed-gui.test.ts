@@ -9,7 +9,7 @@ import { project } from './support/gitFixture';
 import { document, evaluate, executedSteps } from './support/workflowGraph';
 import { exactlyOne, windowsNsisBinaryDigest } from '../.changeset/release-platform';
 import { assertCargoReceipt, descendantsOf, edgeDriverVersion, freePorts, hostState, installWebViewArguments, launch, mainWindow, parseHostState,
-  parseProcessTable, pinnedTools, powershell, processTable, quote, removeWebViewArguments, requireOwnedWindowsRunner, sameImage, killOwned, until,
+  parseProcessTable, pinnedTools, powershell, processTable, protocolHandlerImage, quote, registeredProtocolHandler, removeWebViewArguments, requireOwnedWindowsRunner, sameImage, killOwned, until,
   WebDriver, WebDriverError, type HostState, type ProcessRow } from './support/windowsGui';
 
 const root = join(import.meta.dir, '..');
@@ -71,6 +71,14 @@ test('host state and pinned tool receipts reject anything that is not exactly th
     expect(() => assertCargoReceipt(bad, 'tauri-driver', '2.1.0', 'tauri-driver.exe')).toThrow('pinned Cargo');
   expect(edgeDriverVersion('Microsoft Edge WebDriver 130.0.2849.80 (a8a1f9c)\r\n')).toBe('130.0.2849.80');
   expect(() => edgeDriverVersion('ChromeDriver 130.0.0.0')).toThrow('Unrecognized');
+});
+
+test('a protocol registration is trusted only when it starts one absolute image with the link as a single argument', () => {
+  const registration = (command: string, urlProtocol = true) => JSON.stringify({ urlProtocol, command });
+  expect(protocolHandlerImage(registration('"C:\\Installed\\lazysh.exe" "%1"'))).toBe('C:\\Installed\\lazysh.exe');
+  for (const bad of [registration('"C:\\Installed\\lazysh.exe" %1'), registration('C:\\Installed\\lazysh.exe "%1"'), registration('"lazysh.exe" "%1"'),
+    registration('"C:\\Installed\\lazysh.exe" "%1" --extra'), registration(''), registration('"C:\\Installed\\lazysh.exe" "%1"', false)])
+    expect(() => protocolHandlerImage(bad)).toThrow('Invalid lazysh:// protocol registration');
 });
 
 type Reply = (status: number, value: unknown) => void;
@@ -394,3 +402,63 @@ actual('actual Windows installed GUI opens a caller-relative literal directory i
     });
   } finally { await rm(caller, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); }
 }, 900_000);
+
+// ---- Theme import (#995 gap group 26): the image scan and the OS link dispatch the Linux GUI suite also drives. ----
+
+const fixtures = join(root, 'apps/client/src-tauri/fixtures');
+const element = (tag: string, text: string) => `.//${tag}[normalize-space()=${JSON.stringify(text)}]`;
+
+/** Preferences, Appearance and the "Import and share theme" section; the app theme is `custom` only once a theme has been applied. */
+async function enterThemeImport(browser: WebDriver) {
+  await browser.click(await until('Preferences button', () => browser.find('button.preferences-button')));
+  const preferences = await until('Preferences dialog', () => browser.find('[role="dialog"][aria-label="Preferences"]'));
+  await browser.click(await until('Appearance category', () => browser.find('button[data-settings-target="appearance"]', preferences)));
+  const page = await until('Appearance page', async () => {
+    const found = await browser.find('[data-settings-page="appearance"]', preferences);
+    return found && await browser.displayed(found) ? found : undefined;
+  });
+  await browser.click(await until('Import and share theme', () => browser.find(element('summary', 'Import and share theme'), page, 'xpath')));
+  const appTheme = async () => (await browser.script('return document.documentElement.dataset.appTheme')) as string | null;
+  expect(await appTheme()).not.toBe('custom');
+  return { page, appTheme, find: (tag: string, text: string, within?: string) => browser.find(element(tag, text), within, 'xpath'),
+    appears: (stage: string, tag: string, text: string, within?: string) => until(stage, () => browser.find(element(tag, text), within, 'xpath')),
+    applied: (stage: string) => until(stage, async () => (await appTheme()) === 'custom' ? true : undefined, 10_000) };
+}
+
+actual('actual Windows installed GUI scans a QR image chosen in Preferences, decodes it natively and applies the theme only on request', () =>
+  withInstalledGui('theme-qr', async ({ browser }) => {
+    const { page, appTheme, find, appears, applied } = await enterThemeImport(browser);
+    const file = await until('QR image input', () => browser.find('.theme-qr-panel input[type="file"]', page));
+    // The WebDriver sets the file the chooser would return from the checkout's owned fixtures; the app reads it and the native decoder scans it.
+    await browser.type(file, join(fixtures, 'theme-qr-camera-cropped.png'));
+    await appears('report of an image without a code', 'p', 'No decodable QR code was found in this image.', page);
+    expect(await find('h3', 'QR fixture', page)).toBeUndefined();
+    await browser.type(file, join(fixtures, 'theme-qr.png'));
+    await appears('preview of the scanned theme', 'h3', 'QR fixture', page);
+    expect(await appTheme()).not.toBe('custom');
+    await browser.click((await find('button', 'Apply to app and terminal', page))!);
+    await applied('the scanned theme applied on request');
+  }), 900_000);
+
+const linked = { v: 1, name: 'Linked by the OS', mode: 'light', colors: { background: '#fafafa', foreground: '#121212' } };
+
+actual('actual Windows installed GUI opens a lazysh:// theme link through the shell with the installer registration and applies it only on request', () =>
+  withInstalledGui('theme-link', async ({ browser, app, installed }) => {
+    const { appTheme, find, appears, applied } = await enterThemeImport(browser);
+    expect(await find('button', 'Review linked theme')).toBeUndefined();
+    // Nothing is registered by the test: the handler is the one the NSIS installer wrote for this installation.
+    expect(sameImage(await registeredProtocolHandler(), installed)).toBe(true);
+    await runToExit('rundll32.exe', ['url.dll,FileProtocolHandler', `lazysh://theme?data=${Buffer.from(JSON.stringify(linked)).toString('base64url')}`], 30_000);
+    const review = await appears('offer to review the linked theme', 'button', 'Review linked theme');
+    expect(await appTheme()).not.toBe('custom');
+    await browser.click(review);
+    await appears('preview of the linked theme', 'h2', 'Linked by the OS');
+    expect(await appTheme()).not.toBe('custom');
+    await browser.click((await find('button', 'Apply linked theme'))!);
+    await applied('the linked theme applied on request');
+    // The link reached the running window through the single-instance channel: the shell's own launch exited and no second image remains.
+    await until('only the original image', async () => {
+      const images = (await processTable()).filter(row => sameImage(row.path, installed));
+      return images.length === 1 && images[0].pid === app.pid && images[0].created === app.created ? true : undefined;
+    });
+  }), 900_000);
