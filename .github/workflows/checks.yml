@@ -922,7 +922,7 @@ jobs:
         id: ios-terminal-fixture
         if: ${{ !cancelled() && steps.ios-terminal-install.outcome == 'success' }}
         timeout-minutes: 18
-        run: cargo +1.96.1 build --locked -p lazysh-terminal-ssh-fixture --target-dir "$RUNNER_TEMP/terminal-fixture-target"
+        run: cargo +1.96.1 build --locked --manifest-path tests/support/terminal-ssh-fixture/Cargo.toml --target-dir "$RUNNER_TEMP/terminal-fixture-target"
       - name: Exercise the installed iOS terminal with owned SSH
         id: ios-terminal-ssh
         if: ${{ !cancelled() && steps.ios-terminal-fixture.outcome == 'success' }}

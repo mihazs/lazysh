@@ -4241,15 +4241,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lazysh-terminal-ssh-fixture"
-version = "0.0.0"
-dependencies = [
- "rand 0.10.3",
- "russh",
- "tokio",
-]
-
-[[package]]
 name = "lazysh-transcription"
 version = "1.103.0"
 dependencies = [
