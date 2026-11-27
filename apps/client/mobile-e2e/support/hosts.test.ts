@@ -94,5 +94,5 @@ test('Herdr joins the default hosts only when all three of its binaries are give
   const tools = {LAZYSH_TEST_HERDR: '/h', LAZYSH_TEST_AGENT_BIN: '/a', LAZYSH_TEST_RECEIVER_BIN: '/r'};
   expect(defaultHostKinds({})).toBe('ssh');
   expect(defaultHostKinds({...tools, LAZYSH_TEST_RECEIVER_BIN: ''})).toBe('ssh');
-  expect(defaultHostKinds(tools)).toBe('ssh,herdr');
+  expect(defaultHostKinds(tools)).toBe('ssh,herdr,herdr-agents');
 });
