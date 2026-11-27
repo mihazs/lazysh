@@ -477,6 +477,7 @@ export const english = {
   themeQrCameraUnavailable: "Camera capture is unavailable here. Choose a PNG or JPEG image instead.",
   themeQrCameraFailed: "The camera could not start. You can choose a PNG or JPEG image.",
   themeQrEncodeFailed: "The camera frame could not be encoded.",
+  themeQrReadFailed: "The chosen QR image could not be read. Choose it again.",
   themeQrFailed: "The QR image could not be decoded.",
   themeQrLimits: "Manual imports keep the 8 KiB JSON and 16 KiB share-code limits. QR images are decoded locally by the native app. Supplied terminal colors stay unchanged; app controls derive readable colors. Theme links and QR content require review.",
 
