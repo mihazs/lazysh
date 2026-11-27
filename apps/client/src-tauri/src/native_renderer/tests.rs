@@ -63,7 +63,7 @@ fn session_of(cols: u16, rows: u16) -> (Session, Inbox) {
     (HUB.create(id, config, hooks).unwrap(), inbox)
 }
 
-fn wait(what: &str, done: impl Fn() -> bool) {
+fn wait(what: &str, done: impl FnMut() -> bool) {
     assert!(wait_until(done), "timed out: {what}");
 }
 
@@ -383,15 +383,26 @@ fn a_blinking_cursor_redraws_only_its_row_once_per_phase_without_any_output() {
     };
     let (on, off) = (phase(true), phase(false));
     assert_ne!(on, off);
-    let rows = |state: &mut Loop| {
-        let stats = state.renderer.as_ref().unwrap().stats();
-        (stats.frames_drawn, stats.rows_drawn)
+    let sample = |expected: &Image, what| {
+        let mut counts = None;
+        wait(what, || {
+            counts = shown
+                .host
+                .ask(|state| {
+                    let renderer = state.renderer.as_mut().unwrap();
+                    let image = renderer.read_image().unwrap();
+                    let stats = renderer.stats();
+                    (image, (stats.frames_drawn, stats.rows_drawn))
+                })
+                .map(|(image, counts)| (image == *expected).then_some(counts))
+                .unwrap();
+            counts.is_some()
+        });
+        counts.unwrap()
     };
-    shown.shows(&on, "the cursor");
-    let before = shown.host.ask(rows).unwrap();
-    shown.shows(&off, "the cursor's cell without the cursor");
-    shown.shows(&on, "the cursor again");
-    let after = shown.host.ask(rows).unwrap();
+    let before = sample(&on, "the cursor");
+    sample(&off, "the cursor's cell without the cursor");
+    let after = sample(&on, "the cursor again");
     assert_eq!(after.1 - before.1, after.0 - before.0, "one row per phase");
     assert!(
         (2..=3).contains(&(after.0 - before.0)),
