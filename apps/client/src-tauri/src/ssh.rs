@@ -4274,6 +4274,7 @@ mod tests {
     #[cfg(unix)]
     #[path = "auth_signin_fixture.rs"]
     mod auth_signin_fixture;
+    #[cfg(unix)]
     #[path = "auth_tunnel_fixture.rs"]
     mod auth_tunnel_fixture;
     #[cfg(unix)]
