@@ -147,6 +147,24 @@ mod logind {
 
         #[test]
         fn a_fresh_stub_runs_while_other_threads_spawn_processes() {
+            // The spawner threads fork without pause, and in the shared test binary a fork can hold
+            // another case's lock descriptor open, so the storm runs in a child of this binary.
+            const STORM: &str = "LAZYSH_LOGIND_FORK_STORM";
+            let name = "desktop_lock::logind::tests::a_fresh_stub_runs_while_other_threads_spawn_processes";
+            if std::env::var_os(STORM).is_none() {
+                let child = Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", name, "--test-threads=1"])
+                    .env(STORM, "1")
+                    .output()
+                    .unwrap();
+                let report = String::from_utf8_lossy(&child.stdout);
+                assert!(child.status.success(), "{report}");
+                assert!(
+                    report.contains("1 passed"),
+                    "the child ran no case: {report}"
+                );
+                return;
+            }
             let busy = Arc::new(AtomicBool::new(true));
             let spawners: Vec<_> = (0..4)
                 .map(|_| {
