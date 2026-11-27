@@ -37,7 +37,7 @@ export type TerminalMountTarget =
   | {kind: 'dom'; element: HTMLElement}
   /** A native surface still has a DOM anchor so layout stays in React. */
   /** `surface` is the session id the shell's surface and keyboard editor are under (Android). */
-  | {kind: 'native'; anchorId: string; surface?: string};
+  | {kind: 'native'; anchorId: string; surface?: string; touchSelection?: 'pane'};
 
 export type TerminalTheme = {
   foreground?: string; background?: string; cursor?: string; cursorAccent?: string;

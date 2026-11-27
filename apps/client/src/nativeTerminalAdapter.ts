@@ -115,7 +115,7 @@ export class NativeTerminalAdapter implements TerminalAdapter {
     this.sendLook();
     this.measure();
     this.capture?.dispose(); this.pointer?.dispose();
-    this.pointer = attachPointerSelection(this, anchor);
+    this.pointer = attachPointerSelection(this, anchor, target.kind !== 'native' || target.touchSelection !== 'pane');
     this.tapLinks();
     // Android types through a native input connection (#1328), not a DOM editor.
     const preferences = () => this.preferences;

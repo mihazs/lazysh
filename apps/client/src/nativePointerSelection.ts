@@ -15,7 +15,7 @@ const TAP_MS = 500;
 const earlier = (a: TerminalCell, b: TerminalCell) => a.y < b.y || (a.y === b.y && a.x < b.x);
 const same = (a: TerminalCell, b: TerminalCell) => a.x === b.x && a.y === b.y;
 
-export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: HTMLElement): Disposable {
+export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: HTMLElement, selectByTouch: boolean): Disposable {
   let drag: TerminalCell | undefined, hold: {x: number; y: number; ready: boolean; timer: ReturnType<typeof setTimeout>} | undefined;
   let touched: TouchSelection | null = null;
   // A mouse drag held past the top or bottom edge keeps scrolling and extending, as xterm.js' own selection does.
@@ -81,6 +81,7 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
       try { anchor.setPointerCapture?.(event.pointerId); } catch { /* a synthetic pointer has nothing to capture */ }
       return;
     }
+    if (!selectByTouch) return;
     cancelHold();
     const pending = {x: event.clientX, y: event.clientY, ready: false, timer: setTimeout(() => { pending.ready = true; }, TOUCH_SELECTION_DELAY)};
     hold = pending;

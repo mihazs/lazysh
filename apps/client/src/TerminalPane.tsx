@@ -781,7 +781,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
       }
       return true;
     });
-    void adapter.attach(native ? {kind: "native", anchorId: element.id, surface: session.id} : {kind: "dom", element}).catch(error => reportError(String(error)));
+    void adapter.attach(native ? {kind: "native", anchorId: element.id, surface: session.id, touchSelection: "pane"} : {kind: "dom", element}).catch(error => reportError(String(error)));
     try {adapter.applyPreferences({...terminalPreferences(preferences, fontFamilyFor(preferences, fonts)), screenReader});} catch (error) {reportError(String(error));}
     const keyboardLane = (event: Event) => {if (event.target === adapter.inputElement()) {inputLane.current = "keyboard"; keyboardInputEvent.current = event;}};
     const literalLane = () => {inputLane.current = "literal";};
