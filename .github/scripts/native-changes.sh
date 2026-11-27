@@ -177,9 +177,9 @@ for output in \
   "android_gotify=$(flag has gotify)" \
   "ios=$(flag has ios)" \
   "terminal_perf=$(flag has terminal_runtime)" \
-  "terminal_macos=$(flag any terminal_runtime terminal_apple)" \
+  "terminal_macos=$(flag any terminal_runtime terminal_apple terminal_macos)" \
   "linux_surface=$(flag any linux_surface)" \
-  "terminal_ios=$(flag any terminal_runtime terminal_apple)"; do
+  "terminal_ios=$(flag any terminal_runtime terminal_apple terminal_ios)"; do
   # The fast gate still runs for a pull request that selected only main-only jobs.
   case "$output" in *=true) native=true ;; esac
   name=${output%%=*}

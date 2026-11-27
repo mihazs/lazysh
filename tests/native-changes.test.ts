@@ -291,6 +291,13 @@ test('a manual dispatch runs only the named areas, by default the macOS and iOS 
   expect(await classify([], { event: 'workflow_dispatch', areas: '' })).toEqual(everything);
 });
 
+test.each(['ios', 'macos'])('a manual terminal_%s dispatch selects only that Apple host', async platform => {
+  const area = `terminal_${platform}`;
+  const outputs = await classify([], { event: 'workflow_dispatch', areas: area });
+  expect(outputs).toEqual({ ...nothing, [area]: 'true', native: 'true', docs_only: 'false' });
+  expect(await runningJobs(outputs, 'workflow_dispatch')).toEqual({ changes: 1, [`terminal-${platform}`]: 1 });
+});
+
 test('quarantined Appium specs get their own job on main and the nightly, never on a pull request or without a tagged spec', async () => {
   const spec = 'apps/client/mobile-e2e/specs/regression/scroll/1402-swipe.e2e.ts';
   const quarantined = { [spec]: "describe('Swipe @flaky', () => {});" };
