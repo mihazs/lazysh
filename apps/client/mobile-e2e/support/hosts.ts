@@ -10,8 +10,8 @@ import type {Adb} from './device';
 // Owned SSH, Herdr and tmux hosts for the suite: the fixtures of the instrumented and desktop suites, started in onPrepare
 // and reached from the guest through `adb reverse`. Nothing here ever touches a personal Herdr, tmux or SSH server.
 
-export type HostKind = 'ssh' | 'herdr' | 'tmux' | 'sftp';
-export const HOST_KINDS: readonly HostKind[] = ['ssh', 'herdr', 'tmux', 'sftp'];
+export type HostKind = 'ssh' | 'herdr' | 'herdr-agents' | 'tmux' | 'sftp';
+export const HOST_KINDS: readonly HostKind[] = ['ssh', 'herdr', 'herdr-agents', 'tmux', 'sftp'];
 /** What a spec needs to reach one owned host. `privateKey` is a secret: never log it or put it on a screen that is captured. */
 export interface Endpoint {kind: HostKind; host: string; port: number; username: string; fingerprint: string; privateKey: string; prompt: string; directory: string}
 export interface Fixture {ssh: Pick<SshFixture, 'port' | 'username' | 'fingerprint' | 'privateKey' | 'prompt' | 'directory'>; stop(): Promise<void>}
@@ -23,6 +23,12 @@ const LIVE_VARIABLES = ['HERDR_SOCKET_PATH', 'HERDR_ENV', 'HERDR_PANE_ID', 'HERD
 export const defaultFixtures: FixtureFactories = {
   ssh: async () => { const ssh = await SshFixture.start(); return {ssh, stop: () => ssh.stop()}; },
   herdr: async () => { const herdr = await HerdrFixture.start(herdrTools()); return {ssh: herdr.ssh, stop: () => herdr.stop()}; },
+  // Stock Herdr with a Codex conversation, a blocked and a Claude agent, and a recorded account report (see `agentsFixture`).
+  'herdr-agents': async () => {
+    const herdr = await HerdrFixture.start(herdrTools(), undefined, false, true);
+    try { await herdr.startAgents(); } catch (error) { await herdr.stop().catch(() => undefined); throw error; }
+    return {ssh: herdr.ssh, stop: () => herdr.stop()};
+  },
   tmux: async () => { const tmux = await TmuxFixture.start(undefined, process.env.LAZYSH_TEST_AGENT_BIN || undefined); return {ssh: tmux.ssh, stop: () => tmux.stop()}; },
   // The plain loopback sshd with the file-transfer subsystem the Files view needs; the other kinds do not offer it.
   sftp: async () => { const ssh = await SshFixture.start(undefined, {sftp: true, shellSeconds: 600}); return {ssh, stop: () => ssh.stop()}; },
@@ -103,7 +109,7 @@ export const hostName = (label: string, nonce = runNonce()) => `e2e-${nonce}-${l
 
 /** The hosts a run starts when LAZYSH_E2E_HOSTS is unset: SSH, plus Herdr when its three binaries are given (the Agent view journey needs it). */
 export const defaultHostKinds = (env: NodeJS.ProcessEnv = process.env) =>
-  ['LAZYSH_TEST_HERDR', 'LAZYSH_TEST_AGENT_BIN', 'LAZYSH_TEST_RECEIVER_BIN'].every(name => env[name]) ? 'ssh,herdr' : 'ssh';
+  ['LAZYSH_TEST_HERDR', 'LAZYSH_TEST_AGENT_BIN', 'LAZYSH_TEST_RECEIVER_BIN'].every(name => env[name]) ? 'ssh,herdr,herdr-agents' : 'ssh';
 
 export function hostKinds(value = process.env.LAZYSH_E2E_HOSTS ?? defaultHostKinds()): HostKind[] {
   const kinds = value.split(',').map(kind => kind.trim()).filter(Boolean);
