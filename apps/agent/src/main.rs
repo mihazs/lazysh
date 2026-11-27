@@ -280,6 +280,9 @@ enum Command {
     ReportedHistory {
         #[arg(long)]
         session_id: String,
+        /// Answer with an opaque reference for `transcript --reference` instead of the host path.
+        #[arg(long)]
+        reference: bool,
     },
     /// List transcript metadata from the agent's local session directory.
     Discover {
@@ -319,8 +322,15 @@ enum Command {
     Transcript {
         #[arg(long, value_enum)]
         agent: lazysh_agent::transcript::TranscriptAgent,
+        #[arg(
+            long,
+            conflicts_with = "reference",
+            required_unless_present = "reference"
+        )]
+        path: Option<std::path::PathBuf>,
+        /// The conversation a `reported-history --reference` lookup named, read as `--view conversation`.
         #[arg(long)]
-        path: std::path::PathBuf,
+        reference: Option<String>,
         #[arg(long)]
         checkpoint: Option<String>,
         /// Require a source-bound consistency receipt (Grok Records only).
@@ -351,10 +361,13 @@ enum Command {
         /// A transcript file, as `transcript --view conversation` reads it.
         #[arg(
             long,
-            conflicts_with = "session_id",
-            required_unless_present = "session_id"
+            conflicts_with_all = ["session_id", "reference"],
+            required_unless_present_any = ["session_id", "reference"]
         )]
         path: Option<std::path::PathBuf>,
+        /// The conversation a `reported-history --reference` lookup named.
+        #[arg(long, conflicts_with = "session_id")]
+        reference: Option<String>,
         /// A provider session id resolved inside the agent's own data root.
         #[arg(long)]
         session_id: Option<String>,
@@ -368,7 +381,7 @@ enum Command {
         /// Frame vocabulary version; only 1 exists.
         #[arg(long, default_value_t=1, value_parser=clap::value_parser!(u8).range(1..=1))]
         protocol: u8,
-        /// Carry the bounded PNG/JPEG previews of the images a user attached; only with `--path`.
+        /// Carry the bounded PNG/JPEG previews of the images a user attached; only with `--path` or `--reference`.
         #[arg(long, conflicts_with = "session_id")]
         inline_images: bool,
         /// Allow bounded indexing of larger Codex conversation history.
@@ -471,6 +484,16 @@ enum FeaturesCommand {
 fn json(value: impl serde::Serialize) -> lazysh_agent::Result<serde_json::Value> {
     serde_json::to_value(value).map_err(|_| Error::InvalidEvent)
 }
+fn reported_reference_path(
+    reference: &str,
+    agent: lazysh_agent::transcript::TranscriptAgent,
+) -> lazysh_agent::Result<std::path::PathBuf> {
+    Store::open(&lazysh_agent::state_directory()?)?.reported_reference_path(
+        reference,
+        agent,
+        chrono::Utc::now(),
+    )
+}
 fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     // Hooks run inside agent turns and must not trigger the unrelated auto-updater.
     let update = (!matches!(
@@ -480,9 +503,15 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
     .then(lazysh_agent::auto_update::trigger)
     .flatten();
     let operation = match &cli.command {
-        Command::Discover { .. } | Command::History { .. } | Command::ReportedHistory { .. } => {
-            Some(lazysh_agent::settings::Operation::TranscriptDiscovery)
+        Command::Discover { .. }
+        | Command::History { .. }
+        | Command::ReportedHistory { .. }
+        | Command::Transcript {
+            reference: Some(_), ..
         }
+        | Command::TranscriptWatch {
+            reference: Some(_), ..
+        } => Some(lazysh_agent::settings::Operation::TranscriptDiscovery),
         Command::Usage { .. } => Some(lazysh_agent::settings::Operation::RecordedUsage),
         Command::Devices { .. } => Some(lazysh_agent::settings::Operation::DeviceTools),
         _ => None,
@@ -800,10 +829,18 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             Some(Store::open(&lazysh_agent::state_directory()?)?.aider_hook_status()?)
         }
         Command::OpencodePlugin => Some(lazysh_agent::hooks::opencode_plugin()),
-        Command::ReportedHistory { session_id } => Some(
-            Store::open(&lazysh_agent::state_directory()?)?
-                .reported_history(&session_id, chrono::Utc::now())?,
-        ),
+        Command::ReportedHistory {
+            session_id,
+            reference,
+        } => {
+            let mut store = Store::open(&lazysh_agent::state_directory()?)?;
+            let now = chrono::Utc::now();
+            Some(if reference {
+                store.reported_history_reference(&session_id, now)?
+            } else {
+                store.reported_history(&session_id, now)?
+            })
+        }
         Command::Discover { agent, root, limit } => Some(
             serde_json::to_value(lazysh_agent::transcript::discover(
                 agent,
@@ -844,6 +881,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         Command::Transcript {
             agent,
             path,
+            reference,
             checkpoint,
             checkpointed,
             inline_images,
@@ -866,6 +904,20 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             {
                 return Err(Error::InvalidArgument);
             }
+            let path = match (path, reference) {
+                (Some(path), None) => path,
+                // The Agent view's own read: the conversation view of the report a reference names.
+                (None, Some(reference))
+                    if matches!(view, lazysh_agent::transcript::TranscriptView::Conversation)
+                        && offset == 0
+                        && checkpoint.is_none()
+                        && !checkpointed
+                        && session_id.is_none() =>
+                {
+                    reported_reference_path(&reference, agent)?
+                }
+                _ => return Err(Error::InvalidArgument),
+            };
             if checkpointed
                 && (!matches!(agent, lazysh_agent::transcript::TranscriptAgent::GrokAcp)
                     || !matches!(view, lazysh_agent::transcript::TranscriptView::Records)
@@ -966,6 +1018,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
         Command::TranscriptWatch {
             agent,
             path,
+            reference,
             session_id,
             database_session,
             limit,
@@ -974,6 +1027,10 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             inline_images,
             allow_large_history,
         } => {
+            let path = match reference {
+                Some(reference) => Some(reported_reference_path(&reference, agent)?),
+                None => path,
+            };
             lazysh_agent::transcript::watch::run_stdio(lazysh_agent::transcript::watch::Options {
                 agent,
                 path,

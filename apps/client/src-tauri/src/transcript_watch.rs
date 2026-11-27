@@ -58,6 +58,16 @@ pub enum WatchTarget {
         #[serde(default)]
         transcript_session_id: Option<String>,
     },
+    /// A conversation named by the companion's opaque reference, never by its host path.
+    #[serde(rename_all = "camelCase")]
+    Reference {
+        agent: String,
+        reference: String,
+        #[serde(default)]
+        inline_images: bool,
+        #[serde(default)]
+        allow_large_history: bool,
+    },
     /// A Herdr pane's agent session, resolved on the host and re-checked while it is watched.
     #[serde(rename_all = "camelCase")]
     Herdr {
@@ -170,6 +180,31 @@ fn target_command(target: &WatchTarget) -> Result<String> {
             (
                 agent,
                 format!("--path {}{images}{session}", quote(path)),
+                *allow_large_history,
+            )
+        }
+        WatchTarget::Reference {
+            agent,
+            reference,
+            inline_images,
+            allow_large_history,
+        } => {
+            ssh::check_reference(reference)?;
+            // The reference names a hook-reported transcript file; a database session has none.
+            if agent == "opencode" {
+                return Err(SshError::new(
+                    "invalid_input",
+                    "Invalid live conversation source",
+                ));
+            }
+            let images = if *inline_images {
+                " --inline-images"
+            } else {
+                ""
+            };
+            (
+                agent,
+                format!("--reference {}{images}", quote(reference)),
                 *allow_large_history,
             )
         }
@@ -419,7 +454,9 @@ pub async fn agent_watch_start(
                     .await?;
                     Some(pane)
                 }
-                WatchTarget::Path { .. } | WatchTarget::HerdrEvents { .. } => None,
+                WatchTarget::Path { .. }
+                | WatchTarget::Reference { .. }
+                | WatchTarget::HerdrEvents { .. } => None,
             };
             let herdr_path = match target {
                 WatchTarget::HerdrEvents { .. } => {
@@ -550,6 +587,24 @@ mod tests {
             database("opencode", false, Some(&"s".repeat(257))),
             database("opencode", true, Some("ses_a")),
             database("claude", false, Some("ses_a")),
+        ] {
+            assert!(target_command(&bad).is_err());
+        }
+        let reference = |agent: &str, id: &str, inline_images| WatchTarget::Reference {
+            agent: agent.into(),
+            reference: id.into(),
+            inline_images,
+            allow_large_history: false,
+        };
+        assert_eq!(
+            target_command(&reference("claude", ID, true)).unwrap(),
+            format!("lazysh-agent transcript-watch --agent claude --reference '{ID}' --inline-images --limit 50")
+        );
+        for bad in [
+            reference("pi", ID, false),
+            reference("opencode", ID, false),
+            reference("claude", "/home/owner/session.jsonl", false),
+            reference("claude", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", false),
         ] {
             assert!(target_command(&bad).is_err());
         }
@@ -785,7 +840,18 @@ mod tests {
         );
         let herdr: WatchTarget = serde_json::from_value(json!({"kind":"herdr","agent":"codex","agentSessionId":ID,"herdrSession":"s","paneId":"p","terminalId":"t"})).unwrap();
         assert!(matches!(herdr, WatchTarget::Herdr { .. }));
+        let reference: WatchTarget =
+            serde_json::from_value(json!({"kind":"reference","agent":"claude","reference":ID}))
+                .unwrap();
+        assert!(matches!(
+            reference,
+            WatchTarget::Reference {
+                inline_images: false,
+                ..
+            }
+        ));
         for bad in [
+            json!({"kind":"reference","agent":"claude","reference":ID,"path":"/a"}),
             json!({"kind":"path","agent":"claude","path":"/a","extra":1}),
             json!({"kind":"shell","agent":"claude"}),
         ] {
