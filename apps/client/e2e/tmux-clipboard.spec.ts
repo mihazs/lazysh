@@ -38,7 +38,10 @@ test.describe('real tmux',()=>{
     // Each key waits for the tmux state it produces: a key that outruns the previous one starts the selection on the wrong cell.
     await page.keyboard.press('Control+b');await page.keyboard.type('[');
     await expect.poll(()=>session!.pane('#{pane_in_mode}')).toBe('1');
-    await page.keyboard.type('?COPY_TARGET');await page.keyboard.press('Enter');
+    // tmux opens the search prompt asynchronously: characters typed before it shows are read as copy-mode commands and drop out of the pattern ("OPY_TARGET" lands on column 7).
+    await page.keyboard.type('?');
+    await expect(page.locator('.terminal-canvas:visible .xterm-rows')).toContainText('(search up)');
+    await page.keyboard.type('COPY_TARGET');await page.keyboard.press('Enter');
     // The search leaves the cursor on the first letter of the match, after "alpha ".
     await expect.poll(()=>session!.pane('#{copy_cursor_x}')).toBe('6');
     await page.keyboard.type(' e');
