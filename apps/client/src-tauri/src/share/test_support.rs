@@ -27,7 +27,7 @@ pub(crate) async fn tls_front_for(names: Vec<String>) -> TlsFront {
     let certificate = rcgen::generate_simple_self_signed(names).unwrap();
     let root = reqwest::Certificate::from_der(certificate.cert.der().as_ref()).unwrap();
     let config = ServerConfig::builder_with_provider(Arc::new(
-        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider(),
+        tokio_rustls::rustls::crypto::ring::default_provider(),
     ))
     .with_safe_default_protocol_versions()
     .unwrap()

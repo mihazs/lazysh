@@ -115,7 +115,7 @@ tokio = { version = "1", features = ["test-util"] }
 axum = "0.8.9"
 lazysh-share = { path = "../../share-service" }
 rcgen = "0.14"
-tokio-rustls = "0.26"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tempfile = "3"
 tauri = { version = "2", features = ["test"] }
 
