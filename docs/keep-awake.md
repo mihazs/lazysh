@@ -1,7 +1,7 @@
 # Agent board display keep-awake
 
-The agent activity panel has a **Keep display awake while this board is open**
-control. It defaults off and stores only an exact boolean preference on this
+**Preferences > Agents** (opened by the agent board's Setup button) has a
+**Keep display awake while this board is open** control. It defaults off and stores only an exact boolean preference on this
 device (`lazysh.agent-board.keep-awake.v1`); it is not part of synced preferences.
 Choosing it never connects an agent, extends a remote process, changes a terminal
 session or creates a background execution task.
