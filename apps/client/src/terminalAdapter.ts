@@ -126,6 +126,8 @@ export type TerminalInputObserver = {
 
 /** Transport-authoritative geometry (Mosh). User sizes are intent until the framebuffer says otherwise. */
 export type CanonicalResize = {
+  /** Restore the snapshot's grid before consuming the replacement transport channel. */
+  restoreSize?(cols: number, rows: number): void;
   requestSize(cols: number, rows: number): void;
   onResizeIntent(listener: (size: {cols: number; rows: number}) => void): {dispose(): void};
   close(): Promise<void>;
