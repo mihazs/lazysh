@@ -1,5 +1,53 @@
 # @lazysh/client
 
+## 1.102.3
+
+### Patch Changes
+
+- test(terminal): verify saved actions and D-pad holds on the native engine ([#2711](https://github.com/mihazs/lazysh/pull/2711))
+- fix(terminal): require paired absolute memory for the same Android app ([#2708](https://github.com/mihazs/lazysh/pull/2708))
+
+  <details><summary>Details</summary>
+
+  The Android rollout comparison also keeps the key improvement target open when a required key benchmark is missing.
+
+  </details>
+- fix(terminal): include Android session memory and churn in native rollout evidence ([#2710](https://github.com/mihazs/lazysh/pull/2710))
+- fix(terminal): keep the native editor focused after tapping the terminal ([#2701](https://github.com/mihazs/lazysh/pull/2701))
+- fix(agents): acknowledge sends promptly and show when the agent queued them ([#2574](https://github.com/mihazs/lazysh/pull/2574))
+
+  <details><summary>Details</summary>
+
+  The composer acknowledges terminal submission, reports a confirmed queue entry, and refreshes the fallback transcript sooner.
+
+  </details>
+- feat(android): add the native terminal engine to the GitHub FOSS APK ([#2694](https://github.com/mihazs/lazysh/pull/2694))
+
+  <details><summary>Details</summary>
+
+  Choose Native in Settings under Terminal engine on supported devices. The APK still builds its native libraries from source, and the release kill switch applies to both Android flavors.
+
+  </details>
+- fix(terminal): start native touch selection at the new word after copying ([#2705](https://github.com/mihazs/lazysh/pull/2705))
+- fix(release): keep the bundled companion runnable in Linux AppImages ([#2733](https://github.com/mihazs/lazysh/pull/2733))
+
+  <details><summary>Details</summary>
+
+  Preserve the source-built companion through AppImage packaging and check that the bundled binary starts and reports the release version.
+
+  </details>
+- fix(terminal): release closed session renderers from terminal IPC channels ([#2619](https://github.com/mihazs/lazysh/pull/2619))
+- fix(terminal): discard canceled native composing text after a focus change ([#2707](https://github.com/mihazs/lazysh/pull/2707))
+- fix(terminal): report mouse hover in native terminals when applications request it ([#2614](https://github.com/mihazs/lazysh/pull/2614))
+- fix(terminal): keep the keyboard closed on Herdr navigation taps ([#2534](https://github.com/mihazs/lazysh/pull/2534))
+- fix(android): preserve typed terminal words when SwiftKey inserts a space ([#2750](https://github.com/mihazs/lazysh/pull/2750))
+
+  <details><summary>Details</summary>
+
+  The native terminal keeps the existing shell text when SwiftKey automatically corrects an already typed word. Explicit keyboard suggestions and composing text still work.
+
+  </details>
+
 ## 1.102.2
 
 ### Patch Changes

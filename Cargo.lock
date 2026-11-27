@@ -3984,7 +3984,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "age",
  "axum",
@@ -4055,7 +4055,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-account-usage"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "ai-usagebar-core",
  "chrono",
@@ -4072,7 +4072,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-agent"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4108,7 +4108,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-common"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "axum",
  "hyper-util",
@@ -4123,7 +4123,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-companion-release"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "axum",
  "bytes",
@@ -4143,7 +4143,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-et-transport"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "lazysh-common",
  "prost",
@@ -4155,7 +4155,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-mosh-transport"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "cc",
  "cmake",
@@ -4169,7 +4169,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-notification-client"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "axum",
  "chrono",
@@ -4186,7 +4186,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-notifications"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4215,7 +4215,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-parakeet-runtime"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "bzip2",
  "cmake",
@@ -4230,7 +4230,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-share"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "axum",
  "clap",
@@ -4275,7 +4275,7 @@ dependencies = [
 
 [[package]]
 name = "lazysh-transcription"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "axum",
  "clap",
@@ -7968,7 +7968,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-apple-speech"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "lazysh-common",
  "serde",
@@ -7979,7 +7979,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-apple-status"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "lazysh-common",
  "serde",
@@ -7991,7 +7991,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-display-idle"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "core-foundation-sys",
  "gio",
@@ -8005,7 +8005,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-push"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "serde",
  "tauri",
@@ -8014,7 +8014,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-lazysh-vault"
-version = "1.102.2"
+version = "1.102.3"
 dependencies = [
  "block2",
  "core-foundation 0.10.1",
