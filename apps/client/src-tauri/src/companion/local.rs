@@ -99,10 +99,22 @@ fn find(
             .map(|file| (file, Source::Path))
     })
 }
+/// Where the app executable sits, which is where the desktop bundle places the companion.
+fn app_dir() -> Option<PathBuf> {
+    // The real-runtime cases run against an installed bundle (an installed Windows app or a built
+    // macOS app) while the test executable stays in the build directory.
+    #[cfg(test)]
+    if let Some(dir) = std::env::var_os("LAZYSH_TEST_BUNDLE_DIR") {
+        return Some(dir.into());
+    }
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
+}
 async fn resolve() -> Option<(String, Source)> {
     let path = crate::host::local_path().await;
-    let exe = std::env::current_exe().ok()?;
-    let (file, source) = find(exe.parent(), managed_dir(None).as_deref(), &path)?;
+    let (file, source) = find(app_dir().as_deref(), managed_dir(None).as_deref(), &path)?;
     Some((file.into_os_string().into_string().ok()?, source))
 }
 /// Which companion a local session would run, or `None` when it cannot run one at all.
@@ -243,9 +255,8 @@ async fn ensure_copy(bundled: &Path, target: &Path) -> Result<()> {
 /// private, version-checked copy of it in the managed directory instead. Any other companion
 /// (managed, on the `PATH`, or a platform without a managed directory) already has a lasting path.
 pub(crate) async fn stable_command(line: &str, data: Option<PathBuf>) -> Result<Cmd> {
-    let bundled = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(NAME)))
+    let bundled = app_dir()
+        .map(|dir| dir.join(NAME))
         .filter(|file| runnable(file));
     let (Some(bundled), Some(managed)) = (bundled, managed_dir(data)) else {
         return command(line).await;

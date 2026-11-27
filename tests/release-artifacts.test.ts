@@ -2,13 +2,14 @@ import { expect, test } from 'bun:test';
 import { mkdtemp, mkdir, rm, rmdir, symlink, truncate, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { aggregatePackages, artifactName, artifactTargets, packageBudgetsMiB, releaseTargets, digestFile, stagePackages,
+import { aggregatePackages, artifactName, artifactTargets, companionMaximumBytes, packageBudgetsMiB, releaseTargets, digestFile, stagePackages,
   validateReceipt, releaseNotes, publishedTagVersions, type ArtifactTarget } from '../.changeset/release-artifacts';
 import { signingProfiles, iosBundleIds } from '../.changeset/release-apple';
 import { javaProperty } from '../.changeset/release-android';
 import { publishInstallationSet } from '../.changeset/release-publish';
 import { exactlyOne, native, windowsInstallation, windowsInstallerFailure, verifyWindowsTerminalEngine, windowsNsisBinaryDigest } from '../.changeset/release-platform';
 import type { ReleasePolicy } from '../.changeset/release-tag';
+import { spawnText } from './support/gitFixture';
 
 const identity = { sha: 'a'.repeat(40), version: '0.22.0' };
 async function fixture(run: (root: string) => Promise<void>) {
@@ -321,10 +322,51 @@ test.skipIf(!nativeWindows)('actual Windows NSIS rejects wrong identity and pres
   console.info(await windowsInstallation(installer, binary, version));
 }, 500_000);
 
+// The local companion cases the Windows runner passes against the installed bundle, as `cargo test` names them.
+const installedBundleCases = [
+  'companion::local::tests::real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell',
+  'companion::local::tests::real_local_hook_setup_on_windows_is_template_only',
+];
+test.skipIf(process.env.LAZYSH_TEST_WINDOWS_INSTALLED_COMPANION !== '1')('actual installed Windows bundle runs the local companion cases, and a bundle without the companion fails them', () => fixture(async root => {
+  const repository = join(import.meta.dir, '..');
+  const cargo = Bun.which('cargo')!;
+  const cargoTest = (...extra: string[]) => ['test', '--manifest-path', join(repository, 'apps/client/src-tauri/Cargo.toml'), '--locked', '--lib', ...extra];
+  // A renamed case must not turn the installed run into a pass that ran nothing.
+  for (const name of installedBundleCases) {
+    const listed = await spawnText(repository, [cargo, ...cargoTest(name, '--', '--list', '--ignored', '--exact')]);
+    expect(listed.stdout.split(/\r?\n/)).toContain(`${name}: test`);
+  }
+  const withoutCompanion = join(root, 'bundle-without-companion');
+  await mkdir(withoutCompanion);
+  const refused = await spawnText(repository, [cargo, ...cargoTest('--', '--ignored', '--exact', ...installedBundleCases)],
+    { ...process.env, LAZYSH_TEST_BUNDLE_DIR: withoutCompanion });
+  expect(refused.code).not.toBe(0);
+  expect(refused.stdout).toContain('0 passed; 2 failed');
+
+  const installer = await exactlyOne('nsis/*.exe', join(repository, 'target/release/bundle'));
+  const binary = join(repository, 'target/release/lazysh.exe');
+  const file = join(repository, 'target/release/lazysh-agent.exe');
+  const { version } = await Bun.file(join(repository, 'apps/client/package.json')).json();
+  const log = join(root, 'installed-bundle-cases.log');
+  const logged = async (path: string) => await Bun.file(path).exists() ? Bun.file(path).text() : '';
+  try {
+    console.info(await windowsInstallation(installer, binary, version,
+      { target: 'windows-agent-x64', file, ...await digestFile(file, companionMaximumBytes) },
+      { file: cargo, args: cargoTest('--', '--ignored', '--exact', '--test-threads=1', ...installedBundleCases), log }));
+  } finally {
+    console.info(await logged(log), await logged(`${log}.error`));
+  }
+  const output = await logged(log);
+  expect(output).toContain('running 2 tests');
+  expect(output).toContain('2 passed; 0 failed');
+}), 1_200_000);
+
 test.each([
   ['private stdout\nLAZYSH_WINDOWS_INSTALLER:preflight:VERSION_MISMATCH\r\nprivate stderr', 'preflight:VERSION_MISMATCH'],
   ['LAZYSH_WINDOWS_INSTALLER:repair:REPAIR_MARKER\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_OWNERSHIP', 'repair:REPAIR_MARKER; cleanup:UNINSTALL_OWNERSHIP'],
   ['LAZYSH_WINDOWS_INSTALLER:install:UNEXPECTED', 'install:UNEXPECTED'],
+  ['LAZYSH_WINDOWS_INSTALLER:probe:PROBE_EXIT\nLAZYSH_WINDOWS_INSTALLER:cleanup:UNINSTALL_BINARY', 'probe:PROBE_EXIT; cleanup:UNINSTALL_BINARY'],
+  ['LAZYSH_WINDOWS_INSTALLER:probe:PROBE_TIMEOUT', 'probe:PROBE_TIMEOUT'],
   ['LAZYSH_WINDOWS_INSTALLER:identity:SOURCE_HASH_MISMATCH', 'identity:SOURCE_HASH_MISMATCH'],
   [Array(3).fill('LAZYSH_WINDOWS_INSTALLER:cleanup:UNEXPECTED').join('\n'), undefined],
   ['LAZYSH_WINDOWS_INSTALLER:preflight:PRIVATE_VALUE', undefined],
