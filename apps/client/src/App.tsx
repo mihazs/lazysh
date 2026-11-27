@@ -112,6 +112,7 @@ import { ConnectionRecovery, useNetworkOnline, type RecoveryOutcome } from "./co
 import { ConnectionRecoveryBanner, NetworkOfflineNotice } from "./ConnectionBanner";
 import NotificationPanel, { NotificationMonitor } from "./NotificationPanel";
 import { focusInboxPane } from "./notificationStore";
+import { attachedPaneServer } from "./agentPaneIdentity";
 import {agentViewShortcut, appShortcut, navigationShortcut, shiftedChordHint, useCapturedShortcut, type NavigationShortcut} from './keyboard';
 import CommandPalette, {usePaletteShortcut} from './CommandPalette';
 import {paletteCommands} from './paletteCommands';
@@ -1930,7 +1931,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       const source = reachable(detail.sessionId);
       if (!source) return;
       // The pane comes first so the Agent view that opens next follows the agent that raised the event.
-      if ("paneId" in detail && typeof detail.paneId === "string") await focusInboxPane(invoke, source, detail.paneId);
+      if ("paneId" in detail && typeof detail.paneId === "string") await focusInboxPane(invoke, source, detail.paneId, "paneServer" in detail && typeof detail.paneServer === "string" ? detail.paneServer : undefined);
       if (!mounted.current || !reachable(detail.sessionId)) return;
       const target=detail.sessionId;
       setActiveId(target);
@@ -2428,7 +2429,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
             <div className="sidebar-heading"><span>{t('appWorkspaceTools')}</span></div>
             {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && remoteActive)).map(toolButton('subtle-button'))}
           </>}
-          {pickerVisible && active && <Suspense fallback={<p role="status">{t(jumpKind==='zellij'?'appReadingZellijDestinations':'appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} zellij={active.attached?.kind==='zellij'?active.attached.name:undefined} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={jumpKind==='tmux'?snapshot=>tmuxJumped(active.id,snapshot):undefined} onBusyChange={busy=>{
+          {pickerVisible && active && <Suspense fallback={<p role="status">{t(jumpKind==='zellij'?'appReadingZellijDestinations':'appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} paneServer={attachedPaneServer(active.attached)} zellij={active.attached?.kind==='zellij'?active.attached.name:undefined} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={jumpKind==='tmux'?snapshot=>tmuxJumped(active.id,snapshot):undefined} onBusyChange={busy=>{
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
           }}/></Suspense>}
         </div>}
@@ -2625,7 +2626,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 {sessions.filter(session=>agentMounted.includes(session.id) && session.connected && !session.local).map(session=>(
                   <Suspense key={session.id} fallback={null}>
                   <AgentView images={agentImages} sessionId={session.id} full={fullAgent} onToggleFull={toggleAgentFull} shown={activeId === session.id && view === "terminal" && (sessionViewOf(session) !== "terminal" || swipeFrom!==null)}
-                    tmux={native && session.attached?.kind==='tmux'} zellijSession={native && session.attached?.kind==='zellij' ? session.attached.name : undefined} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id],true)} terminal={session.adapter} onShowTerminal={()=>chooseSessionView(session,'terminal')}
+                    tmux={native && session.attached?.kind==='tmux'} paneServer={attachedPaneServer(session.attached)} zellijSession={native && session.attached?.kind==='zellij' ? session.attached.name : undefined} herdrSession={native && session.attached?.kind==='herdr' ? session.attached.name : undefined} herdrLaunch={!!muxTools[session.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} terminalInput={terminalInputFor(session,muxTools[session.id],true)} terminal={session.adapter} onShowTerminal={()=>chooseSessionView(session,'terminal')}
                     onEnterHerdr={(name,target,owner,current)=>openHerdrTarget(session,name,target,owner,current,true)} onOpenCompanion={()=>showAgentSetup(session)} />
                   </Suspense>
                 ))}

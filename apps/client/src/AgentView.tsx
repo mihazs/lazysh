@@ -20,7 +20,7 @@ import {hostScreen, herdrStillRuns, herdrStillWaits, screenRows, type HerdrAgent
 import {parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
 import {conversationAgents, conversationSource, recordsAgents} from './agentConversationSource';
 import {parseTerminalSnapshot, type TerminalInputLabels, type ZellijTarget} from './ChatTerminalInput';
-import {zellijPane} from './agentPaneIdentity';
+import {onServer,zellijPane} from './agentPaneIdentity';
 import {StatusRing, herdrTones, reportedTones} from './AgentStatus';
 import {herdrStatusKeys, useHerdrNavigation, type LiveAgent} from './useHerdrNavigation';
 import {formatRelativeTime, pathBasename, useNow} from './relativeTime';
@@ -56,8 +56,8 @@ const sameSource = (left: BoundConversation | BoundRecords | undefined, right: B
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, full, onToggleFull, tmux, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, images: imagePreferences, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
-  sessionId: string; shown: boolean; /** The Agent view has the whole window: the app bars around it are hidden. */full?: boolean; onToggleFull?: () => void; tmux: boolean; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
+export default function AgentView({sessionId, shown, full, onToggleFull, tmux, paneServer, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, images: imagePreferences, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
+  sessionId: string; shown: boolean; /** The Agent view has the whole window: the app bars around it are hidden. */full?: boolean; onToggleFull?: () => void; tmux: boolean; /** `tmux:<label>` of the attached server: a report of another server is not this terminal's. */paneServer?: string; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
   images?: ReturnType<typeof storedImages>;
   onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
 }) {
@@ -124,7 +124,7 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
       try {
         // The host's reports and the pane this terminal shows are independent reads: together they cost one round trip.
         const [snapshot, terminal] = await Promise.all([invoke('agent_snapshot', {sessionId}), tmux ? invoke('tmux_chat', {sessionId, action: {kind: 'snapshot'}}) : undefined]);
-        const reports = parseSnapshot(snapshot);
+        const reports = parseSnapshot(snapshot).filter(row => onServer(row, paneServer));
         if (!alive || !access.current()) return;
         setSessions(reports.filter(row=>row.agent in conversationAgents && reports.filter(other=>other.sessionId===row.sessionId).length===1));
         // Pane identity is the evidence: TMUX_PANE ties a hook report to this tmux terminal; in a Zellij session, the one report that names a pane of it.
@@ -156,7 +156,7 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
     void bind();
     const timer = setInterval(() => void bind(), 5000);
     return () => {alive = false; request.current++; clearInterval(timer);};
-  }, [shown, sessionId, tmux, zellijSession, herdrSession, invoke, access]);
+  }, [shown, sessionId, tmux, paneServer, zellijSession, herdrSession, invoke, access]);
   useEffect(()=>{
     if(!menu)return;
     if(!shown){setMenu(false);return;}
@@ -199,9 +199,9 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, z
   // The state the hook reports for the pane's session, only while the same pane still shows that same session.
   const reportedState = useCallback(async () => {
     if (!await paneGuard()) return undefined;
-    const rows = parseSnapshot(await invoke('agent_snapshot', {sessionId})).filter(item => item.paneId === row?.paneId);
+    const rows = parseSnapshot(await invoke('agent_snapshot', {sessionId})).filter(item => item.paneId === row?.paneId && onServer(item, paneServer));
     return rows.length === 1 && rows[0].sessionId === row?.sessionId && access.current() ? rows[0].state : undefined;
-  }, [paneGuard, row?.paneId, row?.sessionId, access, invoke, sessionId]);
+  }, [paneGuard, paneServer, row?.paneId, row?.sessionId, access, invoke, sessionId]);
   const answerGuard = useCallback(async () => await reportedState() === 'needs_attention', [reportedState]);
   // A request to stop a task is typed text and Enter: it needs the same pane still showing the same reported session, and no
   // dialog open, because Enter would answer one.
