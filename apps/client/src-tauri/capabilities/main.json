@@ -72,6 +72,7 @@
     "allow-remote-notifications-status", "allow-remote-notifications-configure", "allow-remote-notifications-pause", "allow-remote-notifications-resume", "allow-remote-notifications-forget",
     "allow-edge-gesture-exclusion",
     "allow-edge-gesture-insets",
+    "allow-android-default-back",
     "allow-native-terminal-surface-place",
     "allow-native-terminal-surface-look",
     "allow-native-terminal-surface-cell",
