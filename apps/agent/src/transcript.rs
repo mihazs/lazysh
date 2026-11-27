@@ -129,6 +129,8 @@ mod anchored_tests {
 }
 
 const MAX_LINE: u64 = 256 * 1024;
+/// A conversation reader takes a record as long as the snapshot: one command, one tool result or one compaction is a single line.
+const MAX_RECORD: u64 = lazysh_common::record_checkpoint::MAX_SNAPSHOT;
 const MAX_SCAN: u64 = 4 * 1024 * 1024;
 const MAX_PAGE: usize = 512 * 1024;
 

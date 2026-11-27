@@ -1,4 +1,4 @@
-use super::window::{select, Window};
+use super::window::{fit, select, Window};
 use super::{normalize, open_transcript, string, Error, Result, TranscriptAgent, TranscriptPage};
 use serde_json::{json, Value};
 use std::{
@@ -91,7 +91,7 @@ pub(super) fn project_claude(
         bytes,
         limit,
         inline_images,
-        super::MAX_LINE,
+        super::MAX_RECORD,
         MAX_RECORDS,
         None,
         window,
@@ -111,7 +111,7 @@ pub(super) fn claude_message(record: &Value, inline_images: bool, position: u64)
             normalize(record, TranscriptAgent::Claude, position)
         }
     })?;
-    super::codex_conversation::fit(&mut message);
+    fit(&mut message);
     Some(message)
 }
 
@@ -543,12 +543,15 @@ pub(super) fn activity(records: &[(u64, Value)], leaf: usize) -> Option<&'static
 
 pub(super) fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Option<usize>)> {
     let mut by_id = HashMap::new();
-    let mut parents = HashSet::new();
     for (index, (_, record)) in records.iter().enumerate() {
         if let Some(id) = record["uuid"].as_str() {
             by_id.insert(id, index);
         }
-        if let Some(parent) = parent(record) {
+    }
+    let unlinked = unlinked_boundaries(records, &by_id);
+    let mut parents = HashSet::new();
+    for (_, record) in records {
+        if let Some(parent) = parent(record, &unlinked) {
             parents.insert(parent);
         }
     }
@@ -573,7 +576,7 @@ pub(super) fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Opti
                 }
                 break;
             }
-            current = parent(record).and_then(|parent| by_id.get(parent).copied());
+            current = parent(record, &unlinked).and_then(|parent| by_id.get(parent).copied());
         }
     }
     let Some(leaf) = leaves.into_iter().max() else {
@@ -590,7 +593,8 @@ pub(super) fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Opti
             return Err(Error::InvalidEvent);
         }
         chain.push(index);
-        current = parent(&records[index].1).and_then(|parent| by_id.get(parent).copied());
+        current =
+            parent(&records[index].1, &unlinked).and_then(|parent| by_id.get(parent).copied());
     }
     chain.reverse();
     Ok((recover_parallel(records, &chain, &mut seen)?, Some(leaf)))
@@ -598,13 +602,50 @@ pub(super) fn active_chain(records: &[(u64, Value)]) -> Result<(Vec<usize>, Opti
 
 /// The record before this one in the session. A compaction restarts the chain with `parentUuid`
 /// null and keeps the earlier conversation behind `logicalParentUuid`, so reading across it shows
-/// the whole session from its first message.
-fn parent(record: &Value) -> Option<&str> {
+/// the whole session from its first message. A boundary in `unlinked` keeps no such link.
+fn parent<'a>(record: &'a Value, unlinked: &HashSet<&str>) -> Option<&'a str> {
     record["parentUuid"].as_str().or_else(|| {
-        (record["subtype"] == "compact_boundary")
-            .then(|| record["logicalParentUuid"].as_str())
-            .flatten()
+        (record["subtype"] == "compact_boundary"
+            && !record["uuid"]
+                .as_str()
+                .is_some_and(|id| unlinked.contains(id)))
+        .then(|| record["logicalParentUuid"].as_str())
+        .flatten()
     })
+}
+
+/// The compaction boundaries whose `logicalParentUuid` names a record that leads back to the boundary itself: Claude Code has
+/// written one that points at a record after it. Following that link would make the session a loop and refuse all of it, so the
+/// boundary starts the chain as it does without the link. A loop through `parentUuid` is still an error.
+fn unlinked_boundaries<'a>(
+    records: &'a [(u64, Value)],
+    by_id: &HashMap<&'a str, usize>,
+) -> HashSet<&'a str> {
+    let mut unlinked = HashSet::new();
+    for (_, record) in records {
+        let (true, Some(id)) = (
+            record["subtype"] == "compact_boundary",
+            record["uuid"].as_str(),
+        ) else {
+            continue;
+        };
+        let mut visited = HashSet::new();
+        let mut next = record["logicalParentUuid"]
+            .as_str()
+            .and_then(|logical| by_id.get(logical).copied());
+        while let Some(index) = next {
+            let ancestor = &records[index].1;
+            if ancestor["uuid"].as_str() == Some(id) {
+                unlinked.insert(id);
+                break;
+            }
+            if !visited.insert(index) {
+                break;
+            }
+            next = parent(ancestor, &unlinked).and_then(|up| by_id.get(up).copied());
+        }
+    }
+    unlinked
 }
 
 pub(super) fn is_main(record: &Value) -> bool {
