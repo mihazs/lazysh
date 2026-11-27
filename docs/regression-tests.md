@@ -15,6 +15,7 @@ or `n/a` with a reason. Rows below were read from the fixing commits; a test not
 
 | Bug | Symptom | Fix | Layers and tests | Appium |
 | --- | --- | --- | --- | --- |
+| [#2865](https://github.com/mihazs/lazysh/issues/2865) | The restored AppImage companion lost its execute bit and the Linux release failed | Install the published companion with mode 0755 after copying it | unit `tests/release-bundle.test.ts` (published companion installed executable) | n/a (release packaging) |
 | [#2766](https://github.com/mihazs/lazysh/issues/2766) | The Herdr keyboard test called driver methods without its driver receiver | Run the helper on NativeSessionDriver so Android instrumentation builds | Android :app:compileUniversalDebugAndroidTestKotlin and NativeTerminalSessionTest |
 | [#2716](https://github.com/mihazs/lazysh/issues/2716) | A named key from a Wayland virtual layout sent the code of a different physical key | Honor the layout action and preserve keypad Enter | Rust `packages/terminal-runtime/tests/keys.rs` (remapped Return and Escape) | n/a (Linux Wayland PTY and shared encoder) |
 | [#2665](https://github.com/mihazs/lazysh/issues/2665) | Enabled push left agent events queued until a sender was started manually | Start a single bound sender after enabling and restart it on subsequent reports | Rust `apps/agent/tests/relay_publisher.rs` with an owned TLS relay and destination | n/a (host sender) |

@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { chmod, copyFile, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { digestFile, stagePackages, companionTargets, type CompanionTarget } from '../.changeset/release-artifacts';
 import { desktopCompanions, elfSections, publishedCompanion, requireBundled, sidecarPath, stageSidecar, type DesktopTarget } from '../.changeset/release-bundle';
-import { appImageCompanion, debCompanion } from '../.changeset/release-platform';
+import { appImageCompanion, debCompanion, installCompanion } from '../.changeset/release-platform';
 import { spawnText } from './support/gitFixture';
 
 const identity = { sha: 'a'.repeat(40), version: '0.23.0' };
@@ -160,4 +160,15 @@ test.skipIf(process.platform !== 'linux')('the final AppImage companion must exe
   const image = await appImageWith(root, 'working', working.file);
   await appImageCompanion(image, working, identity.version);
   await expect(appImageCompanion(image, working, '0.23.1')).rejects.toThrow('AppImage companion version mismatch');
+}));
+
+test('the published companion is installed executable even when its downloaded copy kept no mode', () => owned(async root => {
+  const source = join(root, 'downloaded-companion'), destination = join(root, 'squashfs-companion');
+  await writeFile(source, 'companion');
+  await chmod(source, 0o644);
+  await writeFile(destination, 'rewritten by linuxdeploy');
+  await chmod(destination, 0o755);
+  await installCompanion(source, destination);
+  expect((await lstat(destination)).mode & 0o111).not.toBe(0);
+  expect(await readFile(destination, 'utf8')).toBe('companion');
 }));
