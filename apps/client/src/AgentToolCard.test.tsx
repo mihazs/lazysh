@@ -38,6 +38,13 @@ describe('AgentToolCard', () => {
     rerender(<AgentToolCard use={bash('rm -rf x')} result={{text: "The user doesn't want to proceed with this tool use.", isError: true}} live={false} />);
     expect(screen.getByText('Declined')).toBeTruthy();
   });
+  it('titles a single-file delete and rename card with its operation and paths', () => {
+    const patch = '*** Begin Patch\n*** Delete File: old.rs\n*** Update File: a.rs\n*** Move to: b.rs\n@@\n-x\n+y\n*** End Patch';
+    render(<AgentToolCard use={{name: 'apply_patch', text: patch}} result={{text: 'Done'}} live={false} />);
+    const card = screen.getByText('apply_patch').closest('details')!;
+    expect(within(card).getByText(/Deleted old\.rs/)).toBeTruthy();
+    expect(within(card).getByText(/Renamed a\.rs → b\.rs/)).toBeTruthy();
+  });
   it('draws an edit as a diff card with counts, wraps and copies the diff', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText}});

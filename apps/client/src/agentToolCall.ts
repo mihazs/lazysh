@@ -12,7 +12,7 @@ const kinds: Record<string, ToolKind> = {
   read: 'read', read_file: 'read', view: 'read', notebookread: 'read', read_many_files: 'read',
   grep: 'search', glob: 'search', ls: 'search', search: 'search', find: 'search', grep_search: 'search', list_directory: 'search',
   webfetch: 'fetch', websearch: 'fetch', web_fetch: 'fetch', google_web_search: 'fetch',
-  edit: 'edit', multiedit: 'edit', write: 'edit', notebookedit: 'edit', apply_patch: 'edit', str_replace_based_edit_tool: 'edit', replace: 'edit', write_file: 'edit',
+  edit: 'edit', multiedit: 'edit', write: 'edit', notebookedit: 'edit', apply_patch: 'edit', str_replace_based_edit_tool: 'edit', replace: 'edit', write_file: 'edit', patch: 'edit',
 };
 export const toolKind = (name = ''): ToolKind => kinds[name.toLowerCase()] ?? 'other';
 
