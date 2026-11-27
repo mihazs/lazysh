@@ -21,7 +21,7 @@ it('opens AI account usage for the exact connected terminal and returns without 
   await user.click(screen.getByRole('button',{name:'Back'}));
   expect(await screen.findByText('Live SSH terminal')).toBeTruthy();
   expect(mocks.terminalPaneProps.mock.lastCall?.[0]).toMatchObject({session:owner,active:true});
-  await waitFor(()=>expect(mocks.backButton).toBeUndefined());
+  expect(mocks.backButton).toBeTypeOf('function');
   expect(mocks.api.disconnect).not.toHaveBeenCalled();expect(mocks.api.write).not.toHaveBeenCalled();
 });
 
@@ -43,11 +43,12 @@ it('dismisses the top dialog before navigating and releases native Back at the r
   await screen.findByRole('dialog',{name:'Workspace tools'});
   act(()=>mocks.backButton?.({canGoBack:false}));
   expect(screen.queryByRole('dialog')).toBeNull();expect(screen.getByRole('region',{name:'AI account usage'})).toBeTruthy();
-  const retired=mocks.backButton;
   act(()=>mocks.backButton?.({canGoBack:false}));
   await screen.findByText('Live SSH terminal');
-  await waitFor(()=>expect(mocks.backButton).toBeUndefined());
-  act(()=>retired?.({canGoBack:false}));
+  // The listener stays registered (#1578), so a Back at the root asks the native side for the default Back.
+  expect(mocks.invoke).not.toHaveBeenCalledWith('android_default_back');
+  act(()=>mocks.backButton?.({canGoBack:false}));
+  expect(mocks.invoke).toHaveBeenCalledWith('android_default_back');
   expect(screen.getByText('Live SSH terminal')).toBeTruthy();expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
 
@@ -61,7 +62,7 @@ it('gives a visible dialog priority over the terminal local Back callback',async
   expect(screen.queryByRole('dialog')).toBeNull();expect(close).not.toHaveBeenCalled();
   act(()=>mocks.backButton?.({canGoBack:false}));expect(close).toHaveBeenCalledTimes(1);
   act(()=>publish('local-back',null));
-  await waitFor(()=>expect(mocks.backButton).toBeUndefined());
+  await waitFor(()=>expect(mocks.backButton).toBeTypeOf('function'));
   expect(mocks.api.write).not.toHaveBeenCalled();expect(mocks.api.disconnect).not.toHaveBeenCalled();
 });
 
@@ -340,7 +341,7 @@ describe('the navigation page and Android Back on a phone',()=>{
     expect(mocks.api.disconnect).not.toHaveBeenCalled();
   });
 
-  it('has a Back handler registered whenever the page is open, closes it every time, and never leaves the app',async()=>{
+  it('keeps a Back handler registered, closes the page every time, and never leaves the app',async()=>{
     const user=await connectForNavigation('cycle-owner');
     await waitFor(()=>expect(handle()).not.toBeNull());
     for(let cycle=0;cycle<100;cycle++){
@@ -350,7 +351,6 @@ describe('the navigation page and Android Back on a phone',()=>{
       expect(mocks.backButton,`cycle ${cycle}: handler`).toBeTypeOf('function');
       act(()=>mocks.backButton?.({canGoBack:false}));
       expect(page().classList.contains('sidebar-open'),`cycle ${cycle}: closed`).toBe(false);
-      await waitFor(()=>expect(mocks.backButton).toBeUndefined());
       await waitFor(()=>expect(handle()).not.toBeNull());
     }
     expect(mocks.api.disconnect).not.toHaveBeenCalled();

@@ -178,6 +178,17 @@ class EdgeGesturePlugin(private val owner: Activity) : Plugin(owner) {
         }
     }
 
+    /**
+     * The renderer holds the Back listener for the whole session (#1578), so it asks for the system's default Back when nothing is open.
+     * The dispatcher is not re-entered: AppPlugin's callback would hand the Back straight back to the renderer.
+     */
+    @Command fun defaultBack(invoke: Invoke) {
+        owner.runOnUiThread {
+            if (owner.isTaskRoot) owner.moveTaskToBack(true) else owner.finish()
+            invoke.resolve()
+        }
+    }
+
     /** Rects are in view coordinates and Android drops them on every layout pass, so they follow the view. */
     @Command fun setExclusion(invoke: Invoke) {
         owner.runOnUiThread {
