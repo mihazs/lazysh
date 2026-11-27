@@ -44,6 +44,15 @@ it.each([false,true])('camera markers retain successful behavior when optional l
   expect(logger.mock.calls).toEqual([['lazysh qr camera request'],['lazysh qr camera resolved'],['lazysh qr camera attached'],['lazysh qr camera play_resolved'],['lazysh qr camera draw_start'],['lazysh qr camera draw_end'],['lazysh qr camera encode_end']]);
   expect(invoke).toHaveBeenCalledTimes(1);expect(view.apply).not.toHaveBeenCalled();expect(stop).toHaveBeenCalledTimes(1);
 });
+it('shows a read failure, not a decode failure, when the chosen file cannot be read',async()=>{
+  mount();const file=image();Object.defineProperty(file,'arrayBuffer',{configurable:true,value:vi.fn(async()=>{throw new DOMException('gone','NotReadableError');})});
+  choose(file);expect(await screen.findByRole('alert')).toHaveProperty('textContent',t('themeQrReadFailed'));
+  expect(t('themeQrReadFailed')).not.toBe(t('themeQrFailed'));expect(invoke).not.toHaveBeenCalled();
+  for(const choice of ['pt-BR','es'] as const){await act(async()=>{await uiI18n.changeLanguage(choice);});expect(t('themeQrReadFailed')).not.toBe(t('themeQrFailed'));}
+});
+it('shows the decode failure for an undecodable image',async()=>{
+  vi.mocked(invoke).mockRejectedValue('failed');mount();choose();expect(await screen.findByRole('alert')).toHaveProperty('textContent',t('themeQrFailed'));
+});
 it('a rejected real camera request logs only fixed request/rejected boundaries',async()=>{
   vi.stubEnv('VITE_LAZYSH_QR_CAMERA_TRACE','1');const logger=vi.spyOn(console,'warn').mockImplementation(()=>{});
   permission.mockRejectedValue(new Error('private device identity sentinel'));mount();scan();await screen.findByRole('alert');
