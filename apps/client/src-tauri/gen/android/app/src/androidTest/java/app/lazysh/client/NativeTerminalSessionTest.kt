@@ -554,27 +554,43 @@ class NativeTerminalSessionTest {
             }
         }
         val requestedRows = InstrumentationRegistry.getArguments().getString("lazyshBenchmarkRows")?.toInt() ?: 0
-        val current = PageDriver.poll("the xterm pane to fit the requested rows", 15) {
-            xtermRows().size.takeIf { it >= requestedRows && it > 0 }
+        val requestedColumns = InstrumentationRegistry.getArguments().getString("lazyshBenchmarkColumns")?.toInt() ?: 0
+        val reported = Regex("lazysh-grid ([1-9][0-9]*) ([1-9][0-9]*)")
+        fun reportedGrid(): Pair<Int, Int>? {
+            val visible = xtermRows()
+            return visible.firstNotNullOfOrNull { row ->
+                reported.matchEntire(row)?.destructured?.let { (rows, columns) ->
+                    (rows.toInt() to columns.toInt()).takeIf { it.first == visible.size }
+                }
+            }
         }
-        val targetRows = requestedRows.takeIf { it > 0 } ?: current
-        if (targetRows < current) {
+        val (initialRows, initialColumns) = PageDriver.poll("the packaged xterm SSH PTY and viewport to agree") {
+            reportedGrid()?.takeIf { (rows, columns) -> rows >= requestedRows && columns >= requestedColumns }
+        }
+        val rows = requestedRows.takeIf { it > 0 } ?: initialRows
+        val columns = requestedColumns.takeIf { it > 0 } ?: initialColumns
+        if (rows < initialRows || columns < initialColumns) {
             act("""(() => {
                 const canvas = window.__lz.find(${quoted(xtermRowsSelector)})?.closest('.terminal-canvas');
-                if (!canvas) return false;
-                canvas.style.maxHeight = (canvas.getBoundingClientRect().height * $targetRows / $current) + 'px';
+                const screen = canvas?.querySelector('.xterm-screen');
+                if (!screen) return false;
+                const available = canvas.getBoundingClientRect();
+                const grid = screen.getBoundingClientRect();
+                if ($rows < $initialRows) {
+                    const cell = grid.height / $initialRows;
+                    canvas.style.maxHeight = (available.height - cell * ($initialRows - $rows)) + 'px';
+                }
+                if ($columns < $initialColumns) {
+                    const cell = grid.width / $initialColumns;
+                    canvas.style.maxWidth = (available.width - cell * ($initialColumns - $columns)) + 'px';
+                }
                 return true;
-            })()""", "cap the xterm benchmark pane to $targetRows rows")
-            PageDriver.poll("the xterm benchmark grid to resize", 15) { true.takeIf { xtermRows().size == targetRows } }
-        }
-        val reported = Regex("lazysh-grid ([1-9][0-9]*) ([1-9][0-9]*)")
-        val (rows, columns) = PageDriver.poll("the packaged xterm SSH PTY and viewport to agree") {
-            val visible = xtermRows()
-            visible.firstNotNullOfOrNull { row ->
-                reported.matchEntire(row)?.takeIf { it.groupValues[1].toInt() == visible.size }
+            })()""", "cap the xterm benchmark pane to ${columns}×$rows")
+            PageDriver.poll("the packaged xterm SSH PTY to match the requested grid") {
+                true.takeIf { reportedGrid() == (rows to columns) }
             }
-        }.destructured
-        val configuration = streamConfiguration(port, columns.toInt(), rows.toInt())
+        }
+        val configuration = streamConfiguration(port, columns, rows)
         val order = configuration.getJSONArray("order")
         val screens = configuration.getJSONObject("screens")
         for (index in 0 until order.length()) {
