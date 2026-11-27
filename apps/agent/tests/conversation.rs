@@ -117,6 +117,51 @@ fn compaction_keeps_the_earlier_conversation_above_the_summary_and_recent_limit_
 }
 
 #[test]
+fn a_compaction_link_that_names_a_later_record_starts_the_chain_instead_of_refusing_the_session() {
+    // Claude Code has written a boundary whose logicalParentUuid is a record after it, which makes the session a loop.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    write(
+        &path,
+        &[
+            message("old", None, "user", "original context"),
+            json!({"type":"system","uuid":"boundary","parentUuid":null,"logicalParentUuid":"reply","subtype":"compact_boundary"}),
+            message(
+                "summary",
+                Some("boundary"),
+                "user",
+                "summary of prior context",
+            ),
+            message("reply", Some("summary"), "assistant", "current answer"),
+        ],
+    );
+    let page = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
+    // A loop through parentUuid is still refused (`cycles_oversize_files_and_wrong_provider_input_fail_closed`).
+    assert_eq!(ids(&page), vec!["summary", "reply"]);
+}
+
+#[test]
+fn a_claude_tool_result_of_a_megabyte_is_cut_so_the_session_still_opens() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.jsonl");
+    let big = "r".repeat(1_300_000);
+    write(
+        &path,
+        &[
+            message("root", None, "user", "read the log"),
+            json!({"type":"assistant","uuid":"call","parentUuid":"root","message":{"content":[{"type":"tool_use","id":"tool1","name":"Read","input":{}}]}}),
+            json!({"type":"user","uuid":"result","parentUuid":"call","message":{"content":[{"type":"tool_result","tool_use_id":"tool1","content":big}]}}),
+            message("done", Some("result"), "assistant", "after the big result"),
+        ],
+    );
+    let page = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
+    assert_eq!(ids(&page).last(), Some(&"done"));
+    let text = serde_json::to_string(&page.messages).unwrap();
+    assert!(text.contains("more bytes not shown"));
+    assert!(serde_json::to_vec(&page).unwrap().len() < 512 * 1024);
+}
+
+#[test]
 fn parallel_tool_calls_and_results_are_recovered_without_answering_a_different_response() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("parallel.jsonl");
