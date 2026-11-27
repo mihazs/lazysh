@@ -44,14 +44,14 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
     down(event: PointerEvent) {
       const touch = event.pointerType === 'touch', button = buttons[event.button] ?? 'left';
       reported = {id: event.pointerId, button, touch, x: event.clientX, y: event.clientY, moved: false, at: Date.now()};
-      if (!touch) adapter.reportMouse('press', button, event.clientX, event.clientY);
+      if (!touch) adapter.reportMouse('press', button, event.clientX, event.clientY, event);
     },
     move(event: PointerEvent) {
       const now = reported;
       if (!now || now.id !== event.pointerId) return;
       if (Math.hypot(event.clientX - now.x, event.clientY - now.y) > TOUCH_SLOP) now.moved = true;
       const level = adapter.modes().mouseTracking;
-      if (!now.touch && (level === 'drag' || level === 'any')) adapter.reportMouse('motion', now.button, event.clientX, event.clientY);
+      if (!now.touch && (level === 'drag' || level === 'any')) adapter.reportMouse('motion', now.button, event.clientX, event.clientY, event);
     },
     up(event: PointerEvent) {
       const now = reported;
@@ -60,7 +60,7 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
       // A finger that stayed put and lifted quickly is a click; one that moved was a scroll, which the pane turns into wheel reports.
       if (now.touch && (now.moved || Date.now() - now.at > TAP_MS)) return;
       if (now.touch) adapter.reportMouse('press', now.button, now.x, now.y);
-      adapter.reportMouse('release', now.button, event.clientX, event.clientY);
+      adapter.reportMouse('release', now.button, event.clientX, event.clientY, event);
     },
   };
 
@@ -104,7 +104,7 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
     }
     if (!drag) {
       if (event.pointerType === 'mouse' && !event.buttons && !event.shiftKey && adapter.modes().mouseTracking === 'any') {
-        adapter.reportMouse('motion', undefined, event.clientX, event.clientY);
+        adapter.reportMouse('motion', undefined, event.clientX, event.clientY, event);
       }
       return;
     }
@@ -129,9 +129,16 @@ export function attachPointerSelection(adapter: NativeTerminalAdapter, anchor: H
     } else if (touched && adapter.hasSelection()) { adapter.clearSelection(); touched = null; }
   };
 
+  const wheel = (event: WheelEvent) => {
+    const tracking = adapter.modes().mouseTracking;
+    if (event.defaultPrevented || !event.deltaY || tracking === 'none' || tracking === 'x10') return;
+    event.preventDefault();
+    adapter.wheel({clientX: event.clientX, clientY: event.clientY, deltaY: event.deltaY, unit: 'pixel'}, event);
+  };
+
   // The platform's long-press menu would compete with the selection.
   const menu = (event: Event) => { if (hold) event.preventDefault(); };
-  const listeners: [string, (event: never) => void][] = [['pointerdown', down], ['mousedown', mouseDown], ['pointermove', move], ['pointerup', up], ['pointercancel', up], ['contextmenu', menu]];
+  const listeners: [string, (event: never) => void][] = [['pointerdown', down], ['mousedown', mouseDown], ['pointermove', move], ['pointerup', up], ['pointercancel', up], ['contextmenu', menu], ['wheel', wheel]];
   for (const [type, listener] of listeners) anchor.addEventListener(type, listener as EventListener);
   return {dispose: () => { cancelHold(); stopEdge(); for (const [type, listener] of listeners) anchor.removeEventListener(type, listener as EventListener); }};
 }

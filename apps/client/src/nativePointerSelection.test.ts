@@ -16,16 +16,16 @@ async function mounted(output = 'hello world\r\nsecond line here') {
   const adapter = await openNativeTerminalAdapter(core);
   await adapter.write!(new TextEncoder().encode(output));
   await adapter.attach({kind: 'native', anchorId: element.id});
-  const fire = (type: string, x: number, y: number, init: {detail?: number; shiftKey?: boolean; pointerType?: string} = {}) => {
+  const fire = (type: string, x: number, y: number, init: {detail?: number; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; pointerType?: string} = {}) => {
     const detail = init.detail ?? 1;
-    const options = {clientX: x, clientY: y, shiftKey: init.shiftKey, button: 0, bubbles: true, cancelable: true};
+    const options = {clientX: x, clientY: y, shiftKey: init.shiftKey, ctrlKey: init.ctrlKey, altKey: init.altKey, button: 0, bubbles: true, cancelable: true};
     const event = new MouseEvent(type, {...options, detail: 0});
     Object.defineProperty(event, 'pointerType', {value: init.pointerType ?? 'mouse'});
     element.dispatchEvent(event);
     if (type === 'pointerdown' && detail > 1) element.dispatchEvent(new MouseEvent('mousedown', {...options, detail}));
     return event;
   };
-  return {adapter, fire, core};
+  return {adapter, fire, core, element};
 }
 const at = (column: number, row: number) => [column * 10 + 5, row * 10 + 5] as const;
 
@@ -103,6 +103,28 @@ describe('mouse reports to a program that tracks the mouse', () => {
     fire('pointermove', ...at(3, 1));
     await settle();
     expect(sent(core)).toEqual(hover ? [['motion', undefined, 3, 1]] : []);
+  });
+
+  it('carries Ctrl and Alt through hover, press, drag and release', async () => {
+    const {fire, core} = await mounted('\x1b[?1003h');
+    const mods = {ctrlKey: true, altKey: true};
+    fire('pointermove', ...at(1, 0), mods);
+    fire('pointerdown', ...at(2, 0), mods);
+    fire('pointermove', ...at(3, 0), mods);
+    fire('pointerup', ...at(3, 0), mods);
+    await settle();
+    expect(core.mice.map(({action, mods}) => [action, mods.ctrl, mods.alt])).toEqual([
+      ['motion', true, true], ['press', true, true], ['motion', true, true], ['release', true, true],
+    ]);
+  });
+
+  it.each([['', false], ['\x1b[?9h', false], ['\x1b[?1003h', true]])('routes desktop wheel reports only for modes that support them (%j)', async (output, tracked) => {
+    const {element, core} = await mounted(output);
+    const event = new WheelEvent('wheel', {deltaY: -80, clientX: 35, clientY: 15, ctrlKey: true, cancelable: true});
+    element.dispatchEvent(event);
+    await settle();
+    expect(event.defaultPrevented).toBe(tracked);
+    expect(core.mice).toEqual(tracked ? [expect.objectContaining({action: 'press', button: 'wheelUp', x: 3, y: 1, mods: {ctrl: true, alt: false, shift: false, meta: false}})] : []);
   });
 
   it('sends a mouse its press, drag motion and release in the cell under it, and selects nothing', async () => {
