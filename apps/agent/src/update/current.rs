@@ -50,8 +50,8 @@ pub fn managed_directory() -> Result<PathBuf, Fault> {
 /// are admitted by owner, DACL and reparse point (`lazysh_common::windows_acl`).
 #[cfg(windows)]
 pub fn admit_namespace(root: &Path) -> Result<bool, lazysh_common::windows_acl::Unsafe> {
-    use lazysh_common::windows_acl::{admit_namespace, admit_path};
-    admit_namespace(root, &MANAGED, NAME, admit_path)
+    use lazysh_common::windows_acl::{admit_namespace, admit_path, local_kind};
+    admit_namespace(root, &MANAGED, NAME, admit_path, local_kind)
 }
 /// The same, refusing with the fixed install-location failure. A Unix build of the path store runs only under
 /// test, where there is no Windows ACL to read and nothing is admitted.
