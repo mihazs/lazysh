@@ -465,3 +465,16 @@ it('shows the window of Codex 0.172.0\'s /model list, says more rows are in the 
   await chooseAndClose('GPT-6.1-Sol');
   expect(keys()).toEqual([{kind: 'pick', rows: 3, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
 });
+
+it.each([
+  ['Claude Code', 'config', 'Auto-compact'],
+  ['Claude Code', 'login', 'Select login method:'],
+  ['Claude Code', 'permissions-tabs', 'Recently blocked'],
+  ['Codex', 'codex-resume', 'No sessions yet'],
+])('shows the rows of the %s %s dialog it cannot read exactly, read-only, with the way to the terminal, and sends nothing', async (agent, file, text) => {
+  mount(onTmux(fixture(file).slice(0, 39)), {agent});
+  expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
+  expect(screen.getByText(new RegExp(text)).closest('pre')).not.toBeNull();
+  expect(screen.getByRole('button', {name: t('agentViewShowTerminal')})).toBeTruthy();
+  expect(keys()).toEqual([]);
+});
