@@ -1,5 +1,27 @@
 # @lazysh/agent
 
+## 1.106.0
+
+### Minor Changes
+
+- feat(browser): navigate, go back and forward, reload and switch tabs in the host Firefox relay ([#2822](https://github.com/mihazs/lazysh/pull/2822))
+
+  <details><summary>Details</summary>
+
+  The Firefox adapter of the host browser relay (`lazysh-agent host-browser serve`) now answers `navigate`, `back`, `forward`, `reload`, `tabs`, `activateTab`, `newTab` and `closeTab` through WebDriver BiDi, and reports `navigation` and `tabs` as true. A page that Firefox lists as opened by the shown one (a popup) becomes a tab and takes the view, only the shown tab streams, titles are one `document.title` read each, and a page beyond sixteen is closed again. An address that is not `http`, `https` or `about:blank` is refused before Firefox is asked (Firefox 160 opens `file:` itself), and so is a tab the relay never listed. Firefox has no command to stop a load, so `stop` is refused and the capability record says `stop: false`. The command is still hidden and the app does not send these messages yet.
+
+  </details>
+
+### Patch Changes
+
+- fix(agent): keep hook setup working after a profile folder is restored, copied or remounted ([#2911](https://github.com/mihazs/lazysh/pull/2911))
+
+  <details><summary>Details</summary>
+
+  Inspecting a hook profile failed with `HooksForeignRecord: operation failed` once the profile directory's device or inode changed, for example after a reboot on btrfs, so hooks could be neither updated nor removed. The setup record now stays bound to the agent and profile path, and the plan still refuses a directory swapped before apply. A record written for another folder is reported as unsupported with a specific explanation instead of an error, and every other hook setup failure shows a fixed, localized message instead of the companion's internal error name.
+
+  </details>
+
 ## 1.105.1
 
 ### Patch Changes

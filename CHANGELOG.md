@@ -10,6 +10,18 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.106.0] - 2026-11-28
+
+### New
+
+- **companion:** run the managed Windows companion before the PATH one on OpenSSH hosts ([#2810](https://github.com/mihazs/lazysh/pull/2810))
+- **browser:** navigate, go back and forward, reload and switch tabs in the host Firefox relay ([#2822](https://github.com/mihazs/lazysh/pull/2822))
+
+### Fixed
+
+- **agent:** keep hook setup working after a profile folder is restored, copied or remounted ([#2911](https://github.com/mihazs/lazysh/pull/2911))
+- **credentials:** import ECDSA P-256 private keys whose secret starts with a zero byte ([#2827](https://github.com/mihazs/lazysh/pull/2827))
+
 ## [1.105.1] - 2026-11-28
 
 ### Fixed

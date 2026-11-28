@@ -1,0 +1,5 @@
+- run the managed Windows companion before the PATH one on OpenSSH hosts
+- keep hook setup working after a profile folder is restored, copied or remounted
+- import ECDSA P-256 private keys whose secret starts with a zero byte
+- navigate, go back and forward, reload and switch tabs in the host Firefox relay
+Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.106.0

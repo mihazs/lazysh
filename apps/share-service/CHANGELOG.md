@@ -1,5 +1,9 @@
 # @lazysh/share-service
 
+## 1.106.0
+
+No changes in this release.
+
 ## 1.105.1
 
 No changes in this release.
