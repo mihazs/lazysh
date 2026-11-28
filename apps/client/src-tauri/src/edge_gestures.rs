@@ -111,6 +111,26 @@ pub async fn edge_gesture_insets(app: AppHandle) -> Result<GestureInsets, String
     }
 }
 
+/// Runs Android's default Back (leave the app) for a Back the renderer had nothing to close for. The renderer keeps its Back
+/// listener registered for the whole session, so the native side no longer finishes the activity by itself (#1578).
+#[tauri::command]
+pub async fn android_default_back(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri::Manager;
+        app.state::<Exclusion>()
+            .0
+            .run_mobile_plugin_async("defaultBack", serde_json::json!({}))
+            .await
+            .map_err(|_| "The default Back is unavailable".to_owned())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
 /// A plugin the renderer reaches through app commands, never through the plugin's own invoke handler.
 pub(crate) fn command_only_plugin(name: &'static str) -> tauri::plugin::Builder<tauri::Wry> {
     tauri::plugin::Builder::new(name).invoke_handler(|invoke| {
