@@ -70,8 +70,21 @@ export async function stageHerdr(root: string, executable: string, directory: st
 }
 
 export type Transport = typeof fetch;
-async function download(url: string, maximum: number, transport: Transport) {
-  const response = await transport(url, { headers: { Accept: 'application/vnd.github+json' } });
+// A release asset can answer 403 or 404 for a moment after publication, and a shared runner address can be rate limited (429); retry those,
+// and 5xx, with a bounded backoff. Anything else (a wrong digest, size or tag) is judged on the first answer.
+const transient = (status: number) => status === 403 || status === 404 || status === 429 || status >= 500;
+export const publicationBackoffMs = [2_000, 4_000, 8_000, 16_000];
+async function download(url: string, maximum: number, transport: Transport, backoff = publicationBackoffMs) {
+  // The workflow token lifts the anonymous API limit; it is sent to the API host only, never to the asset host.
+  const token = process.env.GITHUB_TOKEN;
+  const headers: Record<string, string> = { Accept: 'application/vnd.github+json' };
+  if (token && new URL(url).hostname === 'api.github.com') headers.Authorization = `Bearer ${token}`;
+  let response = await transport(url, { headers });
+  for (const delay of backoff) {
+    if (response.ok || !transient(response.status)) break;
+    await Bun.sleep(delay);
+    response = await transport(url, { headers });
+  }
   requireHerdr(response.ok, `download failed (${response.status})`);
   const declared = response.headers.get('content-length');
   requireHerdr(declared === null || (/^\d+$/.test(declared) && Number(declared) <= maximum), 'download declares an oversized body');
@@ -87,9 +100,9 @@ const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
  * inventory, notice text and build receipt must match the receipts and GitHub's own digests. `expectedSha` pins the
  * candidate that this run published.
  */
-export async function verifyPublishedHerdr(tag: string, expectedSha?: string, transport: Transport = (...args) => fetch(...args)) {
+export async function verifyPublishedHerdr(tag: string, expectedSha?: string, transport: Transport = (...args) => fetch(...args), backoff = publicationBackoffMs) {
   requireHerdr(/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag), 'invalid tag');
-  const json = async (url: string) => JSON.parse(text(await download(url, 262_144, transport)));
+  const json = async (url: string) => JSON.parse(text(await download(url, 262_144, transport, backoff)));
   const release = await json(`${repository}/releases/tags/${tag}`);
   requireHerdr(release?.tag_name === tag && release.draft === false && release.prerelease === false && Array.isArray(release.assets), 'public release');
   const ref = await json(`${repository}/git/ref/tags/${tag}`);
@@ -104,7 +117,7 @@ export async function verifyPublishedHerdr(tag: string, expectedSha?: string, tr
     requireHerdr(asset.state === 'uploaded' && Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= maximum
       && /^sha256:[a-f0-9]{64}$/.test(asset.digest) && asset.browser_download_url === `https://github.com/mihazs/lazysh/releases/download/${tag}/${name}`
       && (size === undefined || asset.size === size) && (digest === undefined || asset.digest === `sha256:${digest}`), `asset ${name} identity`);
-    const bytes = await download(asset.browser_download_url, maximum, transport);
+    const bytes = await download(asset.browser_download_url, maximum, transport, backoff);
     requireHerdr(bytes.length === asset.size && `sha256:${sha256(bytes)}` === asset.digest, `asset ${name} download digest`);
     return bytes;
   };
