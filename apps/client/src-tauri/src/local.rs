@@ -831,7 +831,17 @@ mod desktop {
             return Err("Multiplexer sessions attach on this device's own shell".into());
         }
         #[cfg_attr(not(test), allow(unused_mut))]
-        let mut command = attach_command(&entry).await?;
+        let mut command = attach_command(
+            &entry,
+            crate::host::login_path().await.cloned(),
+            crate::local::home_dir(),
+        )?;
+        // No terminal exists yet; the sender stays open so the check is not cancelled.
+        let (_open, cancel) = watch::channel(false);
+        entry
+            .prepare_local(&crate::host::Host::device(state, cancel), &creation)
+            .await
+            .map_err(|error| error.message().to_owned())?;
         // As over SSH, a Herdr that does not positively admit the guard stays an ordinary attach.
         let guard = crate::herdr_guard::Local {
             #[cfg(test)]
@@ -909,7 +919,12 @@ mod desktop {
             })
     }
     /// The PTY command that attaches `entry` directly: a typed argv, never a shell string.
-    async fn attach_command(entry: &crate::multiplexer::Entry) -> Result<CommandBuilder, String> {
+    /// Herdr also searches its owner-checked user install directory after `path`.
+    pub(super) fn attach_command(
+        entry: &crate::multiplexer::Entry,
+        path: Option<std::ffi::OsString>,
+        home: Option<std::path::PathBuf>,
+    ) -> Result<CommandBuilder, String> {
         let argv = entry.argv().map_err(|error| error.message().to_owned())?;
         let program = attach_program(
             &argv[0],
@@ -924,10 +939,15 @@ mod desktop {
         for name in crate::host::INHERITED {
             command.env_remove(name);
         }
-        if let Some(path) = crate::host::login_path().await {
+        let path = if matches!(entry.kind, crate::multiplexer::MultiplexerKind::Herdr) {
+            crate::host::with_herdr_install(path, home.clone())
+        } else {
+            path
+        };
+        if let Some(path) = path {
             command.env("PATH", path);
         }
-        if let Some(home) = crate::local::home_dir() {
+        if let Some(home) = home {
             command.cwd(home);
         }
         Ok(command)
