@@ -11,9 +11,8 @@ fn extensions(target: &str) -> &'static [&'static str] {
         "linux-x64" => &["deb", "AppImage"],
         "windows-x64" => &["exe"],
         "android-google-arm64" | "android-foss-arm64" => &["apk"],
-        "linux-agent-x64" | "linux-agent-arm64" | "macos-agent-x64" | "macos-agent-arm64" => {
-            &["bin"]
-        }
+        "linux-agent-x64" | "linux-agent-arm64" | "macos-agent-x64" | "macos-agent-arm64"
+        | "linux-herdr-x64" => &["bin"],
         "windows-agent-x64" => &["exe"],
         _ => unreachable!(),
     }
@@ -33,6 +32,7 @@ fn fixture() -> (Value, Value, Value) {
         "macos-agent-x64",
         "macos-agent-arm64",
         "windows-agent-x64",
+        "linux-herdr-x64",
     ] {
         let files = extensions(target)
             .iter()
@@ -218,6 +218,7 @@ fn every_published_agent_target_selects_its_own_extension() {
         ("macos-agent-x64", "lazysh-0.24.0-macos-agent-x64.bin"),
         ("macos-agent-arm64", "lazysh-0.24.0-macos-agent-arm64.bin"),
         ("windows-agent-x64", "lazysh-0.24.0-windows-agent-x64.exe"),
+        ("linux-herdr-x64", "lazysh-0.24.0-linux-herdr-x64.bin"),
     ] {
         let selection = chosen_for(fixture(), target).unwrap();
         assert_eq!(
@@ -230,6 +231,8 @@ fn every_published_agent_target_selects_its_own_extension() {
         "windows-x64",
         "android-google-arm64",
         "linux-agent-riscv64",
+        "linux-herdr-notices-x64",
+        "linux-herdr-arm64",
     ] {
         assert_eq!(
             chosen_for(fixture(), target).unwrap_err().kind,

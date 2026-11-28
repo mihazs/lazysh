@@ -69,8 +69,8 @@ container build path, not a claim of Vagrant `--server` execution or hermeticity
 
 ## Job graph and runner queue
 
-A release takes three runner-queue entries on its critical path and eleven runner slots
-(previously five entries and fourteen slots; the desktop builds were the second entry
+A release takes three runner-queue entries on its critical path and twelve runner slots
+(eleven before the managed Herdr job; previously five entries and fourteen slots; the desktop builds were the second entry
 until they began bundling the verified companion). Each GitHub-hosted job waits in the
 account-wide queue, so stages that run one after another add queue time.
 
