@@ -7,12 +7,15 @@ import type {ScreenSource} from './AgentPickerDock';
 export type HerdrAgentTarget = Readonly<{server: string; pane: string; terminal: string; agent: 'claude' | 'codex'; agentSessionId: string}>;
 type Invoke = ReturnType<typeof bindProtectedInvoke>;
 
-/** Reads the Herdr tree again: true only while exactly one live agent names this session, in this pane and terminal. */
-export async function herdrStillRuns(invoke: Invoke, sessionId: string, target: HerdrAgentTarget): Promise<boolean> {
+/** Reads the Herdr tree again: true only while exactly one live agent names this session, in this pane and terminal; with `focused`, also only while Herdr reports that very pane as the one focused pane. */
+export async function herdrStillRuns(invoke: Invoke, sessionId: string, target: HerdrAgentTarget, focused = false): Promise<boolean> {
   try {
-    const mine = parseHerdrAgents(await invoke('herdr_tree', {sessionId, name: target.server}))
+    const tree = await invoke('herdr_tree', {sessionId, name: target.server});
+    const mine = parseHerdrAgents(tree)
       .filter(row => row.agent_session?.agent === target.agent && row.agent_session.value === target.agentSessionId);
-    return mine.length === 1 && mine[0].agent === target.agent && mine[0].pane_id === target.pane && mine[0].terminal_id === target.terminal;
+    const focus = (tree as {panes: {pane_id: string; terminal_id?: string; focused: boolean}[]}).panes.filter(pane => pane.focused);
+    return mine.length === 1 && mine[0].agent === target.agent && mine[0].pane_id === target.pane && mine[0].terminal_id === target.terminal
+      && (!focused || focus.length === 1 && focus[0].pane_id === target.pane && focus[0].terminal_id === target.terminal);
   } catch {return false;}
 }
 

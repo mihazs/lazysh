@@ -9,12 +9,14 @@ vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import
 
 useAgentViewHarness();
 
-type Host={agent:'Claude Code'|'Codex';state:string;paneId:string;messages:unknown[];screen:string[];press?:(input:{kind:string;rows?:number;enter?:boolean})=>void;listed:number};
+type Host={agent:'Claude Code'|'Codex';state:string;paneId:string;messages:unknown[];screen:string[];press?:(input:{kind:string;rows?:number;enter?:boolean})=>void;listed:number;requests:unknown[];decided:unknown[];reports:unknown[]};
 /** The agent in Zellij pane 7 of the session `work` reports `needs_attention`; `screen` is what the host reads from that pane's viewport. */
 function zellij(host:Partial<Host>={}) {
-  const state:Host={agent:'Claude Code',state:'needs_attention',paneId:'zellij:work:7',messages:[{id:'p',role:'user',blocks:[{type:'text',text:'Hello'}]}],screen:[],listed:0,...host};
+  const state:Host={agent:'Claude Code',state:'needs_attention',paneId:'zellij:work:7',messages:[{id:'p',role:'user',blocks:[{type:'text',text:'Hello'}]}],screen:[],listed:0,requests:[],decided:[],reports:[],...host};
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
-    if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'the-session',agent:state.agent,project:'/work',state:state.state,updatedAt:new Date().toISOString(),summary:'Waiting',paneId:state.paneId,eventCount:3}]};
+    if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'the-session',agent:state.agent,project:'/work',state:state.state,updatedAt:new Date().toISOString(),summary:'Waiting',paneId:state.paneId,eventCount:3},...state.reports]};
+    if(command==='agent_approvals')return {schemaVersion:1,requests:state.requests};
+    if(command==='resolve_agent_approval'){state.decided.push(args);return {schemaVersion:1,accepted:true};}
     if(command==='agent_reported_history')return {schemaVersion:1,sessionId:'the-session',status:'available',path:'/home/owner/a.jsonl',reportedAt:'2026-11-09T10:00:00Z',paneId:state.paneId};
     if(command==='agent_transcript')return {schemaVersion:1,agent:state.agent==='Codex'?'codex':'claude',view:'active_branch',messages:state.messages,nextOffset:0,hasMore:false,activity:'waiting'};
     if(command==='zellij_agent_screen')return state.screen;
@@ -98,5 +100,27 @@ describe('the open question of the agent followed in Zellij',()=>{
     await mount();await advance(400);
     host.state='working';await click('Red');
     expect(keys()).toEqual([]);expect(within(card()).getByRole('alert').textContent).toContain('not sent');
+  });
+});
+
+const request=(id:string,paneId:string|null,sessionId='the-session')=>({id,expectedHash:'a'.repeat(64),agent:'claude',sessionId,project:'/work',paneId,toolName:'Bash',toolInput:{command:`run ${id}`},options:[],createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+300_000).toISOString()});
+const ONE='11111111-1111-4111-8111-111111111111';
+describe('permission requests of the agent followed in a Zellij pane',()=>{
+  const dock=()=>screen.getByRole('region',{name:'Pending approvals'});
+  const allow=()=>act(async()=>{fireEvent.click(within(dock()).getByRole('button',{name:'Allow this request'}));await vi.advanceTimersByTimeAsync(0);});
+  it('shows only the requests that name exactly this pane and sends the hook decision once, without a key or tmux',async()=>{
+    const host=zellij({requests:[request(ONE,'zellij:work:7'),request('22222222-2222-4222-8222-222222222222','zellij:work:9'),request('33333333-3333-4333-8333-333333333333','zellij:other:7'),request('44444444-4444-4444-8444-444444444444',null),request('55555555-5555-4555-8555-555555555555','zellij:work:7','another-session')]});
+    await mount();await advance(400);
+    expect(within(dock()).getAllByRole('article')).toHaveLength(1);expect(dock().textContent).toContain(`run ${ONE}`);
+    await allow();
+    expect(host.decided).toEqual([{sessionId:'ssh',id:ONE,expectedHash:'a'.repeat(64),agentSessionId:'the-session',paneId:'zellij:work:7',decision:'allow'}]);
+    expect(keys()).toEqual([]);expect(calls('tmux_chat')).toEqual([]);
+  });
+  it('sends nothing once another report also names a pane of the session',async()=>{
+    const host=zellij({requests:[request(ONE,'zellij:work:7')]});
+    await mount();await advance(400);
+    host.reports=[{sessionId:'second',agent:'Claude Code',project:'/work',state:'working',updatedAt:new Date().toISOString(),summary:'Busy',paneId:'zellij:work:9',eventCount:1}];
+    await allow();
+    expect(host.decided).toEqual([]);expect(within(dock()).getByRole('alert')).toBeTruthy();
   });
 });

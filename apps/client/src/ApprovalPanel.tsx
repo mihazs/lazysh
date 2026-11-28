@@ -59,8 +59,8 @@ export function parseApprovals(value: unknown): Approval[] {
     return {...item, options: parseOptions(item.options), canMessage: Array.isArray(item.options)} as Approval;
   });
 }
-/** `match` shows only the requests of one agent (the approvals store's `claude` or `codex`) session in one pane (any pane when it names none: a Herdr agent's hook has no tmux pane); `validate` must hold again when a decision is sent. */
-export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=false, match, validate, delay=0 }: { sessionId: string; visible?:boolean; compactEmpty?:boolean; match?:{agent:'claude'|'codex';agentSessionId:string;paneId?:string}; validate?:()=>Promise<boolean>; delay?:number }) {
+/** `match` shows only the requests of one agent (the approvals store's `claude` or `codex`) session in one pane (any pane when it names none; with `unnamed`, also the requests that name no pane: a companion older than the exact-pane approvals); `validate` must hold again when a decision is sent. */
+export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=false, match, validate, delay=0 }: { sessionId: string; visible?:boolean; compactEmpty?:boolean; match?:{agent:'claude'|'codex';agentSessionId:string;paneId?:string;unnamed?:boolean}; validate?:()=>Promise<boolean>; delay?:number }) {
   useUi();
   const invoke = useProtectedInvoke();
   const [requests, setRequests] = useState<Approval[]>([]);
@@ -80,7 +80,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
   }
   async function list() {
     const rows = parseApprovals(await invoke("agent_approvals", { sessionId }));
-    return match ? rows.filter(row=>row.agent===match.agent && row.sessionId===match.agentSessionId && (match.paneId===undefined || row.paneId===match.paneId)) : rows;
+    return match ? rows.filter(row=>row.agent===match.agent && row.sessionId===match.agentSessionId && (match.paneId===undefined || row.paneId===match.paneId || (!!match.unnamed && row.paneId===null))) : rows;
   }
   /** Shows `rows`; a request this view showed that is gone, was not answered here and had not expired was answered at the host. */
   function show(rows: Approval[]) {
@@ -116,7 +116,7 @@ export default function ApprovalPanel({ sessionId, visible=true, compactEmpty=fa
       generation.current++;
       window.clearInterval(interval);
     };
-  }, [sessionId,visible,match?.agent,match?.agentSessionId,match?.paneId]);
+  }, [sessionId,visible,match?.agent,match?.agentSessionId,match?.paneId,match?.unnamed]);
   async function decide(request: Approval, {decision, option, message}: Answer) {
     const current=beginRequest();if(current===null)return;
     try {

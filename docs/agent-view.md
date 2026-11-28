@@ -609,8 +609,8 @@ working, and the answer is the keys a person presses sent with `zellij action se
 encodes for the cursor-key mode of that pane, or one typed line and its Enter. The pane is listed and proven to run the agent before every
 call, the card reads the screen again between the arrows and Enter, and the report must still name the same session in the same pane.
 
-Limits: a prompt is at most 4,096 bytes (no long paste), the mode key stays in the terminal, a permission request of a Zellij pane is
-answered from the Agents board (the Agent view's approval dock needs the exact-pane binding of #1536), and the pane test reads only the first two words
+Limits: a prompt is at most 4,096 bytes (no long paste), the mode key stays in the terminal, a permission request is answered in the dock
+only when its pane is named exactly (see [approvals](approvals.md#in-the-agent-view)), and the pane test reads only the first two words
 of the pane's command line. A
 stale report of an agent that has since exited leaves a shell in its pane, which the foreground check
 refuses. rmux (Limited until its confirmed input is verified, #1675) and plain PTY or local sessions (no proof that the

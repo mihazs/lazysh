@@ -18,6 +18,9 @@ export function zellijPane(id:string|null|undefined):{session:string;pane:number
   return match ? {session:match[1],pane:Number(match[2])} : undefined;
 }
 
+/** The identity a hook in the Herdr pane `pane` of server `server` records: `herdr:<session>:<pane id>`. */
+export const herdrPaneIdentity=(server:string,pane:string)=>`herdr:${server}:${pane}`;
+
 const herdrPane=/^herdr:([\w.-]{1,64}):(w[1-9A-HJKMNP-TV-Z0]+:p[1-9A-HJKMNP-TV-Z0]+)$/;
 /** The Herdr pane a hook report names: `herdr:<session>:<pane id>`. */
 export function herdrPaneOf(id:string|null|undefined):{session:string;pane:string}|undefined {
