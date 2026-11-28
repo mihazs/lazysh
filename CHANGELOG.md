@@ -10,6 +10,24 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.107.0] - 2026-11-28
+
+### New
+
+- **browser:** add Keep profile and Clear browser data to the Host browser settings ([#2820](https://github.com/mihazs/lazysh/pull/2820))
+- **herdr:** keep the Herdr event stream open for the inbox while no Herdr view is shown ([#2813](https://github.com/mihazs/lazysh/pull/2813))
+- **desktop:** find native Zellij and Herdr on Windows through PATHEXT in discovery and actions ([#2835](https://github.com/mihazs/lazysh/pull/2835))
+
+### Fixed
+
+- **agents:** open the Claude Code and OpenCode conversations that hold a large tool result ([#2790](https://github.com/mihazs/lazysh/pull/2790))
+- **agent:** start the working clock at the new turn instead of the previous finished prompt ([#2848](https://github.com/mihazs/lazysh/pull/2848))
+
+### Under the hood
+
+- **release:** publish the managed Herdr as verified release assets ([#2831](https://github.com/mihazs/lazysh/pull/2831))
+- **e2e:** Appium regression spec for typing and Backspace through the real Android keyboard ([#2843](https://github.com/mihazs/lazysh/pull/2843))
+
 ## [1.106.0] - 2026-11-28
 
 ### New

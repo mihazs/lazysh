@@ -1,5 +1,9 @@
 # @lazysh/agent
 
+## 1.107.0
+
+No changes in this release.
+
 ## 1.106.0
 
 ### Minor Changes

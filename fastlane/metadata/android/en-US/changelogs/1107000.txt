@@ -1,0 +1,6 @@
+- add Keep profile and Clear browser data to the Host browser settings
+- keep the Herdr event stream open for the inbox while no Herdr view is shown
+- open the Claude Code and OpenCode conversations that hold a large tool result
+- find native Zellij and Herdr on Windows through PATHEXT in discovery and actions
+- start the working clock at the new turn instead of the previous finished prompt
+Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.107.0
