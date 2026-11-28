@@ -21,3 +21,13 @@ export function fakeTerminal(initial: string[]) {
 }
 /** An input as the keys it presses: a `pick` or `dismiss` without the dialog rows it was read from. */
 export const withoutSeen = (input: object) => {const {seen, ...key} = input as {seen?: unknown}; return key;};
+/** Codex 0.172.0's `/model` list: ten rows, a window of eight in view from row `first` with the highlight on row `at`, a `↑` or `↓` row where rows are hidden, and no number
+ * after the ninth. The last window is the real screen (`codex-0.172.0-model-scrolled`); the others move over the same rows (the lift test checks the two agree). */
+const codexModelRows = (() => {
+  const recorded = dialogScreen('codex-0.172.0-model-scrolled');
+  return ['  1. GPT-6.2-Sol (current)  Fast, go-to model for coding and everyday work.', '  2. GPT-6.2-Astra          Our most capable model for complex coding and professional work.',
+    ...recorded.slice(4, 12).map(row => row.replace(/^›/, ' '))];
+})();
+export const codexModelWindow = (first: number, at: number) => ['', '  Select Model and Effort', '', first > 1 ? '↑' : '',
+  ...codexModelRows.slice(first - 1, first + 7).map((row, index) => first + index === at ? `›${row.slice(1)}` : row),
+  first + 7 < codexModelRows.length ? '↓' : '', '  enter select · esc back'];
