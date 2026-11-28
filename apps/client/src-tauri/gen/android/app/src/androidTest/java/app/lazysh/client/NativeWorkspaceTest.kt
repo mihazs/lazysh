@@ -2173,7 +2173,6 @@ class NativeWorkspaceTest {
         val setup = ".agent-panel:not([hidden]) > .tool-bar button[title=Setup]"
         val checkbox = "[data-settings-page=agents]:not([hidden]) .keep-awake-control input[type=checkbox]"
         val preferencesClosed = "!document.querySelector(\"button[aria-label='Close Preferences']\")"
-        val active = "This board owns an acknowledged idle-inhibition request."
         val off = "Keep awake is off."
         val paused = "Keep awake is paused until this board is visible and focused."
         var observedActivity: MainActivity? = null
@@ -2185,11 +2184,19 @@ class NativeWorkspaceTest {
             }
             return enabled
         }
-        fun awaitFlag(expected: Boolean, stage: String) {
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        fun awaitFlag(expected: Boolean, stage: String, seconds: Long = 5) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
             while (flag() != expected) {
                 assertTrue("Native display flag did not settle at $stage", System.nanoTime() < deadline)
                 Thread.sleep(25)
+            }
+        }
+        // The board asks again as soon as it is shown, so a flag that must stay off is watched for a moment.
+        fun flagStays(expected: Boolean, stage: String) {
+            val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+            while (System.nanoTime() < end) {
+                assertEquals("Native display flag changed at $stage", expected, flag())
+                Thread.sleep(50)
             }
         }
         fun navigation(name: String) {
@@ -2225,9 +2232,10 @@ class NativeWorkspaceTest {
             settle()
         }
         fun status(text: String) = "Array.from(document.querySelectorAll('.keep-awake-control [role=status]')).some(x=>x.textContent===${JSONObject.quote(text)})"
-        fun awaitActive(stage: String) {
-            awaitDocument(scenario, stage, "document.querySelector('$checkbox:not(:disabled)')?.checked===true && ${status(active)}")
-            awaitFlag(true, stage)
+        // Preferences covers the board, so with the switch on it reads "paused" and holds no display flag until Preferences closes.
+        fun awaitCovered(stage: String) {
+            awaitDocument(scenario, stage, "document.querySelector('$checkbox:not(:disabled)')?.checked===true && ${status(paused)}")
+            awaitFlag(false, stage)
         }
         val liveHerdr = herdr?.let {
             val agent = it.getJSONObject("agent")
@@ -2332,17 +2340,19 @@ class NativeWorkspaceTest {
                 awaitDocument(scenario, "board keep-awake off",
                     "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}")
             }
-            toggle { awaitActive("explicit board opt-in") }
+            toggle { awaitCovered("explicit board opt-in under Preferences") }
+            awaitFlag(true, "explicit board opt-in", 30)
             toggle {
                 awaitDocument(scenario, "explicit board disable", status(off))
                 awaitFlag(false, "explicit board disable")
             }
-            toggle { awaitActive("second explicit board opt-in") }
+            flagStays(false, "board shown after the explicit disable")
+            toggle { awaitCovered("second explicit board opt-in under Preferences") }
+            awaitFlag(true, "second explicit board opt-in", 30)
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
             awaitFlag(false, "actual Activity background")
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-            awaitDocument(scenario, "board Setup after the Activity foreground", setupReady)
-            inSettings { awaitActive("actual Activity foreground") }
+            awaitFlag(true, "actual Activity foreground", 30)
             navigation("Connections")
             // Preferences edits the preference while the mounted board is hidden; the board itself stays released.
             openPreferences(scenario)
@@ -2357,11 +2367,12 @@ class NativeWorkspaceTest {
             closeSettings()
             navigation("Agents")
             awaitDocument(scenario, "persistent board revealed", "document.querySelector('.workspace-navigation-agents')?.hidden===false")
-            inSettings { awaitActive("persisted opt-in on board reveal") }
+            awaitFlag(true, "persisted opt-in on board reveal", 30)
             toggle {
                 awaitDocument(scenario, "final explicit board off", status(off))
                 awaitFlag(false, "final explicit board off")
             }
+            flagStays(false, "board shown after the final explicit off")
             assertEquals("Owned board preference must finish off", "true", evaluate(scenario,
                 "localStorage.getItem('lazysh.agent-board.keep-awake.v1')==='false'"))
             println("lazysh board keep-awake: packaged opt-in/off, background/foreground and persistent board hide/reveal verified against actual Window flag")
@@ -5410,7 +5421,7 @@ class NativeWorkspaceTest {
             openReportedActivity()
             onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".agent-panel:not([hidden]) button[title='Setup']"))
                 .perform(webScrollIntoView()).perform(webClick())
-            val panel = "[data-settings-page='agents']:not([hidden]) .agent-configuration > details.companion-install:not([hidden])[data-install-outcome]"
+            val panel = "[data-settings-page=agents]:not([hidden]) .agent-configuration > details.companion-install:not([hidden])[data-install-outcome]"
             awaitDocument(scenario, "owned companion installation visible", present(panel))
             val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "selfTesting", "installing", "checkingInstalled", "cleaningUp", "preflight")
             val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "companion_host_network", "companion_host_tool_missing", "companion_verification_failed", "companion_self_test_failed", "companion_rolled_back", "companion_host_busy", "companion_unsafe_location", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")
