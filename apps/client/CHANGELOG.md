@@ -1,5 +1,34 @@
 # @lazysh/client
 
+## 1.106.0
+
+### Minor Changes
+
+- feat(companion): run the managed Windows companion before the PATH one on OpenSSH hosts ([#2810](https://github.com/mihazs/lazysh/pull/2810))
+
+  <details><summary>Details</summary>
+
+  Run the managed Windows companion before the `PATH` one on Windows hosts reached over OpenSSH (#1902, part of #1725 and #490). After the PowerShell probe identifies the host, the app reads `%LOCALAPPDATA%`, `lazysh`, `companion` and `lazysh-agent.exe` in one exec and decides them with the owner, DACL and reparse-point rules the companion's own admission uses: a link or junction, a directory another account can change, and an executable another account owns or can access are refused and reported, and the `PATH` lookup stays. An admitted file is run by its absolute path; a missing one, an unreadable namespace and a host that does not answer the read keep today's `PATH` lookup. The answer is remembered for the connection, so a change to the namespace is noticed on the next connection. Installation, hook setup and the Herdr lookup stay Unix-only. Changed default: a Windows host identified by the probe costs one more exec per connection.
+
+  </details>
+
+### Patch Changes
+
+- fix(agent): keep hook setup working after a profile folder is restored, copied or remounted ([#2911](https://github.com/mihazs/lazysh/pull/2911))
+
+  <details><summary>Details</summary>
+
+  Inspecting a hook profile failed with `HooksForeignRecord: operation failed` once the profile directory's device or inode changed, for example after a reboot on btrfs, so hooks could be neither updated nor removed. The setup record now stays bound to the agent and profile path, and the plan still refuses a directory swapped before apply. A record written for another folder is reported as unsupported with a specific explanation instead of an error, and every other hook setup failure shows a fixed, localized message instead of the companion's internal error name.
+
+  </details>
+- fix(credentials): import ECDSA P-256 private keys whose secret starts with a zero byte ([#2827](https://github.com/mihazs/lazysh/pull/2827))
+
+  <details><summary>Details</summary>
+
+  About one OpenSSH ECDSA P-256 key in 256 failed to import with "Cannot unlock this private key", encrypted or not, because the SSH key decoder rejected the shortened 31-byte secret OpenSSH writes for it. Those keys now import and authenticate like any other.
+
+  </details>
+
 ## 1.105.1
 
 No changes in this release.
