@@ -1,5 +1,41 @@
 # @lazysh/client
 
+## 1.108.0
+
+### Minor Changes
+
+- feat(agents): show Claude Code records lazysh does not map as a "Not shown natively" line in the Agent view ([#2815](https://github.com/mihazs/lazysh/pull/2815))
+
+  <details><summary>Details</summary>
+
+  A record of an unknown type, or a `system` record of an unmapped subtype, now appears as one muted line labelled with its type that opens to the agent's own text, instead of being dropped. Known housekeeping records and unmapped attachments stay hidden. No defaults changed.
+
+  </details>
+
+### Patch Changes
+
+- docs(agents): list which signals prove an agent's background work, per agent ([#2962](https://github.com/mihazs/lazysh/pull/2962))
+
+  <details><summary>Details</summary>
+
+  A reference page names, per agent and per kind of work (shell, monitor, sub-agent, workflow), the record that shows work still open, the one that shows it ended, how stale evidence is bounded and what is unavailable. Nothing changes in the app yet; the session status will use it (#2956).
+
+  </details>
+- docs(agents): describe session names, where each agent's name comes from, what is stored and the per-device rename ([#2966](https://github.com/mihazs/lazysh/pull/2966))
+
+  <details><summary>Details</summary>
+
+  The Agent view guide now has a Session names section: the per-agent hook that supplies the first prompt, how a name is bounded and cleaned, what the companion stores and sends, the rename kept on the device, and what an older companion or app shows. The companion guide links to it from the Agents board.
+
+  </details>
+- fix(settings): show Use Option as Meta only on macOS ([#2814](https://github.com/mihazs/lazysh/pull/2814))
+
+  <details><summary>Details</summary>
+
+  The setting is listed only where the app reports it runs on macOS, so Android, iOS, Windows and Linux no longer list a macOS-only key. When the app cannot report its OS, the setting stays listed.
+
+  </details>
+
 ## 1.107.1
 
 ### Patch Changes

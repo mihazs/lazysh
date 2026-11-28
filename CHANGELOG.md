@@ -10,6 +10,22 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.108.0] - 2026-11-28
+
+### New
+
+- **agents:** show Claude Code records lazysh does not map as a "Not shown natively" line in the Agent view ([#2815](https://github.com/mihazs/lazysh/pull/2815))
+- **browser:** fit the host Firefox relay's polling and encoding to the link with the quality ladder ([#2842](https://github.com/mihazs/lazysh/pull/2842))
+
+### Fixed
+
+- **settings:** show Use Option as Meta only on macOS ([#2814](https://github.com/mihazs/lazysh/pull/2814))
+
+### Documentation
+
+- **agents:** list which signals prove an agent's background work, per agent ([#2962](https://github.com/mihazs/lazysh/pull/2962))
+- **agents:** describe session names, where each agent's name comes from, what is stored and the per-device rename ([#2966](https://github.com/mihazs/lazysh/pull/2966))
+
 ## [1.107.1] - 2026-11-28
 
 ### Fixed

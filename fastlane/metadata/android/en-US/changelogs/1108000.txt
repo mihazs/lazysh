@@ -1,0 +1,4 @@
+- show Claude Code records lazysh does not map as a "Not shown natively" line in the Agent view
+- show Use Option as Meta only on macOS
+- fit the host Firefox relay's polling and encoding to the link with the quality ladder
+Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.108.0
