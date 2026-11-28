@@ -1,5 +1,6 @@
 import {LocalUiError} from './i18n/localError';
 import {isUiLanguage, t, type UiLanguage} from './i18n/core';
+import {parseNavigationShortcuts, type NavigationShortcutChoices} from './navigationShortcuts';
 import { useSyncExternalStore } from "react";
 import { lightExtendedAnsi } from "./terminalPalette";
 import { xtermOptions } from "./xtermOptions";
@@ -125,7 +126,8 @@ export type Preferences = {
   pinchZoom: boolean;
   gestures: Record<typeof gestureDirections[number], GestureAction>;
   bodyGestures: Record<typeof bodyGestureSlots[number] | typeof levelGestureSlots[number], GestureAction>;
-  gestureChords: Partial<Record<GestureSlot, string>>;
+  /** Custom chords per gesture slot; also holds the changed Agents and Workspaces keyboard chords, which clients that predate them ignore. */
+  gestureChords: Partial<Record<GestureSlot, string>> & NavigationShortcutChoices;
   /** Long-press actions per toolbar key; omitted when empty so older sync peers accept the snapshot. */
   toolbarAlternates?: Partial<Record<ToolbarKey, ToolbarAlternate>>;
   /** Toolbar key height in CSS pixels; omitted at the default so older sync peers accept the snapshot. */
@@ -175,8 +177,9 @@ export function parsePreferences(value: unknown): Preferences {
   const number = (name: string, min: number, max: number, fallback: number) => typeof p[name] === "number" && Number.isInteger(p[name]) && p[name] >= min && p[name] <= max ? p[name] as number : fallback;
   let customTheme: ThemeColors | undefined;
   let customThemeInfo: ThemeInfo | undefined;
-  const gestureChords: Partial<Record<GestureSlot, string>> = {};
+  const gestureChords: Preferences["gestureChords"] = {};
   if (p.gestureChords && typeof p.gestureChords === "object") {
+    Object.assign(gestureChords, parseNavigationShortcuts(p.gestureChords as Record<string, unknown>));
     for (const slot of gestureSlots) {
       const keys = (p.gestureChords as Record<string, unknown>)[slot];
       try {if (typeof keys === "string") {parseChord(keys); gestureChords[slot] = keys;}} catch { /* Invalid imported chords never become gesture input. */ }
