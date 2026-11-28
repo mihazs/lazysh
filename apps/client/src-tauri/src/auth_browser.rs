@@ -4,8 +4,10 @@
 //! A host command (`aws sso login`, `codex login`, `gh auth login --web`) asks for a browser. The page
 //! must open here. When its redirect points at the device's own `localhost:PORT`, the browser only
 //! reaches the host command if a tunnel already listens on that port, so [`open`] refuses until the
-//! port is held: opening first would send the user to a dead page. Which program holds it is the
-//! tunnel engine's business (it binds before anything opens and fails closed when the port is busy).
+//! port is held: opening first would send the user to a dead page. For a remote session the port must
+//! be the one of a live flow of that session (`tunnel_id` of `start_auth_tunnel`), so a program that
+//! took the port first does not pass. A local session has no tunnel: the CLI itself holds the port, and
+//! a bind probe shows it.
 //!
 //! Phones open an in-app browser tab (Chrome Custom Tabs, `SFSafariViewController`), so lazysh stays
 //! the app in front and its loopback listener stays alive; desktops open the system browser. Android
@@ -15,6 +17,7 @@
 //!
 //! Nothing here logs or stores a URL: its query carries the OAuth `state` and a PKCE challenge.
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
+use crate::auth_tunnel::AuthTunnelState;
 use crate::links::web_url;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
@@ -145,10 +148,15 @@ fn listening(v6: bool, port: u16) -> bool {
     matches!(TcpListener::bind((address, port)), Err(error) if error.kind() == ErrorKind::AddrInUse)
 }
 
-/// Opens `url` through `show` once every device port its redirect needs is listening. The order is the
-/// point: a page opened before the tunnel binds would send the browser to a dead port, or to another
-/// program that took it. When nothing listens, nothing opens.
-pub(crate) async fn open<F, Fut>(url: &str, browser: Browser, show: F) -> Result<Outcome, String>
+/// Opens `url` through `show` once `holds` accepts every device port its redirect needs. The order is
+/// the point: a page opened before the tunnel binds would send the browser to a dead port, or to
+/// another program that took it. When a port is not held, nothing opens.
+pub(crate) async fn open<F, Fut>(
+    url: &str,
+    browser: Browser,
+    holds: impl Fn(bool, u16) -> bool,
+    show: F,
+) -> Result<Outcome, String>
 where
     F: FnOnce(String, Browser) -> Fut,
     Fut: Future<Output = Result<Outcome, String>>,
@@ -157,13 +165,47 @@ where
     if let Some((_, port)) = inspect_validated(&url)?
         .1
         .into_iter()
-        .find(|(v6, port)| !listening(*v6, *port))
+        .find(|(v6, port)| !holds(*v6, *port))
     {
         return Err(format!(
-            "Nothing on this device listens on port {port} yet, so the sign-in page was not opened. Start the sign-in tunnel first"
+            "No sign-in tunnel of this session holds port {port} on this device yet, so the sign-in page was not opened. Start the sign-in tunnel first"
         ));
     }
     show(url, browser).await
+}
+
+/// [`open`] for `session_id`: a local session needs a listener on the port, a remote one needs the live
+/// flow `tunnel_id` of that session on exactly that port.
+pub(crate) async fn open_for<F, Fut>(
+    tunnels: &AuthTunnelState,
+    session_id: &str,
+    tunnel_id: Option<&str>,
+    url: &str,
+    browser: Browser,
+    show: F,
+) -> Result<Outcome, String>
+where
+    F: FnOnce(String, Browser) -> Fut,
+    Fut: Future<Output = Result<Outcome, String>>,
+{
+    let local = session_id.starts_with("local:");
+    let flow = match tunnel_id {
+        Some(id) if !local => tunnels.port_of(session_id, id).await,
+        _ => None,
+    };
+    open(
+        url,
+        browser,
+        |v6, port| {
+            if local {
+                listening(v6, port)
+            } else {
+                flow == Some(port)
+            }
+        },
+        show,
+    )
+    .await
 }
 
 #[cfg(target_os = "android")]
@@ -221,18 +263,26 @@ pub fn inspect_auth_url(
     access.run_sync(|| inspect_validated(&url).map(|(inspection, _)| inspection))
 }
 
-/// Opens a sign-in page on this device once the tunnel its redirect needs is listening.
+/// Opens a sign-in page on this device once the tunnel (`tunnel_id`, of `session_id`) its redirect needs is listening.
 #[tauri::command]
 pub async fn open_auth_url(
     app: tauri::AppHandle,
     access: AccessLease,
+    tunnels: tauri::State<'_, AuthTunnelState>,
+    session_id: String,
+    tunnel_id: Option<String>,
     url: String,
     browser: Option<Browser>,
 ) -> Protected<Outcome> {
     access
-        .run(open(&url, browser.unwrap_or_default(), |url, browser| {
-            present(app, url, browser)
-        }))
+        .run(open_for(
+            &tunnels,
+            &session_id,
+            tunnel_id.as_deref(),
+            &url,
+            browser.unwrap_or_default(),
+            |url, browser| present(app, url, browser),
+        ))
         .await
 }
 

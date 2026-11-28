@@ -386,6 +386,39 @@ impl AuthTunnelState {
     pub(crate) async fn is_empty(&self) -> bool {
         self.0.lock().await.flows.is_empty()
     }
+    /// The device port of the live flow `tunnel_id` of `session_id`: none for an ended flow, an
+    /// unknown id or another session's flow.
+    pub(crate) async fn port_of(&self, session_id: &str, tunnel_id: &str) -> Option<u16> {
+        let registry = self.0.lock().await;
+        let flow = registry.flows.get(tunnel_id)?;
+        (flow.tunnel.session_id == session_id).then_some(flow.tunnel.port)
+    }
+    /// Registers a flow that only holds a port, as `begin` does for a running one.
+    #[cfg(test)]
+    pub(crate) async fn register(&self, session_id: &str, port: u16) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let tunnel = AuthTunnel {
+            id: id.clone(),
+            session_id: session_id.to_owned(),
+            port,
+            addresses: vec!["127.0.0.1"],
+        };
+        let (stop, _) = watch::channel(None);
+        let (_, finished) = watch::channel(false);
+        self.0.lock().await.flows.insert(
+            id.clone(),
+            Entry {
+                tunnel,
+                stop,
+                finished,
+            },
+        );
+        id
+    }
+    #[cfg(test)]
+    pub(crate) async fn end(&self, tunnel_id: &str) {
+        self.0.lock().await.flows.remove(tunnel_id);
+    }
     pub(crate) async fn cancel_for_lock(&self) {
         for flow in self.0.lock().await.flows.values() {
             flow.stop.send_replace(Some(EndReason::LockEnded));

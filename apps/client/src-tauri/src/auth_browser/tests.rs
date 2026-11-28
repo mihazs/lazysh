@@ -13,7 +13,7 @@ struct Shown {
 async fn attempt(url: &str, browser: Browser) -> (Result<Outcome, String>, Vec<Shown>) {
     let shown = Arc::new(Mutex::new(Vec::new()));
     let record = shown.clone();
-    let result = open(url, browser, |url, browser| async move {
+    let result = open(url, browser, listening, |url, browser| async move {
         let ports = inspect_validated(&url).unwrap().1;
         record.lock().unwrap().push(Shown {
             listening_when_shown: ports.iter().all(|(v6, port)| listening(*v6, *port)),
@@ -231,5 +231,86 @@ fn the_inspection_serializes_in_the_shape_the_renderer_reads() {
     assert_eq!(
         serde_json::from_str::<Browser>("\"system\"").unwrap(),
         Browser::System
+    );
+}
+
+/// Runs [`open_for`] and says whether the fake device was asked to show the page.
+async fn open_with(
+    tunnels: &AuthTunnelState,
+    session: &str,
+    tunnel: Option<&str>,
+    url: &str,
+) -> (Result<Outcome, String>, bool) {
+    let shown = Arc::new(Mutex::new(false));
+    let record = shown.clone();
+    let result = open_for(
+        tunnels,
+        session,
+        tunnel,
+        url,
+        Browser::InApp,
+        |_, _| async move {
+            *record.lock().unwrap() = true;
+            Ok(Outcome::Opened)
+        },
+    )
+    .await;
+    let shown = *shown.lock().unwrap();
+    (result, shown)
+}
+
+#[tokio::test]
+async fn a_remote_session_opens_only_for_its_own_live_flow_on_the_redirect_port() {
+    let tunnels = AuthTunnelState::default();
+    let port = free_port();
+    let url = authorize(&format!("http%3A%2F%2Flocalhost%3A{port}%2Fcb"));
+    let flow = tunnels.register("ssh-1", port).await;
+    let other_port = tunnels.register("ssh-1", free_port()).await;
+    let other_session = tunnels.register("ssh-2", port).await;
+    // A program that took the port is a listener too: the bind probe would pass, the flow check must not.
+    let _squatter = TcpListener::bind(("127.0.0.1", port)).unwrap();
+
+    assert_eq!(
+        open_with(&tunnels, "ssh-1", Some(&flow), &url).await,
+        (Ok(Outcome::Opened), true)
+    );
+    for (session, tunnel) in [
+        ("ssh-1", Some(other_port.as_str())),
+        ("ssh-1", Some(other_session.as_str())),
+        ("ssh-1", Some("unknown")),
+        ("ssh-1", None),
+        ("ssh-2", Some(flow.as_str())),
+    ] {
+        let (result, shown) = open_with(&tunnels, session, tunnel, &url).await;
+        assert!(result.is_err() && !shown, "{session} {tunnel:?} opened");
+    }
+    tunnels.end(&flow).await;
+    let (result, shown) = open_with(&tunnels, "ssh-1", Some(&flow), &url).await;
+    assert!(result.is_err() && !shown, "an ended flow opened");
+}
+
+#[tokio::test]
+async fn a_remote_page_without_a_loopback_redirect_needs_no_flow() {
+    let (result, shown) = open_with(
+        &AuthTunnelState::default(),
+        "ssh-1",
+        None,
+        "https://github.com/login/device",
+    )
+    .await;
+    assert_eq!((result, shown), (Ok(Outcome::Opened), true));
+}
+
+#[tokio::test]
+async fn a_local_session_still_opens_when_the_cli_holds_the_port() {
+    let tunnels = AuthTunnelState::default();
+    let port = free_port();
+    let url = authorize(&format!("http%3A%2F%2F127.0.0.1%3A{port}%2Fcb"));
+    let (result, shown) = open_with(&tunnels, "local:1", None, &url).await;
+    assert!(result.is_err() && !shown);
+    let _cli = TcpListener::bind(("127.0.0.1", port)).unwrap();
+    assert_eq!(
+        open_with(&tunnels, "local:1", None, &url).await,
+        (Ok(Outcome::Opened), true)
     );
 }
