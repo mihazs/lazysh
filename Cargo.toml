@@ -14,7 +14,7 @@ wry = { path = "packages/wry-vendor" }
 debug = "line-tables-only"
 
 [workspace.package]
-version = "1.104.2"
+version = "1.105.0"
 license = "GPL-3.0-or-later"
 
 [profile.release]

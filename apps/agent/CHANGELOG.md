@@ -1,5 +1,21 @@
 # @lazysh/agent
 
+## 1.105.0
+
+### Minor Changes
+
+- feat(browser): let the host browser relay's Firefox take pointer, wheel, key and text input ([#2821](https://github.com/mihazs/lazysh/pull/2821))
+
+  <details><summary>Details</summary>
+
+  After Control is turned on, `lazysh-agent host-browser serve` maps the same pointer, wheel, key and text messages as Chrome, with the same bounds, refusals and rate limit, to WebDriver BiDi `input.performActions` through a closed, bounded allow-list. A rejected sequence is released, and the capability record says Firefox has no page pinch and no composition. The command is hidden and the app has no viewer yet.
+
+  </details>
+
+### Patch Changes
+
+- fix(agents): list script-file and resumed dynamic workflows by name with their progress ([#2806](https://github.com/mihazs/lazysh/pull/2806))
+
 ## 1.104.2
 
 No changes in this release.
