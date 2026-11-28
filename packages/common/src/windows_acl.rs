@@ -117,21 +117,46 @@ pub enum Unsafe {
     Executable,
 }
 
+/// What an existing object is. A link, a junction and anything else that is neither a directory nor a regular file
+/// is `Other`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Directory,
+    File,
+    Other,
+}
+
+/// What `path` is on this machine, never following a link.
+pub fn local_kind(path: &Path) -> Kind {
+    fs::symlink_metadata(path).map_or(Kind::Other, |metadata| {
+        let kind = metadata.file_type();
+        if kind.is_dir() {
+            Kind::Directory
+        } else if kind.is_file() {
+            Kind::File
+        } else {
+            Kind::Other
+        }
+    })
+}
+
 /// Admits a managed namespace: `root`, each of `below` under it in turn, and `executable` in the last one.
 /// Directories must be free of foreign change and the executable private, as [`Need`] says. `Ok(true)` when
 /// the executable exists and passed, `Ok(false)` when it or a directory above it does not exist yet.
 ///
 /// `admit` decides one existing path, as [`admit_path`] does: an error of kind `NotFound` means it is not there,
-/// any other error refuses it, so a path that cannot be read is never admitted. Nothing under a refused or
-/// missing directory is looked at.
+/// any other error refuses it, so a path that cannot be read is never admitted. `kind` says what an admitted path is
+/// ([`local_kind`] for this machine): a directory is a directory and the executable a regular file, nothing else.
+/// Nothing under a refused or missing directory is looked at.
 pub fn admit_namespace(
     root: &Path,
     below: &[&str],
     executable: &str,
     admit: impl Fn(&Path, Need) -> io::Result<()>,
+    kind: impl Fn(&Path) -> Kind,
 ) -> Result<bool, Unsafe> {
     let directory = |path: &Path| match admit(path, Need::NoForeignChange) {
-        Ok(()) if is_a(path, fs::FileType::is_dir) => Ok(true),
+        Ok(()) if kind(path) == Kind::Directory => Ok(true),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         _ => Err(Unsafe::Directory),
     };
@@ -147,14 +172,201 @@ pub fn admit_namespace(
     }
     path.push(executable);
     match admit(&path, Need::Private) {
-        Ok(()) if is_a(&path, fs::FileType::is_file) => Ok(true),
+        Ok(()) if kind(&path) == Kind::File => Ok(true),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         _ => Err(Unsafe::Executable),
     }
 }
-/// Whether `path` is itself a file of the kind `of` asks for; a link is not.
-fn is_a(path: &Path, of: fn(&fs::FileType) -> bool) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|metadata| of(&metadata.file_type()))
+
+/// One component of a namespace as read on the machine that holds it, which need not be this one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fact {
+    /// Nothing is there.
+    Absent,
+    /// A symbolic link, junction or other reparse point, not followed.
+    Link,
+    Directory(Descriptor),
+    File(Descriptor),
+    /// Something is there that could not be read or understood.
+    Unreadable,
+}
+
+/// [`admit_namespace`] over facts read on another machine, for the account `user` (a SID) runs as there. `facts`
+/// holds the root, each directory below it and the executable, in that order and at least the root and the
+/// executable; the walk looks only at the facts it needs, so those under an absent or refused component may be
+/// anything.
+pub fn admit_facts(user: &str, facts: &[Fact]) -> Result<bool, Unsafe> {
+    // The walk names its paths; how deep a path is below the placeholder root says which fact it asks about.
+    let names = (1..facts.len())
+        .map(|depth| depth.to_string())
+        .collect::<Vec<_>>();
+    let Some((executable, below)) = names.split_last() else {
+        return Err(Unsafe::Directory);
+    };
+    let below = below.iter().map(String::as_str).collect::<Vec<_>>();
+    let fact = |path: &Path| &facts[path.components().count() - 1];
+    admit_namespace(
+        Path::new("0"),
+        &below,
+        executable,
+        |path, need| match fact(path) {
+            Fact::Absent => Err(io::ErrorKind::NotFound.into()),
+            Fact::Directory(descriptor) | Fact::File(descriptor) => admit(descriptor, user, need)
+                .map_err(|refusal| io::Error::new(io::ErrorKind::PermissionDenied, refusal)),
+            Fact::Link | Fact::Unreadable => Err(io::ErrorKind::PermissionDenied.into()),
+        },
+        |path| match fact(path) {
+            Fact::Directory(_) => Kind::Directory,
+            Fact::File(_) => Kind::File,
+            _ => Kind::Other,
+        },
+    )
+}
+
+/// The little-endian number of `length` bytes at `at`; `bytes` is small enough (see [`descriptor_from_binary`]) for
+/// `at + length` not to overflow.
+fn le(bytes: &[u8], at: usize, length: usize) -> Option<usize> {
+    let slice = bytes.get(at..at + length)?;
+    Some(
+        slice
+            .iter()
+            .rev()
+            .fold(0, |value, byte| value << 8 | usize::from(*byte)),
+    )
+}
+
+/// The SID at `at` in `bytes` as `S-1-...` text, the way the system prints it.
+fn sid_at(bytes: &[u8], at: usize) -> Option<String> {
+    let head = bytes.get(at..at + 8)?;
+    let count = usize::from(head[1]);
+    if head[0] != 1 || count > 15 {
+        return None;
+    }
+    let authority = head[2..8]
+        .iter()
+        .fold(0u64, |value, byte| value << 8 | u64::from(*byte));
+    let mut text = if authority < 1 << 32 {
+        format!("S-1-{authority}")
+    } else {
+        format!("S-1-0x{authority:012X}")
+    };
+    for part in 0..count {
+        text += &format!("-{}", le(bytes, at + 8 + 4 * part, 4)?);
+    }
+    Some(text)
+}
+
+/// The owner and DACL in a self-relative security descriptor, the bytes `GetSecurityDescriptorBinaryForm` gives, as
+/// the native reader sees them: a missing DACL is a NULL DACL, an entry type other than allow and deny (their callback
+/// forms included) refuses the whole descriptor, and so does anything malformed, ownerless or past 64 KiB (the most
+/// an ACL and its owner can take).
+pub fn descriptor_from_binary(bytes: &[u8]) -> Option<Descriptor> {
+    const SELF_RELATIVE: usize = 0x8000;
+    const DACL_PRESENT: usize = 0x4;
+    const INHERIT_ONLY: u8 = 0x08;
+    if bytes.len() > 1 << 17 || bytes.first() != Some(&1) {
+        return None;
+    }
+    let control = le(bytes, 2, 2)?;
+    if control & SELF_RELATIVE == 0 {
+        return None;
+    }
+    let offset = |at| le(bytes, at, 4).filter(|offset| *offset < bytes.len());
+    let owner = sid_at(bytes, offset(4).filter(|offset| *offset != 0)?)?;
+    let dacl = offset(16)?;
+    if control & DACL_PRESENT == 0 || dacl == 0 {
+        return Some(Descriptor { owner, dacl: None });
+    }
+    let acl = bytes.get(dacl..dacl + le(bytes, dacl + 2, 2)?)?;
+    let (mut at, mut aces) = (8, Vec::new());
+    for _ in 0..le(acl, 4, 2)? {
+        // Type, flags and size (4 bytes), the mask (4 bytes), then the trustee SID; a callback entry goes on after it.
+        let ace = acl.get(at..at + le(acl, at + 2, 2)?)?;
+        let allow = match ace.first()? {
+            0 | 9 => true,
+            1 | 10 => false,
+            _ => return None,
+        };
+        aces.push(Ace {
+            sid: sid_at(ace, 8)?,
+            mask: u32::try_from(le(ace, 4, 4)?).ok()?,
+            allow,
+            inherit_only: ace.get(1)? & INHERIT_ONLY != 0,
+        });
+        at += ace.len();
+    }
+    Some(Descriptor {
+        owner,
+        dacl: Some(aces),
+    })
+}
+
+/// Self-relative security descriptors written the way the system writes them, for tests of what reads them.
+#[cfg(any(test, feature = "test-support"))]
+pub mod binary_fixture {
+    use super::{Ace, Descriptor};
+
+    /// The control flag that says a descriptor carries a DACL.
+    pub const DACL_PRESENT: u16 = 0x4;
+
+    /// `S-1-...` text (an authority past 32 bits as `0x` and 12 hex digits) as the SID structure the system stores.
+    pub fn sid(text: &str) -> Vec<u8> {
+        let parts = text.split('-').skip(1).collect::<Vec<_>>();
+        let authority = parts[1].strip_prefix("0x").map_or_else(
+            || parts[1].parse::<u64>().unwrap(),
+            |hex| u64::from_str_radix(hex, 16).unwrap(),
+        );
+        let mut bytes = vec![1, (parts.len() - 2) as u8];
+        bytes.extend(&authority.to_be_bytes()[2..]);
+        for part in &parts[2..] {
+            bytes.extend(part.parse::<u32>().unwrap().to_le_bytes());
+        }
+        bytes
+    }
+    /// An entry of `kind` (0 allow, 1 deny, 9 and 10 their callback forms), with `trailer` after the trustee.
+    pub fn entry(kind: u8, flags: u8, mask: u32, trustee: &str, trailer: &[u8]) -> Vec<u8> {
+        let trustee = sid(trustee);
+        let mut bytes = vec![kind, flags];
+        bytes.extend(((8 + trustee.len() + trailer.len()) as u16).to_le_bytes());
+        bytes.extend(mask.to_le_bytes());
+        bytes.extend(trustee);
+        bytes.extend(trailer);
+        bytes
+    }
+    /// A self-relative descriptor: header, then the DACL when there is one, then the owner. `control` adds flags.
+    pub fn binary(owner: &str, dacl: Option<&[Vec<u8>]>, control: u16) -> Vec<u8> {
+        let acl = dacl.map(|entries| {
+            let body = entries.concat();
+            let mut bytes = vec![2, 0];
+            bytes.extend(((8 + body.len()) as u16).to_le_bytes());
+            bytes.extend((entries.len() as u16).to_le_bytes());
+            bytes.extend([0, 0]);
+            bytes.extend(body);
+            bytes
+        });
+        let acl_length = acl.as_ref().map_or(0, Vec::len);
+        let mut bytes = vec![1, 0];
+        bytes.extend((0x8000 | control).to_le_bytes());
+        bytes.extend((20 + acl_length as u32).to_le_bytes());
+        bytes.extend([0; 8]);
+        bytes.extend(if acl.is_some() { 20u32 } else { 0 }.to_le_bytes());
+        bytes.extend(acl.unwrap_or_default());
+        bytes.extend(sid(owner));
+        bytes
+    }
+    /// The plain allow and deny entries of `aces`.
+    pub fn entries(aces: &[Ace]) -> Vec<Vec<u8>> {
+        let flags = |ace: &Ace| u8::from(ace.inherit_only) * 8;
+        let kind = |ace: &Ace| u8::from(!ace.allow);
+        aces.iter()
+            .map(|ace| entry(kind(ace), flags(ace), ace.mask, &ace.sid, &[]))
+            .collect()
+    }
+    /// What `descriptor_from_binary` reads back as `descriptor`.
+    pub fn encode(descriptor: &Descriptor) -> Vec<u8> {
+        let entries = descriptor.dacl.as_deref().map(entries);
+        binary(&descriptor.owner, entries.as_deref(), DACL_PRESENT)
+    }
 }
 
 #[cfg(windows)]
@@ -422,16 +634,16 @@ mod native {
 mod tests {
     use super::*;
 
-    const USER: &str = "S-1-5-21-1004336348-1177238915-682003330-1001";
-    const OTHER: &str = "S-1-5-21-1004336348-1177238915-682003330-1002";
-    const USERS: &str = "S-1-5-32-545";
-    const EVERYONE: &str = "S-1-1-0";
+    pub(super) const USER: &str = "S-1-5-21-1004336348-1177238915-682003330-1001";
+    pub(super) const OTHER: &str = "S-1-5-21-1004336348-1177238915-682003330-1002";
+    pub(super) const USERS: &str = "S-1-5-32-545";
+    pub(super) const EVERYONE: &str = "S-1-1-0";
     const AUTHENTICATED: &str = "S-1-5-11";
-    const FULL: u32 = 0x1f_01ff;
-    const MODIFY: u32 = 0x13_01bf;
-    const READ_EXECUTE: u32 = 0x12_00a9;
+    pub(super) const FULL: u32 = 0x1f_01ff;
+    pub(super) const MODIFY: u32 = 0x13_01bf;
+    pub(super) const READ_EXECUTE: u32 = 0x12_00a9;
 
-    fn allow(sid: &str, mask: u32) -> Ace {
+    pub(super) fn allow(sid: &str, mask: u32) -> Ace {
         Ace {
             sid: sid.into(),
             mask,
@@ -439,7 +651,7 @@ mod tests {
             inherit_only: false,
         }
     }
-    fn profile() -> Vec<Ace> {
+    pub(super) fn profile() -> Vec<Ace> {
         vec![
             allow(SYSTEM, FULL),
             allow(ADMINISTRATORS, FULL),
@@ -627,13 +839,14 @@ mod namespace_tests {
     /// paths it refuses, and reports every decision it was asked for.
     fn walk(root: &Path, refused: &[&Path]) -> (Result<bool, Unsafe>, Vec<(PathBuf, Need)>) {
         let asked = RefCell::new(Vec::new());
-        let result = admit_namespace(root, &BELOW, EXECUTABLE, |path, need| {
+        let admit = |path: &Path, need| {
             asked.borrow_mut().push((path.to_owned(), need));
             if refused.contains(&path) {
                 return Err(io::Error::new(io::ErrorKind::PermissionDenied, "refused"));
             }
             fs::symlink_metadata(path).map(|_| ())
-        });
+        };
+        let result = admit_namespace(root, &BELOW, EXECUTABLE, admit, local_kind);
         (result, asked.into_inner())
     }
     fn paths(asked: &[(PathBuf, Need)]) -> Vec<&Path> {
@@ -707,7 +920,7 @@ mod namespace_tests {
         let (_root, all) = namespace();
         let unreadable = |_: &Path, _| Err(io::Error::other("unreadable"));
         assert_eq!(
-            admit_namespace(&all[0], &BELOW, EXECUTABLE, unreadable),
+            admit_namespace(&all[0], &BELOW, EXECUTABLE, unreadable, local_kind),
             Err(Unsafe::Directory)
         );
         let unreadable_executable = |path: &Path, _| {
@@ -717,7 +930,13 @@ mod namespace_tests {
             Ok(())
         };
         assert_eq!(
-            admit_namespace(&all[0], &BELOW, EXECUTABLE, unreadable_executable),
+            admit_namespace(
+                &all[0],
+                &BELOW,
+                EXECUTABLE,
+                unreadable_executable,
+                local_kind
+            ),
             Err(Unsafe::Executable)
         );
     }
@@ -732,7 +951,7 @@ mod namespace_tests {
         fs::rename(&all[2], &elsewhere).unwrap();
         std::os::unix::fs::symlink(&elsewhere, &all[2]).unwrap();
         assert_eq!(
-            admit_namespace(&all[0], &BELOW, EXECUTABLE, follows),
+            admit_namespace(&all[0], &BELOW, EXECUTABLE, follows, local_kind),
             Err(Unsafe::Directory)
         );
         fs::remove_file(&all[2]).unwrap();
@@ -740,9 +959,289 @@ mod namespace_tests {
         fs::rename(&all[3], root.path().join("target")).unwrap();
         std::os::unix::fs::symlink(root.path().join("target"), &all[3]).unwrap();
         assert_eq!(
-            admit_namespace(&all[0], &BELOW, EXECUTABLE, follows),
+            admit_namespace(&all[0], &BELOW, EXECUTABLE, follows, local_kind),
             Err(Unsafe::Executable)
         );
+    }
+}
+
+#[cfg(test)]
+mod facts_tests {
+    use super::binary_fixture::{binary, entries, entry, DACL_PRESENT as PRESENT};
+    use super::tests::{allow, profile, EVERYONE, FULL, MODIFY, OTHER, READ_EXECUTE, USER, USERS};
+    use super::*;
+
+    #[test]
+    fn a_self_relative_descriptor_reads_back_as_the_native_reader_sees_it() {
+        let mut expected = profile();
+        expected.push(Ace {
+            sid: EVERYONE.into(),
+            mask: 0x8000_0000,
+            allow: false,
+            inherit_only: false,
+        });
+        expected.push(Ace {
+            sid: USERS.into(),
+            mask: MODIFY,
+            allow: true,
+            inherit_only: true,
+        });
+        let mut written = entries(&expected);
+        // The callback forms keep the prefix and add a condition after the trustee.
+        written.push(entry(9, 0, READ_EXECUTE, OTHER, &[1, 2, 3, 4]));
+        written.push(entry(10, 0, FULL, OTHER, &[]));
+        expected.push(allow(OTHER, READ_EXECUTE));
+        expected.push(Ace {
+            allow: false,
+            ..allow(OTHER, FULL)
+        });
+        assert_eq!(
+            descriptor_from_binary(&binary(USER, Some(&written), PRESENT)),
+            Some(Descriptor {
+                owner: USER.into(),
+                dacl: Some(expected)
+            })
+        );
+    }
+
+    #[test]
+    fn no_dacl_and_an_empty_dacl_are_told_apart() {
+        let owner = ADMINISTRATORS;
+        assert_eq!(
+            descriptor_from_binary(&binary(owner, None, 0)),
+            Some(Descriptor {
+                owner: owner.into(),
+                dacl: None
+            })
+        );
+        assert_eq!(
+            descriptor_from_binary(&binary(owner, None, PRESENT)),
+            Some(Descriptor {
+                owner: owner.into(),
+                dacl: None
+            }),
+            "present with no pointer is a NULL DACL"
+        );
+        assert_eq!(
+            descriptor_from_binary(&binary(owner, Some(&[]), PRESENT)),
+            Some(Descriptor {
+                owner: owner.into(),
+                dacl: Some(vec![])
+            })
+        );
+    }
+
+    #[test]
+    fn the_trustees_print_as_the_system_prints_them() {
+        for text in [
+            "S-1-1-0",
+            "S-1-5-18",
+            "S-1-16-4096",
+            "S-1-5-21-1-2-3-4294967295",
+            "S-1-0x0123456789AB",
+        ] {
+            let descriptor = descriptor_from_binary(&binary(text, Some(&[]), PRESENT)).unwrap();
+            assert_eq!(descriptor.owner, text);
+        }
+    }
+
+    #[test]
+    fn what_cannot_be_read_faithfully_is_refused_and_never_panics() {
+        let aces = entries(&profile());
+        let good = binary(USER, Some(&aces), PRESENT);
+        assert!(descriptor_from_binary(&good).is_some());
+        for length in 0..good.len() {
+            assert_eq!(descriptor_from_binary(&good[..length]), None, "{length}");
+        }
+        for (kind, name) in [
+            (2, "audit"),
+            (4, "compound"),
+            (5, "object"),
+            (6, "object deny"),
+            (255, "unknown"),
+        ] {
+            let mut other = aces.clone();
+            other.push(entry(kind, 0, 1, OTHER, &[]));
+            assert_eq!(
+                descriptor_from_binary(&binary(USER, Some(&other), PRESENT)),
+                None,
+                "{name}"
+            );
+        }
+        let broken = |change: &dyn Fn(&mut Vec<u8>)| {
+            let mut bytes = good.clone();
+            change(&mut bytes);
+            descriptor_from_binary(&bytes)
+        };
+        assert_eq!(broken(&|b| b[0] = 2), None, "revision");
+        assert_eq!(broken(&|b| b[3] = 0), None, "absolute, not self-relative");
+        assert_eq!(broken(&|b| b[4..8].fill(0)), None, "no owner");
+        assert_eq!(
+            broken(&|b| b[4..8].copy_from_slice(&u32::MAX.to_le_bytes())),
+            None,
+            "owner past the end"
+        );
+        assert_eq!(
+            broken(&|b| b[16..20].copy_from_slice(&u32::MAX.to_le_bytes())),
+            None,
+            "DACL past the end"
+        );
+        assert_eq!(
+            broken(&|b| b[22] = 0xff),
+            None,
+            "ACL longer than the descriptor"
+        );
+        assert_eq!(
+            broken(&|b| b[30] = 0),
+            None,
+            "an entry that says it is empty"
+        );
+        assert_eq!(
+            broken(&|b| b[31] = 0xff),
+            None,
+            "an entry longer than the ACL"
+        );
+        assert_eq!(broken(&|b| b[37] = 16), None, "a SID with sixteen parts");
+        assert_eq!(broken(&|b| b[36] = 2), None, "a SID of another revision");
+        assert_eq!(broken(&|b| b.resize((1 << 17) + 1, 0)), None, "oversize");
+    }
+
+    fn directory(aces: Vec<Ace>) -> Fact {
+        Fact::Directory(Descriptor {
+            owner: USER.into(),
+            dacl: Some(aces),
+        })
+    }
+    fn executable(aces: Vec<Ace>) -> Fact {
+        Fact::File(Descriptor {
+            owner: USER.into(),
+            dacl: Some(aces),
+        })
+    }
+    /// Local application data, `lazysh`, `companion` and the executable as a profile gives them.
+    fn namespace() -> [Fact; 4] {
+        [
+            directory(profile()),
+            directory(profile()),
+            directory(profile()),
+            executable(profile()),
+        ]
+    }
+    fn decide(facts: &[Fact]) -> Result<bool, Unsafe> {
+        admit_facts(USER, facts)
+    }
+    fn replaced(index: usize, fact: Fact) -> [Fact; 4] {
+        let mut facts = namespace();
+        facts[index] = fact;
+        facts
+    }
+
+    #[test]
+    fn a_namespace_the_user_alone_controls_is_admitted() {
+        assert_eq!(decide(&namespace()), Ok(true));
+        let mut readable = profile();
+        readable.push(allow(USERS, READ_EXECUTE));
+        // Others may list a directory and run the executable's directory, but not read the executable itself.
+        assert_eq!(decide(&replaced(2, directory(readable.clone()))), Ok(true));
+        assert_eq!(
+            decide(&replaced(3, executable(readable))),
+            Err(Unsafe::Executable)
+        );
+    }
+
+    #[test]
+    fn what_is_not_there_yet_is_admitted_as_absent_and_nothing_below_it_is_read() {
+        for index in 0..4 {
+            let mut facts = namespace();
+            facts[index] = Fact::Absent;
+            // What lies under an absent component must be ignored, even when it would be refused.
+            for fact in &mut facts[index + 1..] {
+                *fact = Fact::Link;
+            }
+            assert_eq!(decide(&facts), Ok(false), "{index}");
+        }
+    }
+
+    #[test]
+    fn another_account_that_owns_or_can_change_a_directory_or_reach_the_executable_is_refused() {
+        let foreign_owner = |fact: Fact| match fact {
+            Fact::Directory(d) => Fact::Directory(Descriptor {
+                owner: OTHER.into(),
+                ..d
+            }),
+            Fact::File(d) => Fact::File(Descriptor {
+                owner: OTHER.into(),
+                ..d
+            }),
+            fact => fact,
+        };
+        for (index, refused) in [
+            (0, Unsafe::Directory),
+            (1, Unsafe::Directory),
+            (2, Unsafe::Directory),
+            (3, Unsafe::Executable),
+        ] {
+            let facts = namespace();
+            let mut owned = facts.clone();
+            owned[index] = foreign_owner(facts[index].clone());
+            assert_eq!(decide(&owned), Err(refused), "owner {index}");
+            let mut open = profile();
+            open.push(allow(OTHER, if index == 3 { 1 } else { MODIFY }));
+            let facts = replaced(
+                index,
+                if index == 3 {
+                    executable(open)
+                } else {
+                    directory(open)
+                },
+            );
+            assert_eq!(decide(&facts), Err(refused), "grant {index}");
+        }
+        let mut without_user = profile();
+        without_user.retain(|ace| ace.sid != USER);
+        assert_eq!(
+            decide(&replaced(
+                1,
+                Fact::Directory(Descriptor {
+                    owner: USER.into(),
+                    dacl: None
+                })
+            )),
+            Err(Unsafe::Directory),
+            "NULL DACL"
+        );
+        assert_eq!(
+            decide(&replaced(3, executable(without_user))),
+            Ok(true),
+            "the system and the administrators suffice"
+        );
+    }
+
+    #[test]
+    fn a_link_a_misplaced_kind_and_an_unreadable_component_are_refused() {
+        for index in 0..3 {
+            for fact in [Fact::Link, Fact::Unreadable, executable(profile())] {
+                assert_eq!(
+                    decide(&replaced(index, fact)),
+                    Err(Unsafe::Directory),
+                    "{index}"
+                );
+            }
+        }
+        for fact in [Fact::Link, Fact::Unreadable, directory(profile())] {
+            assert_eq!(decide(&replaced(3, fact)), Err(Unsafe::Executable));
+        }
+    }
+
+    #[test]
+    fn a_namespace_needs_a_root_and_an_executable_at_least() {
+        assert_eq!(decide(&[]), Err(Unsafe::Directory));
+        assert_eq!(decide(&[directory(profile())]), Err(Unsafe::Directory));
+        assert_eq!(
+            decide(&[directory(profile()), executable(profile())]),
+            Ok(true)
+        );
+        assert_eq!(decide(&[directory(profile()), Fact::Absent]), Ok(false));
     }
 }
 

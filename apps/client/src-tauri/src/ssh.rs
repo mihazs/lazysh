@@ -5037,6 +5037,19 @@ mod tests {
         }
     }
 
+    /// The script a `powershell.exe ... -EncodedCommand <base64>` line carries.
+    fn decoded_powershell(command: &str) -> Option<String> {
+        let encoded = command
+            .strip_prefix("powershell.exe ")?
+            .rsplit(' ')
+            .next()?;
+        let bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).unwrap();
+        let units = bytes
+            .chunks(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+        Some(char::decode_utf16(units).map(|c| c.unwrap()).collect())
+    }
     /// Stdout chunks and the exit status of a scripted exec.
     type ScriptedExec = (Vec<Vec<u8>>, Vec<Vec<u8>>, u32);
     #[derive(Clone)]
@@ -5047,6 +5060,8 @@ mod tests {
         legacy_exec: Arc<std::sync::atomic::AtomicBool>,
         /// A Windows OpenSSH server under `cmd.exe`: no `sh`, and `powershell.exe -EncodedCommand` answers.
         windows_exec: Arc<std::sync::atomic::AtomicBool>,
+        /// What the managed namespace reader prints on that Windows server.
+        windows_namespace: Arc<StdMutex<String>>,
         /// Stdout chunks and exit status the next exec requests answer with.
         scripted_exec: Arc<StdMutex<Option<ScriptedExec>>>,
         clipboard_eof: Arc<tokio::sync::Notify>,
@@ -5249,29 +5264,15 @@ mod tests {
                 return Ok(());
             }
             if self.windows_exec.load(Ordering::SeqCst) {
-                let status = if let Some(encoded) = text
-                    .strip_prefix("powershell.exe ")
-                    .and_then(|rest| rest.rsplit(' ').next())
-                {
-                    let bytes =
-                        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
-                            .unwrap();
-                    let units = bytes
-                        .chunks(2)
-                        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
-                    let script = char::decode_utf16(units)
-                        .map(|c| c.unwrap())
-                        .collect::<String>();
-                    session.data(
-                        channel,
-                        if script.contains("lazysh-windows-v1") {
-                            "lazysh-windows-v1\r\nAMD64\r\nS-1-5-21-1-2-3-1001\r\nQzpcVXNlcnNcb3duZWRcQXBwRGF0YVxMb2NhbA==\r\n"
-                        } else {
-                            "windows-companion-ran\r\n"
-                        }
-                        .as_bytes()
-                        .to_vec(),
-                    )?;
+                let status = if let Some(script) = decoded_powershell(&text) {
+                    let answer = if script.contains("lazysh-windows-v1") {
+                        "lazysh-windows-v1\r\nAMD64\r\nS-1-5-21-1-2-3-1001\r\nQzpcVXNlcnNcb3duZWRcQXBwRGF0YVxMb2NhbA==\r\n".to_owned()
+                    } else if script.contains("lazysh-windows-managed-v1") {
+                        self.windows_namespace.lock().unwrap().clone()
+                    } else {
+                        "windows-companion-ran\r\n".to_owned()
+                    };
+                    session.data(channel, answer.into_bytes())?;
                     0
                 } else {
                     // What cmd.exe says for a program it cannot find.
@@ -5631,6 +5632,7 @@ mod tests {
             authorized_key: Arc::new(StdMutex::new(None)),
             legacy_exec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             windows_exec: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            windows_namespace: Arc::new(StdMutex::new(String::new())),
             scripted_exec: Arc::new(StdMutex::new(None)),
             clipboard_mode: Arc::new(AtomicUsize::new(0)),
             clipboard_eof: Arc::new(tokio::sync::Notify::new()),
@@ -6448,14 +6450,14 @@ mod tests {
         let sent = sent();
         assert_eq!(
             sent.len(),
-            4,
-            "one POSIX probe, one Windows probe, then the two commands"
+            5,
+            "one POSIX probe, one Windows probe, one read of the managed namespace, then the two commands"
         );
         assert!(sent[0].starts_with("sh -c "));
         assert!(sent[1..]
             .iter()
             .all(|command| command.starts_with("powershell.exe -NoProfile ")));
-        assert!(sent[2..]
+        assert!(sent[3..]
             .iter()
             .all(|command| command != &sent[1] && !command.contains("snapshot")));
         assert!(!crate::companion::positive_unix(&fixture.session, &lease)
@@ -6472,9 +6474,79 @@ mod tests {
         assert!(required.starts_with("powershell.exe "));
         assert_eq!(
             fixture.server.commands.lock().unwrap().len(),
-            4,
+            5,
             "the answer is remembered"
         );
+    }
+    /// What the managed namespace reader of a Windows server prints when the namespace holds a directory
+    /// `directory_to` may reach with `directory_mask`, as the user, the system and the administrators do.
+    fn windows_namespace(directory_to: &str, directory_mask: u32) -> String {
+        use lazysh_common::windows_acl::{binary_fixture::encode, Ace, Descriptor};
+        let user = "S-1-5-21-1-2-3-1001";
+        let grant = |sid: &str, mask| Ace {
+            sid: sid.into(),
+            mask,
+            allow: true,
+            inherit_only: false,
+        };
+        let mut aces: Vec<_> = [user, "S-1-5-18", "S-1-5-32-544"]
+            .map(|sid| grant(sid, 0x1f_01ff))
+            .into();
+        let row = |kind: &str, aces: &[Ace]| {
+            let descriptor = Descriptor {
+                owner: user.into(),
+                dacl: Some(aces.to_vec()),
+            };
+            let bytes = encode(&descriptor);
+            let text = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+            format!("{kind} {text}\r\n")
+        };
+        let file = row("f", &aces);
+        aces.push(grant(directory_to, directory_mask));
+        format!(
+            "lazysh-windows-managed-v1\r\n{}{file}",
+            row("d", &aces).repeat(3)
+        )
+    }
+    #[tokio::test]
+    async fn a_windows_host_runs_its_admitted_managed_companion_by_path_and_keeps_the_path_lookup_when_it_is_refused(
+    ) {
+        let managed = r"C:\Users\owned\AppData\Local\lazysh\companion\lazysh-agent.exe";
+        let lease = access_lease();
+        for (namespace, expected) in [
+            // Read and run by every user: no foreign change, so admitted.
+            (windows_namespace("S-1-1-0", 0x12_00a9), true),
+            // Changed by every user: refused, reported and never used.
+            (windows_namespace("S-1-1-0", 0x13_01bf), false),
+            // Nothing the reader printed means nothing to decide: the PATH lookup stays.
+            (String::new(), false),
+        ] {
+            let fixture = guard_admission_fixture(lease.clone()).await;
+            fixture.server.windows_exec.store(true, Ordering::SeqCst);
+            *fixture.server.windows_namespace.lock().unwrap() = namespace;
+            for original in [
+                "lazysh-agent snapshot --limit 50",
+                "lazysh-agent snapshot --limit 51",
+            ] {
+                crate::companion::exec(&fixture.session, original.into(), &lease)
+                    .await
+                    .unwrap();
+            }
+            let sent = fixture.server.commands.lock().unwrap().clone();
+            assert_eq!(sent.len(), 5, "the namespace is read once per connection");
+            let scripts: Vec<_> = sent
+                .iter()
+                .skip(1)
+                .map(|c| decoded_powershell(c).unwrap())
+                .collect();
+            assert!(scripts[1].contains("lazysh-windows-managed-v1"));
+            for script in &scripts[2..] {
+                let source = format!("$e=@{{Source='{managed}'}}");
+                assert_eq!(script.contains(&source), expected);
+                // Either way the PATH lookup is there, as the fallback of a managed file that is gone.
+                assert!(script.contains("$e=Get-Command lazysh-agent"));
+            }
+        }
     }
     #[tokio::test]
     async fn interrupted_command_reports_an_indeterminate_result_without_replaying() {

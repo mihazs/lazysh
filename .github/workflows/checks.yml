@@ -1500,7 +1500,7 @@ jobs:
         env:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent.exe
         run: |
-          for case_name in companion::powershell::native_tests::real_windows_shells_identify_the_host_through_the_encoded_probe companion::powershell::native_tests::real_windows_shells_run_the_companion_with_every_argument_and_its_exit_status; do
+          for case_name in companion::powershell::native_tests::real_windows_shells_identify_the_host_through_the_encoded_probe companion::powershell::native_tests::real_windows_shells_run_the_companion_with_every_argument_and_its_exit_status companion::powershell::native_tests::real_windows_shells_read_the_managed_namespace_and_run_what_it_admits_before_the_path; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done
