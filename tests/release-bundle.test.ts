@@ -3,7 +3,7 @@ import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { digestFile, stagePackages, companionTargets, type CompanionTarget } from '../.changeset/release-artifacts';
-import { desktopCompanions, elfSections, publishedCompanion, requireBundled, sidecarPath, stageSidecar, type DesktopTarget } from '../.changeset/release-bundle';
+import { desktopCompanions, elfSections, hostDesktop, publishedCompanion, requireBundled, sidecarPath, stageBuiltSidecar, stageSidecar, type DesktopTarget } from '../.changeset/release-bundle';
 import { appImageCompanion, debCompanion, installCompanion, requireDebianRuntime } from '../.changeset/release-platform';
 import { spawnText } from './support/gitFixture';
 
@@ -44,6 +44,35 @@ test('each desktop platform stages exactly the companion built for it, named the
   }
   // The Tauri host triple differs from the compile triple only on Linux, where the static musl build ships.
   expect(companionTargets[desktopCompanions['linux-x64'].companion].triple).toBe('x86_64-unknown-linux-musl');
+}));
+
+test('the companion this checkout built is staged byte for byte as the sidecar of the platform that built it', () => owned(async root => {
+  expect([hostDesktop('linux', 'x64'), hostDesktop('win32', 'x64'), hostDesktop('darwin', 'arm64'), hostDesktop('darwin', 'x64')])
+    .toEqual(['linux-x64', 'windows-x64', 'macos-arm64', 'macos-x64']);
+  expect(() => hostDesktop('linux', 'arm64')).toThrow('unsupported desktop host linux-arm64');
+  await expect(stageBuiltSidecar(root, 'macos-arm64')).rejects.toThrow('no built companion to stage');
+  await mkdir(join(root, 'target/release'), { recursive: true });
+  for (const [desktop, name] of [['macos-arm64', 'lazysh-agent'], ['windows-x64', 'lazysh-agent.exe']] as const) {
+    await writeFile(join(root, 'target/release', name), bytes(desktop));
+    const staged = await stageBuiltSidecar(root, desktop);
+    expect(staged.destination).toBe(join(root, 'apps/client/src-tauri', sidecarPath(desktop)));
+    expect(await Bun.file(staged.destination).bytes()).toEqual(new Uint8Array(bytes(desktop)));
+    expect((await Bun.file(staged.destination).stat()).mode & 0o111).not.toBe(0);
+    expect(await digestFile(staged.destination)).toEqual({ bytes: staged.bytes, sha256: staged.sha256 });
+  }
+}));
+
+const host = (() => { try { return hostDesktop(); } catch { return undefined; } })();
+test.skipIf(!host)('the command the checks run stages the companion built in the working directory', () => owned(async root => {
+  const build = join(root, 'target/release', host === 'windows-x64' ? 'lazysh-agent.exe' : 'lazysh-agent');
+  await mkdir(join(build, '..'), { recursive: true });
+  await writeFile(build, bytes('built here'));
+  const staged = await spawnText(root, [process.execPath, join(import.meta.dir, '../.changeset/release-bundle.ts'), 'stage-built']);
+  expect(staged.code).toBe(0);
+  const { sha256 } = await digestFile(build);
+  expect(staged.stdout.trim()).toBe(`Built companion staged: bytes=${bytes('built here').length} sha256=${sha256}`);
+  expect(await Bun.file(join(root, 'apps/client/src-tauri', sidecarPath(host!))).bytes()).toEqual(new Uint8Array(bytes('built here')));
+  expect((await spawnText(root, [process.execPath, join(import.meta.dir, '../.changeset/release-bundle.ts'), 'stage-unknown'])).code).not.toBe(0);
 }));
 
 test('the Tauri overlay config names the sidecar every desktop platform stages', async () => {

@@ -51,7 +51,7 @@ const windowsInstallerGuards = new Set([
   'INSTALL_OWNERSHIP', 'UNINSTALL_OWNERSHIP', 'UNINSTALL_BINARY', 'UNINSTALL_REGISTRY',
   'REGISTRY_VALUES', 'REGISTRY_CHILDREN', 'UNINSTALL_MARKER', 'DATA_CONTENTS',
   'LOCAL_DATA', 'INSTALL_CONTENTS', 'SOURCE_HASH_MISMATCH', 'UNEXPECTED',
-  'UNSUPPORTED_SIGNING',
+  'UNSUPPORTED_SIGNING', 'PROBE_TIMEOUT', 'PROBE_EXIT',
 ]);
 export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (typeof stdout !== 'string' || stdout.length > 2_097_152) return;
@@ -59,7 +59,7 @@ export function windowsInstallerFailure(stdout: unknown): string | undefined {
   if (!markers.length || markers.length > 2) return;
   const labels: string[] = [];
   for (const marker of markers) {
-    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|cleanup):([A-Z_]+)$/.exec(marker);
+    const match = /^LAZYSH_WINDOWS_INSTALLER:(preflight|paths|registry|webview|identity|install|repair|probe|cleanup):([A-Z_]+)$/.exec(marker);
     if (!match || !windowsInstallerGuards.has(match[2])) return;
     labels.push(`${match[1]}:${match[2]}`);
   }
@@ -112,8 +112,18 @@ export async function verifyWindowsTerminalEngine(binary: string, mode: string |
   requirePlatform(present === (mode === 'on'), 'Windows native terminal engine mismatch');
 }
 
-/** `companion`, when the installer bundles one, is what the installation must contain beside the app. */
-export async function windowsInstallation(installer: string, binary: string, version: string, companion?: PublishedCompanion) {
+// Start-Process joins its argument list with spaces, so an argument with whitespace carries its own quotes.
+function quotedArgument(argument: string) {
+  requirePlatform(!argument.includes('"'), 'probe arguments cannot contain quotes');
+  return /\s/.test(argument) ? `"${argument}"` : argument;
+}
+/** A program the acceptance runs while the app is installed, with `LAZYSH_TEST_BUNDLE_DIR` naming the install directory. Its output goes to `log` and `log` + `.error`. */
+export type InstalledProbe = { file: string; args: string[]; log: string };
+/**
+ * `companion`, when the installer bundles one, is what the installation must contain beside the app.
+ * `probe` runs after the repair, before the uninstall.
+ */
+export async function windowsInstallation(installer: string, binary: string, version: string, companion?: PublishedCompanion, probe?: InstalledProbe) {
   requirePlatform(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true'
     && process.env.RUNNER_ENVIRONMENT === 'github-hosted' && process.env.RUNNER_TEMP,
   'Windows installation requires an owned GitHub-hosted Windows job');
@@ -148,6 +158,22 @@ function RunInstaller($file, $arguments) {
     if (!$process.HasExited) { $process.Kill($true); Require ($process.WaitForExit(10000)) 'PROCESS_TREE' }
     $process.Dispose()
   }
+}
+function Probe {
+  $probe = $env:LAZYSH_PROBE | ConvertFrom-Json
+  $env:LAZYSH_TEST_BUNDLE_DIR = $directory
+  try {
+    $process = Start-Process -FilePath $probe.file -ArgumentList @($probe.args) -NoNewWindow -PassThru -RedirectStandardOutput $probe.log -RedirectStandardError ($probe.log + '.error')
+    # Reading the handle keeps the exit code readable once the process has ended.
+    $null = $process.Handle
+    try {
+      Require ($process.WaitForExit(300000)) 'PROBE_TIMEOUT'
+      Require ($process.ExitCode -eq 0) 'PROBE_EXIT'
+    } finally {
+      if (!$process.HasExited) { $process.Kill($true); Require ($process.WaitForExit(10000)) 'PROCESS_TREE' }
+      $process.Dispose()
+    }
+  } finally { Remove-Item -LiteralPath Env:LAZYSH_TEST_BUNDLE_DIR }
 }
 function Installed {
   Plain $installed
@@ -228,6 +254,7 @@ try {
   Installed
   Plain $marker
   Require ((Get-Content -Raw -LiteralPath $marker) -ceq $content) 'REPAIR_MARKER'
+  if ($env:LAZYSH_PROBE) { $stage = 'probe'; Probe }
 } catch {
   [Console]::Out.WriteLine('LAZYSH_WINDOWS_INSTALLER:' + $stage + ':' + $failure)
   $primaryFailed = $true
@@ -275,7 +302,8 @@ if ($primaryFailed) { exit 1 }
 `], { ...process.env, LAZYSH_INSTALLER: resolve(installer), LAZYSH_BINARY: resolve(binary),
     LAZYSH_VERSION: version, LAZYSH_BINARY_SHA256: expected.sha256, LAZYSH_BINARY_BYTES: String(expected.bytes),
     LAZYSH_NSIS_BINARY_SHA256: packaged.sha256,
-    ...(companion ? { LAZYSH_COMPANION_BYTES: String(companion.bytes), LAZYSH_COMPANION_SHA256: companion.sha256 } : {}) }, 450_000);
+    ...(companion ? { LAZYSH_COMPANION_BYTES: String(companion.bytes), LAZYSH_COMPANION_SHA256: companion.sha256 } : {}),
+    ...(probe ? { LAZYSH_PROBE: JSON.stringify({ file: resolve(probe.file), args: probe.args.map(quotedArgument), log: resolve(probe.log) }) } : {}) }, probe ? 800_000 : 450_000);
 }
 const unpacked = async <T>(work: (directory: string) => Promise<T>) => {
   const directory = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), 'lazysh-unpacked-'));

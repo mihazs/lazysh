@@ -1414,14 +1414,22 @@ jobs:
             cargo test --locked -p tauri-plugin-lazysh-vault --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --locked -p tauri-plugin-lazysh-vault --lib "$case_name" -- --ignored --exact
           done
+      # The desktop packages carry a companion beside the app (a Tauri `externalBin` entry that only the overlay
+      # config names), so the app and installer packaged below are the ones a release builds. The companion is
+      # built here, not downloaded: the release stages its receipt-verified build instead.
+      - name: Build the companion the packaged app carries and stage it as the app's sidecar
+        shell: bash
+        run: |
+          cargo build --release --locked --package lazysh-agent --bin lazysh-agent
+          bun .changeset/release-bundle.ts stage-built
       - name: Package and validate native macOS permission localizations
         if: runner.os == 'macOS'
         run: |
-          bun run --cwd apps/client tauri build --bundles app
+          bun run --cwd apps/client tauri build --config src-tauri/tauri.bundled-agent.conf.json --bundles app
           plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/{InfoPlist,NativeUI}.strings
       - name: Package the actual Windows NSIS installer
         if: runner.os == 'Windows'
-        run: bun run --cwd apps/client tauri build --bundles nsis -- --locked
+        run: bun run --cwd apps/client tauri build --config src-tauri/tauri.bundled-agent.conf.json --bundles nsis -- --locked
       - name: Exercise actual Windows install, same-version repair and uninstall
         id: windows-installer
         if: runner.os == 'Windows'
@@ -1524,6 +1532,31 @@ jobs:
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done
+      # The same case runs the companion inside the packaged app, which the local arm resolves beside the app executable.
+      - name: Exercise the companion in the built macOS app through real local sessions
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          LAZYSH_TEST_BUNDLE_DIR: ${{ github.workspace }}/target/release/bundle/macos/lazysh.app/Contents/MacOS
+        run: |
+          case_name=companion::local::tests::real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell
+          test -x "$LAZYSH_TEST_BUNDLE_DIR/lazysh-agent"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          # An app folder without the companion must fail the same case.
+          if LAZYSH_TEST_BUNDLE_DIR="$(mktemp -d)" cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact; then
+            echo "the case passed without a bundled companion"
+            exit 1
+          fi
+      # Installs the packaged NSIS app and runs the Windows cases against its install directory. Non-blocking until
+      # its first hosted pass on main is recorded on #1853; then remove continue-on-error.
+      - name: Exercise the companion in the installed Windows app through real local sessions
+        if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
+        timeout-minutes: 25
+        continue-on-error: true
+        env:
+          LAZYSH_TEST_WINDOWS_INSTALLED_COMPANION: '1'
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual installed Windows bundle'
       - name: Verify uploaded paths through the owned Mac host clipboard
         if: runner.os == 'macOS'
         env:
