@@ -1,4 +1,5 @@
 import {useSyncExternalStore} from 'react';
+import {deviceSettingSubscriber} from './deviceSetting';
 
 /** "Show top bar": phones in a session hide the bar for the side menu unless this device keeps it. Device-local; sync never carries it. */
 export const topBarKey = 'lazysh.show-top-bar.v1';
@@ -15,11 +16,7 @@ export function setShowTopBar(value: boolean) {
   window.dispatchEvent(new Event(changed));
 }
 
-function subscribe(callback: () => void) {
-  window.addEventListener(changed, callback);
-  window.addEventListener('storage', callback);
-  return () => { window.removeEventListener(changed, callback); window.removeEventListener('storage', callback); };
-}
+const subscribe = deviceSettingSubscriber(changed);
 
 export function useShowTopBar() { return useSyncExternalStore(subscribe, read, () => false); }
 

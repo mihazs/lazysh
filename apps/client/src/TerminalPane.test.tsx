@@ -1802,7 +1802,8 @@ describe("terminal interactions", () => {
     expect(screen.getByText('https://example.com/')).toBeTruthy();
     expect(mocks.openWebUrl).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Open in browser' }));
-    expect(mocks.openWebUrl).toHaveBeenCalledOnce();
+    // The link is checked for a sign-in redirect first, so the opener runs a moment after the tap.
+    await waitFor(() => expect(mocks.openWebUrl).toHaveBeenCalledOnce());
     expect(mocks.openWebUrl).toHaveBeenCalledWith('https://example.com/');
     act(() => {mocks.link?.(new MouseEvent('click'), 'https://second.example/');});
     await act(async () => {finish?.();});

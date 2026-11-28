@@ -45,6 +45,7 @@
     "remark-gfm": "4.0.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@lazysh/apple-speech": "workspace:*",
     "@lazysh/apple-status": "workspace:*",
     "@lazysh/credential-vault": "workspace:*",

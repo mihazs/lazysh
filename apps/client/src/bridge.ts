@@ -79,6 +79,14 @@ export type TmuxJumpSnapshot = {
 /** What to show before a sign-in page opens on this device: the host, never the query. */
 export type AuthUrlInspection = {host: string; warnings: ('insecure' | 'punycode')[]; callbackPorts: number[]};
 export type AuthUrlOutcome = 'opened' | 'notified';
+/** Why a sign-in tunnel ended (#1511). Fixed names only: the tunnel never reports a request, so no `code` or `state` is here. */
+export type AuthTunnelEndReason = 'callbackDelivered' | 'timeout' | 'cancelled' | 'sessionEnded' | 'lockEnded' | 'hostStoppedListening' | 'forwardingDisabled' | 'controlConnectionLost';
+export type AuthTunnelEvent = {type: 'callback'} | {type: 'ended'; reason: AuthTunnelEndReason};
+export type AuthTunnel = {id: string; sessionId: string; port: number; addresses: string[]};
+/** What the engine needs to know about a sign-in: a port and a path, never a query. */
+export type AuthTunnelHint = {port: number; path?: string; evidence: 'launcher' | 'url' | 'listener'; confirmed?: boolean; owner?: 'sessionUser' | 'otherUser' | 'unknown'; family?: 'v4' | 'v6'};
+/** `allow` is the user's answer for this flow; `policy` is the host's saved choice, which the engine still checks. */
+export type AuthTunnelConsent = {kind: 'allow'; confirmRisky?: boolean} | {kind: 'policy'; policy: 'ask' | 'always' | 'never'};
 export type HostFileAction = 'save' | 'open' | 'share';
 export type HostFileStat = {path: string; name: string; kind: 'file' | 'directory' | 'other'; size: number; link: string | null; actions: HostFileAction[]};
 export type HostFileProgress = {bytes: number; total: number | null};
@@ -140,6 +148,12 @@ export const api = {
   /** Opens a sign-in page on this device once the tunnel its redirect needs listens: a remote session passes the `tunnelId` of its live flow, a local one needs none. A phone uses an in-app tab unless told otherwise. */
   openAuthUrl: (sessionId: string, url: string, options: {tunnelId?: string; browser?: 'inApp' | 'system'} = {}) =>
     invoke<AuthUrlOutcome>("open_auth_url", { sessionId, url, ...options }),
+  /** Listens on this device's loopback at the callback port of a host sign-in and relays that one request to the host; events end with the flow. */
+  startAuthTunnel: (sessionId: string, hint: AuthTunnelHint, consent: AuthTunnelConsent, onEvent: (event: AuthTunnelEvent) => void) => {
+    const events = new Channel<AuthTunnelEvent>(); events.onmessage = guardAccessCallback(onEvent);
+    return remoteInvoke<AuthTunnel>('start_auth_tunnel', {sessionId, hint, consent, events});
+  },
+  stopAuthTunnel: (sessionId: string, tunnelId: string) => remoteInvoke<void>('stop_auth_tunnel', {sessionId, tunnelId}),
   attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>,onEvent:(event:SshEvent)=>void) =>
     createRemoteSession('attach_multiplexer',{sessionId,...target,createIfMissing:true,cols:100,rows:30},onEvent),
   /** `reattach` (reconnect and restore) never creates the session: Zellij fails when it is gone instead of starting an empty one. */

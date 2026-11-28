@@ -1,12 +1,12 @@
 # Sign in on a host from your device
 
-Status: specification, with one workaround that exists today. The automatic tunnel and the device browser are designed in [ADR 0004](../architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md) and tracked by [epic #1504](https://github.com/mihazs/lazysh/issues/1504); none of it is released. Names, limits and defaults are in the [contract reference](../reference/auth-tunnel.md); what each login tool really does is in [Observed sign-in flows](../reference/sso-login-flows.md).
+Status: the tunnel, the question and the settings are available; the host browser shim is not read by the app yet. The design is in [ADR 0004](../architecture/adr-0004-sso-localhost-tunnel-and-guest-browser.md) and tracked by [epic #1504](https://github.com/mihazs/lazysh/issues/1504). Names, limits and defaults are in the [contract reference](../reference/auth-tunnel.md); what each login tool really does is in [Observed sign-in flows](../reference/sso-login-flows.md).
 
 The problem: a command on the host (`aws sso login`, `codex login`, `claude`, `az login`, `gcloud auth login` and others) starts a small web server on the host's `localhost`, sends your browser to the identity provider, and waits for the provider to redirect the browser to `http://localhost:PORT/...`. The browser is on your device, so that redirect reaches your device, not the host. Some tools avoid the problem with a device code or by asking you to paste a code; those need no tunnel.
 
-## Today: forward the port yourself with Preview
+## When no banner appears: forward the port yourself with Preview
 
-This uses [Previews](../previews.md) and was not tested end to end for this page.
+The tunnel needs a printed address that names the callback port. A login that prints none (`az login`, `claude auth login`), a host over a local terminal, or an app version without the tunnel can still be finished by hand. This uses [Previews](../previews.md) and was not tested end to end for this page.
 
 1. In the terminal, start the login on the host and leave it waiting.
 2. Find the port in the printed address: the part after `redirect_uri=` is the callback, for example `redirect_uri=http%3A%2F%2F127.0.0.1%3A36871%2Foauth%2Fcallback` means port 36871. If the tool printed only `http://localhost:1455`, the port is 1455. `az login` prints no address with a port; **Discover listeners** in Preview should list it (the process is `python`).
@@ -16,16 +16,29 @@ This uses [Previews](../previews.md) and was not tested end to end for this page
 
 Opening the preview loads the callback address once, so the host's callback server receives a request that has no code. The AWS CLI's handler ignores a request without `code` and `state` (read from `OAuthCallbackHandler.do_GET`); other tools were not checked, and one that stops on its first request will fail. If that happens, use the tool's device-code option instead (`aws sso login --use-device-code`, `codex login --device-auth`, `az login --use-device-code`, `wrangler login --device`, `firebase login --no-localhost`).
 
-## Planned: automatic
+## Sign in with the tunnel
 
-What you will see once the children of the epic have shipped.
+Available for hosts you reach over SSH, Mosh or Eternal Terminal. It covers the logins that print an authorize URL whose redirect is `localhost` (`aws sso login`, `aws login`, `codex login`, `gcloud auth login` on a host with a display, and by their documentation `wrangler login`, `firebase login`, `terraform login`, `vault login -method=oidc`). A login that uses a device code needs no tunnel and shows no banner.
 
-1. Run the login on the host. If the output shows a redirect to `localhost:PORT` and the host is listening on it, a banner appears above the terminal: **Sign-in on `<host>` needs `localhost:PORT`** with the command when the companion knows it and the identity provider's host. Choose **Allow once**, **Always for this host** or **Deny**. The banner does not take focus from the keyboard and is announced to screen readers.
-2. lazysh binds the port on your device, then opens the page: an in-app browser tab on Android and iOS, your default browser on a desktop. It never opens the page first.
-3. After you sign in, the redirect goes through lazysh to the host command. The tunnel closes 15 seconds after the callback, after 10 minutes at most, when you cancel, or when the session ends.
-4. If a host program asks to open a browser (after you install the shim with `lazysh-agent browser-shim install` on that host), the same banner offers to open that page on your device.
+1. Run the login on the host. When its output shows a redirect to `localhost:PORT`, a banner appears above the terminal: **Sign-in on `<host>` needs `localhost:PORT`**. It names the identity provider's host (never the rest of the address), says whether the host is listening on that port, and warns when the sign-in does not use PKCE, when the provider's name uses internationalized characters, or when another user's program holds the port. The first time, it also explains what is about to happen. The banner does not take the keyboard focus, screen readers hear it as a status, and its buttons are at least 44 points high (48 on a touch screen).
+2. Choose **Allow once**, **Always for this host** or **Deny**. Allowing makes lazysh listen on the same port number on your device (never anything but loopback), and the banner then says **Tunnel ready**. Deny starts nothing. An unanswered banner shrinks to one line after a minute (**Review** brings it back) and goes away after ten.
+3. Tap the sign-in link in the terminal and choose **Open in browser**. lazysh opens it on your device: an in-app tab on Android and iOS, your default browser on a desktop. If you tap before allowing, nothing opens and a message tells you to allow the tunnel first.
+4. After you sign in, the redirect reaches your device's `localhost:PORT`, lazysh passes that one request to the host, and the banner reports **Sign-in finished**. The tunnel closes 15 seconds after the callback, after 10 minutes at most, when you press **Stop**, when the session ends or when the app is locked.
 
-Settings, per host: **Auto tunnel for auth callbacks** and **Open host browser requests on this device**, each **Ask** (default), **Always** or **Never**. A decision is remembered on this device only and is not synced.
+**Always for this host** remembers your answer for that host on this device. A later sign-in on it then starts by itself, with a banner that shows **Stop**, but only when the host confirms that a program started listening on the port around the time the URL was printed. It still asks for a database or admin port, for a program that belongs to another user (NetBird's daemon), and after the sixth sign-in on the host within ten minutes.
+
+### Choose what the app may do
+
+**Settings, General, Sign-in on hosts** (apps only):
+
+- **Auto tunnel for auth callbacks** is the default for every host: **Ask** (the default), **Always** or **Never**. Each saved host can override it. **Never** keeps a host's sign-ins from tunnelling: it shows one explanation per host and app run, asks the host nothing, and counts what it kept from starting.
+- **Recent sign-ins** lists the last 50 flows since the app opened: time, host, port, your decision and how it ended. It lives in memory, is never stored, and never holds an address, a query, a `code` or a `state`. **Clear list** empties it.
+
+These choices are kept on this device and are not synced, backed up with the hosts or shared between devices.
+
+## Planned: the host browser
+
+What arrives with the host browser shim, tracked in [#1512](https://github.com/mihazs/lazysh/issues/1512) and [#1514](https://github.com/mihazs/lazysh/issues/1514): if a host program asks to open a browser (after you install the shim with `lazysh-agent browser-shim install` on that host), the same banner offers to open that page on your device, with a second setting, **Open host browser requests on this device**, also **Ask** (default), **Always** or **Never**. Logins that print no redirect (`claude auth login` prints a paste-the-code address and opens the `localhost` one in a browser, and `az login` prints an address with no query) are only found this way.
 
 ## What it will not do
 
@@ -48,10 +61,10 @@ These steps are the acceptance criteria of [#1515](https://github.com/mihazs/laz
 
 Prepare a host with the companion, `aws` with an SSO session in `~/.aws/config`, and optionally `codex` and `claude`.
 
-1. **Android phone.** Connect, run `aws sso login --profile NAME`. Expect the banner. Allow. Expect an in-app tab, the identity provider's page, then the CLI's own page "you can close this window" and the CLI printing `Successfully logged into Start URL`. Repeat with the app in the background during the sign-in (switch to another app for 30 seconds before returning) and with the screen off for the first minute. Expect the notification to open the page when the app was not in front.
+1. **Android phone.** Connect, run `aws sso login --profile NAME`. Expect the banner. Allow once. Tap the printed link and choose **Open in browser**. Expect an in-app tab, the identity provider's page, then the CLI's own page "you can close this window" and the CLI printing `Successfully logged into Start URL`. Repeat with the app in the background during the sign-in (switch to another app for 30 seconds before returning) and with the screen off for the first minute. Expect the notification to open the page when the app was not in front.
 2. **iPhone.** The same steps. Record whether the app stays active while the in-app tab is shown; whether the tab loads `http://127.0.0.1:PORT`; whether the password manager and a passkey can be used; and what happens after switching apps for 10, 30 and 60 seconds during the sign-in. Expect failure when the page is opened in the Safari app instead of the in-app tab and note it.
 3. **Desktop.** The same, once per desktop operating system you have.
-4. **Negative checks.** Choose Deny (nothing may start and no page may open). Choose Never (silent). Occupy the port on the device first (`python3 -m http.server PORT`) and expect a clear failure, not a silent one. End the SSH session mid-sign-in and expect the listener to disappear (check with `ss -ltn` on a desktop, or retry the same port). Disable `AllowTcpForwarding` on the host and expect the stated reason.
+4. **Negative checks.** Choose Deny (nothing may start and no page may open). Choose Never in Settings (one explanation, no listener, no page). Occupy the port on the device first (`python3 -m http.server PORT`) and expect a clear failure, not a silent one. End the SSH session mid-sign-in and expect the listener to disappear (check with `ss -ltn` on a desktop, or retry the same port). Disable `AllowTcpForwarding` on the host and expect the stated reason.
 5. **Secrets.** Search the app log and any exported bug report for the `code=` and `state=` values of the redirect: neither may appear.
 
 ## Troubleshooting

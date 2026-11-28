@@ -29,13 +29,13 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Browse Git changes and stage review comments | [Repository review](repository-review.md) |
 | Why Files plays video and audio in an isolated frame, what it accepts and what is verified | [Files video and audio viewer](reference/files-media-viewer.md) |
 | Preview a forwarded remote web service | [Previews](previews.md) |
-| Finish a browser sign-in whose redirect goes to `localhost` on the host (planned automatic tunnel, manual workaround today) | [Sign in on a host from your device](how-to/sign-in-on-a-host-from-your-device.md) |
+| Finish a browser sign-in whose redirect goes to `localhost` on the host (automatic tunnel once you allow it, manual workaround when none is detected) | [Sign in on a host from your device](how-to/sign-in-on-a-host-from-your-device.md) |
 | Preview, upload or recover an image transfer | [Attachments](attachments.md) |
 | Encrypt and synchronize selected settings or credentials | [Sync](sync.md) |
 | Create an explicitly public, expiring share link | [Sharing](sharing.md) |
 | Configure terminal appearance and imports | [Themes](themes.md) · [Theme QR](theme-qr.md) · [Fonts](font-downloads.md) |
 | Use terminal shortcuts and chords | [Shortcuts](shortcuts.md) |
-| Open a host sign-in page on your phone or desktop (device side, not wired to the app yet) | [Open a sign-in page on your device](guest-browser.md) |
+| Open a host sign-in page on your phone or desktop (the device side that sign-in links use) | [Open a sign-in page on your device](guest-browser.md) |
 | Use the phone edge swipes and replay the gesture tour | [Session gestures](how-to/use-session-gestures.md) |
 | Dictate editable text or import a local speech model | [Voice](voice.md) · [Parakeet](voice-parakeet.md) |
 | Configure an optional cloud transcription service | [Cloud transcription](cloud-transcription.md) |

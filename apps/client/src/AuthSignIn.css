@@ -1,0 +1,24 @@
+.auth-signin-stack {
+  display: flex;
+  flex-direction: column;
+}
+.auth-signin {
+  align-items: flex-start;
+}
+.auth-signin-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.auth-signin-warning {
+  color: var(--theme-warning, #e0b35a);
+}
+.auth-signin[data-phase="failed"] .connection-banner-text svg {
+  color: var(--theme-danger, #e07a6a);
+}
+/* Three answers do not fit beside the text on a phone, least of all in a language with longer words. */
+.auth-signin .connection-banner-actions {
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+}
