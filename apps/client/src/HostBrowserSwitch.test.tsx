@@ -4,7 +4,8 @@ import {act,cleanup,fireEvent,render,screen,within} from '@testing-library/react
 import {invoke} from '@tauri-apps/api/core';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
 import HostBrowserSwitch,{parseHostBrowserSettings} from './HostBrowserSwitch';
-import {isHostBrowserConfirmed} from './hostBrowserConfirmation';
+import {parseCleared} from './HostBrowserProfile';
+import {isHostBrowserConfirmed,isHostBrowserKeepProfile} from './hostBrowserConfirmation';
 import {getPreferences,syncablePreferences} from './preferences';
 import {answer,calls} from './test/routedInvoke';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
@@ -171,4 +172,101 @@ it('reconciles a save that completes after the switch remounts',async()=>{
   await act(async()=>finish());
   await vi.waitFor(()=>expect(calls('get_host_browser_settings')).toHaveLength(2));
   expect((screen.getByRole('checkbox',{name:'Host browser'}) as HTMLInputElement).checked).toBe(true);
+});
+
+// Keep profile and Clear browser data, the other half of the Host browser row.
+const cleared=(value:boolean)=>({schemaVersion:1,cleared:value});
+const keep=()=>screen.getByRole('checkbox',{name:'Keep profile'}) as HTMLInputElement;
+const ready=()=>vi.waitFor(()=>expect(keep().disabled).toBe(false));
+const open=()=>fireEvent.click(screen.getByRole('button',{name:'Clear browser data'}));
+const confirm=()=>fireEvent.click(screen.getByRole('button',{name:'Delete browser data'}));
+const panel=(host='host-a',session='s1')=>render(<CompanionSettingsPanel sessionId={session} hostKey={host}/>);
+
+it('requires the exact versioned answer of the companion',()=>{
+  expect(parseCleared(cleared(true))).toEqual(cleared(true));
+  for(const value of [null,[],{schemaVersion:2,cleared:true},{schemaVersion:1,cleared:'true'},{schemaVersion:1},{...cleared(true),profile:'/home/user/.local/state/lazysh/host-browser/kept'}])expect(()=>parseCleared(value)).toThrow();
+});
+it('keeps the profile only when chosen, per host and on this device',async()=>{
+  answer({get_companion_settings:[settings],get_host_browser_settings:[off]});
+  const view=panel('host-a');
+  expect(keep().checked).toBe(false);
+  expect(screen.getByText(/cookies and sign-ins stay on this host's disk until you use Clear browser data/)).toBeTruthy();
+  await ready();fireEvent.click(keep());
+  expect(keep().checked).toBe(true);expect(isHostBrowserKeepProfile('host-a')).toBe(true);expect(isHostBrowserKeepProfile('host-b')).toBe(false);
+  view.unmount();
+  // Another host starts off; the first one is remembered.
+  panel('host-b','s2');expect(keep().checked).toBe(false);cleanup();
+  panel('host-a');expect(keep().checked).toBe(true);
+  await ready();fireEvent.click(keep());
+  expect(keep().checked).toBe(false);expect(isHostBrowserKeepProfile('host-a')).toBe(false);
+});
+it('keeps the choice on this device: not in the sync snapshot, and no address, title or frame is stored',async()=>{
+  answer({get_companion_settings:[settings],get_host_browser_settings:[off]});
+  panel('host-a');await ready();fireEvent.click(keep());
+  // What the encrypted settings sync uploads (SyncPanel pushes exactly this).
+  const synced=JSON.stringify(syncablePreferences(getPreferences()));
+  expect(synced).not.toContain('host-a');expect(synced).not.toMatch(/hostBrowser|keepProfile|keep-profile/i);
+  // Everything the app stored: one device-local list of host ids and nothing else.
+  const stored=Object.fromEntries(Object.keys(localStorage).map(key=>[key,localStorage.getItem(key)]));
+  expect(stored).toEqual({'lazysh.hostBrowserKeepProfile.v1':'["host-a"]'});
+  expect(sessionStorage.length).toBe(0);
+  expect(Object.values(stored).join('')).not.toMatch(/:\/\/|title|frame|url/i);
+});
+it('offers Keep profile only while the host browser settings can be read, and Clear browser data regardless',async()=>{
+  answer({get_companion_settings:[settings],get_host_browser_settings:[unsupported]});
+  panel();
+  await screen.findByText(/cannot change the host browser setting/);
+  expect(keep().disabled).toBe(true);
+  expect((screen.getByRole('button',{name:'Clear browser data'}) as HTMLButtonElement).disabled).toBe(false);
+});
+it('offers Clear browser data with the host browser switch off and names what the confirmation deletes before anything runs',async()=>{
+  answer({get_companion_settings:[settings],get_host_browser_settings:[off],host_browser_clear_data:[cleared(true)]});
+  panel();
+  await vi.waitFor(()=>expect((screen.getByRole('button',{name:'Clear browser data'}) as HTMLButtonElement).disabled).toBe(false));
+  expect((screen.getByRole('checkbox',{name:'Host browser'}) as HTMLInputElement).checked).toBe(false);
+  open();
+  const group=screen.getByRole('group',{name:'Clear the browser data kept on this host?'});
+  expect(document.activeElement).toBe(group);
+  expect(group.textContent).toMatch(/deletes the kept browser profile directory on this host/);
+  expect(group.textContent).toMatch(/cookies, sign-ins and site data that Keep profile saved/);
+  expect(group.textContent).toMatch(/cannot be undone/);
+  expect(calls('host_browser_clear_data')).toHaveLength(0);
+  fireEvent.click(within(group).getByRole('button',{name:'Cancel'}));
+  expect(screen.queryByRole('group',{name:/Clear the browser data/})).toBeNull();
+  expect(calls('host_browser_clear_data')).toHaveLength(0);
+  expect(document.activeElement).toBe(screen.getByRole('button',{name:'Clear browser data'}));
+  open();confirm();
+  await screen.findByText('Browser data cleared: the kept profile was deleted from this host.');
+  expect(calls('host_browser_clear_data')).toEqual([['host_browser_clear_data',{sessionId:'s1'},access]]);
+  expect(calls('update_host_browser_settings')).toHaveLength(0);
+  expect(document.activeElement).toBe(screen.getByRole('button',{name:'Clear browser data'}));
+});
+it('says when there was nothing to clear',async()=>{
+  answer({get_companion_settings:[settings],get_host_browser_settings:[off],host_browser_clear_data:[cleared(false)]});
+  panel();open();confirm();
+  await screen.findByText('Nothing to clear: this host keeps no browser profile.');
+  expect(screen.queryByText(/Browser data cleared/)).toBeNull();
+});
+it('shows an update message for a companion that predates the flag and sends nothing else',async()=>{
+  answer({get_companion_settings:[settings],get_host_browser_settings:[off],host_browser_clear_data:[unsupported]});
+  panel();open();confirm();
+  await screen.findByText("This host's companion cannot clear browser data. Update the host companion, then try again.");
+  expect(calls('host_browser_clear_data')).toHaveLength(1);expect(calls('update_host_browser_settings')).toHaveLength(0);expect(calls('update_companion_settings')).toHaveLength(0);
+});
+it('names a profile that a running browser holds, and keeps other failures as they are',async()=>{
+  answer({get_companion_settings:[settings],get_host_browser_settings:[off],host_browser_clear_data:[()=>Promise.reject({kind:'remote_command_failed',message:'BrowserProfileInUse'}),()=>Promise.reject({kind:'disconnected',message:'Session closed'}),cleared(true)]});
+  panel();open();confirm();
+  await screen.findByText('A host browser session is using the kept profile. Stop it, then clear browser data again.');
+  open();confirm();
+  expect((await screen.findByRole('alert')).textContent).toBe('Session closed');
+  expect(screen.queryByText(/is using the kept profile/)).toBeNull();
+  open();confirm();
+  await screen.findByText('Browser data cleared: the kept profile was deleted from this host.');
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+it('treats an answer of another shape as an unsupported companion and shows nothing as cleared',async()=>{
+  answer({get_companion_settings:[settings],get_host_browser_settings:[off],host_browser_clear_data:[{schemaVersion:1,cleared:true,profile:'/home/user/x'}]});
+  panel();open();confirm();
+  expect((await screen.findByRole('alert')).textContent).toMatch(/Unsupported companion settings/);
+  expect(screen.queryByText(/Browser data cleared/)).toBeNull();
 });

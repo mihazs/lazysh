@@ -300,6 +300,7 @@ fn main() {
         "update_notification_policy",
         "get_host_features",
         "update_host_features",
+        "host_browser_clear_data",
         "agent_transcript",
         "agent_usage",
         "account_usage",

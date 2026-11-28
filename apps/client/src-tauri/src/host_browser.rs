@@ -35,6 +35,14 @@ type Protected<T> = std::result::Result<Guarded<T>, GuardedError<SshError>>;
 /// Printed by the `required_command` wrapper when the host has no `host-browser serve`.
 pub(crate) const COMPANION_REQUIRED: &str = "lazysh-host-browser-companion-required-v1";
 const SERVE: &str = "lazysh-agent host-browser serve";
+/// **Keep profile**: the relay uses the one kept profile and leaves it for **Clear browser data**. An older
+/// relay answers the option with a usage error, which the wrapper turns into `CompanionRequired`: a session
+/// never silently runs without the profile the user asked to keep.
+const KEEP_PROFILE: &str = " --keep-profile";
+
+fn serve_command(keep_profile: bool) -> String {
+    format!("{SERVE}{}", if keep_profile { KEEP_PROFILE } else { "" })
+}
 /// One browser per session, two per app.
 const MAX_BROWSERS: usize = 2;
 /// A cold browser on a loaded host needs well over a second; the relay itself gives up after 90 s.
@@ -352,7 +360,8 @@ fn open_message(viewport: Viewport, url: Option<&str>) -> Result<Vec<u8>> {
 }
 
 /// Starts a browser on the host and returns its token. The channel opens in the background: the renderer
-/// learns how it went from the messages it pulls, `closed` among them.
+/// learns how it went from the messages it pulls, `closed` among them. With `keep_profile` the relay keeps the
+/// browser's profile on the host until **Clear browser data**; without it the profile ends with the session.
 #[tauri::command]
 pub async fn host_browser_start(
     access: AccessLease,
@@ -361,21 +370,19 @@ pub async fn host_browser_start(
     session_id: String,
     viewport: Viewport,
     url: Option<String>,
+    keep_profile: Option<bool>,
 ) -> Protected<String> {
     access
         .run(async {
             let open = open_message(viewport, url.as_deref())?;
+            let serve = serve_command(keep_profile.unwrap_or(false));
             let session = state.session(&session_id).await?;
             let disconnected = session.cancel.subscribe();
             let lease = access.clone();
             let connect = async move {
-                let command = crate::companion::required_command(
-                    &session,
-                    SERVE.into(),
-                    COMPANION_REQUIRED,
-                    &lease,
-                )
-                .await?;
+                let command =
+                    crate::companion::required_command(&session, serve, COMPANION_REQUIRED, &lease)
+                        .await?;
                 let channel = ssh::open_owned_channel(
                     &session.handle,
                     &lease,

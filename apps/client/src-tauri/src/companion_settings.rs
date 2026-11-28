@@ -287,13 +287,17 @@ fn parse_host_browser(text: &str) -> Result<HostBrowser> {
         (settings.schema_version, settings.revision)
     })
 }
-/// A companion that predates `settings host-browser` fails with clap's unknown-subcommand usage error. That is
-/// the one failure the panel treats as "update the companion"; every other failure keeps its own text.
+/// A companion that predates `settings host-browser` (or `host-browser --clear-data`) fails with clap's
+/// unknown-subcommand (or unknown-argument) usage error. That is the one failure the panel treats as "update the
+/// companion"; every other failure keeps its own text.
 fn unsupported_companion(error: SshError) -> SshError {
     if error.kind() == "remote_command_failed"
-        && error
-            .message()
-            .starts_with("error: unrecognized subcommand")
+        && [
+            "error: unrecognized subcommand",
+            "error: unexpected argument",
+        ]
+        .iter()
+        .any(|usage| error.message().starts_with(usage))
     {
         return SshError::new(
             "host_browser_companion_required",
@@ -355,6 +359,41 @@ pub async fn update_host_browser_settings(
             Some(&settings),
             &access,
         ))
+        .await
+}
+/// What `lazysh-agent host-browser --clear-data` prints: whether a kept profile existed and was removed.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostBrowserCleared {
+    schema_version: u8,
+    cleared: bool,
+}
+fn parse_cleared(text: &str) -> Result<HostBrowserCleared> {
+    strict(text, |cleared: &HostBrowserCleared| {
+        (cleared.schema_version, 0)
+    })
+}
+/// **Clear browser data**: removes the profile that Keep profile left on the host. Like the companion's own
+/// command it works while the host browser switch is off, and the host refuses it while a browser uses the
+/// profile. It sends no value, so there is nothing for the app to store or log.
+const CLEAR_DATA: &str = "lazysh-agent host-browser --clear-data";
+#[tauri::command]
+pub async fn host_browser_clear_data(
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+    session_id: String,
+    access: AccessLease,
+) -> std::result::Result<Guarded<HostBrowserCleared>, GuardedError<crate::ssh::SshError>> {
+    access
+        .run(async {
+            let host = Host::resolve(&state, &local, &session_id, &access).await?;
+            parse_cleared(
+                &host
+                    .companion(&access, CLEAR_DATA.into())
+                    .await
+                    .map_err(unsupported_companion)?,
+            )
+        })
         .await
 }
 #[cfg(test)]
@@ -475,13 +514,48 @@ mod tests {
             unsupported_companion(old).kind(),
             "host_browser_companion_required"
         );
+        // A companion with `host-browser` but without `--clear-data`, and one that predates the command.
+        for usage in [
+            "error: unexpected argument '--clear-data' found\n\nUsage: lazysh-agent host-browser [OPTIONS]",
+            "error: unrecognized subcommand 'host-browser'",
+        ] {
+            assert_eq!(
+                unsupported_companion(SshError::new("remote_command_failed", usage)).kind(),
+                "host_browser_companion_required"
+            );
+        }
         for error in [
             SshError::new("remote_command_failed", "SettingsConflict"),
+            SshError::new("remote_command_failed", "BrowserProfileInUse"),
             SshError::new("remote_command_failed", "HostBrowserDisabled"),
             SshError::new("disconnected", "error: unrecognized subcommand"),
         ] {
             let kind = error.kind();
             assert_eq!(unsupported_companion(error).kind(), kind);
         }
+    }
+    #[test]
+    fn clear_data_reads_only_the_strict_answer_of_the_companion() {
+        // Verbatim stdout of `host-browser --clear-data` (keys in the order the companion prints them).
+        for (printed, cleared) in [
+            (r#"{"cleared":true,"schemaVersion":1}"#, true),
+            (r#"{"cleared":false,"schemaVersion":1}"#, false),
+        ] {
+            assert_eq!(
+                parse_cleared(printed).unwrap().cleared,
+                cleared,
+                "{printed}"
+            );
+        }
+        for text in [
+            r#"{"schemaVersion":2,"cleared":true}"#,
+            r#"{"schemaVersion":1,"cleared":"true"}"#,
+            r#"{"schemaVersion":1}"#,
+            // A path, a count or an address of a profile never reaches the renderer.
+            r#"{"schemaVersion":1,"cleared":true,"profile":"/home/user/.local/state/lazysh/host-browser/kept"}"#,
+        ] {
+            assert!(parse_cleared(text).is_err(), "{text}");
+        }
+        assert!(parse_cleared(&" ".repeat(4097)).is_err());
     }
 }
