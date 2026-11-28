@@ -343,6 +343,19 @@ process or from the newest file of a folder. The record format and the hook inpu
 snapshot and synthetic fixtures only: the development host has no Grok Build binary and no account, so the runtime case
 against a real agent is still open ([#1842](https://github.com/mihazs/lazysh/issues/1842)).
 
+### Header mode chips
+
+The header always shows the mode, and the approval policy and sandbox, that the agent last reported in the `session` object of its
+conversation page; the view re-reads it with each transcript poll, so a change made in the terminal appears at the next read. A field the agent
+does not report is not drawn, never guessed from the last message.
+
+| Agent | Chips | Source | Changed by |
+| --- | --- | --- | --- |
+| Claude Code | Mode: Default, Plan mode, Accept edits, Auto, Bypass permissions | `permission-mode` transcript record, written at the next prompt after a change | Shift+Tab in the terminal, or **Permission mode** in the options |
+| Codex | Mode (collaboration mode), then approval policy and sandbox, such as `never · danger-full-access` | `turn_context` record: `collaboration_mode`, `approval_policy`, `sandbox_policy` | Codex's own `/approvals` and `/plan` commands |
+| OpenCode | Agent name as the mode (`build`, `plan`) | `agent` of the newest assistant message | OpenCode's agent switch (Tab) |
+| Gemini CLI, Grok Build, Copilot CLI, Kimi CLI, Droid | None | Their records carry no mode | Not shown |
+
 ## Input and control mapping
 
 All input goes through one ordered path per session. The Agent view never writes to

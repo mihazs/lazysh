@@ -994,11 +994,11 @@ describe('OpenCode pane',()=>{
     expect(card.textContent).toContain('cat notes.txt');
     expect(card.querySelector('[aria-label="Output"]')!.textContent).toBe('hello');
     expect(screen.getAllByText('hello').length).toBeGreaterThan(1);
-    // The footer facts the companion read from the same database: the model and the context in use; the default `build` agent is no pill.
+    // The footer facts the companion read from the same database: the model and the context in use, and the `build` agent as the mode chip.
     const header=screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;
     expect(header.textContent).toContain('big-pickle');
     expect(header.textContent).toContain('15K tokens used');
-    expect(header.querySelector('[data-mode]')).toBeNull();
+    expect(header.querySelector('[data-mode]')!.textContent).toBe('build');
   });
 
   it('sends the prompt through the guarded input with its database session, and Stop is two Escapes a moment apart',async()=>{
@@ -1453,6 +1453,19 @@ describe('session header',()=>{
     expect(details.getByText('380,000 of 475,000 tokens (20% left)')).toBeTruthy();expect(details.getByText('43% used')).toBeTruthy();
   });
 
+  it('keeps the live permission chip current: Default, then Plan mode with approval and sandbox after the agent changes mode',async()=>{
+    let session:unknown={mode:'default',approval:'on-request',sandbox:'workspace-write'};
+    withSession('codex',session);
+    const base=vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async(command,args,options)=>{const reply=await base(command,args,options);return command==='agent_transcript'?{...(reply as object),session}:reply;});
+    const header=await mount();
+    expect(within(header).getByText('Default')).toBeTruthy();expect(within(header).getByTitle('Approval and sandbox').textContent).toBe('on-request · workspace-write');
+    session={mode:'plan',approval:'never',sandbox:'read-only'};
+    await advance(5000);
+    expect(within(header).getByText('Plan mode')).toBeTruthy();expect(within(header).queryByText('Default')).toBeNull();
+    expect(within(header).getByTitle('Approval and sandbox').textContent).toBe('never · read-only');
+  });
+
   it('shows the git branch and worktree in the header and the folder too in the options, and drops names that are not printable text',async()=>{
     withSession('claude',{model:'claude-opus-5-5',folder:'fix-login',branch:'fix/login',worktree:'fix-login'});
     const header=await mount();
@@ -1472,7 +1485,7 @@ describe('session header',()=>{
     withSession('claude',{model:'claude-opus-5-5',mode:'default',usage:{usedTokens:183000,limitTokens:190000},cost:{usd:3.19}});
     let header=await mount();
     expect(within(header).getByText('4% left').getAttribute('data-low')).toBe('danger');
-    expect(within(header).queryByText('Default')).toBeNull();
+    expect(within(header).getByText('Default').getAttribute('data-mode')).toBe('default');
     expect(within(options()).getByText('$3.19')).toBeTruthy();
     cleanup();
     withSession('claude',{usage:{usedTokens:183000}});
