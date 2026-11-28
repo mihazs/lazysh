@@ -2527,6 +2527,7 @@ export const english = {
   agentAnswerFailed: "The answer was not sent. Check the terminal.",
   agentPickerTitle: "Dialog in the terminal",
   agentPickerTerminalOnly: "Answer this one in the terminal.",
+  agentPickerMore: "More options are in the terminal.",
   agentPickerCancel: "Cancel the dialog",
   agentPickerRememberTitle: "Confirm a choice that is kept",
   agentPickerRemember: "This choice is kept: the agent will not ask about it again. It will choose:",

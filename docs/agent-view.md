@@ -464,7 +464,10 @@ transcript, so it works for dialogs no hook or transcript record describes.
   title, numbered options with `›` before the highlighted one, and one of the three footers captured (`enter select · esc back`,
   `enter default · s session · esc back`, `Press enter to confirm or esc to cancel`). That covers `/model` and its reasoning page,
   `/permissions`, `/review`, the rate-limit prompt and **the approval prompt** (Yes, proceed; Yes and don't ask again; No and tell Codex),
-  checked live with Down, Up and Enter on a real Codex in tmux. **A question Codex asks** (`request_user_input`, drawn as `Question 1/2`, the
+  checked live with Down, Up and Enter on a real Codex in tmux. Codex 0.172.0 draws a list of more than eight rows (`/model` lists ten models) as a
+  window of eight rows, with a `↑` or `↓` row where rows are hidden and a number only on the first nine rows: the card reads the window it sees
+  (screens recorded in a tmux pane), says **More options are in the terminal.**, and a choice moves the highlight inside the window, as the
+  scrolled window is read back by what the option says; a row the window hides is not offered. **A question Codex asks** (`request_user_input`, drawn as `Question 1/2`, the
   question and its options, footer `tab to add notes | enter to submit answer | esc to interrupt`, wrapped by a narrow terminal) is read the same
   way, so it is answered from the card with the arrows and Enter whatever the transcript or hook says: Enter takes the highlighted option and Codex
   goes on to the next question, which is its own card. Esc interrupts Codex's turn there, so that card offers no **Cancel the dialog**. The notes box
