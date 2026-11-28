@@ -17,6 +17,6 @@ export async function probePane(browser:Browser,terminal:Terminal,tag:string,tim
 }
 
 /** Attached clients of the fixture's own tmux server, observed through its private socket. */
-export async function tmuxClients(ssh:SshFixture) {
-  return (await ssh.tmux(['list-clients','-F','#{client_tty}'])).split('\n').filter(Boolean).length;
+export async function tmuxClients(ssh:SshFixture,server='default') {
+  return (await ssh.tmux(['list-clients','-F','#{client_tty}'],server)).split('\n').filter(Boolean).length;
 }
