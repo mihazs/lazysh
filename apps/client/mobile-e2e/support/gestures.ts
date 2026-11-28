@@ -29,3 +29,6 @@ export async function screenBox(element: () => ChainablePromiseElement) {
   const origin = await inNative(() => $('android=new UiSelector().className("android.webkit.WebView")', {strict: false}).getLocation());
   return {x: origin.x + box.x * ratio, y: origin.y + (box.y + scrollY) * ratio, width: box.width * ratio, height: box.height * ratio};
 }
+
+/** One real touch at a screen point in device pixels, as a finger tap: it focuses the element under it and raises the soft keyboard. */
+export const tapAt = ({x, y}: ScreenPoint) => inNative(() => browser.execute('mobile: clickGesture', {x, y}));
