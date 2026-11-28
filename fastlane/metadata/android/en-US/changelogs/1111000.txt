@@ -1,0 +1,2 @@
+- ask before a host sign-in tunnels to this device, with a per-host Ask, Always or Never choice
+Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.111.0
