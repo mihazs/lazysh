@@ -5,8 +5,9 @@ import './AgentWorkingRow.css';
 
 type Part = {blocks: {type: string; id?: string; name?: string}[]; usage?: Record<string, number | string>};
 export type WorkState = 'working' | 'waiting' | 'idle' | 'stopped';
-/** What the live sources (Herdr status, hook report) say; `label` names what a waiting agent waits for when that is known. */
-export type LiveState = {state?: WorkState; label?: string};
+/** What the live sources (Herdr status, hook report) say; `label` names what a waiting agent waits for when that is known,
+ * `background` what a working agent still runs after its turn ended ("2 sub-agents"). */
+export type LiveState = {state?: WorkState; label?: string; background?: string};
 
 /** What the running turn has done so far: output tokens and the tool still running, from its recorded messages. */
 export function turnProgress(parts: Part[]): {tokens?: number; tool?: string} {
@@ -26,7 +27,7 @@ export function turnProgress(parts: Part[]): {tokens?: number; tool?: string} {
 }
 
 /** One line above the composer while a turn runs. The ticking clock lives here so the message list never re-renders. */
-export default function AgentWorkingRow({state, label, since, tokens, tool}: {state?: WorkState; label?: string; since?: string; tokens?: number; tool?: string}) {
+export default function AgentWorkingRow({state, label, since, tokens, tool, background}: {state?: WorkState; label?: string; since?: string; tokens?: number; tool?: string; background?: string}) {
   const active = state === 'working' || state === 'waiting';
   const now = useNow(1000, active);
   // Without a recorded start (the agent reports work the transcript has not caught up with) the clock starts when this row saw it begin.
@@ -35,7 +36,8 @@ export default function AgentWorkingRow({state, label, since, tokens, tool}: {st
   if (!active) return null;
   const recorded = Date.parse(since ?? ''), start = Number.isFinite(recorded) ? recorded : seen.current!;
   const parts = [
-    state === 'working' ? t('agentWorking') : label ?? t('agentWaitingForYou'),
+    state === 'working' ? t(background ? 'agentsWorkingBackground' : 'agentWorking') : label ?? t('agentWaitingForYou'),
+    state === 'working' ? background : undefined,
     formatCountdown(Math.max(0, now - start)),
     tokens ? t('agentTurnTokens', {tokens: formatNumber(tokens, {notation: 'compact'})}) : undefined,
     state === 'working' ? tool : undefined,

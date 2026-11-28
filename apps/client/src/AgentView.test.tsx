@@ -1518,8 +1518,8 @@ describe('session header',()=>{
 });
 
 describe('working row',()=>{
-  const mount=async(state:string,activity:string|undefined,messages:unknown[],updatedAt=new Date().toISOString(),summary='Working')=>{
-    host('claude',[{...row('Claude Code','%3',state),updatedAt,summary}],'available',[messages]);
+  const mount=async(state:string,activity:string|undefined,messages:unknown[],updatedAt=new Date().toISOString(),summary='Working',extra:object={})=>{
+    host('claude',[{...row('Claude Code','%3',state),updatedAt,summary,...extra}],'available',[messages]);
     const base=vi.mocked(invoke).getMockImplementation()!;
     vi.mocked(invoke).mockImplementation(async(command,args)=>{const reply=await base(command,args);return command==='agent_transcript'?{...(reply as object),activity}:reply;});
     await mountTmux();
@@ -1547,6 +1547,16 @@ describe('working row',()=>{
     expect(working()).toEqual(['Working · 1:12 · 1.2K tokens · Bash']);
     // The running turn is marked; its prompt is not pinned, so it never covers the reply scrolling beneath it.
     expect(screen.getAllByRole('region',{name:'Turn'}).map(turn=>turn.hasAttribute('data-running'))).toEqual([true]);
+  });
+
+  it('says what still runs after the turn ended, in the row and the header, and goes back when it is gone',async()=>{
+    await mount('working','idle',turn('Earlier prompt','Earlier answer'),undefined,'Working in the background',{background:{agents:2,shells:1}});
+    expect(working()).toEqual(['Working in the background · 2 sub-agents · 1 shell or monitor · 0:00']);
+    expect(document.querySelector('.agent-view-state')?.textContent).toBe('Working in the background');
+    cleanup();
+    await mount('done','idle',turn('Earlier prompt','Earlier answer'));
+    expect(working()).toEqual([]);
+    expect(document.querySelector('.agent-view-state')?.textContent).toBe('Done');
   });
 
   it('names a wait for the person, and draws nothing for a finished turn',async()=>{
