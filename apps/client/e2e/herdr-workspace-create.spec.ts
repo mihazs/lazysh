@@ -1,4 +1,5 @@
 import {expect,test,type Page} from '@playwright/test';
+import {fitsWidth} from './fixtures/dialogFit';
 import {mountHerdrSpaces as mount} from './fixtures/herdrSpacesPage';
 
 const commands=(page:Page)=>page.evaluate(()=>window.herdrCreate.calls.map(call=>call.command));
@@ -9,11 +10,6 @@ async function openWorktree(page:Page) {
   await expect(page.getByRole('menu')).toHaveCount(0);
 }
 const call=(page:Page,command:string)=>page.evaluate(command=>window.herdrCreate.calls.filter(call=>call.command===command).map(call=>call.args),command);
-async function fitsWidth(page:Page) {
-  const size=await page.getByRole('dialog').evaluate(node=>({width:node.clientWidth,scroll:node.scrollWidth,viewport:window.innerWidth,right:node.getBoundingClientRect().right}));
-  expect(size.scroll,JSON.stringify(size)).toBeLessThanOrEqual(size.width);
-  expect(size.right,JSON.stringify(size)).toBeLessThanOrEqual(size.viewport);
-}
 
 test('new workspace validates, shows the exact command and starts no agent unless asked',async({page})=>{
   await mount(page);
