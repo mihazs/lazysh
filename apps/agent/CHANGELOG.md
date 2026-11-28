@@ -1,5 +1,71 @@
 # @lazysh/agent
 
+## 1.110.0
+
+### Minor Changes
+
+- feat(agent): keep a Claude Code session working while it runs background shells, monitors, sub-agents or workflows ([#2969](https://github.com/mihazs/lazysh/pull/2969))
+
+  <details><summary>Details</summary>
+
+  `lazysh-agent snapshot` no longer reports a Claude Code session as done after `Stop` while its own records show work still running: the session registry's `shell` status (believed only while the agent process lives) and the `turn_duration` counts of background sub-agents and workflows. The row reads `working` ("Working in the background") with an optional `background` object (`agents`, `workflows`, `shells`), and `working` ("Turn resumed") when a finished task started a turn no hook reported yet. Changed default: a snapshot row the hooks left `done` can now read `working`. The stored state is unchanged, a dead process or an unreadable record leaves the hook state, and older clients and companions are unaffected.
+
+  </details>
+- feat(agent): add an optional operating system timer for the companion update check ([#2841](https://github.com/mihazs/lazysh/pull/2841))
+
+  <details><summary>Details</summary>
+
+  `lazysh-agent auto-update enable` installs the timer for the user's own account, without `sudo`: a systemd user timer on Linux, a launchd agent on macOS and a Scheduled Task on Windows, all waking the managed companion's `auto-update run` every hour (which decides from the settings whether a check is due). `auto-update disable` removes it and only files that carry the lazysh marker; `auto-update status` reports `timer`. `enable` exits 40 while the policy is `off`, 41 when the account cannot have a timer and 42 when the system refuses, putting the files back. No default changes: the timer is off until enabled.
+
+  </details>
+- feat(agent): check for a newer companion release on a schedule, with channel, interval and window ([#2841](https://github.com/mihazs/lazysh/pull/2841))
+
+  <details><summary>Details</summary>
+
+  The managed companion, when the app reads the snapshot and a check is due (about once a day), starts one detached `lazysh-agent auto-update run`: it asks the release metadata over HTTPS from the host, records `lastCheck` for `lazysh-agent update --status` (now also carrying the settings as `autoUpdate`) and `auto-update status`, and under the default policy `install` installs a newer verified release with the same guards as an app-driven update (never during an agent turn, never over a release rolled back from or one that failed verification, never to an older version, only inside the optional window). `auto-update set` gains `--channel stable|prerelease`, `--interval-hours 1..720` and `--window HH:MM-HH:MM|none`. A host that is offline records the failed check and waits an hour, doubling to a day. Changed default: the companion now makes one check of four small requests a day on its own and installs what it finds; `auto-update set --policy off` stops it.
+
+  </details>
+- feat(agent): hold a Claude Code done push while the session still runs background work ([#3006](https://github.com/mihazs/lazysh/pull/3006))
+
+  <details><summary>Details</summary>
+
+  The relay no longer sends "done" the moment `Stop` is reported while Claude Code's own records say the session still runs a background shell, monitor, sub-agent or workflow (or has started a turn no hook reported): the push is looked at again every 20 seconds, sent once nothing is open, dropped when the session reports another state (the resumed turn), and sent anyway after an hour. Changed default: a done push can arrive up to an hour after the turn ended. Sessions with no such evidence, other agents and every other push are unchanged, and the outbox schema is the same.
+
+  </details>
+- feat(agents): name each reported session from its first prompt so sessions in one folder are easy to tell apart ([#2954](https://github.com/mihazs/lazysh/pull/2954))
+
+  <details><summary>Details</summary>
+
+  The companion now keeps one line per session, cut from the first prompt the agent reports (Claude Code, Codex, Droid, Kimi, Grok Build, Copilot, Gemini CLI and Cursor), and reports it as `title` in the snapshot. The title is at most 80 characters, with whitespace collapsed and control characters removed; a bare slash command gives none. The first prompt names the session once and later prompts never replace it; an agent that reports its own `title` through the generic event replaces it.
+
+  Changed default: this is the first prompt text the companion stores. Only that bounded line is kept; the rest of a prompt, tool arguments and transcript paths are still discarded, and the push notification relay still carries no text. A companion without a title omits the field, so older apps keep showing the folder and agent.
+
+  </details>
+
+### Patch Changes
+
+- fix(agent): report and retire a legacy lazysh hook that runs beside the managed one ([#2968](https://github.com/mihazs/lazysh/pull/2968))
+
+  <details><summary>Details</summary>
+
+  A leftover `lazysh-agent ingest` hook at another path ingested every event a second time into the same store, doubling write contention, and an older companion rejected newer events. `hooks status` now lists these in `legacyDuplicates` and `hooks install` removes exactly them, leaving every other hook untouched.
+
+  </details>
+- fix(agent): give a cold Firefox as long to start as Chrome before the host browser relay gives up ([#2964](https://github.com/mihazs/lazysh/pull/2964))
+
+  <details><summary>Details</summary>
+
+  The Firefox adapter ended a session with `BrowserStartTimeout` after 30 seconds without the browser's port, while the Chrome launcher and relay wait 90 seconds. A Firefox starting on a loaded host could miss the shorter limit. Both now wait 90 seconds, and the closing message of a Firefox that never listened carries how long the relay waited.
+
+  </details>
+- test(agent): hold the storage gate in every test that flushes, so the slow-flush case stops flaking ([#2982](https://github.com/mihazs/lazysh/pull/2982))
+
+  <details><summary>Details</summary>
+
+  Five CLI tests opened stores or ran the companion without the cross-process volume gate, and their durable flushes queued in front of the sixteen-writer burst of `concurrent_hooks_preserve_every_event` under the simulated slow volume. No shipped behavior changes.
+
+  </details>
+
 ## 1.109.0
 
 ### Minor Changes
