@@ -2,12 +2,19 @@ import {$, browser} from '@wdio/globals';
 import Page from './page';
 import {inNative} from '../support/contexts';
 import {READY, receivedBytes} from '../support/receiver';
+import {screenBox, tapAt} from '../support/gestures';
 
 /** The terminal of the connected session. */
 class TerminalPage extends Page {
   readonly context = 'WEBVIEW' as const;
   screen(hostName: string) { return $(`aria/Terminal for ${hostName}`); }
   get root() { return $('aria/Terminal'); }
+
+  /** Taps the terminal as a finger does: focuses its input and raises the soft keyboard. */
+  async tapScreen(hostName: string) {
+    const {x, y, width, height} = await screenBox(() => this.screen(hostName));
+    await tapAt({x: x + width / 2, y: y + height / 2});
+  }
 
   /**
    * Types as a person does with the soft keyboard open: the characters reach the page as Android key events, not as DevTools
