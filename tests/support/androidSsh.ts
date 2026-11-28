@@ -767,7 +767,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       console.log('Owned packaged Zellij: discovery, list, attach, numbered tabs, detach and reattach verified against the original session and command panes');
     }
     if(sharedHerdr){
-      await herdr!.verifyPanelActions('ANDROID_CREATED_'+fixture.nonce,'ANDROID_RENAMED_'+fixture.nonce);
+      await herdr!.verifyPanelActions('ANDROID_CREATED_'+fixture.nonce,'ANDROID_RENAMED_'+fixture.nonce,'ANDROID_TAB_'+fixture.nonce);
       await herdr!.expectNavigationBytes();
     }
     else if(herdr){await herdr.expectBytes(Buffer.from(herdr.draft+'\r\x1b'));await herdr.expectHistoryScrolled();}
