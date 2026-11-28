@@ -24,6 +24,7 @@ mod herdr;
 mod herdr_backend;
 mod herdr_create;
 mod herdr_guard;
+mod herdr_pane_input;
 mod herdr_path;
 mod herdr_stock_input;
 mod host;
@@ -371,6 +372,7 @@ pub fn run() {
                 tmux_jump::chat::tmux_chat,
                 herdr_backend::herdr_backend_select,
                 herdr_guard::herdr_chat,
+                herdr_pane_input::herdr_pane_input,
                 herdr_stock_input::herdr_agent_input,
                 herdr_stock_input::herdr_agent_screen,
                 zellij_input::zellij_agent_input,

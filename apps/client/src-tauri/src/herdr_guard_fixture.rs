@@ -105,7 +105,7 @@ async fn adopted_source(
     adopt(app, &lease, &source).await;
     (authority, lease, source, events)
 }
-async fn captured(path: &std::path::Path, expected: &[u8]) {
+pub(super) async fn captured(path: &std::path::Path, expected: &[u8]) {
     timeout(BOUND, async {
         loop {
             if let Ok(bytes) = tokio::fs::read(path).await {
@@ -124,7 +124,7 @@ async fn captured(path: &std::path::Path, expected: &[u8]) {
     .expect("owned guarded input did not arrive exactly");
 }
 
-async fn install_capture(
+pub(super) async fn install_capture(
     servers: &HerdrServers<'_>,
     name: &str,
     pane: &str,

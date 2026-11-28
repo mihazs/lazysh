@@ -258,9 +258,9 @@ the same exact target, and searching opens every matching space in any layout.
 `lazysh-agent herdr-pane-input --session NAME` is the host half of typing into a
 named pane of an unchanged stock Herdr (Linux hosts with kernel 6.5 or newer; on
 other hosts it reports `HerdrInputPlatformUnsupported` and nothing is sent). It
-speaks JSON lines on stdin and stdout and ends when stdin closes. The app does
-not use it yet, so no Chat or Agent view behaviour changes in this release; it is
-the verified transport that the explicit destination picker will build on (#655).
+speaks JSON lines on stdin and stdout and ends when stdin closes. The app drives
+it through its `herdr_pane_input` command (below); no Chat or Agent view shows it
+yet, because the explicit destination picker is still to come (#655).
 
 Stock Herdr has no private guard to prove which server owns a socket, and its
 JSON connections last one request. The actor therefore pins the server process
@@ -286,6 +286,26 @@ and `uncertain` (the request left and no intact acknowledgement came back; it is
 never resent). `retired` and `uncertain` end the actor, so the caller must confirm a
 destination again and keeps its draft.
 
+**The app bridge.** `herdr_pane_input` keeps one such actor per displayed session
+on a retained exec channel, under the access lease, for one destination at a time.
+`prepare` starts it and reads the pane's occupant, `confirm` reads it again (a
+different terminal there is stale) and mints the receipt, `input` takes the
+receipt, the transcript source, the next operation number and a `send` or
+`request_stop`, and `release` ends it. Only text and Escape are pane input: dialog
+answers, long pastes and key profiles stay in the terminal. An operation number is
+spent before the request is written and a request is never resent. A refusal (Herdr
+or the actor said no before writing) keeps the confirmation and the operation
+number, except when the pane is gone or holds another terminal, which retires it.
+A retired server (replaced, restarted, exited), a lost acknowledgement
+(`uncertain`), a stale receipt, source or operation, a source changed from A to B and
+back to A, and the end of the access lease, the session or the actor end the actor and
+retire the confirmation, so the caller keeps its draft and confirms a destination
+again. A host without the updated companion, a kernel without `SO_PEERPIDFD` or a
+host that cannot run the command is one `herdr_pane_input_unsupported` state and
+Stage stays as it is; an unsupported host cannot be told apart from a Herdr session
+that is not running, because the command ends the same way. Guarded input and the
+Agent view composer are not touched.
+
 The destination is the selected pane's **current occupant**. Herdr's public API has
 no terminal-id or revision compare-and-swap, so the actor reads the pane right
 before writing and refuses when its terminal id is no longer the confirmed one, but
@@ -304,7 +324,15 @@ acknowledgement is `uncertain`. What is not: a server that hands its listener to
 new process (`server.live_handoff`) is retired, because the pinned process exits;
 PID reuse, inherited listeners and PID namespaces were not induced; macOS and
 Windows hosts are unsupported; and the Android and desktop confirmation screens are
-not built yet.
+not built yet. The CI `native-linux` job also drives the app command through actual
+OpenSSH, the real companion and the same stock Herdr (`herdr_pane_input` fixture):
+the selected pane gets the bytes once while a focused other pane and a bystander get
+nothing and no client moves, a repeated operation, a stale source (A, B, A) and an ended
+access lease type nothing and end the actor, a socket path taken over by another live
+server and a restarted server retire before any request byte, and a companion without
+the command is the one unsupported state. A lost acknowledgement and a kernel without
+`SO_PEERPIDFD` are exercised against a scripted stand-in for the companion, not a
+real host.
 
 Herdr **Spaces** offers **New workspace** above the workspace tree, and a
 **New worktree from …** button on each workspace that reports a pane directory.
