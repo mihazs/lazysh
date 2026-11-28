@@ -20,8 +20,9 @@ export function validBranch(value:string) {
 export function validBase(value:string) {
   return freeText(value,256) && !value.startsWith('-') && !/\s/.test(value);
 }
-export function validPrompt(value:string) {
-  return value.trim()==='' || (freeText(value,2000) && !value.startsWith('-'));
+/** `multiline` is for a tmux or Zellij launch, whose argv carries line breaks and tabs verbatim; Herdr's `agent start` takes one line. */
+export function validPrompt(value:string,multiline=false) {
+  return value.trim()==='' || (freeText(multiline?value.replace(/[\n\t]/g,' '):value,2000) && !value.startsWith('-'));
 }
 
 /** A branch suggestion from a workspace label that differs from the current HEAD. */

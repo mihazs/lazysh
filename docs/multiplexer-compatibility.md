@@ -94,7 +94,7 @@ table and literal argv quoting:
 
 | Multiplexer | Start an agent |
 | --- | --- |
-| tmux, rmux | `new-window -d -P -F '#{pane_id}' -t =<session> -n <label> -c <dir> -- <argv>` |
+| tmux, rmux | `new-window -P -F '#{pane_id}' -t =<session> -n <label> -c <dir> -- <argv>` |
 | Zellij | `zellij --session <S> run --cwd <dir> --name <label> -- <argv>` (returns the pane id) |
 | Herdr | unchanged: workspace or tab, then `agent start --pane` |
 
@@ -145,8 +145,8 @@ implemented without full evidence, *part* means partial.
 | Attach, reattach | yes | yes (reattach never creates and refuses an exited session, #1145, #2047) | yes | attach yes; reattach → #1677 |
 | Navigation, Jump To, current marker | yes, with pane rows (#1691) | impl (tab Jump To; a current row only while one client is attached, #2046); Android evidence → #1145 | yes; marker assertion #990 | tree and window and pane actions yes; Jump To → #1675 |
 | Create in a directory | yes | part → #1141 | yes | yes |
-| Create in a worktree | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
-| Agent launch | impl, backend only → #1128, #1680 | impl, backend only → #1128, #1680 | yes | no → #1679 |
+| Create in a worktree | impl, New agent flow → #1680 | impl, New agent flow → #1680 | yes | no → #1679 |
+| Agent launch | impl, New agent flow → #1680 | impl, New agent flow → #1680 | yes | no → #1679 |
 | Rename | session, window, pane | tab yes; session, pane impl → yes #1685 | workspace, tab, pane | session, window, pane |
 | Close | session, window (tab strip), pane | tab yes; pane, session impl → yes #1685 | workspace, tab (#1573), pane | session, window, pane |
 | Split, zoom | yes | yes | yes | yes |
