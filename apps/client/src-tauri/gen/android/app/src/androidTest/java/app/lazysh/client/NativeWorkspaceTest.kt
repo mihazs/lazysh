@@ -3511,6 +3511,125 @@ class NativeWorkspaceTest {
         println("lazysh tmux: copy mode entered from its shortcut, a line copied and the system clipboard written after Allow")
     }
 
+    // The host runs a hook-reporting stand-in agent in the displayed tmux pane, which reports to the real companion as Claude Code's
+    // hooks do. This case drives only the packaged UI: a prompt typed through the Android terminal input starts a held turn, the
+    // Agent view follows it, Terminal, Agent and Terminal keep the same xterm node, a prompt sent from the Agent view composer and
+    // another typed one each become a turn, and Android Back from the Agent view returns to that terminal. The host then reads the
+    // agent's own logs for one delivery of each prompt and no other key.
+    private fun verifyOwnedTmuxAgentView(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, label: String) {
+        val server = tmux.getString("name")
+        require(server == "owned-tmux") { "Owned tmux fixture required" }
+        val agent = tmux.getJSONObject("agent")
+        val hold = agent.getString("hold")
+        val sent = agent.getString("sent")
+        val typed = agent.getString("typed")
+        for (prompt in listOf(hold, sent, typed)) require(Regex("(hold|send|type) [a-f0-9]{8}").matches(prompt))
+        val child = "$parent / $server"
+        val view = "section.agent-view:not([hidden])"
+        val turns = "$view section.agent-turn"
+        val pane = "Array.from(document.querySelectorAll('.terminal-pane')).find(p=>p.style.display!=='none')"
+        fun switchTo(name: String) = onWebView().withElement(findElement(Locator.XPATH,
+            "//div[@role='group' and @aria-label='Session view']/button[@aria-label='$name']")).perform(webScrollIntoView()).perform(webClick())
+        fun turnTexts() = "Array.from(document.querySelectorAll(${JSONObject.quote(turns)})).map(x=>x.textContent)"
+        fun observeAgentView(remaining: Long) = evaluate(scenario, """JSON.stringify({view:!!document.querySelector(${JSONObject.quote(view)}),
+            header:(document.querySelector(${JSONObject.quote("$view header")})?.textContent??'').slice(0,80),
+            turns:${turnTexts()}.map(x=>x.slice(0,80)),pane:!!($pane)})""", remaining)
+        // Terminal: the one original xterm node is visible again with the scroll height it had before the Agent view.
+        fun terminalOriginal(height: String) = """(()=>{const node=document.querySelector('.xterm[data-agent-view-original]'),shown=node?.closest('.terminal-pane');
+            return !!shown && shown.style.display!=='none' && !document.querySelector(${JSONObject.quote(view)}) &&
+              document.querySelectorAll('.session-tabs [role=tab]').length===2 && shown.querySelector('.xterm-scroll-area')?.style.height===$height;})()"""
+        fun typeInTerminal(text: String, stage: String) {
+            // Only the shown pane takes the typing; the connection's own terminal stays hidden behind the tmux display.
+            val focused = "document.activeElement?.classList.contains('xterm-helper-textarea')===true && document.activeElement.closest('.terminal-pane')?.style.display!=='none'"
+            // Android Back and leaving the composer can leave the WebView without native focus, which native typing requires.
+            scenario.onActivity { activity ->
+                val web = requireNotNull(webView(activity.window.decorView))
+                if (!web.hasFocus()) assertTrue("Native WebView focus was denied", web.requestFocus())
+            }
+            fun tap() = onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".terminal-pane[style*='display: flex'] .xterm-screen")).perform(webClick())
+            if (evaluate(scenario, focused) != "true") tap()
+            awaitDocument(scenario, "terminal input focused to type $stage", focused)
+            // DOM focus can outlive the keyboard's input connection after Back; one more tap on the pane restores it.
+            val typing = typeTextIntoFocusedView(text)
+            val typingDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            var tapped = false
+            while (true) {
+                var ready = false
+                scenario.onActivity { activity -> ready = typing.constraints.matches(requireNotNull(webView(activity.window.decorView))) }
+                if (ready) break
+                assertTrue("Native typing constraints did not become ready to type $stage", System.nanoTime() < typingDeadline)
+                if (!tapped) { tapped = true; tap() }
+                Thread.sleep(25)
+            }
+            onView(isAssignableFrom(WebView::class.java)).perform(typing, pressKey(KeyEvent.KEYCODE_ENTER))
+            closeSoftKeyboard()
+            awaitDocument(scenario, "the pane shows the prompt typed $stage", terminalScreenContains("> $text"))
+        }
+        sessionView(scenario, "Sessions")
+        val attach = "Attach $server"
+        awaitDocument(scenario, "live tmux session discovered for the agent pane", """
+            Array.from(document.querySelectorAll('.multiplexer-panel button')).some(x=>x.textContent.trim()===${JSONObject.quote(attach)} && !x.disabled)""")
+        onWebView().withElement(findElement(Locator.XPATH, "//section[contains(@class,'multiplexer-panel')]//button[normalize-space(.)='$attach']"))
+            .perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "owned tmux display of the agent pane attached", """
+            (()=>{const tabs=document.querySelectorAll('.session-tabs [role=tab]');
+              return tabs.length===2 && tabs[1].textContent.trim()===${JSONObject.quote(child)} && tabs[1].getAttribute('aria-selected')==='true';})()""")
+        sessionView(scenario, "Terminal")
+        awaitDocument(scenario, "the reporting agent drew its pane", terminalScreenContains("manual mode on"))
+        // The node and scroll height the Agent view must give back; Android Back and the Terminal control both return to them.
+        val height = evaluate(scenario, """(()=>{const shown=$pane,node=shown?.querySelector('.xterm');if(!node)return '';
+            node.dataset.agentViewOriginal='';return shown.querySelector('.xterm-scroll-area')?.style.height??'';})()""")
+        require(height.length > 2 && height.startsWith("\"")) { "The reporting agent terminal must be shown before the Agent view" }
+        typeInTerminal(hold, "to start a held turn")
+        switchTo("Agent")
+        awaitDocument(scenario, "the Agent view follows the running turn of the reporting pane", """
+            (()=>{const turns=document.querySelectorAll(${JSONObject.quote(turns)});
+              return turns.length===1 && turns[0].getAttribute('data-running')==='true' && turns[0].textContent.includes(${JSONObject.quote(hold)}) &&
+                (document.querySelector(${JSONObject.quote("$view header")})?.textContent??'').includes('Working') && !($pane);})()""", observe = ::observeAgentView)
+        switchTo("Terminal")
+        awaitDocument(scenario, "Terminal after the mid-turn Agent view shows the same xterm node", terminalOriginal(height))
+        switchTo("Agent")
+        awaitDocument(scenario, "the Agent view again follows the still running turn", """
+            (()=>{const turns=document.querySelectorAll(${JSONObject.quote(turns)});
+              return turns.length===1 && turns[0].getAttribute('data-running')==='true';})()""", observe = ::observeAgentView)
+        // The composer sends to the bound pane; the next prompt also ends the held turn.
+        val composer = "$view textarea[aria-label='Draft for this terminal']"
+        val send = "$view button[aria-label='Send to the agent']"
+        pasteOwnedText(scenario, composer, sent, label)
+        closeSoftKeyboard()
+        // The keyboard can keep the pasted last word as an open composition, which the composer answers with Send off until it ends
+        // (observed on Waydroid: compositionstart and compositionupdate, never compositionend). Leaving the field ends it.
+        evaluate(scenario, "(()=>{document.activeElement?.blur();return true;})()")
+        assertEquals("Native paste must preserve the exact prompt", "true", evaluate(scenario, "document.querySelector(${JSONObject.quote(composer)})?.value===${JSONObject.quote(sent)}"))
+        awaitDocument(scenario, "the Agent view composer is bound to the pane", "Boolean(document.querySelector(${JSONObject.quote(send)}) && !document.querySelector(${JSONObject.quote(send)}).disabled)",
+            observe = { remaining -> evaluate(scenario, """(()=>{const row=document.querySelector(${JSONObject.quote("$view .agent-composer")});
+                const button=row?.querySelector('button[type=submit]');
+                return JSON.stringify({button:button?.getAttribute('aria-label')??null,disabled:button?.disabled??null,
+                  draft:(row?.querySelector('textarea')?.value??'').length,
+                  notes:Array.from(row?.querySelectorAll('[role=status],[role=alert]')??[]).map(x=>x.textContent.slice(0,120)),
+                  header:(document.querySelector(${JSONObject.quote("$view header")})?.textContent??'').slice(0,80),
+                  active:document.activeElement?.tagName+':'+(document.activeElement?.getAttribute('aria-label')??'')});})()""", remaining) })
+        onWebView().withElement(findElement(Locator.CSS_SELECTOR, send)).perform(webScrollIntoView()).perform(webClick())
+        awaitDocument(scenario, "the sent prompt became a turn and the held turn ended", """
+            (()=>{const texts=${turnTexts()},running=document.querySelectorAll(${JSONObject.quote("$turns[data-running=true]")}).length;
+              return texts.length===2 && running===0 && texts[0].includes('Finished the held work.') && texts[1].includes(${JSONObject.quote("Answered: $sent")});})()""", observe = ::observeAgentView)
+        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack()
+        awaitDocument(scenario, "Android Back from the bound Agent view shows the same terminal and node", terminalOriginal(height))
+        // The pane shows the sent prompt once; the agent's own log counts the deliveries.
+        assertEquals("The prompt sent from the Agent view must show once in the pane", "true", evaluate(scenario,
+            "Array.from(document.querySelectorAll('.terminal-canvas .xterm-screen')).some(x=>x.textContent.split(${JSONObject.quote("> $sent")}).length===2)"))
+        typeInTerminal(typed, "after the Agent view")
+        switchTo("Agent")
+        // One follow interval is 2 s; the SSH exec round trip and the shared runner's slack stay inside five.
+        awaitDocument(scenario, "the typed prompt became a turn within one follow interval", """
+            ${turnTexts()}.length===3 && ${turnTexts()}[2].includes(${JSONObject.quote("Answered: $typed")})""",
+            deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5), observe = ::observeAgentView)
+        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack()
+        awaitDocument(scenario, "Android Back after the typed turn shows the same terminal and node", terminalOriginal(height))
+        println("lazysh tmux Agent view: a mid-turn switch, a sent prompt, a typed prompt and Android Back followed the reporting pane")
+        endOwnedConnection(scenario, child)
+    }
+
     // The host harness owns this pinned tmux server and its two pane processes. This
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
     // window control, confirmed Chat input to the displayed pane, a top/bottom split and zoom of beta's pane
@@ -4041,6 +4160,7 @@ class NativeWorkspaceTest {
     @Test fun ownedMoshSurvivesBusyBackgroundThroughRealUi() = ownedSshUi(false, false, true)
     @Test fun ownedMoshUploadsLargeClipboardImageThroughRealUi() = ownedSshUi(false, requireAttachments = true)
     @Test fun ownedTmuxThroughRealUi() = ownedSshUi(false, requireTmux = true)
+    @Test fun ownedTmuxAgentViewThroughRealUi() = ownedSshUi(false, requireTmux = true, requireTmuxAgent = true)
     @Test fun ownedTmuxControlsWithNativeEngine() {
         Os.setenv("LAZYSH_NATIVE_TERMINAL_SOFTWARE_GPU", "1", true)
         ownedSshUi(false, requireTmux = true, nativeTmux = true)
@@ -5108,7 +5228,8 @@ class NativeWorkspaceTest {
         closeSoftKeyboard()
     }
 
-    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireZellij: Boolean = false, nativeTmux: Boolean = false, nativeZellij: Boolean = false) {
+    private fun ownedSshUi(requireHerdr: Boolean, requireCompanion: Boolean = false, requireMoshBackground: Boolean = false, requireHerdrMosh: Boolean = false, requireSharedHerdr: Boolean = false, requireAttachments: Boolean = false, requireIme: Boolean = false, requireDpad: Boolean = false, requireRecorded: Boolean = false, requireTmux: Boolean = false, requireDeniedNotification: Boolean = false, requireZellij: Boolean = false, nativeTmux: Boolean = false, nativeZellij: Boolean = false, requireTmuxAgent: Boolean = false) {
+        require(!requireTmuxAgent || (requireTmux && !nativeTmux)) { "Owned tmux agent mode requires the packaged tmux fixture" }
         require(!requireZellij || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded && !requireTmux)) { "Owned Zellij mode must be isolated" }
         require(!requireTmux || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad && !requireRecorded)) { "Owned tmux mode must be isolated" }
         require(!requireRecorded || (!requireHerdr && !requireCompanion && !requireMoshBackground && !requireHerdrMosh && !requireSharedHerdr && !requireAttachments && !requireIme && !requireDpad)) { "Recorded conversation mode must be isolated" }
@@ -5562,8 +5683,12 @@ class NativeWorkspaceTest {
                         window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
                         return true;
                     })()""")
-                    verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label, nativeTmux)
-                    if (!nativeTmux) verifyOwnedTmuxDefault(scenario, fixture, name, label)
+                    val tmux = fixture.getJSONObject("tmux")
+                    require(requireTmuxAgent == tmux.has("agent")) { "Owned tmux agent fixture mode mismatch" }
+                    if (requireTmuxAgent) verifyOwnedTmuxAgentView(scenario, tmux, name, label) else {
+                        verifyOwnedTmux(scenario, tmux, name, label, nativeTmux)
+                        if (!nativeTmux) verifyOwnedTmuxDefault(scenario, fixture, name, label)
+                    }
                 } finally {
                     if (nativeTmux) evaluate(scenario, PageDriver.restoreStorageScript(key, previous))
                 }
