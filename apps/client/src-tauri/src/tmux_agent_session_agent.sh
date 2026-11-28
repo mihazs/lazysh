@@ -6,10 +6,15 @@
 # `$log.keys`, and a `hold ...` prompt keeps its turn running until `$log.release` exists. The value `report` also runs the
 # companion's `ingest --reported-history` hook the way Claude Code's hooks do (a tmux pane names itself through TMUX_PANE);
 # any other value (`keys`) leaves the report to the multiplexer that hosts the pane, as Herdr's own session report does.
+# The value `opencode` makes it OpenCode 2.2 instead: `$transcript` is then the SQLite database that agent keeps every session in
+# (a `session_v2` row, one `session_message` row per message with an assistant's parts inline, and its `session_inbox`) and the hook is its plugin's
+# `session.status` report through `ingest --agent opencode`.
 transcript=$1 log=$2 companion=$3 state=$4 report=$5
 modes=('manual mode on' 'accept edits on' 'plan mode on')
 mode=0 buf='' asking=0 pasting=0 count=0 parent=null due=0 sub_due=0 flow_due=0 held=0
 session=${transcript%.jsonl}
+opencode_session=ses_5f0c1d2e00aa
+now_ms() { printf '%s' "$((${EPOCHREALTIME/./} / 1000))"; }
 escape() { local s=${1//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}; printf '%s' "$s"; }
 note() { printf '%s\n' "$1" >> "$log"; }
 # One transcript record: the chain of parentUuid is what makes the reader follow a branch.
@@ -19,8 +24,19 @@ record() {
     "$parent" "$1" "$count" "$((count / 60))" "$((count % 60))" "$2" >> "$transcript"
   parent="\"r$count\""
 }
-user() { record user "{\"role\":\"user\",\"content\":\"$(escape "$1")\"}"; }
-text() { record assistant "{\"id\":\"msg_$count\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture-model\",\"content\":[{\"type\":\"text\",\"text\":\"$(escape "$1")\"}]}"; }
+# One OpenCode message row, in the order of its `seq`; the session's `time_updated` follows it, as the discovery lists it.
+opencode_message() {
+  count=$((count + 1))
+  sqlite3 "$transcript" "INSERT INTO session_message VALUES('msg_$count','$opencode_session','$1',$count,'${2//\'/\'\'}',$(now_ms)); UPDATE session_v2 SET time_updated=$(now_ms);"
+}
+user() {
+  if [[ $report == opencode ]]; then opencode_message user "{\"text\":\"$(escape "$1")\"}"; return; fi
+  record user "{\"role\":\"user\",\"content\":\"$(escape "$1")\"}"
+}
+text() {
+  if [[ $report == opencode ]]; then opencode_message assistant "{\"content\":[{\"type\":\"text\",\"text\":\"$(escape "$1")\"}]}"; return; fi
+  record assistant "{\"id\":\"msg_$count\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"fixture-model\",\"content\":[{\"type\":\"text\",\"text\":\"$(escape "$1")\"}]}"
+}
 ask() {
   record assistant '{"id":"msg_ask","type":"message","role":"assistant","model":"fixture-model","content":[{"type":"tool_use","id":"toolu_ask","name":"AskUserQuestion","input":{"questions":[{"question":"Which layout?","header":"Layout","multiSelect":false,"options":[{"label":"Flat","description":"One file."},{"label":"Nested","description":"One directory."}]}]}}]}'
 }
@@ -61,6 +77,14 @@ permission() {
 # The hook Claude Code runs on a lifecycle event (`lazysh-agent claude-config --reported-history`): it names the session, its
 # transcript and, through TMUX_PANE, this pane.
 hook() {
+  if [[ $report == opencode ]]; then
+    # OpenCode reports only its status: busy while a turn runs, idle before the first and after each.
+    local status=idle; [[ $1 == UserPromptSubmit ]] && status=busy
+    [[ $1 == SessionStart || $1 == UserPromptSubmit || $1 == Stop ]] || return 0
+    printf '{"type":"session.status","directory":"/work/fixture","properties":{"sessionID":"%s","status":{"type":"%s"}}}' "$opencode_session" "$status" |
+      LAZYSH_STATE_DIR=$state "$companion" ingest --agent opencode
+    return
+  fi
   [[ $report == report ]] || return 0
   printf '{"hook_event_name":"%s","session_id":"5f0c1d2e-0000-4000-8000-0000000000aa","transcript_path":"%s","cwd":"/work/fixture"%s}' "$1" "$transcript" "$2" |
     LAZYSH_STATE_DIR=$state "$companion" ingest --agent claude --reported-history
@@ -72,6 +96,10 @@ draw() { printf '\033[2J\033[H> \r\n\r\n  ⏸ %s · ? for shortcuts' "${modes[$m
 # screen (Herdr) takes for a working agent. Rewritten in place, so nothing else on the screen moves.
 hint() { printf '\x1b7\033[3;1H\033[2K  ⏸ %s · %s\x1b8' "${modes[$mode]}" "$1"; }
 
+if [[ $report == opencode ]]; then
+  mkdir -p "${transcript%/*}"
+  sqlite3 "$transcript" "PRAGMA journal_mode=WAL; CREATE TABLE session_v2(id TEXT PRIMARY KEY,title TEXT,revert TEXT,directory TEXT,time_updated INTEGER); CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,data TEXT,time_created INTEGER); CREATE TABLE session_inbox(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,delivery TEXT); INSERT INTO session_v2 VALUES('$opencode_session','Fixture work',NULL,'/work/fixture',$(now_ms));" > /dev/null
+fi
 stty raw -echo
 printf '\033[?2004h'
 draw
