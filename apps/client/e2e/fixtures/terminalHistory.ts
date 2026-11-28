@@ -2,8 +2,8 @@ import {expect,type Page} from '@playwright/test';
 import {installNativeBridge} from './nativeBridge';
 import {onAdapter,terminalBounds,terminalCell,terminalDrawn} from './terminalState';
 import type {TerminalBackendId} from '../../src/terminalAdapter';
-import type {mountTerminalHistoryHarness} from './TerminalHistoryHarness';
-declare global {interface Window {ownedHistory:Awaited<ReturnType<typeof mountTerminalHistoryHarness>>;ownedHistoryInput?:(data:string)=>void;edgeLog:string[]}}
+import type {mountBrowserHistoryHarness} from './TerminalHistoryHarness';
+declare global {interface Window {ownedHistory:Awaited<ReturnType<typeof mountBrowserHistoryHarness>>;ownedHistoryInput?:(data:string)=>void;edgeLog:string[]}}
 
 /** Loads the workspace with synthetic commands; the terminal harness mounts separately. */
 export async function openHistoryWorkspace(page:Page) {
@@ -23,7 +23,7 @@ export async function mountHistory(page:Page,mosh:boolean,load=true,topAnchored=
   await page.evaluate(async({mosh,topAnchored,edge,engine})=>{
     const fixture=await import('/e2e/fixtures/TerminalHistoryHarness.tsx');
     window.edgeLog=[];
-    window.ownedHistory=await fixture.mountTerminalHistoryHarness({engine,mosh,topAnchored,edgeLog:edge?window.edgeLog:undefined,edgeClose:edge?.close,input:data=>window.ownedHistoryInput?.(data)});
+    window.ownedHistory=await fixture.mountBrowserHistoryHarness({engine,mosh,topAnchored,edgeLog:edge?window.edgeLog:undefined,edgeClose:edge?.close,input:data=>window.ownedHistoryInput?.(data)});
   },{mosh,topAnchored,edge,engine});
   await terminalDrawn(page);
   // A Mosh terminal adopts its geometry only from the first authoritative frame.

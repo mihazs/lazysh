@@ -16,6 +16,8 @@ export async function installLocalTerminal(page:Page) {
       if (command==='app_lock_ready' || command==='adopt_session') return;
       if (command==='list_hosts') return [];
       if (command==='clipboard_is_android') return false;
+      // No screen reader: otherwise the terminal selection requires an accessible backend and a native terminal falls back to xterm.js.
+      if (command==='screen_reader_active') return false;
       // Android's IME controller: a spec that installs `simpleShortcutKeyboard` plays the native side, otherwise there is none (null).
       if (command==='soft_keyboard') return window.simpleShortcutKeyboard?.(args.action as string) ?? null;
       // Host files: `simpleShortcutFiles` maps an absolute path to its text; any other path does not exist.

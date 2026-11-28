@@ -11,15 +11,23 @@ import {installMoshResize} from '../../src/xterm/moshResize';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
 import '../../src/styles.css';
 
-/** Synthetic remote screen only: no host, transport or private terminal content. */
-export async function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false,edgeLog,edgeClose,fixedGrid,engine='xterm'}:{engine?:TerminalBackendId;mosh?:boolean;input?:(data:string)=>void;topAnchored?:boolean;edgeLog?:string[];edgeClose?:boolean;fixedGrid?:{cols:number;rows:number}}={}) {
+type HistoryOptions={mosh?:boolean;input?:(data:string)=>void;topAnchored?:boolean;edgeLog?:string[];edgeClose?:boolean;fixedGrid?:{cols:number;rows:number}};
+const defaultGrid={cols:40,rows:24};
+
+/** The harness over the engine's terminal: only a native engine has to be created (asynchronously) before the harness mounts. */
+export async function mountBrowserHistoryHarness({engine='xterm',...options}:HistoryOptions&{engine?:TerminalBackendId}={}) {
+  const {cols,rows}=options.fixedGrid??defaultGrid;
+  return mountTerminalHistoryHarness({...options,browser:engine==='native'?await createBrowserTerminal(engine,{columns:cols,rows}):undefined});
+}
+
+/** Synthetic remote screen only: no host, transport or private terminal content. Synchronous, because the terminal benchmark opens it in place. */
+export function mountTerminalHistoryHarness({mosh=false,input,topAnchored=false,edgeLog,edgeClose,fixedGrid,browser}:HistoryOptions&{browser?:Awaited<ReturnType<typeof createBrowserTerminal>>}={}) {
   applyAccessStatus({initialized:true,supported:true,reason:'Synthetic browser access fixture.',enabled:true,locked:false,
     generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'a'.repeat(64)});
   const host=document.createElement('section');
   Object.assign(host.style,{position:'fixed',inset:'0',zIndex:'100',display:'flex',flexDirection:'column',background:'#101010'});
   document.body.append(host);
-  const {cols,rows}=fixedGrid??{cols:40,rows:24};
-  const browser=engine==='native'?await createBrowserTerminal(engine,{columns:cols,rows}):undefined;
+  const {cols,rows}=fixedGrid??defaultGrid;
   const terminal=browser?undefined:createTerminal();
   const adapter=browser?.adapter??new XtermTerminalAdapter(terminal!);
   if(fixedGrid&&terminal)adapter.fit=()=>terminal.resize(cols,rows);
