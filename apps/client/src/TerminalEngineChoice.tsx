@@ -29,13 +29,19 @@ export default function TerminalEngineChoice({engine, screenReader, update}: {en
       .then(next => { if (current) setAnswer(next); });
     return () => { current = false; };
   }, [screenReader, returns]);
+  // The re-probe path: the device is asked again (a driver updated, a display changed) and the answer replaces the shown one.
+  const checkAgain = () => {
+    import('./terminalBackends').then(async ({reprobeBackend, recordedNativeFailure}) => ({reason: await reprobeBackend('native', screenReader), failed: recordedNativeFailure()}))
+      .catch((error: unknown) => ({reason: String(error)}))
+      .then(setAnswer);
+  };
   const off = !answer || answer.reason !== undefined;
   return <>
     <fieldset className="cursor-picker" aria-describedby="terminal-engine-help"><legend>{t('preferencesTerminalEngine')}</legend><div>{choices.map(([value, label]) =>
       <label key={value}><input type="radio" name="terminal-engine" value={value} checked={(engine ?? 'auto') === value} disabled={value === 'native' && off} aria-describedby={value === 'native' && answer?.reason !== undefined ? 'terminal-engine-native-off' : undefined} onChange={() => update({terminalEngine: value === 'auto' ? undefined : value})} /><span>{t(label)}</span></label>)}</div></fieldset>
     <p id="terminal-engine-help">{t('preferencesTerminalEngineHelp')}</p>
     <p id="terminal-engine-feedback"><TerminalFeedbackLink report={{preference: engine ?? 'auto', reasons: answer?.reason === undefined ? [] : [`native: ${answer.reason}`]}} /> {t('terminalFeedbackHelp')}</p>
-    {answer?.reason !== undefined && <p id="terminal-engine-native-off">{t('preferencesTerminalEngineNativeOff', {reason: describeRefusal(answer.reason)})}</p>}
+    {answer?.reason !== undefined && <p id="terminal-engine-native-off">{t('preferencesTerminalEngineNativeOff', {reason: describeRefusal(answer.reason)})} <button type="button" onClick={checkAgain}>{t('preferencesTerminalEngineCheckAgain')}</button></p>}
     {answer?.failed !== undefined && <p id="terminal-engine-native-failed">{t('preferencesTerminalEngineFailed', {detail: answer.failed.slice(FAILED_PREFIX.length)})}</p>}
   </>;
 }

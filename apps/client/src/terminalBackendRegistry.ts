@@ -11,7 +11,7 @@ export type BackendRegistration = {
   /** `auto` may pick this backend. A backend becomes eligible only after its rollout gate passes. */
   autoEligible: boolean;
   /** Real hardware/surface detection; a failure is recorded with its reason, never ignored. */
-  probe(): BackendProbe | Promise<BackendProbe>;
+  probe(options?: {fresh?: boolean}): BackendProbe | Promise<BackendProbe>;
   create(session?: SessionOptions): TerminalAdapter | Promise<TerminalAdapter>;
 };
 
@@ -67,9 +67,9 @@ export function createBackendRegistry(failures: FailureMemory = memoryOfFailures
   const backends = new Map<TerminalBackendId, BackendRegistration>();
   const probed = new Map<TerminalBackendId, Promise<BackendProbe>>();
   // A probe may be costly (GPU surface); it runs once per registry and its result is the recorded truth.
-  const probeOnce = (backend: BackendRegistration) => {
+  const probeOnce = (backend: BackendRegistration, fresh = false) => {
     let result = probed.get(backend.id);
-    if (!result) probed.set(backend.id, result = Promise.resolve().then(() => backend.probe()).catch((error): BackendProbe => ({ok: false, reason: String(error)})));
+    if (!result || fresh) probed.set(backend.id, result = Promise.resolve().then(() => backend.probe({fresh})).catch((error): BackendProbe => ({ok: false, reason: String(error)})));
     return result;
   };
 
@@ -120,6 +120,13 @@ export function createBackendRegistry(failures: FailureMemory = memoryOfFailures
     },
     select,
     refusal,
+    /** The re-probe path: forgets what the backend's probe answered and asks the device again; answers the probe as `refusal` would. */
+    async reprobe(id: TerminalBackendId): Promise<string | undefined> {
+      const backend = backends.get(id);
+      if (!backend) return NOT_REGISTERED;
+      const probe = await probeOnce(backend, true);
+      return probe.ok ? undefined : probe.reason;
+    },
     /** The failure recorded for a backend (undefined: none), as `select` records it under Auto. */
     failure: (id: TerminalBackendId) => failures.get(id),
     /** A backend broke in a session: Auto keeps away from it until the memory forgets or a start of it works. Answers the recorded reason. */

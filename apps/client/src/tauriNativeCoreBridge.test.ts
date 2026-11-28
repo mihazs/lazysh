@@ -371,6 +371,13 @@ describe('the native backend probe', () => {
     expect(commands()).toEqual(['terminal_core_available', 'native_terminal_probe']);
   });
 
+  it('asks the app to forget its kept device answer only when re-probing', async () => {
+    invoke.mockResolvedValueOnce({available: true, reason: 'present'});
+    invoke.mockResolvedValueOnce({available: true, reason: 'drawn'});
+    expect(await probeNativeCore({fresh: true})).toEqual({ok: true});
+    expect(invoke.mock.calls.map(call => call.slice(0, 2))).toEqual([['terminal_core_available'], ['native_terminal_probe', {fresh: true}]]);
+  });
+
   it('refuses a device whose GPU cannot draw the terminal with the reason the app gives', async () => {
     const reason = 'The native terminal cannot draw on this device: renderer unsupported: no hardware GPU, only a software rasterizer';
     invoke.mockResolvedValueOnce({available: true, reason: 'present'});
