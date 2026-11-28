@@ -1,79 +1,17 @@
 //! A permission dialog the person rejects in Claude Code sends no hook (#1795); the snapshot settles the row from the
 //! conversation file. The records have the shapes Claude Code 2.1.3xx writes for a rejected tool call: the assistant
 //! `tool_use`, a `tool_result` with `is_error` and `toolUseResult: "User rejected tool use"`, then the interruption marker.
+#[path = "support/claude_host.rs"]
+mod claude_host;
 #[path = "support/json_output.rs"]
 mod json_output;
 #[path = "support/process.rs"]
 mod process;
-use chrono::{Duration, SecondsFormat, Utc};
+use chrono::Duration;
+use claude_host::{append, at, carry_on, queue_operation, sidechain_text, Host, SESSION};
 use serde_json::{json, Value};
-use std::{fs, io::Write, path::Path, process::Command};
+use std::{fs, io::Write};
 
-const SESSION: &str = "9d5c2c9e-6a38-4a4d-b1c8-3f8f5a1b2c3d";
-
-struct Host {
-    state: tempfile::TempDir,
-    config: tempfile::TempDir,
-}
-impl Host {
-    fn new() -> Self {
-        let config = tempfile::tempdir().unwrap();
-        fs::create_dir_all(config.path().join("projects/-work")).unwrap();
-        Self {
-            state: tempfile::tempdir().unwrap(),
-            config,
-        }
-    }
-    fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_lazysh-agent"));
-        command
-            .args(args)
-            .env("LAZYSH_STATE_DIR", self.state.path())
-            .env("CLAUDE_CONFIG_DIR", self.config.path());
-        command
-    }
-    fn ingest(&self, payload: &Value) {
-        let output = process::run(
-            &mut self.command(&["ingest", "--agent", "claude"]),
-            payload.to_string().as_bytes(),
-        );
-        assert!(output.status.success(), "{output:?}");
-    }
-    fn hook(&self, name: &str, tool: Option<&str>) {
-        let mut payload = json!({"hook_event_name":name,"session_id":SESSION,"cwd":"/work"});
-        if let Some(tool) = tool {
-            payload["tool_name"] = json!(tool);
-        }
-        self.ingest(&payload);
-    }
-    fn sessions(&self) -> Value {
-        json_output::decode(process::run(&mut self.command(&["snapshot"]), b""))["sessions"].clone()
-    }
-    fn row(&self) -> Value {
-        self.sessions()[0].clone()
-    }
-    fn conversation(&self) -> std::path::PathBuf {
-        self.config
-            .path()
-            .join(format!("projects/-work/{SESSION}.jsonl"))
-    }
-    fn append(&self, records: &[Value]) {
-        append(&self.conversation(), records);
-    }
-}
-fn append(path: &Path, records: &[Value]) {
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .unwrap();
-    for record in records {
-        writeln!(file, "{record}").unwrap();
-    }
-}
-fn at(offset: Duration) -> String {
-    (Utc::now() + offset).to_rfc3339_opts(SecondsFormat::Millis, true)
-}
 fn asks(tool: &str, offset: Duration) -> Value {
     json!({"type":"assistant","isSidechain":false,"timestamp":at(offset),"sessionId":SESSION,
         "message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"toolu_1","name":tool,"input":{}}]}})
@@ -143,10 +81,7 @@ fn only_a_rejection_after_the_wait_began_and_with_nothing_said_since_settles_it(
 
     // A message after the rejection means the conversation went on, so no dialog is rejected.
     host.append(&rejection());
-    host.append(&[
-        json!({"type":"user","isSidechain":false,"timestamp":at(Duration::zero()),
-        "message":{"role":"user","content":"carry on"}}),
-    ]);
+    host.append(&[carry_on(Duration::zero())]);
     assert_eq!(host.row()["state"], "needs_attention");
 }
 
@@ -157,9 +92,8 @@ fn a_sub_agents_own_records_and_other_record_types_do_not_hide_the_rejection() {
     host.append(&[asks("Bash", Duration::seconds(-1))]);
     host.append(&rejection());
     host.append(&[
-        json!({"type":"assistant","isSidechain":true,"timestamp":at(Duration::zero()),
-            "message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}),
-        json!({"type":"queue-operation","operation":"enqueue","timestamp":at(Duration::zero())}),
+        sidechain_text(Duration::zero()),
+        queue_operation(Duration::zero()),
         json!({"type":"system","subtype":"turn_duration","timestamp":at(Duration::zero())}),
     ]);
     assert_eq!(host.row()["state"], "done");
