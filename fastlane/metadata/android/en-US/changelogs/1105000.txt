@@ -1,0 +1,6 @@
+- label each file update card as created, edited, deleted or renamed
+- show the newest pane history tail when a pane's scrollback exceeds 8 MiB
+- match the native and xterm terminal grids in Android stream measurements
+- keep the Back listener registered so Back never leaves the app while a page opens
+- refresh host-tool views automatically after the command connection recovers
+Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.105.0

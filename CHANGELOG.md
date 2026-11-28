@@ -10,6 +10,29 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.105.0] - 2026-11-28
+
+### New
+
+- **agents:** label each file update card as created, edited, deleted or renamed ([#2803](https://github.com/mihazs/lazysh/pull/2803))
+- **agents:** always show the agent's reported mode, approval and sandbox in the Agent view header ([#2805](https://github.com/mihazs/lazysh/pull/2805))
+- **browser:** let the host browser relay's Firefox take pointer, wheel, key and text input ([#2821](https://github.com/mihazs/lazysh/pull/2821))
+
+### Fixed
+
+- **multiplexers:** show the newest pane history tail when a pane's scrollback exceeds 8 MiB ([#2809](https://github.com/mihazs/lazysh/pull/2809))
+- **bench:** match the native and xterm terminal grids in Android stream measurements ([#2754](https://github.com/mihazs/lazysh/pull/2754))
+- **android:** keep the Back listener registered so Back never leaves the app while a page opens ([#2791](https://github.com/mihazs/lazysh/pull/2791))
+- **ssh:** refresh host-tool views automatically after the command connection recovers ([#2795](https://github.com/mihazs/lazysh/pull/2795))
+- **tmux:** start new sessions, windows and panes in directories whose name contains a style marker ([#2800](https://github.com/mihazs/lazysh/pull/2800))
+- **agents:** list script-file and resumed dynamic workflows by name with their progress ([#2806](https://github.com/mihazs/lazysh/pull/2806))
+
+### Under the hood
+
+- **fdroid:** add release notes and phone screenshots to the F-Droid listing ([#2928](https://github.com/mihazs/lazysh/pull/2928))
+- **windows:** drive theme QR scan and shell link import through the installed GUI ([#2816](https://github.com/mihazs/lazysh/pull/2816))
+- **android:** wait for the auth activity to resume before the instrumentation test continues ([#2817](https://github.com/mihazs/lazysh/pull/2817))
+
 ## [1.104.2] - 2026-11-27
 
 ### Fixed

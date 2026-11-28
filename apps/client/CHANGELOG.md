@@ -1,5 +1,83 @@
 # @lazysh/client
 
+## 1.105.0
+
+### Minor Changes
+
+- feat(agents): label each file update card as created, edited, deleted or renamed ([#2803](https://github.com/mihazs/lazysh/pull/2803))
+
+  <details><summary>Details</summary>
+
+  Patch-style edits (Codex `apply_patch`, OpenCode `patch`) now show deleted and renamed files with their operation and old and new paths, and a Write says whether it created the file.
+
+  </details>
+
+### Patch Changes
+
+- fix(multiplexers): show the newest pane history tail when a pane's scrollback exceeds 8 MiB ([#2809](https://github.com/mihazs/lazysh/pull/2809))
+
+  <details><summary>Details</summary>
+
+  Pane history for tmux, Zellij and Herdr now keeps only the newest part of the host output before it crosses the transport bound, so a wide, deep pane shows its latest 2 MiB with the truncation notice instead of failing.
+
+  </details>
+- fix(bench): match the native and xterm terminal grids in Android stream measurements ([#2754](https://github.com/mihazs/lazysh/pull/2754))
+
+  <details><summary>Details</summary>
+
+  The packaged xterm benchmark can match the native arm’s rows and columns using rendered cell dimensions, then checks the remote PTY size before replaying the matched fixture.
+
+  </details>
+- fix(android): keep the Back listener registered so Back never leaves the app while a page opens ([#2791](https://github.com/mihazs/lazysh/pull/2791))
+
+  <details><summary>Details</summary>
+
+  Back is handled for the whole session; when nothing is open it runs Android's default Back instead of the app finishing.
+
+  </details>
+- fix(ssh): refresh host-tool views automatically after the command connection recovers ([#2795](https://github.com/mihazs/lazysh/pull/2795))
+
+  <details><summary>Details</summary>
+
+  Herdr navigation, the Agent view, account usage, the multiplexer strip and live transcript watches now refresh on their own when a Mosh or Eternal Terminal session recovers its host-tools connection, and the terminal and session are untouched. The manual host-tools reconnect buttons and credential dialog are removed: while recovery runs the views say host tools are reconnecting, and when it cannot proceed (credentials, a changed host or a jump host) they say why. Reconnecting uploads still uses its own manual flow. Verified with an owned Linux Mosh/Herdr session; Android and iOS acceptance is not yet run.
+
+  </details>
+- build(fdroid): add release notes and phone screenshots to the F-Droid listing ([#2928](https://github.com/mihazs/lazysh/pull/2928))
+
+  <details><summary>Details</summary>
+
+  Each version PR now writes `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`, which lists the release's user-facing headlines and links to the full notes. The listing also gets six phone screenshots taken from the README captures.
+
+  </details>
+- test(windows): drive theme QR scan and shell link import through the installed GUI ([#2816](https://github.com/mihazs/lazysh/pull/2816))
+
+  <details><summary>Details</summary>
+
+  The installed Windows GUI check now scans a QR image through the real file input and opens a `lazysh://theme` link through the Windows shell with the registration the NSIS installer wrote; the theme changes only after Apply. Test-only; the application is unchanged.
+
+  </details>
+- fix(tmux): start new sessions, windows and panes in directories whose name contains a style marker ([#2800](https://github.com/mihazs/lazysh/pull/2800))
+
+  <details><summary>Details</summary>
+
+  A directory such as `a#[b]c` no longer makes tmux start the new session, window or split pane in Home.
+
+  </details>
+- feat(agents): always show the agent's reported mode, approval and sandbox in the Agent view header ([#2805](https://github.com/mihazs/lazysh/pull/2805))
+
+  <details><summary>Details</summary>
+
+  The header now draws the mode the agent reports even when it is the default one, plus a chip with the approval policy and sandbox when the agent reports them (Codex). An agent that reports nothing shows no chip.
+
+  </details>
+- test(android): wait for the auth activity to resume before the instrumentation test continues ([#2817](https://github.com/mihazs/lazysh/pull/2817))
+
+  <details><summary>Details</summary>
+
+  The Android auth instrumentation test no longer reads a transitional RESTARTED state, so the owned emulator job stops failing intermittently. No app behavior changes.
+
+  </details>
+
 ## 1.104.2
 
 ### Patch Changes
