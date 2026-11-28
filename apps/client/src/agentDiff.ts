@@ -4,7 +4,9 @@
 import type {ToolCall} from './agentToolCall';
 
 export type DiffLine = {kind: '+' | '-' | ' '; text: string};
-export type FileChange = {path: string; lines: DiffLine[]; added: number; removed: number};
+export type FileOp = 'create' | 'edit' | 'delete' | 'rename';
+/** `from` is the old path of a rename; `path` is always the file as it is after the change (or the deleted file). */
+export type FileChange = {path: string; op: FileOp; from?: string; lines: DiffLine[]; added: number; removed: number};
 
 const CONTEXT = 2;
 const split = (text: string) => (text === '' ? [] : text.replace(/\n$/, '').split('\n'));
@@ -26,16 +28,19 @@ export function replacement(before: string, after: string): DiffLine[] {
 }
 
 const str = (value: unknown) => (typeof value === 'string' ? value : undefined);
-const change = (path: string, lines: DiffLine[]): FileChange => ({path, lines, added: lines.filter(line => line.kind === '+').length, removed: lines.filter(line => line.kind === '-').length});
+const change = (path: string, lines: DiffLine[], op: FileOp = 'edit', from?: string): FileChange => ({path, op, from, lines, added: lines.filter(line => line.kind === '+').length, removed: lines.filter(line => line.kind === '-').length});
+
+const PATCH_OPS = {Add: 'create', Update: 'edit', Delete: 'delete'} as const;
 
 function patches(text: string): FileChange[] {
-  const files: {path: string; lines: DiffLine[]}[] = [];
+  const files: {path: string; op: FileOp; from?: string; lines: DiffLine[]}[] = [];
   for (const line of text.split('\n')) {
-    const file = /^\*\*\* (?:Update|Add|Delete) File: (.+)$/.exec(line);
-    if (file) files.push({path: file[1].trim(), lines: []});
+    const file = /^\*\*\* (Update|Add|Delete) File: (.+)$/.exec(line), move = /^\*\*\* Move to: (.+)$/.exec(line);
+    if (file) files.push({path: file[2].trim(), op: PATCH_OPS[file[1] as keyof typeof PATCH_OPS], lines: []});
+    else if (move && files.length) Object.assign(files.at(-1)!, {op: 'rename', from: files.at(-1)!.path, path: move[1].trim()});
     else if (files.length && /^[+\- ]/.test(line)) files.at(-1)!.lines.push({kind: line[0] as DiffLine['kind'], text: line.slice(1)});
   }
-  return files.map(file => change(file.path, file.lines));
+  return files.map(file => change(file.path, file.lines, file.op, file.from));
 }
 
 export function fileChanges(call: ToolCall): FileChange[] {
@@ -51,5 +56,6 @@ export function fileChanges(call: ToolCall): FileChange[] {
   });
   if (replaced.length) return [change(path, replaced.flatMap((lines, index) => (index ? [{kind: ' ' as const, text: '…'}, ...lines] : lines)))];
   const written = str(input.content) ?? str(input.new_source);
-  return written !== undefined ? [change(path, split(written).map(text => ({kind: '+' as const, text})))] : [];
+  // A whole-file write is a create only when the tool says so (Claude Code: "File created successfully"); an overwrite is an edit.
+  return written !== undefined ? [change(path, split(written).map(text => ({kind: '+' as const, text})), /\bcreated\b/i.test(call.output ?? '') ? 'create' : 'edit')] : [];
 }

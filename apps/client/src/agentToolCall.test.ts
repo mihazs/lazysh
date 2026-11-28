@@ -79,6 +79,14 @@ describe('fileChanges', () => {
     const [patch] = fileChanges(describeTool(use('apply_patch', {patchText: '*** Begin Patch\n*** Update File: /w/b.md\n@@\n-x\n+y\n*** End Patch'})));
     expect([patch.path, patch.added, patch.removed]).toEqual(['/w/b.md', 1, 1]);
   });
+  it('names the operation of each file: a patch adds, deletes and renames, and a Write creates only when the tool says so', () => {
+    const patch = '*** Begin Patch\n*** Add File: new.rs\n+hi\n*** Delete File: old.rs\n*** Update File: a.rs\n*** Move to: b.rs\n@@\n-x\n+y\n*** End Patch';
+    expect(fileChanges(describeTool(use('apply_patch', patch))).map(c => [c.op, c.from, c.path, c.added, c.removed])).toEqual([['create', undefined, 'new.rs', 1, 0], ['delete', undefined, 'old.rs', 0, 0], ['rename', 'a.rs', 'b.rs', 1, 1]]);
+    expect(fileChanges(describeTool(use('patch', {patchText: patch}))).map(c => c.op)).toEqual(['create', 'delete', 'rename']);
+    const write = {name: 'Write', text: JSON.stringify({file_path: 'n.txt', content: 'x'})};
+    expect(fileChanges(describeTool(write, {text: 'File created successfully at: n.txt'}))[0].op).toBe('create');
+    expect(fileChanges(describeTool(write, {text: 'The file n.txt has been updated successfully.'}))[0].op).toBe('edit');
+  });
   it('shows no line for identical text', () => {
     expect(replacement('same\n', 'same\n').filter(line => line.kind !== ' ')).toEqual([]);
   });

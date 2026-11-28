@@ -1,13 +1,14 @@
 import {useState} from 'react';
 import {Ban, Check, Copy, FileDiff, Globe, LoaderCircle, Pencil, Search, Terminal, Wrench, X, FileText} from 'lucide-react';
 import {describeTool, tail, type ToolKind, type ToolResult, type ToolStatus, type ToolUse} from './agentToolCall';
-import {fileChanges} from './agentDiff';
+import {fileChanges, type FileOp} from './agentDiff';
 import {t} from './i18n/core';
 import './AgentToolCard.css';
 
 const icons = {execute: Terminal, read: FileText, search: Search, fetch: Globe, edit: Pencil, other: Wrench} as const satisfies Record<ToolKind, unknown>;
 const marks = {running: LoaderCircle, ok: Check, error: X, denied: Ban} as const satisfies Record<ToolStatus, unknown>;
 const statusText = {running: 'agentToolRunning', ok: 'agentToolOk', error: 'agentToolError', denied: 'agentToolDenied'} as const satisfies Record<ToolStatus, string>;
+const opText = {create: 'agentDiffCreate', edit: 'agentDiffEdit', delete: 'agentDiffDelete', rename: 'agentDiffRename'} as const satisfies Record<FileOp, string>;
 const TAIL = 20, DIFF_HEAD = 40;
 
 export function CopyButton({text, label}: {text: string; label: 'agentToolCopy' | 'agentDiffCopy' | 'agentPastedCopy'}) {
@@ -39,7 +40,7 @@ export default function AgentToolCard({use, result, live, resultMessage}: {use: 
     </summary>
     {files.length > 0 ? <>
       {files.map((file, index) => <section key={index} className="agent-diff-file">
-        {files.length > 1 && <h5>{file.path} <span className="agent-diff-counts">+{file.added} −{file.removed}</span></h5>}
+        {(files.length > 1 || file.op !== 'edit') && <h5 data-op={file.op}>{t(opText[file.op])} {file.from ? `${file.from} → ${file.path}` : file.path} <span className="agent-diff-counts">+{file.added} −{file.removed}</span></h5>}
         <pre className="agent-diff-lines" data-wrap={wrap}>{(all ? file.lines : file.lines.slice(0, DIFF_HEAD)).map((line, row) => <span key={row} data-kind={line.kind}>{line.kind}{line.text}{'\n'}</span>)}</pre>
       </section>)}
       <div className="agent-tool-actions">
