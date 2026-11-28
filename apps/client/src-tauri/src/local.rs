@@ -19,6 +19,9 @@ pub struct Capability {
     available: bool,
     reason: &'static str,
     targets: Vec<Target>,
+    /// The OS this app runs on (`macos`, `windows`, `linux`, `android`, `ios`); the web view's
+    /// user agent is not a contract, so the UI scopes OS-specific controls with this.
+    platform: &'static str,
 }
 /// A local place sessions run in, with the host tools the UI may offer for it.
 #[derive(Serialize)]
@@ -85,6 +88,7 @@ pub async fn local_capability() -> Capability {
             .await,
         );
         Capability {
+            platform: std::env::consts::OS,
             available: true,
             reason: "Local shell runs on this desktop device.",
             targets,
@@ -93,6 +97,7 @@ pub async fn local_capability() -> Capability {
     #[cfg(not(desktop))]
     {
         Capability {
+            platform: std::env::consts::OS,
             available: false,
             reason: "Local terminals require the desktop app.",
             targets: Vec::new(),
