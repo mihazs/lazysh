@@ -1,0 +1,36 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus trac… ▔
+   Resume session
+   ╭────────────────────────────────────────────────────────────────────────────────────────────╮
+   │ ⌕ Search…                                                                                  │
+   ╰────────────────────────────────────────────────────────────────────────────────────────────╯
+     work
+
+   ❯ Two
+     11 seconds ago · HEAD · 535.9KB
+
+     (session)
+     1 minute ago · HEAD · 18.6KB
+
+     Ok
+     2 minutes ago · HEAD · 530.5KB
+
+     Ctrl+A to show all projects · Ctrl+B to only show current branch · Space to preview · Ctrl+R
+     to rename · Type to search · Esc to cancel

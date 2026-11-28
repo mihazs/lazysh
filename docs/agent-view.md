@@ -425,7 +425,7 @@ shown above the composer as a **dialog card**: its title, the text that explains
 with the highlighted option marked. It is read from the rows of the session's own terminal screen (`agentDialogLift.ts`), not from the
 transcript, so it works for dialogs no hook or transcript record describes.
 
-- **Fail closed.** The lift returns a dialog only for one whole, simple list that has a full-width rule above it, exactly one highlighted
+- **Fail closed.** The lift returns a dialog only for one whole, simple list that has a full-width frame row above it (a `─` rule, or the row of `▔` that Claude Code 2.1.326 draws, also when a tip is drawn over it), exactly one highlighted
   row, a footer that says Enter takes the highlighted row and how to leave, and no check boxes, second list or tabs. Anything else (a tabbed
   dialog, a multi-select, a text field, a dialog whose footer this profile does not know) shows **The agent is waiting for you in the
   terminal** with **Show terminal**, and sends nothing. The view never switches by itself.
@@ -451,8 +451,11 @@ transcript, so it works for dialogs no hook or transcript record describes.
   already answers shows no second card (Claude's permission request and every agent's question); Codex has no approval hook here, so its
   approval prompt is answered by this card.
 - **Profile and corpus.** Each agent reads its own screen, and no agent's dialog is guessed from another's layout. The Claude Code 2.1.x
-  footers and layout are data in `agentDialogLift.ts`, verified against screens captured from Claude Code 2.1.318 in a real tmux pane
-  (`apps/client/src/test/agentDialogs`). The Codex profile (`agentDialogLiftCodex.ts`) reads the dialogs Codex 0.167.0 draws inline: a
+  footers and layout are data in `agentDialogLift.ts`, verified against screens captured from Claude Code 2.1.318 and 2.1.326 in a real tmux
+  pane and, for `/model` on 2.1.326, a Herdr pane (`apps/client/src/test/agentDialogs`). Claude Code 2.1.326 redrew its dialogs: a row of `▔`
+  instead of the `─` rule above them, digits followed by two spaces (`4.  Sonnet 5.5`), a `▸  More models` row (an option whose Enter opens the
+  next list, which is read again) and footers wrapped at the pane width (`Esc to` and `cancel` on two rows, read as one footer); both layouts
+  are read. A list of one item under its heading (a project with one saved session in `/resume`) is one choice, not a list, and shows the banner. The Codex profile (`agentDialogLiftCodex.ts`) reads the dialogs Codex 0.167.0 draws inline: a
   title, numbered options with `›` before the highlighted one, and one of the three footers captured (`enter select · esc back`,
   `enter default · s session · esc back`, `Press enter to confirm or esc to cancel`). That covers `/model` and its reasoning page,
   `/permissions`, `/review`, the rate-limit prompt and **the approval prompt** (Yes, proceed; Yes and don't ask again; No and tell Codex),
