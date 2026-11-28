@@ -18,8 +18,8 @@ const showTerminal=async(agent:ReportingAgent)=>{
   await agent.terminal.waitForDisplayed({timeout:20_000});
 };
 
-/** The co-existence cases 1 to 3 of `docs/agent-view.md` over the real GUI, for a reporting agent that `start` runs in a pane of one multiplexer. */
-export function reportingAgentCases(multiplexer:string,start:()=>Promise<ReportingAgent>) {
+/** The co-existence cases 1 to 3 of `docs/agent-view.md` over the real GUI, for a reporting agent that `start` runs in a pane of one multiplexer. `pasted` is for an agent whose prompt box takes a prompt as one bracketed paste (OpenCode). */
+export function reportingAgentCases(multiplexer:string,start:()=>Promise<ReportingAgent>,pasted=false) {
   describe(multiplexer,()=>{
     it('keeps one connection, one PTY and its scrollback, and writes nothing to the pane, when Terminal, Agent and Terminal are switched mid-turn',async()=>{
       const agent=await start(),{browser,terminal}=agent;
@@ -54,8 +54,9 @@ export function reportingAgentCases(multiplexer:string,start:()=>Promise<Reporti
       expect(await agent.keys()).toEqual(before.keys);
     },180_000);
 
-    /** The codes the pane receives for a prompt sent as text and Enter, as the agent's key log records them. */
+    /** The codes the pane receives for a prompt sent as text and Enter, as the agent's key log records them; a paste's start and end markers each log their Escape. */
     const keyCodes=(text:string)=>Array.from(text,character=>String(character.codePointAt(0)));
+    const sentKeys=(text:string)=>pasted?['27',...keyCodes(text),'27']:keyCodes(text);
 
     it('shows a prompt sent from the Agent view once in the pane and as a turn of the conversation',async()=>{
       const agent=await start(),{browser,terminal}=agent;
@@ -82,7 +83,7 @@ export function reportingAgentCases(multiplexer:string,start:()=>Promise<Reporti
       await agent.expectSubmitted(['first question','Add a test']);
       // The guarded send ends the line with Enter, which the pane's tty delivers as CR or LF.
       const keys=(await agent.keys()).slice(keysBefore);
-      expect(keys.slice(0,-1)).toEqual(keyCodes('Add a test'));expect(['13','10']).toContain(keys.at(-1));
+      expect(keys.slice(0,-1)).toEqual(sentKeys('Add a test'));expect(['13','10']).toContain(keys.at(-1));
 
       await showTerminal(agent);
       // The pane painted the prompt while hidden; it shows once, and the agent's own log above is the count of deliveries.

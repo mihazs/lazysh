@@ -621,11 +621,27 @@ Tests assert behaviour, not source text.
   connection (the sshd side's socket, to the inode), the agent's key log and the fixture's original
   receiver pane, which stays empty; the prompt sent from the composer reaches the pane once (one
   submission, its bytes and one Enter) and shows once in it; the prompt typed in the terminal
-  becomes a turn in **Both** within 5 s (about 0.2 s measured). Both specs share their cases
-  (`agentViewScenarios.ts`) and differ only in the multiplexer (`reportingAgent.ts`). The agent is a
-  stand-in, not Claude Code, and Herdr's state for it comes from the drawn hint, not from Claude's
-  own hooks: provider behaviour, macOS, Windows and Android are not covered by these specs. Still to
-  add: the Android instrumentation case.
+  becomes a turn in **Both** within 5 s (about 0.2 s measured). `agentViewOpenCodeAgent.spec.ts`
+  runs the same three cases for OpenCode in a real tmux pane. The stand-in, started with the value
+  `opencode`, writes what OpenCode 2.2 writes instead of a transcript file (its database under
+  `$XDG_DATA_HOME/opencode`: a `session_v2` row, a `session_message` row per message with the
+  assistant's parts inline, and `session_inbox`, written with `sqlite3`, which `native-linux`
+  installs) and reports only `session.status` (busy while a turn runs, idle before and after)
+  through the real companion's `ingest --agent opencode` with its pane's `TMUX_PANE`. The view
+  binds the way it does for a real OpenCode pane: the pane's report names a session, the
+  companion's discovery of the database finds it, and the conversation is read from the database.
+  The round trip keeps the terminal node, the pane, the one tmux client and the key log, as above. A
+  prompt sent from the composer reaches the pane once in the form OpenCode takes (the key log is
+  Escape, the prompt's bytes, Escape, Enter: one bracketed paste and Enter, not a burst of keys),
+  shows once in the pane and becomes a turn; a prompt typed in the terminal becomes a turn in
+  **Both** within 5 s over the 2 s polling OpenCode has today (no live stream yet; 1.7 s measured). The three
+  specs share their cases (`agentViewScenarios.ts`) and differ only in the multiplexer and the
+  agent (`reportingAgent.ts`). The agents are stand-ins, not Claude Code or OpenCode (no real
+  OpenCode runs in CI, which does not have the binary; its own screen, dialogs and database writes
+  are not reproduced), and Herdr's state for the Herdr one comes from the drawn hint, not from
+  Claude's own hooks: provider behaviour, macOS, Windows and Android are not covered by these
+  specs. Still to add: the Android instrumentation case, for the Claude-style agent and for
+  OpenCode.
 - **Android** (`NativeWorkspaceTest`): the same fixture over the real UI whenever
   native input, back navigation, IME or attachments are involved.
 - **Co-existence cases, required in every slice**:
