@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import {dialogScreen, fakeTerminal, modelScreen, onTmux} from './test/agentDialogScreens';
+import {codexModelWindow, dialogScreen, fakeTerminal, modelScreen, onTmux} from './test/agentDialogScreens';
 import {act, cleanup, configure, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import AgentPickerDock from './AgentPickerDock';
 import {publishComposerControl} from './agentDialogAnswer';
@@ -446,4 +446,22 @@ it('answers the /model picker Claude Code 2.1.326 draws, with the keys a person 
   expect(option('Sonnet 5.5').getAttribute('aria-current')).toBe('true');
   await chooseAndClose('Opus 5.5');
   expect(keys()).toEqual([{kind: 'pick', rows: -2, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+});
+
+it('shows the window of Codex 0.172.0\'s /model list, says more rows are in the terminal, and answers a row of it with the arrows and Enter', async () => {
+  let at = 1;
+  answers.length = 0;
+  bindTo(vi.fn(async (body: DialogAnswer) => {
+    answers.push(body);
+    if (body.kind === 'pick' && !body.enter) {at += body.rows; screenOf.set(codexModelWindow(1, at));} else screenOf.set(closed);
+    return true;
+  }));
+  mount(codexModelWindow(1, at), {agent: 'Codex'});
+  const card = await screen.findByRole('region', {name: t('agentPickerTitle')});
+  expect(within(card).getByRole('heading', {name: 'Select Model and Effort'})).toBeTruthy();
+  expect(within(card).getAllByRole('button').filter(button => /^GPT/.test(button.textContent ?? ''))).toHaveLength(8);
+  expect(card.textContent).toContain(t('agentPickerMore'));
+  expect(option('GPT-6.2-Sol').getAttribute('aria-current')).toBe('true');
+  await chooseAndClose('GPT-6.1-Sol');
+  expect(keys()).toEqual([{kind: 'pick', rows: 3, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
 });

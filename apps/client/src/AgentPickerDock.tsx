@@ -153,6 +153,7 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
         <span>{option.label}</span>{option.detail && <small>{option.detail}</small>}
       </button> : <p aria-current={index === dialog.highlighted || undefined}><span>{option.label}</span>{option.detail && <small>{option.detail}</small>}</p>}
     </li>)}</ol>
+    {dialog.more && <p className="agent-picker-hint">{t('agentPickerMore')}</p>}
     {confirm !== undefined && dialog.options[confirm] && <section className="agent-picker-confirm" aria-label={t('agentPickerRememberTitle')}>
       <p>{t('agentPickerRemember')}</p>
       <p><code>{dialog.options[confirm].label}</code></p>
