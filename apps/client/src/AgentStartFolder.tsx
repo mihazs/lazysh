@@ -3,7 +3,7 @@ import {useEffect,useRef,useState,type FormEvent} from 'react';
 import type {bindProtectedInvoke} from './access';
 import {shellPath} from './attachment';
 import DirectoryPicker from './DirectoryPicker';
-import AgentLaunchOptions,{YoloNote} from './AgentLaunchOptions';
+import AgentLaunchOptions,{YoloNote} from './AgentLaunchOptionsFields';
 import {agentCommand,noOptions,splitArguments,yoloFlags,type ArgumentProblem} from './agentLaunchOptions';
 import {validAbsolutePath} from './herdrCreate';
 import {Modal} from './HerdrWorkspaceCreateDialog';
