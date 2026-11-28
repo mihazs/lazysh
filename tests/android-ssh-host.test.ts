@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {join} from 'node:path';
 import {SshFixture,listening,androidSshAcceptance,androidSshCleanup,OwnedProcess,checkRawReceiverIdentity,recordedCompanionBytes,prepareRecordedConversation,IME_TRANSACTION_WIRE,IME_CHAT_WIRE} from './support/androidSsh';
 import {HerdrFixture,agentsFixture,herdrPanelRows,herdrTools} from './support/androidHerdr';
-import {prepareAgentBoardHooks} from './support/androidAgentBoard';
+import {agentBoardDecisions,agentBoardMultiplexers,prepareAgentBoardHooks,zellijSession} from './support/androidAgentBoard';
 import {TmuxFixture} from './support/androidTmux';
 import {ZellijFixture} from './support/androidZellij';
 import {androidForceStopRestoreAcceptance} from './support/androidForceStopRestore';
@@ -252,12 +252,19 @@ test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZ
   await expect(stat(fixture.directory)).rejects.toMatchObject({code:'ENOENT'});
 },65_000);
 
+/** The namespaced SSH fixture with the current-source companion where the client installs it. */
+async function companionFixture(agent:string) {
+  const bytes=await recordedCompanionBytes(agent),fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
+  const companion=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
+  try {await mkdir(join(fixture.directory,'data/lazysh/companion'),{recursive:true,mode:0o700});await writeFile(companion,bytes,{flag:'wx',mode:0o700});}
+  catch(error){await androidSshCleanup(true,[['SSH',()=>fixture.stop()]]);throw error;}
+  return {fixture,companion};
+}
+
 test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_AGENT_BIN)('owned namespaced SSH preflights the Android board hooks and drops the aged report when the companion reads',async()=>{
-  const bytes=await recordedCompanionBytes(process.env.LAZYSH_TEST_AGENT_BIN),fixture=await SshFixture.start(undefined,{companion:true,privateTtyGroup:true});
+  const {fixture,companion}=await companionFixture(process.env.LAZYSH_TEST_AGENT_BIN!);
   let primary=false;
   try {
-    const companion=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
-    await mkdir(join(fixture.directory,'data/lazysh/companion'),{recursive:true,mode:0o700});await writeFile(companion,bytes,{flag:'wx',mode:0o700});
     await prepareAgentBoardHooks(fixture.directory);
     // What the device types: the script runs the real hook commands, then dates the aged report back.
     await (await fixture.client(true,'sh "$HOME/board"')).finish('owned Android board hooks',20_000);
@@ -268,6 +275,41 @@ test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZ
   } catch(error){primary=true;throw error;}
   finally {await androidSshCleanup(primary,[['SSH',()=>fixture.stop()]]);}
 },65_000);
+
+test.skipIf(process.env.LAZYSH_TEST_SSH_USER_NAMESPACE!=='1' || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_ZELLIJ || !process.env.LAZYSH_TEST_HERDR_STOCK)('owned namespaced SSH preflights the Android waiting hooks in real Zellij and Herdr panes and answers each by its listed pane',async()=>{
+  const {fixture,companion}=await companionFixture(process.env.LAZYSH_TEST_AGENT_BIN!);
+  let primary=false;
+  try {
+    await prepareAgentBoardHooks(fixture.directory,agentBoardMultiplexers());
+    // What the device types; the hooks and both private servers keep running after the script returns.
+    await (await fixture.client(true,'sh "$HOME/approvals" </dev/null >/dev/null 2>&1')).finish('owned Android waiting hooks',60_000);
+    type Request={id:string;expectedHash:string;sessionId:string;paneId:string|null};
+    const listed=async()=>(JSON.parse(await (await fixture.client(true,`'${companion}' approval-list`)).finish('owned approval list',10_000)).requests as Request[]);
+    let requests:Request[]=[];
+    for(let attempt=0;requests.length<5;attempt++) {
+      if(attempt>=240)throw new Error(`Waiting hooks were not listed: ${JSON.stringify(requests)}`);
+      await Bun.sleep(250);requests=await listed();
+    }
+    const pane=Object.fromEntries(requests.map(request=>[request.sessionId,request.paneId]));
+    expect([pane['approval-allow'],pane['approval-deny'],pane['approval-host']]).toEqual(['%7','%8','%9']);
+    expect(pane['approval-zellij']).toMatch(new RegExp(`^zellij:${zellijSession}:[0-9]+$`));
+    expect(pane['approval-herdr']).toMatch(/^herdr:[A-Za-z0-9._-]+:w[0-9A-Z]+:p[0-9A-Z]+$/);
+    const resolve=(request:Request,decision:string,paneId:string|null)=>fixture.client(true,`'${companion}' approval-resolve --id '${request.id}' --expected-hash '${request.expectedHash}' --session-id '${request.sessionId}' ${paneId?`--pane-id '${paneId}'`:''} --decision ${decision}`).then(client=>client.finish('owned approval answer',10_000));
+    const byName=(name:string)=>requests.find(request=>request.sessionId===`approval-${name}`)!;
+    // Another live pane cannot answer a Zellij or Herdr request, and it stays pending.
+    await expect(resolve(byName('zellij'),'allow',pane['approval-herdr'])).rejects.toThrow();
+    await expect(resolve(byName('herdr'),'deny',pane['approval-zellij'])).rejects.toThrow();
+    expect((await listed()).length).toBe(5);
+    for(const [name,decision] of [['allow','allow'],['deny','deny'],['zellij','allow'],['herdr','deny']] as const)await resolve(byName(name),decision,pane[`approval-${name}`]);
+    // The host then ends the fifth hook, so nothing is left to answer.
+    for(let attempt=0;(await listed()).length>0;attempt++) {
+      if(attempt>=240)throw new Error('The host-ended hook stayed listed');
+      await Bun.sleep(250);
+    }
+    await agentBoardDecisions(fixture.directory);
+  } catch(error){primary=true;throw error;}
+  finally {await androidSshCleanup(primary,[['SSH',()=>fixture.stop()]]);}
+},180_000);
 
 test.skipIf(process.env.LAZYSH_ANDROID_UI_RECORDED!=='1')('actual Android recorded Codex and OpenCode conversations preserve their original SSH terminal',async()=>{
   await androidSshAcceptance(undefined,undefined,false,false,false,false,false,false,false,true);

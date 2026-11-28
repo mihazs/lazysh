@@ -15,7 +15,7 @@ import {installedCompanion,publishedCompanion} from '../../apps/client/published
 import {observeAndroidMoshBackground} from './androidMoshBackground';
 import {observeAndroidUploadRecovery} from './androidUploadRecovery';
 import {OwnedSshRelay} from '../../apps/client/native-e2e/sshRelay';
-import {agentBoardDecisions,prepareAgentBoardHooks} from './androidAgentBoard';
+import {agentBoardDecisions,agentBoardMultiplexers,prepareAgentBoardHooks} from './androidAgentBoard';
 import {recordedCompanionBytes,prepareRecordedConversation} from './recordedConversation';
 export {recordedCompanionBytes,prepareRecordedConversation} from './recordedConversation';
 
@@ -633,7 +633,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
       await missing.finish('no preinstalled Android companion fixture executable',5000);
       await lstat(managed).then(()=>{throw new Error('Owned companion destination must initially be absent');},error=>{if(error.code!=='ENOENT')throw new Error('Owned companion absence could not be verified');});
       console.log(`Public Android companion receipt version=${evidence.version} source=${evidence.source} sha256=${evidence.sha256} bytes=${evidence.bytes}`);
-      await prepareAgentBoardHooks(fixture.directory);
+      await prepareAgentBoardHooks(fixture.directory,agentBoardMultiplexers());
     }
     // The host allowlist key must match the concrete device port removed in cleanup.
     if(!moshBackground && !herdrMosh && !attachments) {
@@ -728,7 +728,7 @@ export async function androidSshAcceptance(root=resolve(import.meta.dir,'../..')
     if(evidence) {
       await installedCompanion(fixture,evidence);
       await agentBoardDecisions(fixture.directory);
-      console.log('Owned companion board: real hook events rendered, device Allow and Deny returned to the waiting hooks, the host-answered request printed no decision');
+      console.log('Owned companion board: real hook events rendered, device Allow and Deny returned to the waiting hooks (two of them in real Zellij and Herdr panes), the host-answered request printed no decision');
       if(JSON.stringify(await publishedCompanion())!==JSON.stringify(evidence))throw new Error('Published Android companion nomination changed during acceptance');
       console.log(`Owned packaged companion Install/reuse: public version=${evidence.version} sha256=${evidence.sha256}; installed bytes/version and staging cleanup verified`);
     }

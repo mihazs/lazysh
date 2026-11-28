@@ -139,7 +139,7 @@ test('stock source admission rejects changed archive bytes before extraction or 
 
 test('same-run stock admission rejects changed binary, source, checkout or unknown receipt fields without executing the binary',async()=>{
   const workflow=Bun.YAML.parse(await Bun.file(join(root,'.github/workflows/checks.yml')).text()) as any;
-  const admission=workflow.jobs['native-android-herdr-navigation'].steps.find((step:any)=>step.name==='Verify same-run stock Herdr').run;
+  const admission=workflow.jobs['native-android-herdr-navigation'].steps.find((step:any)=>step.name==='Verify same-run stock Herdr').run.replace('.github/scripts/',join(root,'.github/scripts/')+'/');
   const fixture=await mkdtemp(join(tmpdir(),'lazysh-stock-receipt-')),directory=join(fixture,'lazysh-stock-herdr');
   await mkdir(directory);
   const bytes=Buffer.from('owned validation bytes; never a native executable'),digest=createHash('sha256').update(bytes).digest('hex');
