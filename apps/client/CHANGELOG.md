@@ -1,5 +1,56 @@
 # @lazysh/client
 
+## 1.107.0
+
+### Minor Changes
+
+- feat(browser): add Keep profile and Clear browser data to the Host browser settings ([#2820](https://github.com/mihazs/lazysh/pull/2820))
+
+  <details><summary>Details</summary>
+
+  Keep profile is off for every host until chosen, remembered on this device for that host only (never in the encrypted sync, host ids only) and passed to the host browser relay as `--keep-profile`, so cookies and sign-ins stay on the host's disk until cleared. Clear browser data deletes that kept profile directory on the host after a confirmation that names what is deleted; it is offered with the host browser switch off, reports when there is nothing to clear, is refused while a browser uses the profile, and asks you to update an older companion. No browser session starts from the app yet, so Keep profile takes effect when the Chrome viewer ships.
+
+  </details>
+- ci(release): publish the managed Herdr as verified release assets ([#2831](https://github.com/mihazs/lazysh/pull/2831))
+
+  <details><summary>Details</summary>
+
+  Each release now also carries the managed Herdr executable for Linux x86-64 (`lazysh-<version>-linux-herdr-x64.bin`) and its notice inventory, notice text and build receipt, all listed in `release.json` and `SHA256SUMS` and checked against the tag after publication. Installs stay opt-in and no platform support is claimed.
+
+  </details>
+- feat(herdr): keep the Herdr event stream open for the inbox while no Herdr view is shown ([#2813](https://github.com/mihazs/lazysh/pull/2813))
+
+  <details><summary>Details</summary>
+
+  With Monitor connected hosts on, each connected host that runs one Herdr server (or the attached one) is followed through the shared stream a visible Herdr view reads, so a blocked or finished Herdr agent becomes an inbox event and a notification whichever page is open. It is deduplicated against the same turn reported by a hook, and the stream closes when monitoring is turned off or the host disconnects.
+
+  </details>
+
+### Patch Changes
+
+- fix(agents): open the Claude Code and OpenCode conversations that hold a large tool result ([#2790](https://github.com/mihazs/lazysh/pull/2790))
+
+  <details><summary>Details</summary>
+
+  The Agent view no longer refuses a Claude Code or OpenCode session because one tool result is megabytes long: the text is cut with a note of how many bytes were left out, and a compaction link that names a later record no longer makes the session a loop. Needs the updated host companion.
+
+  </details>
+- feat(desktop): find native Zellij and Herdr on Windows through PATHEXT in discovery and actions ([#2835](https://github.com/mihazs/lazysh/pull/2835))
+
+  <details><summary>Details</summary>
+
+  Find a native Zellij or Herdr on Windows the same way in multiplexer discovery, one-shot actions and attach. Discovery and actions only appended `.exe` to the program name, so a Zellij or Herdr installed as a `.com` file, or found through a different `PATHEXT` order, was reported missing or failed to start while attach found it. They now try each `PATH` directory in order with the name plus the `.com` and `.exe` entries of `PATHEXT`, and an action runs the file found; a `.bat` or `.cmd` still never resolves. Herdr is looked up on the `PATH` only on Windows. A program that resolved before still resolves, and Linux and macOS behave as before.
+
+  </details>
+- test(e2e): Appium regression spec for typing and Backspace through the real Android keyboard ([#2843](https://github.com/mihazs/lazysh/pull/2843))
+
+  <details><summary>Details</summary>
+
+  Adds the device spec that types a word, a correction, a toolbar key and Backspace through Android's own input path and checks the bytes the host receives.
+
+  </details>
+- fix(agent): start the working clock at the new turn instead of the previous finished prompt ([#2848](https://github.com/mihazs/lazysh/pull/2848))
+
 ## 1.106.0
 
 ### Minor Changes
