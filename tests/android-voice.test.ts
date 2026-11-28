@@ -1,8 +1,8 @@
 import {afterAll,expect,spyOn,test} from 'bun:test';
-import {mkdtemp,rm,stat} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {androidVoiceAcceptance,voiceCase,type VoiceCommand} from './support/androidVoice';
+import {androidVoiceAcceptance,parakeetFixtureDirectory,parakeetFixtures,voiceCases,type VoiceCommand} from './support/androidVoice';
 
 const nonce='d'.repeat(32),env={ANDROID_SERIAL:'emulator-5580',ANDROID_HOME:'/sdk'};
 const adb='/sdk/platform-tools/adb',staging=`/data/local/tmp/lazysh-voice-${nonce}`,gradle='/owned/apps/client/src-tauri/gen/android/gradlew';
@@ -32,7 +32,7 @@ test('voice acceptance refuses hosts and devices it does not own before any comm
   expect(device.calls).toEqual([]);
 });
 
-test('pinned fixtures are verified, staged privately, used by the one Whisper case and removed',async()=>{
+test('pinned and committed fixtures are staged privately, used by the Whisper and Parakeet cases and removed',async()=>{
   const device=recorder();
   await acceptance(device);
   const [fixtures,...rest]=device.calls;
@@ -42,9 +42,10 @@ test('pinned fixtures are verified, staged privately, used by the one Whisper ca
     [adb,'-s','emulator-5580','shell','mkdir','-p',staging],
     [adb,'-s','emulator-5580','push',join(host,'ggml-tiny.en.bin'),`${staging}/ggml-tiny.en.bin`],
     [adb,'-s','emulator-5580','push',join(host,'jfk.wav'),`${staging}/jfk.wav`],
+    ...parakeetFixtures.map(name=>[adb,'-s','emulator-5580','push',join('/owned',parakeetFixtureDirectory,name),`${staging}/${name}`]),
     [gradle,'-p','/owned/apps/client/src-tauri/gen/android',':app:connectedUniversalDebugAndroidTest','--no-daemon',
       '-PabiList=x86_64','-ParchList=x86_64','-PtargetList=x86_64','-x',':app:rustBuildX86_64Debug','-PlazyshVoiceAcceptance=true',
-      `-Pandroid.testInstrumentationRunnerArguments.class=${voiceCase}`,
+      `-Pandroid.testInstrumentationRunnerArguments.class=${voiceCases}`,
       `-Pandroid.testInstrumentationRunnerArguments.lazyshVoiceFixtures=${staging}`],
     [adb,'-s','emulator-5580','shell','rm','-rf',staging],
   ]);
@@ -64,18 +65,32 @@ test('a caller-owned fixture cache survives the run',async()=>{
 test.each([
   ['owned voice pinned fixtures',['owned voice pinned fixtures','owned voice fixture cleanup']],
   ['owned voice ggml-tiny.en.bin push',['owned voice pinned fixtures','owned voice fixture directory','owned voice ggml-tiny.en.bin push','owned voice fixture cleanup']],
-  ['actual Android local Whisper instrumentation',['owned voice pinned fixtures','owned voice fixture directory','owned voice ggml-tiny.en.bin push','owned voice jfk.wav push','actual Android local Whisper instrumentation','owned voice fixture cleanup']],
+  ['owned voice reference.txt push',['owned voice pinned fixtures','owned voice fixture directory','owned voice ggml-tiny.en.bin push','owned voice jfk.wav push','owned voice 1272-128104-0000.wav push','owned voice reference.txt push','owned voice fixture cleanup']],
+  ['actual Android local voice instrumentation',['owned voice pinned fixtures','owned voice fixture directory','owned voice ggml-tiny.en.bin push','owned voice jfk.wav push','owned voice 1272-128104-0000.wav push','owned voice reference.txt push','actual Android local voice instrumentation','owned voice fixture cleanup']],
 ])('a failure at %s stops the run, removes the staged directory and is the error reported',async(stage,expected)=>{
   const device=recorder(stage);
   await expect(acceptance(device)).rejects.toThrow(`failed ${stage}`);
   expect(device.calls.map(call=>call.stage)).toEqual(expected);
 });
 
+test('the committed Parakeet sample and reference the owner stages exist, and the reference is the sample\'s 17 words',async()=>{
+  const directory=join(import.meta.dir,'..',parakeetFixtureDirectory);
+  for(const name of parakeetFixtures)expect((await stat(join(directory,name))).size).toBeGreaterThan(0);
+  expect((await Bun.file(join(directory,'reference.txt')).text()).trim().split(' ')).toHaveLength(17);
+});
+
+test('the shared Android runtime job leaves both voice cases to the voice owner',async()=>{
+  // They need the staged fixtures and a 487 MB download, so they fail in the shared job.
+  const moon=Bun.YAML.parse(await readFile(join(import.meta.dir,'../apps/client/moon.yml'),'utf8')) as {tasks:Record<string,{script:string}>};
+  const excluded=moon.tasks['test-android'].script.match(/notClass=(\S+)/)![1].split(',');
+  for(const name of voiceCases.split(','))expect(excluded).toContain(name);
+});
+
 test('a cleanup failure after an instrumentation failure never replaces it',async()=>{
   const warning=spyOn(console,'error').mockImplementation(()=>{});
   try {
-    const device=recorder('actual Android local Whisper instrumentation',true);
-    await expect(acceptance(device)).rejects.toThrow('failed actual Android local Whisper instrumentation');
+    const device=recorder('actual Android local voice instrumentation',true);
+    await expect(acceptance(device)).rejects.toThrow('failed actual Android local voice instrumentation');
     expect(warning).toHaveBeenCalledWith('Owned voice fixture cleanup failed after original failure');
   } finally {warning.mockRestore();}
 });
@@ -85,6 +100,6 @@ test('a cleanup failure after a passing run is reported, not swallowed',async()=
 });
 
 // moon sets LAZYSH_ANDROID_UI_VOICE for client:test-android-voice; every other run skips the device case.
-test.skipIf(process.env.LAZYSH_ANDROID_UI_VOICE!=='1')('actual Android local Whisper transcription and model removal',async()=>{
+test.skipIf(process.env.LAZYSH_ANDROID_UI_VOICE!=='1')('actual Android local Whisper and Parakeet transcription and model removal',async()=>{
   await androidVoiceAcceptance();
-},2_400_000);
+},3_000_000);

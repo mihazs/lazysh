@@ -315,8 +315,8 @@ receipt, then retains its own runtime results. A configured job or local
 contract pass is not Android acceptance: inspect the fresh native case and cleanup
 results before claiming parity or merging the acceptance milestone.
 
-The independent F-Droid distribution, QR camera, local Whisper and final device CLI owners run in
-`native-android-auxiliary`, with their own 40-minute job, source checkout, admitted
+The independent F-Droid distribution, QR camera, local Whisper and Parakeet, and final device CLI owners run in
+`native-android-auxiliary`, with their own 55-minute job, source checkout, admitted
 KVM emulator, diagnostics and result artifact. The guarded runtime job retains its
 full official Mosh and SSH owners. Neither job can substitute for the other. This
 separates the previous sequential workload without extending any native deadline

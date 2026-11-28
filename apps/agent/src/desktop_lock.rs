@@ -1,5 +1,6 @@
 //! Whether the user sits at an unlocked desktop on this host. Anything not known for certain is `Unknown`.
-//! Only Linux (logind) is implemented; macOS and Windows report `Unknown`, so they always notify.
+//! Linux reads systemd-logind, macOS the window-server session dictionary and Windows the console session's
+//! lock flag; any other host reports `Unknown`, so it always notifies.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Desktop {
@@ -14,9 +15,25 @@ pub(crate) fn system() -> Desktop {
         // SAFETY: geteuid has no preconditions.
         logind::desktop("loginctl", unsafe { libc::geteuid() })
     }
-    #[cfg(not(target_os = "linux"))]
-    Desktop::Unknown
+    #[cfg(target_os = "macos")]
+    {
+        macos::system()
+    }
+    #[cfg(windows)]
+    {
+        windows::system()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        Desktop::Unknown
+    }
 }
+
+// The decision tables compile on every host under test, so Linux CI runs them; the system readers only on their own OS.
+#[cfg(any(target_os = "macos", test))]
+mod macos;
+#[cfg(any(windows, test))]
+mod windows;
 
 #[cfg(target_os = "linux")]
 mod logind {

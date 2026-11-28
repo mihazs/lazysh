@@ -1,11 +1,11 @@
-//! Explicit agent launch and Git worktree creation in a Herdr, tmux or Zellij session.
+//! Explicit agent launch and Git worktree creation in a Herdr, tmux, rmux or Zellij session.
 //!
 //! Every remote step is an exact argv run by `sh` as `"$@"`; the SSH login
 //! shell parses each element as one quoted word and nothing else (see
 //! [`script`]), and nothing is typed into an existing pane. An agent starts
 //! only after the renderer showed this plan and the user confirmed it: through
-//! `herdr agent start` in a new workspace's root pane, as the argv of a new tmux
-//! window (`new-window`) or as the argv of a new Zellij pane (`run`).
+//! `herdr agent start` in a new workspace's root pane, as the argv of a new tmux or
+//! rmux window (`new-window`) or as the argv of a new Zellij pane (`run`).
 use crate::app_lock::AccessLease;
 use crate::multiplexer::{tmux_word, Entry, MultiplexerKind};
 use crate::ssh::{quote, AppState, Result, Session, SshError};
@@ -203,7 +203,7 @@ impl<'a> Host<'a> {
         }
         Ok(match entry.kind {
             MultiplexerKind::Herdr => Self::Herdr(&entry.name),
-            MultiplexerKind::Tmux => Self::Tmux(
+            MultiplexerKind::Tmux | MultiplexerKind::Rmux => Self::Tmux(
                 &entry.name,
                 match session {
                     Some(session) => TmuxServer::for_session(
@@ -215,18 +215,9 @@ impl<'a> Host<'a> {
                 },
             ),
             MultiplexerKind::Zellij => Self::Zellij(&entry.name),
-            // shortcut: rmux agent launch needs its own verified plan (#1679).
-            MultiplexerKind::Rmux => {
-                return Err(invalid("Starting agents in rmux is not available yet"))
-            }
         })
     }
 }
-/// tmux expands formats in window names and start directories; `##` is a literal `#`.
-fn literal_format(value: &str) -> String {
-    tmux_word(&value.replace('#', "##"))
-}
-
 struct Validated<'a> {
     label: &'a str,
     directory: &'a str,
@@ -361,9 +352,9 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
                 "-t",
                 &tmux_word(&format!("={session}:")),
                 "-n",
-                &literal_format(valid.label),
+                &tmux_word(&server.binary().literal_name(valid.label)),
                 "-c",
-                &literal_format(valid.directory),
+                &tmux_word(&server.binary().literal_directory(valid.directory)),
                 "--",
             ]));
             argv.extend(launch.iter().map(|word| tmux_word(word)));

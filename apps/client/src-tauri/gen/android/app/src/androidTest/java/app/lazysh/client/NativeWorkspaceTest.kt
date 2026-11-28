@@ -3515,11 +3515,12 @@ class NativeWorkspaceTest {
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
     // window control, confirmed Chat input to the displayed pane, a top/bottom split and zoom of beta's pane
     // from the Sessions panel, a two-finger pinch zoom and unzoom and window swipes on the display,
-    // tab-close detach and reattach. The host independently proves the remote
+    // tab-close detach and reattach, then has the display print a tmux-wrapped OSC 52 and observes the system
+    // clipboard after Allow. The host independently proves the remote
     // window state, the Chat draft in the original pane, that the split left the original pane untouched
     // and the zoom returned, that the gestures changed the zoom flag and active window in order,
     // and that the original server and panes survived.
-    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, label: String, native: Boolean) {
+    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, nonce: String, label: String, native: Boolean) {
         val server = tmux.getString("name")
         require(server == "owned-tmux") { "Owned tmux fixture required" }
         val windows = tmux.getJSONArray("windows")
@@ -3752,6 +3753,13 @@ class NativeWorkspaceTest {
         }
         val lifecycle = tmux.getJSONArray("lifecycle")
         require(lifecycle.length() == 2) { "Owned tmux window names required" }
+        // The fixture's tmux has allow-passthrough on, so it strips the wrapper and the attached display gets a bare OSC 52,
+        // which the app holds for consent. The shell is beta's, the window the display shows after the reattach.
+        fun clipboardThroughPassthrough() {
+            val copied = "TMUX52_$nonce"
+            sendOwnedCommand(scenario, osc52Command(copied, tmuxPassthrough = true), label)
+            allowRemoteClipboardCopy(scenario, copied)
+        }
         var primaryFailure: Throwable? = null
         try {
             attach(alpha, "before detach")
@@ -3789,8 +3797,9 @@ class NativeWorkspaceTest {
             windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
             visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
             gestures()
+            clipboardThroughPassthrough()
             detach("after reattach")
-            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom, two-finger window swipes, tab-close detach and reattach completed")
+            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom, two-finger window swipes, tab-close detach, reattach and OSC 52 passthrough to the system clipboard completed")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
@@ -5338,6 +5347,50 @@ class NativeWorkspaceTest {
             sendShell("sh $script && printf '${marker}_%s_END\\n' \"${'$'}LI\"")
             awaitDocument(scenario, "owned companion $script hooks ran", screenContains("${marker}_${nonce}_END"))
         }
+        // A real Android Back press (not the DOM event the browser tests dispatch) leaves the phone's
+        // focused report detail for the same mounted list: its search value, the focused row and the Agents
+        // view come back, and Back does not fall through to the workspace Back that would close the drawer.
+        fun verifyReportedDetailBack() {
+            val panel = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden])"
+            val search = "$panel .agent-search input"
+            val rowSelector = ".agent-report-row[aria-label*='for /work/delta']"
+            val snapshot = """(()=>{const panel=document.querySelector(${JSONObject.quote(panel)}),row=panel?.querySelector(${JSONObject.quote(rowSelector)}),
+                detail=panel?.querySelector('.agent-selected-report');
+              return {phone:matchMedia('(max-width: 600px)').matches,documentFocus:document.hasFocus(),panel:!!panel&&panel.getClientRects().length>0,
+                query:panel?.querySelector('.agent-search input')?.value??null,cards:panel?.querySelectorAll('.agent-board .agent-card').length??0,
+                row:!!row,rowFocus:!!row&&document.activeElement===row,detail:!!detail,detailFocus:!!detail&&document.activeElement===detail,
+                detailView:panel?.hasAttribute('data-activity-detail')??false};})()"""
+            val observe = { remaining: Long -> evaluate(scenario, "JSON.stringify($snapshot)", remaining) }
+            fun await(stage: String, condition: String) = awaitDocument(scenario, stage, "(s=>$condition)($snapshot)", observe = observe)
+            await("phone-width reported activity list ready", "s.phone && s.panel && s.cards===3 && !s.detail")
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, search)).perform(webScrollIntoView())
+            // "eta" keeps beta and delta and drops alpha, so a list that reset on Back would differ from the filtered one.
+            typeInto(scenario, search, "eta")
+            closeSoftKeyboard()
+            await("search narrows the reported activity list", "s.query==='eta' && s.cards===2 && s.row")
+            // A real finger tap on the row, as a user opens the detail; it also leaves the WebView focused.
+            val row = "$panel $rowSelector"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, row)).perform(webScrollIntoView())
+            awaitDocument(scenario, "touchable reported activity row", workspaceElementVisible(row, true))
+            val center = JSONArray(evaluate(scenario, "(()=>{const r=document.querySelector(${JSONObject.quote(row)}).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2,innerWidth];})()"))
+            onView(isAssignableFrom(WebView::class.java)).perform(GeneralClickAction(Tap.SINGLE, { view ->
+                val origin = IntArray(2); view.getLocationOnScreen(origin)
+                val scale = view.width / center.getDouble(2)
+                floatArrayOf((origin[0] + center.getDouble(0) * scale).toFloat(), (origin[1] + center.getDouble(1) * scale).toFloat())
+            }, Press.FINGER))
+            // document.hasFocus() gates the detail's Back handler: without it a real Back would reach the workspace Back.
+            await("focused phone detail replaces the list with document focus", "s.detail && s.detailView && s.detailFocus && s.documentFocus")
+            var imeShown: Boolean? = null
+            scenario.onActivity { imeShown = ViewCompat.getRootWindowInsets(it.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) }
+            assertTrue("The soft keyboard must be closed so Back reaches the detail, not the keyboard", imeShown != true)
+            assertTrue("Android Back must be delivered", UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack())
+            await("Android Back returns the detail to the list with its search, focused row and Agents view",
+                "!s.detail && !s.detailView && s.panel && s.query==='eta' && s.cards===2 && s.rowFocus && s.documentFocus")
+            // Later steps expect the unfiltered board.
+            onWebView().withElement(findElement(Locator.XPATH, "//button[normalize-space(.)='Clear filters']")).perform(webScrollIntoView()).perform(webClick())
+            await("filters cleared for the next board step", "s.query==='' && s.cards===3")
+            println("lazysh companion board: real Android Back left the phone report detail for the same list with its search value and focused row, still on Agents")
+        }
         fun verifyCompanionHookBoard() {
             val board = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) .agent-board"
             val rows = """(state=>Array.from(document.querySelectorAll(${JSONObject.quote(board)}+" .agent-column[data-state='"+state+"'] .agent-card"))
@@ -5357,6 +5410,7 @@ class NativeWorkspaceTest {
                 " && document.querySelectorAll(${JSONObject.quote("$board .agent-card")}).length===3", observe = observe)
             assertEquals("Hook prompt and tool input must stay on the host", "false", evaluate(scenario,
                 "document.body.textContent.includes('PRIVATE-PROMPT') || document.body.textContent.includes('SECRET-TOKEN')"))
+            verifyReportedDetailBack()
             returnToTerminal()
             hostHooks("approvals")
             openReportedActivity()
@@ -5562,7 +5616,7 @@ class NativeWorkspaceTest {
                         window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
                         return true;
                     })()""")
-                    verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label, nativeTmux)
+                    verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, nonce, label, nativeTmux)
                     if (!nativeTmux) verifyOwnedTmuxDefault(scenario, fixture, name, label)
                 } finally {
                     if (nativeTmux) evaluate(scenario, PageDriver.restoreStorageScript(key, previous))
@@ -6373,6 +6427,32 @@ class NativeWorkspaceTest {
     }
 
     /**
+     * A shell line that prints an OSC 52 write of `text`, wrapped in the DCS that tmux forwards when asked. The base64 is
+     * computed by the remote shell, so the text never appears in the line the test types.
+     */
+    private fun osc52Command(text: String, tmuxPassthrough: Boolean): String {
+        val (open, close) = if (tmuxPassthrough) "\\033Ptmux;\\033\\033" to "\\007\\033\\\\" else "\\033" to "\\007"
+        val command = "printf '$open]52;c;%s$close' \"\$(printf %s $text | base64)\""
+        require(!command.contains("]52;c;$text")) { "Owned OSC 52 text must not appear in its input" }
+        return command
+    }
+
+    /** Requires the consent region for `copied`, proves the clipboard is untouched before Allow, taps Allow and waits for the system clipboard to hold it. */
+    private fun allowRemoteClipboardCopy(scenario: ActivityScenario<MainActivity>, copied: String) {
+        awaitDocument(scenario, "owned OSC 52 consent", regionShows("Remote clipboard request", copied))
+        // The composer's own paste left the command on the clipboard; the remote text must not replace it before consent.
+        assertTrue("The OSC 52 text must not reach the clipboard before Allow", systemClipboardText() != copied)
+        tapCss { buttonCenter(scenario, "Allow this copy") }
+        val copyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (systemClipboardText() != copied) {
+            assertTrue("Allow did not write the OSC 52 text to the system clipboard", System.nanoTime() < copyDeadline)
+            Thread.sleep(100)
+        }
+        // SystemUI previews the copied clip over the bottom-left for a few seconds; wait it out before the next tap.
+        awaitClipboardPreviewGone(System.nanoTime())
+    }
+
+    /**
      * What a remote shell can ask of the device, observed at the operating system: an OSC 52 write reaches the system
      * clipboard only after the Allow tap, and Open on a terminal link starts an ACTION_VIEW intent for exactly that URL.
      */
@@ -6383,20 +6463,8 @@ class NativeWorkspaceTest {
             connectOwnedPrimaryWithKey(scenario, parity, name)
 
             val copied = "OSC52_${parity.nonce}"
-            val osc = "printf '\\033]52;c;%s\\007' \"\$(printf %s $copied | base64)\""
-            require(!osc.contains("]52;c;$copied")) { "Owned OSC 52 text must not appear in its input" }
-            sendOwnedCommand(scenario, osc, parity.label)
-            awaitDocument(scenario, "owned OSC 52 consent", regionShows("Remote clipboard request", copied))
-            // The composer's own paste left the command on the clipboard; the remote text must not replace it before consent.
-            assertTrue("The OSC 52 text must not reach the clipboard before Allow", systemClipboardText() != copied)
-            tapCss { buttonCenter(scenario, "Allow this copy") }
-            val copyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-            while (systemClipboardText() != copied) {
-                assertTrue("Allow did not write the OSC 52 text to the system clipboard", System.nanoTime() < copyDeadline)
-                Thread.sleep(100)
-            }
-            // SystemUI previews the copied clip over the bottom-left for a few seconds; wait it out before the next tap.
-            awaitClipboardPreviewGone(System.nanoTime())
+            sendOwnedCommand(scenario, osc52Command(copied, tmuxPassthrough = false), parity.label)
+            allowRemoteClipboardCopy(scenario, copied)
 
             val url = "https://example.invalid/l/${parity.nonce.take(8)}"
             sendOwnedCommand(scenario, "printf '%s\\n' $url", parity.label)
@@ -7655,19 +7723,18 @@ class NativeWorkspaceTest {
         throw AssertionError("Sample has no data chunk")
     }
 
-    /**
-     * Local Whisper on the device (#1604): imports the pinned English model through the product's chunked IPC, transcribes the
-     * public JFK sample with the bundled whisper.cpp, then removes the model. The owned acceptance run stages both files.
-     */
-    @Test fun ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView() {
+    /** The private directory the owned voice run staged its fixtures in; any other path is refused. */
+    private fun voiceFixtureDirectory(): String {
         val directory = InstrumentationRegistry.getArguments().getString("lazyshVoiceFixtures")
         require(directory != null && Regex("/data/local/tmp/lazysh-voice-[a-f0-9]{32}").matches(directory)) {
-            "An owned Whisper fixture directory is required"
+            "An owned voice fixture directory is required"
         }
-        val model = "ggml-tiny.en.bin"
-        val name = JSONObject.quote(model)
-        val scenario = NativeActivityFixture.scenario
-        awaitUnlockedWorkspace(scenario, "Local Whisper IPC")
+        return directory
+    }
+
+    /** Waits for the unlocked workspace and defines `window.__lazyshVoice.call` (the product's IPC with its access header) and `.chunk`. */
+    private fun voiceBridge(scenario: ActivityScenario<MainActivity>, stage: String) {
+        awaitUnlockedWorkspace(scenario, stage)
         evaluate(scenario, """(() => {
           const call = async (command, args) => {
             const access = await window.__TAURI_INTERNALS__.invoke('app_lock_status', {});
@@ -7678,6 +7745,18 @@ class NativeWorkspaceTest {
             call('voice_import_chunk', {id, offset, bytes: Array.from(Uint8Array.from(atob(base64), c => c.charCodeAt(0)))})};
           return true;
         })()""")
+    }
+
+    /**
+     * Local Whisper on the device (#1604): imports the pinned English model through the product's chunked IPC, transcribes the
+     * public JFK sample with the bundled whisper.cpp, then removes the model. The owned acceptance run stages both files.
+     */
+    @Test fun ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView() {
+        val directory = voiceFixtureDirectory()
+        val model = "ggml-tiny.en.bin"
+        val name = JSONObject.quote(model)
+        val scenario = NativeActivityFixture.scenario
+        voiceBridge(scenario, "Local Whisper IPC")
         fun call(stage: String, command: String, args: String, seconds: Long = 120) =
             voiceReply(scenario, stage, "window.__lazyshVoice.call('$command', $args)", seconds)
         fun models() = call("Whisper model list", "voice_models", "{}") as JSONArray
@@ -7723,6 +7802,71 @@ class NativeWorkspaceTest {
             // Leave the emulator as found, whichever stage failed; a cleanup rejection never replaces the first failure.
             runCatching { openImport?.let { call("Whisper import cancel", "voice_import_finish", "{id:${JSONObject.quote(it)}, cancel:true}") } }
             runCatching { call("Whisper model cleanup", "voice_remove_model", "{id:$name}") }
+            runCatching { evaluate(scenario, "delete window.__lazyshVoice; delete window.__lazyshVoiceResult; true") }
+        }
+    }
+
+    /** Word error rate of `hypothesis` against `reference`, both split on anything but ASCII letters and digits and upper-cased as the desktop test does. */
+    private fun normalizedWordErrorRate(reference: String, hypothesis: String): Double {
+        fun words(text: String) = text.uppercase().split(Regex("[^A-Z0-9]+")).filter { it.isNotEmpty() }
+        val expected = words(reference)
+        val actual = words(hypothesis)
+        var previous = IntArray(actual.size + 1) { it }
+        for (row in 1..expected.size) {
+            val current = IntArray(actual.size + 1)
+            current[0] = row
+            for (column in 1..actual.size) {
+                current[column] = minOf(previous[column] + 1, current[column - 1] + 1,
+                    previous[column - 1] + if (expected[row - 1] == actual[column - 1]) 0 else 1)
+            }
+            previous = current
+        }
+        return previous[actual.size].toDouble() / expected.size
+    }
+
+    /**
+     * Local Parakeet on the device (#1815, parity gap group 24): the app downloads, verifies and prepares its one pinned archive
+     * itself, so the owned run stages only the public LibriSpeech sample and its reference. The case drives the product commands
+     * through the bundled WebView: status, install, transcription (word error rate <= 0.10, as the desktop test) and removal.
+     */
+    @Test fun ownedParakeetInstallsTranscribesAndRemovesThroughTheBundledWebView() {
+        val directory = voiceFixtureDirectory()
+        val utterance = "1272-128104-0000"
+        val wav = shellOutput("cat $directory/$utterance.wav") { it.readBytes() }
+        assertEquals("The staged sample is the pinned public LibriSpeech utterance",
+            "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+            java.security.MessageDigest.getInstance("SHA-256").digest(wav).joinToString("") { "%02x".format(it) })
+        val samples = pcmSamples(wav)
+        assertEquals("The sample is 93,680 frames", 93_680, samples.size)
+        val reference = shellOutput("cat $directory/reference.txt") { String(it.readBytes(), Charsets.UTF_8).trim() }
+        assertEquals("The reference transcript is the utterance's 17 words: $reference", 17, reference.split(" ").size)
+        val scenario = NativeActivityFixture.scenario
+        voiceBridge(scenario, "Local Parakeet IPC")
+        fun call(stage: String, command: String, args: String, seconds: Long = 120) =
+            voiceReply(scenario, stage, "window.__lazyshVoice.call('$command', $args)", seconds)
+        fun request() = "requestId:${JSONObject.quote(UUID.randomUUID().toString())}"
+        fun status(stage: String) = call(stage, "voice_parakeet_status", "{}") as JSONObject
+        val before = status("Parakeet status")
+        assertTrue("Parakeet is unavailable in this build: ${before.optString("reason")}", before.getBoolean("available"))
+        assertFalse("A fresh emulator holds no Parakeet model; remove it before this case: $before", before.getBoolean("installed"))
+        try {
+            // The progress channel is the panel's `Channel`: its id is a registered callback, passed as `__CHANNEL__:<id>`.
+            call("Parakeet install", "voice_parakeet_install",
+                "{${request()}, events:'__CHANNEL__:' + window.__TAURI_INTERNALS__.transformCallback(() => {})}", 1_200)
+            val installed = status("Parakeet status after install")
+            assertTrue("Parakeet is installed, ready and idle after install: $installed",
+                installed.getBoolean("installed") && installed.getBoolean("ready") && !installed.getBoolean("busy"))
+            val transcript = (call("Parakeet transcription", "voice_parakeet_transcribe",
+                "{${request()}, samples:[${samples.joinToString(",")}]}", 600) as JSONObject).getString("text")
+            val wer = normalizedWordErrorRate(reference, transcript)
+            assertTrue("On-device Parakeet word error rate $wer exceeds 0.10: ${JSONObject.quote(transcript)}", wer <= 0.10)
+            call("Parakeet model removal", "voice_parakeet_remove", "{${request()}}")
+            val removed = status("Parakeet status after removal")
+            assertFalse("Removal leaves Parakeet not installed: $removed", removed.getBoolean("installed"))
+            println("lazysh native parakeet: samples=${samples.size} wer=$wer transcript=${JSONObject.quote(transcript)} removed=true")
+        } finally {
+            // Leave the emulator as found, whichever stage failed; a cleanup rejection never replaces the first failure.
+            runCatching { call("Parakeet model cleanup", "voice_parakeet_remove", "{${request()}}") }
             runCatching { evaluate(scenario, "delete window.__lazyshVoice; delete window.__lazyshVoiceResult; true") }
         }
     }

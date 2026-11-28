@@ -4268,6 +4268,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[path = "agent_board_fixture.rs"]
     mod agent_board_fixture;
+    #[cfg(target_os = "linux")]
+    #[path = "agent_board_multiplexer_fixture.rs"]
+    mod agent_board_multiplexer_fixture;
     #[cfg(unix)]
     #[path = "auth_listeners_fixture.rs"]
     mod auth_listeners_fixture;
@@ -8129,6 +8132,13 @@ mod tests {
         openssh_interoperability(OpenSshCheck::AgentBoard).await;
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires owned OpenSSH, a current-source companion binary and Zellij and Herdr on PATH"]
+    async fn openssh_real_zellij_and_herdr_hooks_are_answered_from_the_client_by_exact_pane() {
+        openssh_interoperability(OpenSshCheck::AgentMultiplexers).await;
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires owned OpenSSH and a current-source companion binary"]
@@ -8176,6 +8186,8 @@ mod tests {
         ManagedHerdr,
         #[cfg(target_os = "linux")]
         AgentBoard,
+        #[cfg(target_os = "linux")]
+        AgentMultiplexers,
         AccountUsage,
     }
 
@@ -8274,7 +8286,10 @@ mod tests {
             String::new()
         };
         #[cfg(target_os = "linux")]
-        let environment = if matches!(check, OpenSshCheck::AgentBoard) {
+        let environment = if matches!(
+            check,
+            OpenSshCheck::AgentBoard | OpenSshCheck::AgentMultiplexers
+        ) {
             agent_board_fixture::environment(dir.path())
         } else if matches!(check, OpenSshCheck::ManagedHerdr) {
             companion_fixture::environment(dir.path())
@@ -8352,6 +8367,16 @@ mod tests {
         #[cfg(target_os = "linux")]
         if matches!(check, OpenSshCheck::ManagedHerdr) {
             Box::pin(managed_herdr_fixture::verify(&app, &id, dir.path())).await;
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        if matches!(check, OpenSshCheck::AgentMultiplexers) {
+            Box::pin(agent_board_multiplexer_fixture::verify(
+                &app,
+                &id,
+                dir.path(),
+            ))
+            .await;
             return;
         }
         if matches!(check, OpenSshCheck::TranscriptImages) {

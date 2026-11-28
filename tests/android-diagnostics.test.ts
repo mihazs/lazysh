@@ -101,7 +101,7 @@ test('native fixture namespaces are admitted without privilege changes before Li
 test('independent Android auxiliary owners have their own finite native job and unchanged prerequisites',()=>{
   const guarded=workflow.jobs['native-android-runtime'],auxiliary=workflow.jobs['native-android-auxiliary'];
   expect(auxiliary).toBeDefined();
-  expect(auxiliary['timeout-minutes']).toBe(40);
+  expect(auxiliary['timeout-minutes']).toBe(55);
   expect(auxiliary['runs-on']).toBe('ubuntu-24.04');
   // Only the documentation-only gate precedes it; no client or Herdr build prerequisite.
   expect(auxiliary.needs).toBe('changes');
