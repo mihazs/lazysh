@@ -284,9 +284,6 @@ impl Entry {
         session: &crate::ssh::Session,
         lease: &AccessLease,
     ) -> Result<()> {
-        let unavailable = || {
-            SshError::new("multiplexer_unavailable", "Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")
-        };
         let herdr = matches!(self.kind, MultiplexerKind::Herdr);
         let backend = if herdr {
             crate::herdr_backend::choose(&session.handle, self.backend)?
@@ -300,13 +297,7 @@ impl Entry {
             lease,
         )
         .await
-        .map_err(|error| {
-            if error.kind() == "remote_command_failed" {
-                unavailable()
-            } else {
-                error
-            }
-        })?;
+        .map_err(unavailable_if_failed)?;
         if !self.create_if_missing && !self.kind.is_tmux_family() {
             let live = if herdr {
                 let output = crate::ssh::exec_for_access(
@@ -315,20 +306,16 @@ impl Entry {
                     lease,
                 )
                 .await?;
-                persistent_sessions(self.kind, &output)?
-                    .into_iter()
-                    .map(|target| target.name)
-                    .collect()
+                herdr_live(&output)?
             } else {
-                // `--short` also lists a serialized exited session, which `zellij attach` resurrects (#2047).
-                zellij_live_sessions(&zellij_output(
+                zellij_live(
                     crate::ssh::exec_for_access_status(
                         session,
                         zellij_full_sessions_command().render(),
                         lease,
                     )
                     .await?,
-                )?)?
+                )?
             };
             if !live.contains(&self.name) {
                 return Err(unavailable());
@@ -336,6 +323,86 @@ impl Entry {
         }
         Ok(())
     }
+    /// `prepare` on this device, before a local terminal exists: the tool runs and the named
+    /// session can be attached. Argv with no shell in between; a tmux session is checked only
+    /// for an attach, as `new-session -A` creates it, and Herdr and Zellij create their own.
+    #[cfg(desktop)]
+    pub(crate) async fn prepare_local(&self, host: &Host, lease: &AccessLease) -> Result<()> {
+        self.validate()?;
+        let (tool, version): (_, &[&str]) = match self.kind {
+            MultiplexerKind::Tmux => ("tmux", &["-V"]),
+            MultiplexerKind::Herdr => ("herdr", &["--version"]),
+            MultiplexerKind::Zellij => ("zellij", &["--version"]),
+            MultiplexerKind::Rmux => {
+                return Err(SshError::new(
+                    "invalid_target",
+                    "rmux sessions in local terminals are not available yet",
+                ))
+            }
+        };
+        let argv = [&[tool], version].concat();
+        let probe = Cmd::new(&[], &argv);
+        let herdr = matches!(self.kind, MultiplexerKind::Herdr);
+        host.run(lease, &if herdr { probe.herdr() } else { probe })
+            .await
+            .map_err(unavailable_if_failed)?;
+        if self.create_if_missing {
+            return Ok(());
+        }
+        let live = match self.kind {
+            MultiplexerKind::Tmux => {
+                let exists = self.server()?.cmd(&[
+                    "has-session",
+                    "-t",
+                    &tmux_word(&format!("={}", self.name)),
+                ]);
+                return host
+                    .run(lease, &exists)
+                    .await
+                    .map(drop)
+                    .map_err(unavailable_if_failed);
+            }
+            MultiplexerKind::Herdr => herdr_live(
+                &host
+                    .run(
+                        lease,
+                        &Cmd::new(&[], &["herdr", "session", "list", "--json"]).herdr(),
+                    )
+                    .await?,
+            )?,
+            _ => zellij_live(
+                host.run_status(lease, &zellij_full_sessions_command())
+                    .await?,
+            )?,
+        };
+        if live.contains(&self.name) {
+            Ok(())
+        } else {
+            Err(unavailable())
+        }
+    }
+}
+fn unavailable() -> SshError {
+    SshError::new("multiplexer_unavailable", "Cannot enter the selected multiplexer. Check that it is installed and the named session can be opened.")
+}
+/// A command that exits non-zero, or cannot start, means the tool or the session is not there;
+/// a closed session, a revoked lease or a timeout stays what it is.
+fn unavailable_if_failed(error: SshError) -> SshError {
+    if error.kind() == "remote_command_failed" {
+        unavailable()
+    } else {
+        error
+    }
+}
+fn herdr_live(output: &str) -> Result<Vec<String>> {
+    Ok(persistent_sessions(MultiplexerKind::Herdr, output)?
+        .into_iter()
+        .map(|target| target.name)
+        .collect())
+}
+/// `--short` also lists a serialized exited session, which `zellij attach` resurrects (#2047).
+fn zellij_live(output: crate::ssh::ExecOutput) -> Result<Vec<String>> {
+    zellij_live_sessions(&zellij_output(output)?)
 }
 /// A target that must already exist: reconnect and restore never create it.
 pub(crate) fn reattach_entry(kind: MultiplexerKind, value: &str) -> Entry {

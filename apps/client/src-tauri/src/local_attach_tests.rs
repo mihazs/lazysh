@@ -730,9 +730,9 @@ mod runtime {
             ]))
         };
         assert_eq!(sessions(), name);
-        // Without `createIfMissing` a missing session ends the terminal instead of creating one.
-        let (channel, mut closing) = events();
-        let missing = desktop::connect(
+        // Without `createIfMissing` a missing session is refused before any terminal starts.
+        let (channel, _events) = events();
+        let refused = desktop::connect(
             &state,
             access_lease(),
             None,
@@ -743,16 +743,13 @@ mod runtime {
             channel,
         )
         .await
-        .unwrap()
-        .session_id;
-        loop {
-            let event = closing.recv().await.unwrap();
-            if event["type"] == "closed" {
-                break;
-            }
-        }
+        .err()
+        .expect("a missing session must be refused");
+        assert!(
+            refused.starts_with("Cannot enter the selected multiplexer"),
+            "{refused}"
+        );
         assert_eq!(sessions(), name, "the missing session was created");
-        desktop::disconnect(&state, &missing);
         desktop::disconnect(&state, &id);
         home.stop_tmux(&server);
     }
@@ -763,7 +760,12 @@ mod runtime {
         let home = Isolated::new();
         let state = home.state();
         let name = unique("lazysh-");
-        let (id, mut rx, lease) = attach(&state, json!({"kind":"herdr","name":name})).await;
+        // Stock Herdr starts a missing session; without `createIfMissing` it must already run.
+        let (id, mut rx, lease) = attach(
+            &state,
+            json!({"kind":"herdr","name":name,"createIfMissing":true}),
+        )
+        .await;
         // The stock client switches to the alternate screen once it is attached.
         until(&mut rx, "\u{1b}[?1049h").await;
         let snapshot = eventually("the attached Herdr session never answered", || {
@@ -796,6 +798,7 @@ mod runtime {
             r#"#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/invocations"
 case "$*" in
+  --version) echo 'herdr 1';;
   *"api guarded"*)
     body=$(cat)
     case "$body" in
@@ -835,7 +838,7 @@ esac
             &state,
             lease.clone(),
             None,
-            Some(entry(json!({"kind":"herdr","name":"scripted"})).unwrap()),
+            Some(entry(json!({"kind":"herdr","name":"scripted","createIfMissing":true})).unwrap()),
             None,
             80,
             24,
@@ -866,7 +869,7 @@ esac
         let (_directory, app) = app_state();
         let status = guard(&app, &state, &id, &lease, json!({"kind":"status"})).await;
         assert_eq!(status.unwrap()["available"], true);
-        // The guard probe, the attach and the claim; never an ordinary attach.
+        // The version check, the guard probe, the attach and the claim; never an ordinary attach.
         let ran = invocations(&home);
         assert_eq!(
             ran.iter()
@@ -879,7 +882,7 @@ esac
             ran.iter()
                 .filter(|line| !line.contains("api guarded"))
                 .collect::<Vec<_>>(),
-            ["--session scripted --guarded-attach"]
+            ["--version", "--session scripted --guarded-attach"]
         );
         guard_ends_with_the_terminal(&app, &state, &id, &lease).await;
     }
@@ -907,7 +910,7 @@ esac
     #[tokio::test]
     async fn a_local_herdr_without_the_guard_stays_an_ordinary_attach() {
         // Stock Herdr rejects the unknown `api guarded` subcommand.
-        let script = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/invocations\"\ncase \"$*\" in\n  *\"api guarded\"*) cat >/dev/null; echo 'unknown subcommand' >&2; exit 2;;\nesac\nprintf 'ORDINARY_SCREEN\\n'; exec sleep 30\n";
+        let script = "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/invocations\"\ncase \"$*\" in\n  --version) echo 'herdr 1'; exit 0;;\n  *\"api guarded\"*) cat >/dev/null; echo 'unknown subcommand' >&2; exit 2;;\nesac\nprintf 'ORDINARY_SCREEN\\n'; exec sleep 30\n";
         let (home, state, connected, mut rx, lease) = attach_scripted(script).await;
         let id = connected.unwrap();
         desktop::adopt(&state, &id, &lease).unwrap();
@@ -992,7 +995,11 @@ esac
             "--cwd",
             directory,
         ]));
-        let (id, mut rx, lease) = attach(&state, json!({"kind":"herdr","name":name})).await;
+        let (id, mut rx, lease) = attach(
+            &state,
+            json!({"kind":"herdr","name":name,"createIfMissing":true}),
+        )
+        .await;
         let shown = until(&mut rx, "GUARD_LOCAL").await;
         // The private first frame never reaches the terminal.
         assert!(!shown.contains("LAZYSH-GUARD-1"), "{shown}");
@@ -1108,5 +1115,214 @@ esac
         .await;
         desktop::disconnect(&state, &id);
         home.quiet("zellij", &["delete-session", "--force", &name]);
+    }
+}
+
+/// The connect-time preflight and the PTY start against stand-in tools on a private PATH, so the
+/// refusals and the argument lists are observed without a real tmux, Herdr or Zellij.
+#[cfg(unix)]
+mod stand_ins {
+    use super::{
+        super::{
+            desktop,
+            tests::{access_lease, events, until},
+            LocalState,
+        },
+        *,
+    };
+    use std::{os::unix::fs::PermissionsExt, path::Path};
+
+    const REFUSED: &str = "Cannot enter the selected multiplexer";
+    // The flags `session` and `broken` sit beside the tool directory.
+    const TMUX: &str = r#"T="$(dirname "$0")/.."
+case "$*" in
+  -V) [ -e "$T/broken" ] && exit 1; echo 'tmux 3.4';;
+  *has-session*) [ -e "$T/session" ];;
+  *) printf 'STAND_IN %s\n' "$*"; exec sleep 30;;
+esac"#;
+    const LISTS_ALPHA_AND_BETA: &str = r#"case "$*" in
+  --version|-V) echo "tool 1";;
+  "list-sessions --no-formatting") printf 'alpha [Created 1s ago]\nbeta [Created 2s ago]\ngone [Created 1h ago] (EXITED - attach to resurrect)\n';;
+  *"api guarded"*) cat >/dev/null; exit 2;;
+  "session list --json") echo '{"sessions":[{"name":"alpha","running":true},{"name":"gone","running":false}]}';;
+  *) printf 'STAND_IN %s\n' "$*"; exec sleep 30;;
+esac"#;
+
+    fn install(directory: &Path, tool: &str, body: &str) {
+        std::fs::create_dir_all(directory).unwrap();
+        let path = directory.join(tool);
+        // Every call is logged beside the tool, so a test can see what was and was not run.
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\necho \"$*\" >> \"$0.log\"\n{body}\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    struct Tools {
+        temp: tempfile::TempDir,
+    }
+    impl Tools {
+        fn new(tools: &[(&str, &str)]) -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            for (tool, body) in tools {
+                install(&temp.path().join("bin"), tool, body);
+            }
+            Self { temp }
+        }
+        fn bin(&self) -> std::path::PathBuf {
+            self.temp.path().join("bin")
+        }
+        /// The tools alone for a PATH, or with the system's `sleep` after them.
+        fn state(&self, system: bool) -> LocalState {
+            let path = if system {
+                format!("{}:/usr/bin:/bin", self.bin().display())
+            } else {
+                self.bin().display().to_string()
+            };
+            let state = LocalState::default();
+            state.set_test_env(vec![("PATH".into(), path)]);
+            state
+        }
+        fn calls(&self, tool: &str) -> String {
+            std::fs::read_to_string(self.bin().join(format!("{tool}.log"))).unwrap_or_default()
+        }
+        fn flag(&self, name: &str, on: bool) {
+            let path = self.temp.path().join(name);
+            if on {
+                std::fs::write(path, "").unwrap();
+            } else {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    async fn connect(
+        state: &LocalState,
+        value: serde_json::Value,
+    ) -> (
+        Result<String, String>,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+    ) {
+        let (channel, rx) = events();
+        let connected = desktop::connect(
+            state,
+            access_lease(),
+            None,
+            Some(entry(value).unwrap()),
+            None,
+            80,
+            24,
+            channel,
+        )
+        .await;
+        (connected.map(|connected| connected.session_id), rx)
+    }
+
+    #[tokio::test]
+    async fn a_tmux_attach_needs_a_working_tool_and_an_existing_session_unless_it_creates_one() {
+        let tools = Tools::new(&[("tmux", TMUX)]);
+        let state = tools.state(true);
+        let work = json!({"kind":"tmux","name":"work space"});
+        // The session is missing: refused before any attach, after the version gate.
+        let (refused, _rx) = connect(&state, work.clone()).await;
+        assert!(refused.unwrap_err().starts_with(REFUSED));
+        assert_eq!(
+            tools.calls("tmux"),
+            "-V\n-u -L default has-session -t =work space\n"
+        );
+        // The session exists: the PTY runs the attach as one literal argument list.
+        tools.flag("session", true);
+        let (connected, mut rx) = connect(&state, work.clone()).await;
+        let id = connected.unwrap();
+        until(
+            &mut rx,
+            "STAND_IN -u -L default attach-session -t =work space",
+        )
+        .await;
+        desktop::disconnect(&state, &id);
+        // A tool that fails its version check is refused even when the session exists.
+        tools.flag("broken", true);
+        let (refused, _rx) = connect(&state, work).await;
+        assert!(refused.unwrap_err().starts_with(REFUSED));
+        // `createIfMissing` needs no session: tmux creates it, and no existence check runs.
+        tools.flag("broken", false);
+        tools.flag("session", false);
+        let _ = std::fs::remove_file(tools.bin().join("tmux.log"));
+        let (created, mut rx) = connect(
+            &state,
+            json!({"kind":"tmux","name":"fresh","createIfMissing":true}),
+        )
+        .await;
+        let id = created.unwrap();
+        until(&mut rx, "STAND_IN -u -L default new-session -A -s fresh").await;
+        assert_eq!(tools.calls("tmux").lines().next(), Some("-V"));
+        assert!(!tools.calls("tmux").contains("has-session"));
+        desktop::disconnect(&state, &id);
+    }
+
+    #[tokio::test]
+    async fn a_zellij_or_herdr_attach_needs_a_running_listed_session_unless_it_creates_one() {
+        let tools = Tools::new(&[
+            ("zellij", LISTS_ALPHA_AND_BETA),
+            ("herdr", LISTS_ALPHA_AND_BETA),
+        ]);
+        let state = tools.state(true);
+        for (kind, listed, attach) in [
+            ("zellij", "beta", "STAND_IN attach beta"),
+            ("herdr", "alpha", "STAND_IN --session alpha"),
+        ] {
+            let (refused, _rx) = connect(&state, json!({"kind":kind,"name":"gone"})).await;
+            assert!(refused.unwrap_err().starts_with(REFUSED), "{kind}");
+            let (connected, mut rx) = connect(&state, json!({"kind":kind,"name":listed})).await;
+            let id = connected.unwrap();
+            until(&mut rx, attach).await;
+            desktop::disconnect(&state, &id);
+            let (created, mut rx) = connect(
+                &state,
+                json!({"kind":kind,"name":"gone","createIfMissing":true}),
+            )
+            .await;
+            let id = created.unwrap();
+            until(&mut rx, "STAND_IN").await;
+            desktop::disconnect(&state, &id);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_tool_is_refused_without_starting_a_terminal() {
+        let tools = Tools::new(&[]);
+        // Neither the tools nor the system's directories are on the PATH.
+        let state = tools.state(false);
+        std::fs::create_dir_all(tools.bin()).unwrap();
+        for kind in ["tmux", "herdr", "zellij"] {
+            let (refused, mut rx) = connect(&state, json!({"kind":kind,"name":"work"})).await;
+            assert!(refused.unwrap_err().starts_with(REFUSED), "{kind}");
+            // No terminal was started, so nothing was ever sent to it.
+            assert!(rx.try_recv().is_err(), "{kind}");
+        }
+    }
+
+    #[tokio::test]
+    async fn herdr_attaches_from_the_user_install_after_the_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let (home, empty) = (temp.path().join("home"), temp.path().join("empty"));
+        std::fs::create_dir(&empty).unwrap();
+        install(
+            &home.join(".local/bin"),
+            "herdr",
+            r#"printf 'INSTALLED %s\n' "$*"; read _"#,
+        );
+        let herdr = entry(json!({"kind":"herdr","name":"work_1"})).unwrap();
+        let state = LocalState::default();
+        let (channel, mut rx) = events();
+        let command =
+            desktop::attach_command(&herdr, Some(empty.clone().into()), Some(home.clone()))
+                .unwrap();
+        let id = desktop::start(&state, command, 80, 24, channel)
+            .await
+            .unwrap()
+            .session_id;
+        until(&mut rx, "INSTALLED --session work_1").await;
+        desktop::disconnect(&state, &id);
     }
 }

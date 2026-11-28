@@ -120,7 +120,9 @@ detected natively; the renderer chooses an id, never a path or command.
 `local_connect` accepts a launch spec `{ target, cwd?, attach? }`. `attach` is the
 existing typed `multiplexer::Entry` (tmux, tmux server, Herdr, Zellij;
 `deny_unknown_fields`), validated natively and turned into argv by the existing
-`attach_command` builders. The PTY is started with `CommandBuilder` from that argv.
+`attach_command` builders. The PTY is started with `CommandBuilder` from that argv, after the
+same preflight as over SSH (`Entry::prepare`) has run on this device through the host context:
+the tool answers its version command and, without `createIfMissing`, the named session exists.
 For WSL the PTY runs `wsl.exe -d <distro> --cd <dir> -e <argv>` and the host context
 runs every tool the same way, so all POSIX features (tmux included) work inside the
 distribution with no shell string.
