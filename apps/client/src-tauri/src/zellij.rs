@@ -1055,10 +1055,12 @@ mod tests {
             }
         }
     }
-    /// Retries `probe` for five seconds: Zellij applies actions asynchronously.
+    /// Retries `probe` for five seconds: Zellij applies actions asynchronously. On a timeout the panic carries `state`,
+    /// the session as Zellij reports it then, because a hosted runner failure cannot be reproduced locally (#2252).
     #[cfg(unix)]
     async fn until<T, F: std::future::Future<Output = Option<T>>>(
         what: &str,
+        state: impl Fn() -> String,
         mut probe: impl FnMut() -> F,
     ) -> T {
         for _ in 0..250 {
@@ -1067,7 +1069,26 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        panic!("Zellij never reached {what}");
+        panic!("Zellij never reached {what}; session state:\n{}", state());
+    }
+    /// The clients, tabs and panes Zellij reports for `session`, for a failure message.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    fn session_state(run: impl Fn(&[&str]) -> std::process::Output, session: &str) -> String {
+        ["list-clients", "list-tabs --json", "list-panes --json"]
+            .iter()
+            .map(|query| {
+                let mut args = vec!["--session", session, "action"];
+                args.extend(query.split(' '));
+                let output = run(&args);
+                format!(
+                    "{query} ({}): {}{}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
     #[cfg(unix)]
     #[tokio::test]
@@ -1106,7 +1127,9 @@ mod tests {
             client,
             drain: Some(drain),
         };
-        let listed = until("a listed session", || async {
+        let zellij = |args: &[&str]| home.command("zellij").args(args).output().unwrap();
+        let state = || session_state(zellij, &name);
+        let listed = until("a listed session", state, || async {
             let sessions = ok(crate::multiplexer::multiplexer_sessions(
                 app.state(),
                 app.state(),
@@ -1124,6 +1147,15 @@ mod tests {
                 .then_some(())
         });
         listed.await;
+        // Zellij lists a session before its client has attached, and only an attached client has an active tab.
+        until("an attached client", state, || async {
+            let listing = String::from_utf8_lossy(
+                &zellij(&["--session", &name, "action", "list-clients"]).stdout,
+            )
+            .into_owned();
+            (attached_clients(&listing) == 1).then_some(())
+        })
+        .await;
         // A session that has not reported its tabs yet answers with an unreadable list.
         let tabs = || {
             let answer = Box::pin(zellij_tabs(
@@ -1156,27 +1188,10 @@ mod tests {
                 .then_some(tabs)
             }
         };
-        let first_tab_attempts = std::sync::atomic::AtomicUsize::new(0);
-        until("the first tab", || async {
-            let observed = tabs().await;
-            let ready = observed.as_ref().is_some_and(|tabs| {
+        until("the first tab", state, || async {
+            tabs().await.filter(|tabs| {
                 tabs.len() == 1 && tabs.iter().any(|tab| tab.active && tab.position == 0)
-            });
-            if !ready
-                && first_tab_attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 249
-            {
-                let summary = observed.as_ref().map(|tabs| {
-                    (
-                        tabs.len(),
-                        tabs.iter().filter(|tab| tab.active).count(),
-                        tabs.iter().any(|tab| tab.active && tab.position == 0),
-                    )
-                });
-                eprintln!(
-                    "Zellij first-tab final observation (total, active, first active): {summary:?}"
-                );
-            }
-            observed.filter(|_| ready)
+            })
         })
         .await;
         let literal = "literal 'quote' $(touch nope)";
@@ -1187,15 +1202,15 @@ mod tests {
             directory: directory.to_str().unwrap().into(),
         })
         .await;
-        let tabs_now = until("the new tab", || active(1, 2)).await;
+        let tabs_now = until("the new tab", state, || active(1, 2)).await;
         assert_eq!(tabs_now[1].name, literal);
         assert!(!home.path().join("nope").exists());
         act(ZellijAction::GoToTab { index: 1 }).await;
-        until("the first tab by number", || active(0, 2)).await;
+        until("the first tab by number", state, || active(0, 2)).await;
         act(ZellijAction::NextTab).await;
-        until("the next tab", || active(1, 2)).await;
+        until("the next tab", state, || active(1, 2)).await;
         act(ZellijAction::PreviousTab).await;
-        until("the previous tab", || active(0, 2)).await;
+        until("the previous tab", state, || active(0, 2)).await;
     }
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     #[test]
@@ -1339,7 +1354,8 @@ mod tests {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            panic!("Attached Zellij client did not reach {description}: {last}");
+            let state = session_state(|args| execute(format!("zellij {}", args.join(" "))), &name);
+            panic!("Attached Zellij client did not reach {description}: {last}\nsession state:\n{state}");
         };
         let query = |subcommand: &str| -> std::result::Result<serde_json::Value, String> {
             let output = execute(format!(
@@ -1359,6 +1375,15 @@ mod tests {
                 .and_then(|tab| tab["position"].as_u64())
                 .ok_or_else(|| format!("attached client has no active tab: {tabs}"))
         };
+        // The session is listed before its client attaches, and only an attached client has an active tab.
+        let attached = || {
+            let output = execute(format!(
+                "zellij --session={} action list-clients",
+                quote(&name)
+            ));
+            Ok(attached_clients(&String::from_utf8_lossy(&output.stdout)) as u64)
+        };
+        wait("an attached client", &attached, &|clients| clients == 1);
         wait("attached first tab", &active_tab, &|position| position == 0);
         let directory = temp.path().to_str().unwrap().to_owned();
         run(command(
