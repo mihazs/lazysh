@@ -36,7 +36,7 @@ const usageItemLabels={follow:"preferencesUsageFollow",fixed:"preferencesUsageFi
 
 /** `pages` adds host-owned entries (connections, security, other surfaces) into the shared sections. */
 /** `terminalEngine` is the engine line of the session on screen (which engine and why), when there is one. */
-export default function PreferencesPanel({pages=[],footer,usageAccounts=[],terminalEngine}:{pages?:SettingsPage[];footer?:string;usageAccounts?:readonly {id:string;name:string}[];terminalEngine?:string}={}) {
+export default function PreferencesPanel({pages=[],footer,usageAccounts=[],terminalEngine,initialPage,onSelectedChange}:{pages?:SettingsPage[];footer?:string;usageAccounts?:readonly {id:string;name:string}[];terminalEngine?:string;initialPage?:string;onSelectedChange?:(id:string|undefined)=>void}={}) {
   useUi();
   const preferences = usePreferences();
   const topBar = useShowTopBar();
@@ -227,6 +227,6 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[],termi
   return <section className="preferences-panel" aria-label={t("preferencesTerminalPreferences")}>
     {error && <p role="alert">{uiErrorText(error)}</p>}
     {languageError && <p role="alert">{t(languageError==='settings'?'preferencesSettingsCouldNotBeSavedOnThisDevice':'nativeLocaleSaveFailed')}</p>}
-    <SettingsNavigation sections={settingsSections()} footer={footer} pages={[...own,...pages]}/>
+    <SettingsNavigation sections={settingsSections()} footer={footer} pages={[...own,...pages]} initialPage={initialPage} onSelectedChange={onSelectedChange}/>
   </section>;
 }

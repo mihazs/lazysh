@@ -368,6 +368,12 @@ it('keeps one agent owner beside the owned terminal and suspends it through navi
   const search=await screen.findByRole('searchbox',{name:'Search reported agents'});await user.type(search,'/project');
   await user.click(screen.getByRole('button',{name:'Setup'}));
   const settings=await screen.findByRole('checkbox',{name:'Recorded usage inspection'});await user.click(settings);
+  const preferences=within(screen.getByRole('dialog',{name:'Preferences'}));
+  await user.click(preferences.getByRole('button',{name:'Back'}));
+  await user.click(preferences.getByRole('button',{name:'Agents'}));
+  expect(preferences.getByRole('checkbox',{name:'Recorded usage inspection'})).toBe(settings);
+  expect(settings).toHaveProperty('checked',false);
+  await user.click(preferences.getByRole('button',{name:'Close Preferences'}));
   const jumps=screen.getByRole('navigation',{name:'Agent sections'});
   const activity=screen.getByRole('group',{name:'Reported agent activity'});
   const scroller=activity.closest('.workspace-navigation-scroll') as HTMLDivElement;

@@ -25,18 +25,22 @@ it('requests a portal idle inhibition only for an opted-in, focused Agent board 
   await (await browser.$('button[data-workspace-mode="agents"]')).click();
   await (await browser.$('button=Activity')).click();
   const panel=await browser.$('section.agent-panel:not([hidden])');await panel.waitForDisplayed({timeout:20_000});
-  const setup=await panel.$('button[title="Setup"]');await setup.waitForClickable();await setup.click();
-  const control=await panel.$('.keep-awake-control'),checkbox=await control.$('input[type="checkbox"]'),status=await control.$('[role="status"]');
-  const shows=(text:string)=>waitFor(`status "${text}"`,async()=>await status.getText()===text);
+  // The switch lives on Preferences > Agents, which the board's Setup button opens; it leaves the document when Preferences closes.
+  const CONTROL='[data-settings-page="agents"]:not([hidden]) .keep-awake-control';
+  const openSettings=async()=>{const setup=await panel.$('button[title="Setup"]');await setup.waitForClickable();await setup.click();await browser.$(CONTROL).waitForDisplayed({timeout:20_000});};
+  const closeSettings=async()=>{await (await browser.$('button[aria-label="Close Preferences"]')).click();await browser.$(CONTROL).waitForExist({reverse:true,timeout:10_000});};
+  const control=()=>browser.$(CONTROL),checkbox=async()=>(await control()).$('input[type="checkbox"]'),status=async()=>(await control()).$('[role="status"]');
+  const shows=(text:string)=>waitFor(`status "${text}"`,async()=>await (await status()).getText()===text);
+  await openSettings();
   const focused=()=>browser.execute(()=>document.hasFocus());
 
   gui.stage='owned keep-awake default off';
   await shows(OFF);
-  expect(await checkbox.isSelected()).toBe(false);
+  expect(await (await checkbox()).isSelected()).toBe(false);
   expect(requests('inhibit')).toEqual([]);
 
   gui.stage='owned keep-awake opt-in';
-  await checkbox.click();
+  await (await checkbox()).click();
   await shows(ACTIVE);
   const [first,...others]=requests('inhibit');
   expect(others).toEqual([]);
@@ -64,27 +68,30 @@ it('requests a portal idle inhibition only for an opted-in, focused Agent board 
   expect(requests('close')).toHaveLength(1);
 
   gui.stage='owned keep-awake board left';
+  await closeSettings();
   await (await browser.$('button[data-workspace-mode="workspaces"]')).click();
   await waitFor('Close of the second request',()=>requests('close').length===2);
   expect(requests('close')[1].handle).toBe(second.handle);
   await (await browser.$('button[data-workspace-mode="agents"]')).click();
+  await waitFor('the third request',()=>requests('inhibit').length===3);
+  await openSettings();
   await shows(ACTIVE);
   const third=requests('inhibit')[2];
   expect(requests('inhibit')).toHaveLength(3);
   expect(third.handle).not.toBe(second.handle);
 
   gui.stage='owned keep-awake opt-out';
-  await checkbox.click();
+  await (await checkbox()).click();
   await shows(OFF);
   await waitFor('Close of the third request',()=>requests('close').length===3);
   expect(requests('close')[2].handle).toBe(third.handle);
-  expect(await checkbox.isSelected()).toBe(false);
+  expect(await (await checkbox()).isSelected()).toBe(false);
 
   gui.stage='owned keep-awake without a portal';
   await portal.stop();
-  await checkbox.click();
-  await (await control.$('[role="alert"]')).waitForDisplayed({timeout:10_000});
-  expect(await status.getText()).not.toBe(ACTIVE);
+  await (await checkbox()).click();
+  await (await (await control()).$('[role="alert"]')).waitForDisplayed({timeout:10_000});
+  expect(await (await status()).getText()).not.toBe(ACTIVE);
   expect(requests('inhibit')).toHaveLength(3);
   expect(await gui.appOwner()).toEqual(owner);
   expect(gui.connections).toBe(0);
