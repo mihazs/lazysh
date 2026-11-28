@@ -498,3 +498,59 @@ fn a_dynamic_workflow_becomes_a_progress_tree_from_its_journal_and_summary_file(
         json!({"title":"Report","state":"pending"})
     );
 }
+
+#[test]
+fn a_script_path_or_resumed_workflow_is_titled_by_its_script_and_finds_its_run() {
+    let directory = tempfile::tempdir().unwrap();
+    let parent = directory.path().join("sess.jsonl");
+    let mut log = Log(Vec::new());
+    log.push("user", 0, json!("Resume the backlog"));
+    log.call(
+        1,
+        "w1",
+        "Workflow",
+        json!({"scriptPath":"/h/sess/workflows/scripts/backlog-burner-wf_f8a75d16-658.js","resumeFromRunId":"wf_old-run"}),
+    );
+    log.result(
+        1,
+        "w1",
+        "Workflow launched in background. Task ID: wtask1",
+        false,
+    );
+    log.call(
+        2,
+        "w2",
+        "Workflow",
+        json!({"scriptPath":"/h/sess/workflows/scripts/pr-batch.js"}),
+    );
+    log.result(
+        2,
+        "w2",
+        "Workflow launched in background. Task ID: wtask2",
+        false,
+    );
+    fs::write(
+        &parent,
+        log.0.iter().map(|r| format!("{r}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let run = directory.path().join("sess/subagents/workflows/wf_old-run");
+    fs::create_dir_all(&run).unwrap();
+    fs::write(
+        run.join("journal.jsonl"),
+        format!(
+            "{}\n",
+            json!({"type":"started","agentId":"aa1","label":"a","phase":"P"})
+        ),
+    )
+    .unwrap();
+    let page =
+        serde_json::to_value(conversation(&parent, TranscriptAgent::Claude, 100).unwrap()).unwrap();
+    let work = page["work"].as_array().unwrap();
+    let (first, second) = (row(work, "w1"), row(work, "w2"));
+    assert_eq!(first["title"], "backlog-burner");
+    assert_eq!(first["runId"], "wf_old-run");
+    assert_eq!(first["workflow"]["agents"][0]["state"], "running");
+    assert_eq!(second["title"], "pr-batch");
+    assert!(second.get("workflow").is_none());
+}
