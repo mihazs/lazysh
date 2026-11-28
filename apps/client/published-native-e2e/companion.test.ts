@@ -31,9 +31,9 @@ it('installs the published verified companion through the actual native GUI and 
   gui.stage='published companion Agents navigation';
   await (await browser.$('button[aria-label="Agents navigation"]')).click();
   await (await browser.$('button[aria-label="Reported agent activity"]')).click();
-  const setup=await (await browser.$('.agent-panel')).$('button=Setup');await setup.waitForDisplayed({timeout:10_000});
-  if(await setup.getAttribute('aria-expanded')==='false'){await setup.waitForClickable({timeout:10_000});await setup.click();}
-  const panel=await browser.$('details[aria-label="Host companion installation"]');
+  // The board's Setup button opens Preferences > Agents over the board; the companion installation lives there, not on the board.
+  const setup=await browser.$('section.agent-panel:not([hidden]) button[title="Setup"]');await setup.waitForClickable({timeout:10_000});await setup.click();
+  const panel=await browser.$('[data-settings-page="agents"]:not([hidden]) details[aria-label="Host companion installation"]');
   await panel.waitForDisplayed({timeout:20_000});
   let firstIdentity:number[]|undefined;
   for(const [index,verb] of ['Installed host companion','Host companion'].entries()) {
@@ -80,6 +80,7 @@ it('installs the published verified companion through the actual native GUI and 
   expect(await publishedCompanion()).toEqual(evidence);
   console.info(`Published native GUI companion install/reuse verified version=${evidence.version} sha256=${evidence.sha256}; staging cleanup complete`);
   // Return through ordinary UI before the second terminal proof.
+  await (await browser.$('button[aria-label="Close Preferences"]')).click();
   await (await browser.$('button=Connections')).click();
   await challengeOwnedSsh(gui,ssh,terminal,owner,true);
   await disconnectOwnedSsh(gui,terminal);

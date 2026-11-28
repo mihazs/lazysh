@@ -1,6 +1,7 @@
 import {invoke as cleanupInvoke, isTauri} from '@tauri-apps/api/core';
 import {listen} from '@tauri-apps/api/event';
 import {useEffect, useRef, useState} from 'react';
+import {createPortal} from 'react-dom';
 import {useAccessSnapshot, useMountedAccess, useProtectedInvoke} from './access';
 
 import {t, useUi} from './i18n/core';
@@ -23,7 +24,7 @@ export function parseKeepAwakeStatus(value: unknown): NativeStatus {
 function message(error:unknown) {
   return error instanceof LocalUiError ? error : error instanceof Error ? error.message : typeof error==='string' ? error : new LocalUiError('keepAwakeRequestFailed');
 }
-export default function KeepAwakeControl({sessionId,visible:boardVisible=true}:{sessionId:string;visible?:boolean}) {
+export default function KeepAwakeControl({sessionId,visible:boardVisible=true,settingsTarget,settingsActive=false}:{sessionId:string;visible?:boolean;settingsTarget?:HTMLElement | null;settingsActive?:boolean}) {
   useUi();
   const invoke=useProtectedInvoke();
   const {access,mounted}=useMountedAccess();
@@ -63,6 +64,14 @@ export default function KeepAwakeControl({sessionId,visible:boardVisible=true}:{
       window.removeEventListener('blur',hidden);window.removeEventListener('pagehide',hidden);window.removeEventListener('pageshow',changed);};
   },[native,access,mounted,boardVisible]);
   useEffect(()=>{
+    if(!settingsActive || boardVisible || !native || !access.current())return;
+    let alive=true;
+    void invoke('board_keep_awake_status').then(value=>{
+      if(alive && mounted.current && access.current())setStatus(parseKeepAwakeStatus(value));
+    }).catch(failure=>{if(alive && mounted.current && access.current())setError(message(failure));});
+    return()=>{alive=false;};
+  },[sessionId,settingsActive,boardVisible,epoch,native,invoke,access,mounted]);
+  useEffect(()=>{
     let alive=true;
     let request:Ticket|undefined;
     let lost=false;
@@ -86,7 +95,8 @@ export default function KeepAwakeControl({sessionId,visible:boardVisible=true}:{
     if (!native) return;
     if (!access.current()) {cleanupFailure.current='';setPhase('paused');setStatus(undefined);setError('');return;}
     if (requireOptIn.current && enabled) {setPhase('error');return;}
-    if (!boardVisible || !foreground.visible || !visible()) {setPhase(cleanupFailure.current?'error':'paused');return;}
+    // An opted-out board has nothing to pause; Preferences, which hides the board, must read "off" by default.
+    if (!boardVisible || !foreground.visible || !visible()) {setPhase(cleanupFailure.current?'error':enabled?'paused':'off');return;}
     setError(cleanupFailure.current);setPhase(cleanupFailure.current?'error':'checking');
     void (async()=>{
       try {
@@ -127,14 +137,14 @@ export default function KeepAwakeControl({sessionId,visible:boardVisible=true}:{
     };
   },[sessionId,enabled,foreground,epoch,native,invoke,access,mounted,boardVisible]);
   function toggle(checked:boolean) {
-    if(!shown.current || !access.current())return;
+    if((!shown.current && !settingsTarget) || !access.current())return;
     requireOptIn.current=false;
     desired.current=checked;setEnabled(checked);setError(cleanupFailure.current);
     try {localStorage.setItem(boardAwakeKey,String(checked));setPreferenceError('');}
     catch {setPreferenceError(new LocalUiError('keepAwakeSaveFailed'));}
   }
-  return <section hidden={!boardVisible} style={boardVisible?undefined:{display:'none'}} className="keep-awake-control" aria-label={t('keepAwakeRegion')}>
-    <label><input type="checkbox" checked={enabled} disabled={!boardVisible || !native || !access.current() || (!enabled && !status?.available)}
+  const control=<section hidden={settingsTarget === undefined && !boardVisible} style={settingsTarget === undefined && !boardVisible ? {display:'none'} : undefined} className="keep-awake-control" aria-label={t('keepAwakeRegion')}>
+    <label><input type="checkbox" checked={enabled} disabled={(settingsTarget === undefined && !boardVisible) || !native || !access.current() || (!enabled && !status?.available)}
       onChange={event=>toggle(event.target.checked)}/>{t('keepAwakeLabel')}</label>
     <p role="status">{!native?t('keepAwakeNative'):phase==='active'?t('keepAwakeActive'):
       phase==='held'?(enabled?t('keepAwakeHeldOn'):t('keepAwakeHeldOff')):
@@ -146,4 +156,5 @@ export default function KeepAwakeControl({sessionId,visible:boardVisible=true}:{
     {requireOptIn.current && <p>{t('keepAwakeOptIn')}</p>}
     <small>{t('keepAwakeLimits')}</small>
   </section>;
+  return settingsTarget === undefined ? control : settingsTarget ? createPortal(control,settingsTarget) : null;
 }

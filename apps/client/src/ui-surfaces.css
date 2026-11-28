@@ -338,14 +338,14 @@ input[type="search"] {
 .agent-panel .panel-empty .subtle-button { border-radius: 999px; padding-inline: 18px; }
 
 /* Setup lives behind one entry; when it opens it reads as one grouped card. */
-.agent-panel .agent-configuration:not([hidden]) {
+.agent-configuration:not([hidden]) {
   display: grid; gap: 12px; margin: 4px 0 8px; padding: 16px; border-radius: var(--ui-radius); background: var(--ui-row);
   animation: surface-rise 200ms var(--ui-ease);
 }
-.agent-panel .agent-configuration > h3 { margin: 0; font-size: 17px; font-weight: 650; }
-.agent-panel .agent-configuration .agent-note, .agent-panel .agent-configuration p { margin: 0; color: var(--theme-muted); font-size: 13px; line-height: 1.5; }
-.agent-panel .agent-configuration details { border-top: 1px solid var(--ui-hairline); padding-top: 4px; }
-.agent-panel .agent-configuration summary { min-height: 44px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
+.agent-configuration > h3 { margin: 0; font-size: 17px; font-weight: 650; }
+.agent-configuration .agent-note, .agent-configuration p { margin: 0; color: var(--theme-muted); font-size: 13px; line-height: 1.5; }
+.agent-configuration details { border-top: 1px solid var(--ui-hairline); padding-top: 4px; }
+.agent-configuration summary { min-height: 44px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
 .agent-panel .agent-setup { margin: 4px 0 8px; padding: 18px; border-radius: var(--ui-radius); background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 16%, var(--ui-row)), var(--ui-row) 60%); }
 .agent-panel .agent-setup h3 { margin: 8px 0 6px; font-size: 18px; }
 .agent-panel .agent-setup p { margin: 0 0 6px; color: var(--theme-muted); font-size: 13px; line-height: 1.5; }
@@ -463,11 +463,11 @@ input[type="search"] {
 .preferences-content [data-settings-page] > p { margin: -2px 16px 18px; color: var(--theme-muted); font-size: 12.5px; line-height: 1.5; }
 .preferences-content [data-settings-page] > :is(section, details, fieldset, ul, div:not(.settings-category-list)) { margin: 8px 0 16px; }
 .preferences-content [data-settings-page] > details { padding: 4px 16px; border-radius: var(--ui-radius); background: var(--ui-row); }
-.preferences-content [data-settings-page] fieldset, .agent-panel .agent-configuration fieldset { border: 0; border-radius: var(--ui-radius); background: var(--ui-row); padding: 12px 16px; }
-.agent-panel .agent-configuration fieldset { background: var(--ui-row-pressed); }
-.preferences-content [data-settings-page] fieldset > legend, .agent-panel .agent-configuration fieldset > legend { float: left; width: 100%; margin: 0 0 8px; padding: 0; color: var(--theme-muted); font-size: 12px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+.preferences-content [data-settings-page] fieldset, .agent-configuration fieldset { border: 0; border-radius: var(--ui-radius); background: var(--ui-row); padding: 12px 16px; }
+.agent-configuration fieldset { background: var(--ui-row-pressed); }
+.preferences-content [data-settings-page] fieldset > legend, .agent-configuration fieldset > legend { float: left; width: 100%; margin: 0 0 8px; padding: 0; color: var(--theme-muted); font-size: 12px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
 /* The full-width floated legend would otherwise squeeze the first flex label beside it to nothing. */
-.agent-panel .agent-configuration fieldset > legend + * { clear: both; }
+.agent-configuration fieldset > legend + * { clear: both; }
 .preferences-content [data-settings-page] fieldset > legend + * { clear: both; }
 .preferences-content [data-settings-page] > details > summary { min-height: 48px; display: flex; align-items: center; cursor: pointer; font-weight: 500; }
 .preferences-content [data-settings-page] > ul { padding: 4px 16px; border-radius: var(--ui-radius); background: var(--ui-row); list-style: none; }
@@ -501,7 +501,7 @@ input[type="search"] {
 .sidebar { transition: transform .18s var(--ui-ease); }
 @media (prefers-reduced-motion: reduce) {
   .status-ring[data-tone="working"] > .status-ring-svg,
-  .dialog-backdrop, .dialog, .agent-panel .agent-configuration:not([hidden]) { animation: none; }
+  .dialog-backdrop, .dialog, .agent-configuration:not([hidden]) { animation: none; }
   .sidebar, .sidebar .workspace-navigation-modes button, .agent-section-jumps button, .agent-section-jumps button::before, .status-group-toggle svg,
   .herdr-navigation[data-mode=agents] .herdr-agent-row, .agent-panel .agent-card,
   .preferences-content [data-settings-page] > label > input[type="checkbox"],
