@@ -282,6 +282,29 @@ previews keep the inert renderer (`ChatMarkdown`) because they show untrusted fi
 | Watch stream unavailable | Polling, with a "delayed" hint. |
 | Transcript lags (Claude writes asynchronously) | State comes from hooks or protocol, not from transcript recency. |
 
+### Session names
+
+Two sessions in one folder, or of one vendor, used to look the same. A session the companion has named shows that **name first** on the Agents board, the all-hosts board, the selected report and the Agent view header; its latest summary, folder and agent stay beside it as secondary detail. Search matches the name. A session with no name shows the row as before: summary, folder and agent.
+
+**Where the name comes from.** The companion cuts it from the first prompt of the session, with no model call. It reads the prompt from the hook the agent already runs:
+
+| Agent | Hook field | Name |
+| --- | --- | --- |
+| Claude Code, Codex, Droid, Kimi CLI, Copilot CLI | `UserPromptSubmit`, `prompt` | First usable prompt |
+| Grok Build | `UserPromptSubmit`, `prompt` | First usable prompt |
+| Gemini CLI | `BeforeAgent`, `prompt` | First usable prompt |
+| Cursor CLI | `beforeSubmitPrompt`, `prompt` | First usable prompt |
+| Any agent that reports through the generic event | `title` | The title it reports, which replaces a prompt name |
+| OpenCode, Amp, Cline, Aider, Kimi Code | none: their hooks carry no prompt | No name; the row is unchanged |
+
+The first usable prompt names the session once; later prompts never replace it. A prompt that is a bare slash command (`/clear`) says nothing about the session, so it is skipped and the next prompt is used. A name is one line: whitespace collapsed, control characters removed, at most 80 characters, ending in `…` when cut. The vendor's own session title (Claude Code's `ai-title`, Codex's thread name, OpenCode's title) is not read yet; it will replace the prompt name when it is ([#2949](https://github.com/mihazs/lazysh/issues/2949)).
+
+**Rename.** **Rename** in the selected report gives a session your own name. It is kept on this device under the saved host, like **Archive**, and is not synced or written to the host. It wins over any reported name, survives restarts and every new report, and saving it empty brings the reported name back. A device that never renamed a session shows the companion's name.
+
+**What is stored and sent.** The companion keeps only the bounded name, in its private state beside the session's report, and sends it to the app in the snapshot over the authenticated session channel that already carries the report. The rest of a prompt, tool arguments and transcript paths are still discarded, and the push notification relay still carries no text. A companion that predates names omits the field and an app that predates them ignores it, so either side can be updated first.
+
+Not covered: names for the notification inbox rows (they come from their own journal), a rename that follows the session across devices, and model-generated names.
+
 ### Starting an agent from the empty state
 
 - **Start in a new worktree** (Herdr, when no agent runs and a workspace reported a pane directory):
