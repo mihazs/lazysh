@@ -2528,6 +2528,24 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --list --ignored --exact | grep -Fx -- "$CASE_NAME: test"
           cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      # Official ntfy 2.38.0 Linux release; the archive is pinned by its release asset digest
+      # (https://api.github.com/repos/binwiederhier/ntfy/releases/tags/v2.38.0) and the case itself
+      # rechecks the extracted binary. It serves only the case's owned TLS loopback listener.
+      - name: Read ntfy events with a topic-scoped token from the pinned official ntfy server over verified TLS
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        env:
+          CASE_NAME: tests::ntfy_server::real_ntfy_server_serves_the_desktop_receiver_a_scoped_token_over_verified_tls
+        run: |
+          ntfy_root=$(mktemp -d "$RUNNER_TEMP/lazysh-ntfy-2.38.0-XXXXXX")
+          sh .github/scripts/pinned-download.sh b1ff7cae482a6b802c28cddd83b63c7e146bf96a5ff97894278ab478b3a0436c "$ntfy_root/ntfy.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 180 --max-filesize 32840524 https://github.com/binwiederhier/ntfy/releases/download/v2.38.0/ntfy_2.38.0_linux_amd64.tar.gz
+          printf '%s  %s\n' 'b1ff7cae482a6b802c28cddd83b63c7e146bf96a5ff97894278ab478b3a0436c' "$ntfy_root/ntfy.tar.gz" | sha256sum --check --strict
+          tar -xzf "$ntfy_root/ntfy.tar.gz" --strip-components=1 -C "$ntfy_root" ntfy_2.38.0_linux_amd64/ntfy
+          chmod 0500 "$ntfy_root/ntfy"
+          export LAZYSH_NTFY_SERVER="$ntfy_root/ntfy"
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --list --ignored --exact | grep -Fx -- "$CASE_NAME: test"
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --ignored --exact --nocapture
 
   native-android-auxiliary:
     needs: changes
