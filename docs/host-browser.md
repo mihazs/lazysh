@@ -481,21 +481,39 @@ answers, input) is sent without waiting.
 | Socket-free | yes (pipe) | no |
 | Concurrent clients | several (the relay allows one) | one session, owned and always ended by the relay; a leaked one is cleared by restarting the owned browser |
 
+### Keep profile and Clear browser data in the app
+
+Both live in the **Host browser** part of the host settings panel ([#1885](https://github.com/mihazs/lazysh/issues/1885)).
+
+- **Keep profile** is a checkbox that is **off for every host** until chosen. The choice is remembered on this device for
+  that saved host only, in its own storage key (`lazysh.hostBrowserKeepProfile.v1`) as the list of host ids, so it is
+  not part of the encrypted sync and no address, title or frame is stored with it. It is offered while the host browser
+  settings can be read, like the switch. A browser session started from this device with the option passes
+  `--keep-profile` to the relay (`host_browser_start(..., keepProfile: true)`); a relay that does not know the option
+  fails with a usage error, which the session reports as `CompanionRequired`, so a session never silently runs
+  without the profile the user asked to keep. The viewer's session bar does not show a kept profile yet: the viewer
+  ([#1705](https://github.com/mihazs/lazysh/issues/1705)) is not built, so no session starts from the app yet.
+- **Clear browser data** is a button, offered with the switch on or off. It first asks, naming what it deletes (the kept
+  browser profile directory on that host: the cookies, sign-ins and site data that Keep profile saved) and that it
+  cannot be undone, and then runs `host_browser_clear_data`. The answer is "cleared" or "nothing to clear"; a profile that
+  a running browser holds is named, and an old companion gets an update message.
+
 ### App bridge
 
 The app runs the relay over the verified SSH session with six Tauri commands in `apps/client/src-tauri/src/host_browser.rs`
 ([#1704](https://github.com/mihazs/lazysh/issues/1704), slice 2 of [#1254](https://github.com/mihazs/lazysh/issues/1254)),
 shaped like the Devices tool's `device_stream_*`. They are in the permission manifest (`build.rs`) and the main capability.
 The viewer that uses them is the next slice ([#1705](https://github.com/mihazs/lazysh/issues/1705)); nothing in the app calls
-them yet.
+the six relay commands yet. `host_browser_clear_data` is the seventh command and the one the host settings panel calls today.
 
 | Command | Does |
 | --- | --- |
-| `host_browser_start(sessionId, viewport {width, height, scale?}, url?)` | Opens one SSH exec channel that runs `lazysh-agent host-browser serve`, sends `open` and returns a token at once. How the start went arrives as messages. The size and the address are checked first, with the relay's limits (100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels scaled; `http`, `https` or `about:blank`). |
+| `host_browser_start(sessionId, viewport {width, height, scale?}, url?, keepProfile?)` | Opens one SSH exec channel that runs `lazysh-agent host-browser serve` (with `--keep-profile` when `keepProfile` is true, see "Keep profile and Clear browser data in the app"), sends `open` and returns a token at once. How the start went arrives as messages. The size and the address are checked first, with the relay's limits (100 to 2048 CSS pixels, scale 1 to 3, at most 8 million pixels scaled; `http`, `https` or `about:blank`). |
 | `host_browser_next(sessionId, browserId)` | One message as bytes, one pull at a time (a second is refused as `busy`). Waits up to 15 s and then answers one `0` byte. After the closing message was read, a pull fails. |
 | `host_browser_ack(sessionId, browserId, sequence, decodeMs?)` | Sends `ack` after the device decoded a frame, which lets the relay send another. |
 | `host_browser_pause`, `host_browser_resume` | Send `pause` and `resume`. A frame queued before a pause is dropped. |
-| `host_browser_stop(sessionId, browserId)` | Ends the channel's input, so the relay ends its browser and removes its profile, closes the channel and waits (up to 8 s) for that to finish. It works while the app is locked. |
+| `host_browser_stop(sessionId, browserId)` | Ends the channel's input, so the relay ends its browser and removes its profile (a kept one stays), closes the channel and waits (up to 8 s) for that to finish. It works while the app is locked. |
+| `host_browser_clear_data(sessionId)` | **Clear browser data**: runs `lazysh-agent host-browser --clear-data` over the session and answers `{schemaVersion, cleared}`, where `cleared` is whether a kept profile existed and was removed. It works with the host browser switch off and needs an unlocked app; the companion refuses it with `BrowserProfileInUse` while a browser uses the profile, and a companion that predates the command (a usage error) answers `host_browser_companion_required` without writing anything. |
 
 **What a pull answers.** Bytes, never base64 and never a JSON string of an image: the relay's tag and then its message
 without the length. A first byte of `1` is a JSON object, `2` is a frame (`sequence:u32be width:u16be height:u16be

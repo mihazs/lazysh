@@ -502,6 +502,17 @@ async fn a_browser_that_cannot_connect_says_so_once() {
     assert!(h.pull("s", &id).await.is_err());
 }
 
+/// The command line is the contract with the companion: the option is sent only when the user chose it, and as the
+/// companion's own flag, so an older relay refuses it with a usage error instead of dropping it.
+#[test]
+fn the_relay_is_asked_to_keep_its_profile_only_when_the_user_chose_it() {
+    assert_eq!(serve_command(false), "lazysh-agent host-browser serve");
+    assert_eq!(
+        serve_command(true),
+        "lazysh-agent host-browser serve --keep-profile"
+    );
+}
+
 #[test]
 fn the_open_message_carries_a_valid_size_and_a_web_address_only() {
     let message = |viewport, url| {
