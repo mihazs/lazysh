@@ -848,7 +848,7 @@ test('empty Activity opens inspected hook repair without inventing reports',asyn
   const detected=board.getByRole('list',{name:'Detected host agents',exact:true});
   const codex=detected.getByRole('button',{name:/Codex.*Installed executable/});
   await expect(codex).toHaveAttribute('aria-pressed','false');
-  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([4]);
+  expect(await page.evaluate(()=>(window as unknown as {workspaceNavigationState:{hookDiscoveryVersions:number[]}}).workspaceNavigationState.hookDiscoveryVersions)).toEqual([5]);
   await expect(detected.getByRole('button',{name:/Claude Code.*Executable not detected/})).toBeEnabled();
   // Only Kimi Code's current profile is selectable; the legacy profile stays metadata.
   await expect(detected.getByRole('button',{name:/Kimi.*\.kimi-code/})).toBeEnabled();
