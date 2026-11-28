@@ -464,6 +464,15 @@ transcript, so it works for dialogs no hook or transcript record describes.
   back to the banner. OpenCode, Grok and Gemini have no captured corpus yet and fall back to the banner. An option that keeps a permission
   rule (Codex's **Yes, and don't ask again for commands that start with …**) is never one tap: the card first shows the option's exact text
   and what it keeps, and **Back** sends nothing.
+- **Vendor redraws.** Claude Code and Codex update themselves and redraw their dialogs without notice, and a redraw turns a card into the banner.
+  `bun run --cwd apps/client agent-dialogs:check` (`apps/client/src/test/agentDialogDrift.ts`) runs each installed agent in a private tmux pane in a
+  throwaway directory, opens the dialogs of `/model`, `/theme`, `/permissions`, `/review`, `/resume` and others (no model call), reads the pane
+  with the same lifts as the card and prints the agent's version and one line per dialog, `ok` or `FAIL /model unliftable (expected dialog)`. It
+  exits 1 when a dialog that must lift does not, or when the card sees a dialog not at all (`none`). `--agent claude|codex` limits it and
+  `--record DIR` writes each screen, sanitized (working directory, home directory, user name and e-mail addresses replaced), as
+  `AGENT-VERSION-COMMAND.txt`: review one, then add it to `apps/client/src/test/agentDialogs` with the change to the profile. It starts the
+  real agents with their accounts, so it runs on a development host and not in CI; its own test drives a fake agent in a real tmux pane (skipped
+  where tmux is not installed).
 - **Not covered.** `/rewind`'s confirmation page has no footer line, so it is not provable as a list dialog: after the choice that opens it
   the card says **The agent is waiting for you in the terminal**. Dialogs that read text (login codes, the "Tell Claude what to change" field) stay in the terminal.
 
