@@ -19,12 +19,13 @@ mod render;
 #[path = "../src/hook_setup/state.rs"]
 mod state;
 use json::{rewrite, Entry, Fault};
-use lazysh_agent::{claude_config, hooks, kimi_code, Error, Result};
-const WHOLE_FILE_AGENTS: [record::Agent; 4] = [
+use lazysh_agent::{claude_config, hooks, kimi_code, reported_history, Error, Result};
+const WHOLE_FILE_AGENTS: [record::Agent; 5] = [
     record::Agent::Opencode,
     record::Agent::Cline,
     record::Agent::Copilot,
     record::Agent::Amp,
+    record::Agent::Grok,
 ];
 use serde_json::{json, Value};
 #[path = "support/binary.rs"]
@@ -166,6 +167,7 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
         Agent::Opencode,
         Agent::Cline,
         Agent::Copilot,
+        Agent::Grok,
     ] {
         let entries = render::entries(agent, &binary.path).unwrap();
         let plugin = agent
@@ -213,6 +215,9 @@ fn owned_record_checksums_and_templates_bind_the_selected_binary_without_provide
                 Agent::Opencode => r#"Bun.spawn(["/owned/it's a companion", 'ingest'"#,
                 Agent::Cline => r#"childProcess.execFile("/owned/it's a companion", ['ingest'"#,
                 Agent::Copilot => r#""exec": "/owned/it's a companion""#,
+                Agent::Grok => {
+                    r#""command": "'/owned/it'\\''s a companion' ingest --agent grok --reported-history""#
+                }
                 _ => unreachable!(),
             }));
             assert!(!plugin.contains("['lazysh-agent'"));
@@ -1184,6 +1189,80 @@ impl ProfileFixture {
         json_output::decode(command.output().unwrap())
     }
 }
+#[cfg(target_os = "linux")]
+impl ProfileFixture {
+    /// A hand-saved copy of the owned file is foreign: install refuses it, leaves it as it was, and the way is then cleared.
+    fn assert_manual_copy_is_foreign(&self, manual: &str) {
+        std::fs::write(self.provider(), manual).unwrap();
+        assert!(matches!(
+            self.inspect().plan(files::Action::Install),
+            Err(Error::Installation("HooksForeignPlugin"))
+        ));
+        assert_eq!(std::fs::read_to_string(self.provider()).unwrap(), manual);
+        std::fs::remove_file(self.provider()).unwrap();
+    }
+    /// Installs the inspected plan and returns the `hooks/lazysh.json` it wrote.
+    fn install_hook_file(&self) -> Value {
+        let plan = self.plan(files::Action::Install);
+        assert_eq!(
+            self.apply(files::Action::Install, &plan).unwrap().status,
+            "configured"
+        );
+        assert_eq!(
+            self.provider(),
+            self.target.profile.join("hooks/lazysh.json")
+        );
+        serde_json::from_slice(&std::fs::read(self.provider()).unwrap()).unwrap()
+    }
+    /// Installing again is a no-op and removal deletes only the owned file: foreign files stay byte for byte.
+    fn assert_reuse_then_remove_keeps(&self, preserved: &[(std::path::PathBuf, &str)]) {
+        assert_eq!(self.apply_current(files::Action::Install).status, "reused");
+        assert_eq!(self.apply_current(files::Action::Remove).status, "removed");
+        assert!(!self.provider().exists());
+        for (path, bytes) in preserved {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), *bytes);
+        }
+    }
+    /// An owned file edited in place is a conflict that setup refuses to overwrite.
+    fn assert_edit_conflicts(&self, edited: impl AsRef<[u8]>) {
+        std::fs::write(self.provider(), edited).unwrap();
+        let inspect = self.inspect();
+        assert_eq!(inspect.observation, Some(state::Observation::Conflict));
+        assert!(inspect.plan(files::Action::Install).is_err());
+    }
+}
+/// Runs a hook command the way an agent does: nothing on `PATH`, the event on stdin, private state,
+/// and the terminal pane the agent runs in, if any.
+fn run_hook(
+    child: &mut std::process::Command,
+    state: &std::path::Path,
+    pane: Option<&str>,
+    payload: &Value,
+) {
+    child
+        .env_clear()
+        .env("PATH", "")
+        .env("LAZYSH_STATE_DIR", state);
+    if let Some(pane) = pane {
+        child.env("TMUX_PANE", pane);
+    }
+    assert!(process::run(child, &serde_json::to_vec(payload).unwrap())
+        .status
+        .success());
+}
+/// Profile directories that discovery must report invalid instead of guessing another one.
+fn invalid_profile_overrides() -> [&'static std::ffi::OsStr; 6] {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+    [
+        OsStr::new(" "),
+        OsStr::new("relative"),
+        OsStr::new("~/chosen"),
+        OsStr::new("/owned/../profile"),
+        OsStr::new("/owned/\nprofile"),
+        OsStr::from_bytes(b"/owned/\xff"),
+    ]
+}
+
 #[cfg(unix)]
 #[test]
 fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile() {
@@ -1198,6 +1277,7 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
         record::Agent::Copilot,
         record::Agent::Amp,
         record::Agent::KimiCode,
+        record::Agent::Grok,
     ] {
         let fixture = ProfileFixture::new(agent);
         let preview = fixture.cli("preview", None);
@@ -1889,6 +1969,7 @@ fn discovery_reports_independent_executable_profile_and_setup_evidence_without_e
         "kimi",
         "copilot",
         "amp",
+        "grok",
         "aider",
     ] {
         metadata_executable(&bin.join(name), &marker);
@@ -1896,6 +1977,7 @@ fn discovery_reports_independent_executable_profile_and_setup_evidence_without_e
     for name in [
         ".claude",
         ".factory",
+        ".grok",
         ".cursor",
         ".config/opencode",
         ".cline",
@@ -1919,6 +2001,15 @@ fn discovery_reports_independent_executable_profile_and_setup_evidence_without_e
     assert_eq!(result["supported"], true);
     assert_eq!(result["managedSetupSupported"], true);
     assert_eq!(result["agents"].as_array().unwrap().len(), 11);
+    for version in [1, 2, 3] {
+        // Clients that predate Grok setup reject a row they do not know.
+        let older = discover_metadata_version(home, bin.as_os_str(), &[], Some(version));
+        assert!(older["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["agent"] != "grok"));
+    }
     assert_eq!(result["truncated"], false);
     assert!(discovered(&result, "claude")["executable"].is_null());
     assert_eq!(
@@ -2417,7 +2508,7 @@ fn discovery_keeps_invalid_explicit_override_visible_without_an_executable_or_fa
 
 #[test]
 fn discovery_v2_copilot_is_opt_in_and_preserves_literal_profile_overrides() {
-    use std::{ffi::OsStr, fs, os::unix::ffi::OsStrExt};
+    use std::{ffi::OsStr, fs};
     let (root, bin, marker) = metadata_fixture("copilot");
     let home = root.path();
     let default = home.join(".copilot");
@@ -2459,14 +2550,7 @@ fn discovery_v2_copilot_is_opt_in_and_preserves_literal_profile_overrides() {
             json!({"path":literal,"source":"COPILOT_HOME","state":"directory"})
         );
     }
-    for invalid in [
-        OsStr::new(" "),
-        OsStr::new("relative"),
-        OsStr::new("~/chosen"),
-        OsStr::new("/owned/../profile"),
-        OsStr::new("/owned/\nprofile"),
-        OsStr::from_bytes(b"/owned/\xff"),
-    ] {
+    for invalid in invalid_profile_overrides() {
         let result = current(&[("COPILOT_HOME", invalid)]);
         assert_eq!(
             discovered(&result, "copilot")["profiles"][0],
@@ -2484,7 +2568,6 @@ fn discovery_v2_copilot_is_opt_in_and_preserves_literal_profile_overrides() {
 #[cfg(unix)]
 #[test]
 fn copilot_owned_file_uses_absolute_exec_without_touching_settings_or_foreign_hooks() {
-    use files::Action;
     use std::fs;
     let fixture = ProfileFixture::new(record::Agent::Copilot);
     let hooks = fixture.target.profile.join("hooks");
@@ -2511,20 +2594,8 @@ fn copilot_owned_file_uses_absolute_exec_without_touching_settings_or_foreign_ho
         fs::write(path, bytes).unwrap();
     }
     let manual = render::owned_file(record::Agent::Copilot, &fixture.companion).unwrap();
-    fs::write(fixture.provider(), &manual).unwrap();
-    assert!(matches!(
-        fixture.inspect().plan(Action::Install),
-        Err(Error::Installation("HooksForeignPlugin"))
-    ));
-    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), manual);
-    fs::remove_file(fixture.provider()).unwrap();
-    let plan = fixture.plan(Action::Install);
-    assert_eq!(
-        fixture.apply(Action::Install, &plan).unwrap().status,
-        "configured"
-    );
-    assert_eq!(fixture.provider(), hooks.join("lazysh.json"));
-    let asset: Value = serde_json::from_slice(&fs::read(fixture.provider()).unwrap()).unwrap();
+    fixture.assert_manual_copy_is_foreign(&manual);
+    let asset = fixture.install_hook_file();
     assert_eq!(asset["version"], 1);
     assert_eq!(asset["hooks"].as_object().unwrap().len(), 6);
     assert!(asset["hooks"].get("PreToolUse").is_none());
@@ -2535,30 +2606,14 @@ fn copilot_owned_file_uses_absolute_exec_without_touching_settings_or_foreign_ho
     let state = fixture._root.path().join("state");
     let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"owned-copilot-render","cwd":"/owned/copilot"});
     let mut child = std::process::Command::new(command["exec"].as_str().unwrap());
-    child
-        .args(["ingest", "--agent", "copilot"])
-        .env_clear()
-        .env("PATH", "")
-        .env("LAZYSH_STATE_DIR", &state);
-    assert!(
-        process::run(&mut child, &serde_json::to_vec(&payload).unwrap())
-            .status
-            .success()
-    );
+    child.args(["ingest", "--agent", "copilot"]);
+    run_hook(&mut child, &state, None, &payload);
     assert_eq!(
         snapshot(&fixture.companion, &state)["sessions"][0]["state"],
         "working"
     );
-    assert_eq!(fixture.apply_current(Action::Install).status, "reused");
-    assert_eq!(fixture.apply_current(Action::Remove).status, "removed");
-    assert!(!fixture.provider().exists());
-    for (path, bytes) in &preserved {
-        assert_eq!(fs::read_to_string(path).unwrap(), *bytes);
-    }
-    fs::write(fixture.provider(), serde_json::to_vec(&asset).unwrap()).unwrap();
-    let inspect = fixture.inspect();
-    assert_eq!(inspect.observation, Some(state::Observation::Conflict));
-    assert!(inspect.plan(Action::Install).is_err());
+    fixture.assert_reuse_then_remove_keeps(&preserved);
+    fixture.assert_edit_conflicts(serde_json::to_vec(&asset).unwrap());
 }
 
 #[test]
@@ -3185,4 +3240,181 @@ fn status_names_a_legacy_duplicate_and_install_replaces_it_whether_or_not_setup_
     );
     let removed = fixture.cli("remove", fixture.cli("status", None)["removePlan"].as_str());
     assert_eq!(removed["outcome"]["status"], "removed");
+}
+
+#[test]
+fn discovery_v5_grok_is_opt_in_keeps_older_mappings_and_preserves_a_literal_grok_home() {
+    use std::{ffi::OsStr, fs};
+    let (root, bin, marker) = metadata_fixture("grok");
+    let home = root.path();
+    for name in ["copilot", "amp"] {
+        metadata_executable(&bin.join(name), &marker);
+    }
+    let default = home.join(".grok");
+    fs::create_dir(&default).unwrap();
+    fs::write(default.join("config.toml"), "PRIVATE_DO_NOT_READ").unwrap();
+    let current = |overrides: &[(&str, &OsStr)]| {
+        discover_metadata_version(home, bin.as_os_str(), overrides, Some(5))
+    };
+    let result = current(&[]);
+    assert_eq!(result["schemaVersion"], 5);
+    let grok = discovered(&result, "grok");
+    assert_eq!(grok["setup"], "managed");
+    assert_eq!(
+        grok["executable"],
+        json!({"path":bin.join("grok"),"source":"path"})
+    );
+    assert_eq!(
+        grok["profiles"][0],
+        json!({"path":default,"source":"HOME","state":"directory"})
+    );
+    // The newest schema keeps what versions 2 to 4 enabled.
+    for agent in ["copilot", "amp"] {
+        assert_eq!(discovered(&result, agent)["setup"], "managed");
+    }
+    assert_eq!(
+        discovered(&current(&[("GROK_HOME", OsStr::new(""))]), "grok")["profiles"][0],
+        grok["profiles"][0]
+    );
+    for suffix in ["chosen", "chosen "] {
+        let literal = home.join(suffix);
+        fs::create_dir(&literal).unwrap();
+        let selected = current(&[("GROK_HOME", literal.as_os_str())]);
+        assert_eq!(
+            discovered(&selected, "grok")["profiles"][0],
+            json!({"path":literal,"source":"GROK_HOME","state":"directory"})
+        );
+    }
+    for invalid in invalid_profile_overrides() {
+        assert_eq!(
+            discovered(&current(&[("GROK_HOME", invalid)]), "grok")["profiles"][0],
+            json!({"path":null,"source":"GROK_HOME","state":"invalid"})
+        );
+    }
+    assert!(!result.to_string().contains("PRIVATE"));
+    assert!(!marker.exists());
+}
+
+#[test]
+fn grok_file_refuses_a_binary_path_that_grok_would_expand_and_keeps_a_literal_dollar() {
+    use std::path::Path;
+    for expanded in [
+        "/owned/$HOME/lazysh-agent",
+        "/owned/${HOME}/lazysh-agent",
+        "/owned/$$/lazysh-agent",
+        "/owned/a$_b",
+        "/owned/it's $1",
+    ] {
+        assert_eq!(
+            render::owned_file(record::Agent::Grok, Path::new(expanded)),
+            Err("HooksInvalidBinary"),
+            "{expanded}"
+        );
+    }
+    for literal in [
+        "/owned/a $ path",
+        "/owned/trailing$",
+        "/owned/it's a $-sign",
+    ] {
+        let file = render::owned_file(record::Agent::Grok, Path::new(literal)).unwrap();
+        let file: Value = serde_json::from_str(&file).unwrap();
+        let command = file["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(command.starts_with(&format!("'{}' ingest", literal.replace('\'', "'\\''"))));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn grok_owned_file_binds_the_pane_and_session_log_when_run_the_way_grok_runs_hooks() {
+    use files::Action;
+    use std::fs;
+    let fixture = ProfileFixture::new(record::Agent::Grok);
+    let hooks = fixture.target.profile.join("hooks");
+    fs::create_dir(&hooks).unwrap();
+    let preserved = [
+        (
+            fixture.target.profile.join("config.toml"),
+            "[folder_trust]\nenabled = false\n",
+        ),
+        (
+            fixture.target.profile.join("disabled-hooks"),
+            "global:foreign\n",
+        ),
+        (
+            hooks.join("foreign.json"),
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"keep"}]}]}}"#,
+        ),
+    ];
+    for (path, bytes) in &preserved {
+        fs::write(path, bytes).unwrap();
+    }
+    // A fragment saved by hand under the same name is foreign: it is never overwritten.
+    let manual = serde_json::to_string_pretty(&reported_history::grok_config()).unwrap();
+    fixture.assert_manual_copy_is_foreign(&manual);
+    let asset = fixture.install_hook_file();
+    let events = asset["hooks"].as_object().unwrap();
+    assert_eq!(
+        events.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "Notification",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "SessionEnd",
+            "SessionStart",
+            "Stop",
+            "StopCancelled",
+            "StopFailure",
+            "UserPromptSubmit"
+        ],
+        "PreToolUse is the one event that can deny a tool call and is never installed"
+    );
+    let expected = format!(
+        "'{}' ingest --agent grok --reported-history",
+        fixture.companion.to_str().unwrap().replace('\'', "'\\''")
+    );
+    for groups in events.values() {
+        assert_eq!(
+            groups[0]["hooks"][0],
+            json!({"type":"command","command":expected,"timeout":5})
+        );
+    }
+    // Run a command from the file as Grok does, through `sh -c`, with nothing on PATH.
+    let state = fixture._root.path().join("state");
+    let log = fixture
+        ._root
+        .path()
+        .join("sessions/work-project/s1/updates.jsonl");
+    let payload = json!({"hook_event_name":"UserPromptSubmit","hookEventName":"user_prompt_submit","session_id":"owned-grok","cwd":"/owned/grok","transcript_path":log});
+    let mut child = std::process::Command::new("/bin/sh");
+    child.args([
+        "-c",
+        events["UserPromptSubmit"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap(),
+    ]);
+    run_hook(&mut child, &state, Some("%7"), &payload);
+    let row = &snapshot(&fixture.companion, &state)["sessions"][0];
+    assert_eq!(
+        (&row["agent"], &row["state"], &row["paneId"]),
+        (&json!("Grok Build"), &json!("working"), &json!("%7"))
+    );
+    let bound = process::run(
+        std::process::Command::new(&fixture.companion)
+            .args(["reported-history", "--session-id=owned-grok"])
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_STATE_DIR", &state),
+        b"",
+    );
+    let bound: Value = serde_json::from_slice(&bound.stdout).unwrap();
+    assert_eq!(
+        (&bound["status"], &bound["path"], &bound["paneId"]),
+        (&json!("available"), &json!(log), &json!("%7"))
+    );
+
+    fixture.assert_reuse_then_remove_keeps(&preserved);
+    fixture.apply_current(Action::Install);
+    fixture.assert_edit_conflicts(manual);
 }

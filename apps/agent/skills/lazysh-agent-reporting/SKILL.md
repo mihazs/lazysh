@@ -19,8 +19,10 @@ Managed setup supports Claude Code, Codex, OpenCode, Gemini CLI, Cursor CLI,
 Cline CLI and Droid on qualified Linux filesystems. `lazysh-agent hooks discover`
 lists version-1 installation metadata without executing agents or changing profiles.
 Copilot managed setup requires explicit `hooks discover --schema-version 2` and
-an updated companion. Amp managed setup requires explicit version 3; default V1
-and explicit V2 retain their original provider mappings. Let
+an updated companion. Amp managed setup requires explicit version 3 and Grok Build
+(`hooks status|install|remove --agent grok`, the opted-in `hooks/lazysh.json` of
+`GROK_HOME`) explicit version 4; default V1 and explicit V2 retain their original
+provider mappings. Let
 the user select the intended target; inspect its exact existing profile with
 `lazysh-agent hooks status`; install/update or remove only after reviewing its
 returned plan, using the corresponding expected plan hash. Droid requires an

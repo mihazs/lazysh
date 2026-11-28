@@ -100,7 +100,7 @@ mod metadata {
             }
         }
         fn literal_profile(&mut self, variable: &str, fallback: &str) -> Value {
-            // Pinned Kimi and Copilot resolvers preserve nonempty overrides verbatim.
+            // Pinned Kimi, Copilot and Grok resolvers preserve nonempty overrides verbatim.
             match (self.environment)(variable) {
                 Some(value) if !value.is_empty() => self.profile(Some(value), variable, ""),
                 _ => self.home(fallback),
@@ -150,6 +150,7 @@ mod metadata {
                     self.literal_profile("COPILOT_HOME", ".copilot")
                 }
                 "amp" if self.schema_version >= 3 => self.amp_profile(),
+                "grok" if self.schema_version >= 5 => self.literal_profile("GROK_HOME", ".grok"),
                 "kimi" => {
                     let mut profiles = vec![
                         self.literal_profile("KIMI_CODE_HOME", ".kimi-code"),
@@ -293,13 +294,19 @@ mod metadata {
             ("kimi", "kimi", "manual"),
             ("copilot", "copilot", "manual"),
             ("amp", "amp", "manual"),
+            ("grok", "grok", "manual"),
             ("aider", "aider", "healthOnly"),
         ] {
+            // Clients that predate Grok setup reject a row they do not know, so only version 5 names it.
+            if agent == "grok" && schema_version < 5 {
+                continue;
+            }
             let profiles = scan.profiles(agent);
             // Each schema keeps every earlier schema's managed providers; Kimi Code 2.4 is the profile listed first.
             let setup = if (agent == "copilot" && schema_version >= 2)
                 || (agent == "amp" && schema_version >= 3)
                 || (agent == "kimi" && schema_version >= 4)
+                || (agent == "grok" && schema_version >= 5)
             {
                 "managed"
             } else {
