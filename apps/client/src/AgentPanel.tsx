@@ -18,7 +18,7 @@ import CompanionInstallPanel from './CompanionInstallPanel';
 import CompanionHooksPanel from './CompanionHooksPanel';
 import {captureScrollPosition,restoreScrollPosition,type ScrollPosition} from './scrollReturn';
 import {archiveReport,isArchived,readArchive,reconcileArchive,restoreReport,saveArchive,type ArchivedReport} from './agentArchive';
-import {parseLiveAgents,parseReports,projectGroups,reportKey,reportLabel,reportedStateNames,states,type AgentSession,type AgentState,type LiveAgents} from './agentReports';
+import {parseReports,projectGroups,reportKey,reportLabel,reportedStateNames,states,type AgentSession,type AgentState} from './agentReports';
 import AgentRename from './AgentRename';
 import {useNames,withNames} from './agentSessionNames';
 import AllHostsBoard,{distinctHosts,type BoardHost} from './AllHostsBoard';
@@ -63,7 +63,6 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
   const [access]=useState(captureAccess);
   const invoke=useMemo(()=>bindProtectedInvoke(access),[access]);
   const [sessions, setSessions] = useState<AgentSession[]>([]);
-  const [liveAgents,setLiveAgents]=useState<LiveAgents>();
   const [error, setError] = useState<UiErrorCause>('');
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -166,8 +165,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
     try {
       const value = await invoke<unknown>('agent_snapshot', { sessionId });
       const rows = parseReports(value);
-      const live = parseLiveAgents(value);
-      if (visibility.current && selectedSource.current===source && current === request.current) { noteCompanionUpdate(parseCompanionUpdate(value),source);setSessions(rows); setLiveAgents(live); setLoaded(true); setLoadedSessionId(sessionId); setError(''); updateArchive(previous=>reconcileArchive(previous,rows)); }
+      if (visibility.current && selectedSource.current===source && current === request.current) { noteCompanionUpdate(parseCompanionUpdate(value),source);setSessions(rows); setLoaded(true); setLoadedSessionId(sessionId); setError(''); updateArchive(previous=>reconcileArchive(previous,rows)); }
     } catch (e) {
       if (visibility.current && selectedSource.current===source && current === request.current) setError(captureUiError(e));
     } finally {
@@ -176,7 +174,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
       if(recoveryRefresh.current===source && selectedSource.current===source) {recoveryRefresh.current=undefined;void refresh();}
     }
   }
-  useEffect(()=>{setSessions([]);setLiveAgents(undefined);setLoaded(false);setError('');lastUpdate.current=undefined;setCompanionUpdate(undefined);},[sessionId]);
+  useEffect(()=>{setSessions([]);setLoaded(false);setError('');lastUpdate.current=undefined;setCompanionUpdate(undefined);},[sessionId]);
   useEffect(()=>{
     if(panelVisible && !document.hidden)void refresh();
     else if(!panelVisible) {setBusy(false);setSelection(null);setHistoryBusy(false);setHistoryError('');setHistoryStatus('');}
@@ -226,18 +224,9 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
     };
     window.addEventListener('lazysh-workspace-back',back,true);return()=>window.removeEventListener('lazysh-workspace-back',back,true);
   },[selected,panelVisible,activityVisible,sessionId,mobile]);
-  const liveProcesses=ready && !error && <section className="agent-live-processes" aria-label={t('agentsHostProcesses')}>
-    <h3>{t('agentsHostProcesses')}</h3>
-    {!liveAgents || liveAgents.status==='unsupported' || liveAgents.status==='unavailable' ? <p>{t('agentsHostProcessesUnavailable')}</p> : <>
-      <p>{t('agentsHostProcessesIdentity')}</p>
-      {liveAgents.status==='truncated' && <p>{t('agentsHostProcessesTruncated')}</p>}
-      {liveAgents.processes.length===0 ? <p>{t('agentsHostProcessesEmpty')}</p> : <ul>{liveAgents.processes.map(process=>
-        <li key={`${process.pid}:${process.startTime}`}>{process.agent} <small>{t('agentsHostProcessId',{pid:formatNumber(process.pid)})}</small></li>)}</ul>}
-    </>}
-  </section>;
   const approvals=<ApprovalPanel sessionId={sessionId} visible={panelVisible} compactEmpty />;
   const panel=<section className="tool-panel agent-panel" data-activity-detail={!!selected || undefined} hidden={!panelVisible} aria-label={t('agentsTitle')}>
-    {!renderNavigation&&<>{approvals}{liveProcesses}</>}
+    {!renderNavigation&&approvals}
     {peers.length>1 && <div className="agent-scope" role="group" aria-label={t('agentsScope')}>{(['host','all'] as const).map(value=><button type="button" className="filter-chip" key={value} aria-pressed={merged===(value==='all')} onClick={()=>setScope(value)}>{t(value==='host'?'agentsScopeHost':'agentsScopeAll')}</button>)}</div>}
     {merged ? <AllHostsBoard hosts={peers} visible={panelVisible && activityVisible} onOpen={()=>setScope('host')}/> : <>
     <div className="tool-bar"><h3>{t('agentsTitle')}</h3><SearchField query={query} onChange={setQuery}/><button type="button" className="icon-button agent-tool" title={t('agentsSetupAction')} aria-expanded={setupOpen} disabled={!!error} onClick={()=>setSetupSource(setupOpen?undefined:sessionId)}><Settings2 size={18} aria-hidden="true"/><span className="sr-only">{t('agentsSetupAction')}</span></button><button className="icon-button agent-tool" title={t('agentsRefresh')} disabled={busy} aria-busy={busy} onClick={() => void refresh()}><RefreshCw size={18} aria-hidden="true"/><span className="sr-only">{t('agentsRefresh')}</span></button></div>
@@ -281,7 +270,7 @@ export function AgentPanel({ sessionId,hostKey,hostLabel,hosts,local,companionSo
     </section>}
     </>}
   </section>;
-  return renderNavigation?<>{approvals}{!activityVisible && panelVisible && liveProcesses}{renderNavigation(reportSource)}<div ref={activityRef} id={activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} className="workspace-navigation-agents" hidden={!panelVisible||!activityVisible}>{panel}</div></>:panel;
+  return renderNavigation?<>{approvals}{renderNavigation(reportSource)}<div ref={activityRef} id={activityId} role="group" aria-label={t('agentsReportedActivity')} tabIndex={-1} className="workspace-navigation-agents" hidden={!panelVisible||!activityVisible}>{panel}</div></>:panel;
 }
 
 export default AgentPanel;

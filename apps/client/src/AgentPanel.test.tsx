@@ -3,7 +3,6 @@ import {StrictMode,useState} from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AgentPanel, parseReportedHistory, parseSnapshot,type ReportedHistorySource } from './AgentPanel';
-import {parseLiveAgents} from './agentReports';
 import {applyAccessStatus,captureAccess} from './access';
 import HerdrAgentsPanel,{parseHerdrAgents} from './HerdrAgentsPanel';
 import HerdrNavigation from './HerdrNavigation';
@@ -37,22 +36,15 @@ describe('agent activity', () => {
     expect(parseSnapshot({ schemaVersion: 1, sessions: [session] })).toEqual([session]);
     for (const value of [null, { schemaVersion: 2, sessions: [] }, { schemaVersion: 1, sessions: [{ ...session, state: 'approved' }] }, { schemaVersion: 1, sessions: [{ ...session, eventCount: -1 }] }]) expect(() => parseSnapshot(value)).toThrow();
   });
-  it('shows and refreshes host processes alongside reported sessions', async () => {
+  it('shows no list of host processes even when the companion reports discovered ones', async () => {
     const {invoke}=await import('@tauri-apps/api/core');
     const running={status:'available',processes:[{agent:'Codex',pid:123,startTime:456}]};
     vi.mocked(invoke).mockImplementation(noStream(command=>Promise.resolve(command==='agent_snapshot'
-      ? {schemaVersion:1,sessions:[],liveAgents:running} : {})));
+      ? {schemaVersion:1,sessions:[session],liveAgents:running} : {})));
     render(<AgentPanel sessionId="ssh-one" />);
-    expect(await screen.findByText('Process 123')).toBeTruthy();
-    expect(screen.getByRole('region',{name:'Running agent processes'}).textContent).toContain('Codex');
-    running.processes=[];
-    fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
-    expect(await screen.findByText('No supported agent processes found.')).toBeTruthy();
-    expect(screen.queryByText('Process 123')).toBeNull();
-  });
-  it('validates host process data and accepts older companion snapshots',()=>{
-    expect(parseLiveAgents({schemaVersion:1,sessions:[]})).toBeUndefined();
-    expect(()=>parseLiveAgents({liveAgents:{status:'available',processes:[{agent:'Codex',pid:-1,startTime:1}]}})).toThrow();
+    expect(await screen.findByText(session.summary)).toBeTruthy();
+    expect(screen.queryByRole('region',{name:/running agent processes/i})).toBeNull();
+    expect(screen.queryByText(/Process 123/)).toBeNull();
   });
   it('shows actual host events without an unimplemented approval action', async () => {
     const { invoke } = await import('@tauri-apps/api/core');
