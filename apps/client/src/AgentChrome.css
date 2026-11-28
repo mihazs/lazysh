@@ -1,11 +1,12 @@
 /* The frame around the conversation: the header, the floating jump to the latest message, the empty and the error states, and the
  * compact layout for a short window (a landscape phone, or a portrait phone with the on-screen keyboard up). */
 
-/* Header: the agent and what it is doing on two short lines, then two 44 px buttons. A hairline, not a border, separates it. */
-.agent-view-header { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 0 4px 0 14px; border: 0; box-shadow: 0 1px 0 var(--av-rule); flex-shrink: 0; container-type: inline-size; }
+/* Header: the agent and what it is doing on two short lines, then up to four 44 px buttons (New agent, search, options, terminal). A hairline, not a border, separates it.
+ * The buttons are 44 px circles around an 18 px icon, so they sit 4 px apart and the heading keeps 6 px of its own: that room is what lets a name like "Claude Code · lazysh" show whole on a 415 px phone. */
+.agent-view-header { display: flex; align-items: center; gap: 4px; min-width: 0; min-height: 44px; padding: 0 4px 0 14px; border: 0; box-shadow: 0 1px 0 var(--av-rule); flex-shrink: 0; container-type: inline-size; }
 .agent-view-header > .status-ring { width: 26px; height: 26px; flex: 0 0 26px; }
 .agent-view-header > .status-ring > b { font-size: 12px; }
-.agent-view-heading { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; padding-block: 3px; }
+.agent-view-heading { display: grid; flex: 1 1 auto; gap: 1px; min-width: 0; margin-inline: 6px; padding-block: 3px; }
 .agent-view-heading > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; line-height: 1.2; }
 .agent-view-facts { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; font-size: 12px; line-height: 18px; color: var(--muted); }
 .agent-view-facts > .agent-view-state { flex: none; }
