@@ -41,7 +41,8 @@ it('merges the reported agents of two owned SSH hosts by state, host and project
   })),PANEL);
   const projects=()=>browser.execute((panel:string)=>Array.from(document.querySelectorAll(`${panel} section.agent-project-group`),group=>group.getAttribute('aria-label')).sort(),PANEL);
   const failing=()=>browser.execute((panel:string)=>Array.from(document.querySelectorAll(`${panel} p.agent-host-error[role="alert"]`),error=>error.querySelector('strong')?.textContent),PANEL);
-  const scope=(name:string)=>browser.$(`${PANEL} .agent-scope button=${name}`);
+  // A WebdriverIO text selector (`button=...`) cannot follow a CSS prefix, so the text match is chained from the scope group.
+  const scope=(name:string)=>browser.$(`${PANEL} .agent-scope`).$(`button=${name}`);
 
   gui.stage='owned all-hosts own board';
   const panel=await openActivity(browser);
