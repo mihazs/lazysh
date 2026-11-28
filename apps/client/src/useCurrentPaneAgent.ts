@@ -16,9 +16,9 @@ function useTmuxPaneAgent(sessionId:string|null) {
     if(sessionId===null)return;
     const lease=captureAccess();
     const invoke=bindProtectedInvoke(lease);
-    let live=true,flight=false;
+    let live=true,flight=false,pending=false;
     const read=async()=>{
-      if(flight||document.hidden||!lease.current())return;
+      if(!live||flight||document.hidden||!lease.current())return;
       flight=true;
       let agent:string|null=null;
       try {
@@ -28,10 +28,13 @@ function useTmuxPaneAgent(sessionId:string|null) {
       } catch { /* An old companion or a pane that cannot be read means no agent is known, so the default account shows. */ }
       finally {flight=false;}
       if(live&&lease.current())setFound({sessionId,agent});
+      if(pending){pending=false;void read();}
     };
     void read();
     const timer=setInterval(()=>void read(),INTERVAL);
-    return()=>{live=false;clearInterval(timer);};
+    const recovered=(event:Event)=>{if((event as CustomEvent<unknown>).detail!==sessionId || document.hidden || !lease.current())return;if(flight)pending=true;else void read();};
+    window.addEventListener('lazysh-host-tools-restored',recovered);
+    return()=>{live=false;clearInterval(timer);window.removeEventListener('lazysh-host-tools-restored',recovered);};
   },[sessionId,access.epoch]);
   return found?.sessionId===sessionId?found.agent:undefined;
 }

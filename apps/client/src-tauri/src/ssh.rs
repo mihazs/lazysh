@@ -1059,6 +1059,8 @@ pub(crate) enum Input {
 // The core's event stream is built only with the `native-terminal` feature.
 #[cfg_attr(not(native_terminal_core), allow(dead_code))]
 pub enum SshEvent {
+    HostToolsRestored,
+    HostToolsStatus,
     Data {
         data: Vec<u8>,
     },
@@ -2229,6 +2231,7 @@ async fn connect_mosh_inner(
                 target_os = "ios"
             ))]
             {
+                let recovery_events = events.clone();
                 let connected = spawn_native_terminal(
                     &state,
                     lease.clone(),
@@ -2254,6 +2257,7 @@ async fn connect_mosh_inner(
                         state.inner().clone(),
                         connected.session_id.clone(),
                         session,
+                        recovery_events,
                     );
                 }
                 Ok(connected)

@@ -290,6 +290,18 @@ it('installs canonical Mosh rendering before early output and preserves exact pe
   expect(controller.dispose.mock.invocationCallOrder[0]).toBeLessThan(terminals[1].dispose.mock.invocationCallOrder[0]);
 });
 
+it.each(['hosttoolsrestored','hosttoolsstatus'] as const)('routes %s without closing its terminal',async type=>{
+  verifiedMoshControl();let receive!:(event:import('./bridge').SshEvent)=>void;
+  mocks.api.connectMosh.mockImplementation(async(_id,_options,onEvent)=>{receive=onEvent;return {sessionId:'recovered-mosh'};});
+  const user=await openConnection();await selectConnectionTransport(user,'mosh');await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  const name=type==='hosttoolsrestored'?'lazysh-host-tools-restored':'lazysh-host-tools-status';
+  const events=vi.fn();window.addEventListener(name,events);
+  const session=mocks.terminalPaneProps.mock.lastCall?.[0].session,controller=mocks.installMoshResize.mock.results[0].value;
+  await act(async()=>receive({type}));
+  expect(session.connected).toBe(true);expect(controller.close).not.toHaveBeenCalled();expect(events.mock.calls[0][0].detail).toBe('recovered-mosh');
+  window.removeEventListener(name,events);
+});
+
 it.each(['closed','invalid'] as const)('keeps Mosh parser drain separate from terminal disposal on %s output',async branch=>{
   verifiedMoshControl();let receive!:(event:import('./bridge').SshEvent)=>void;
   mocks.api.connectMosh.mockImplementation(async(_id,_options,onEvent)=>{receive=onEvent;return {sessionId:'drained-mosh'};});

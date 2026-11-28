@@ -200,7 +200,9 @@ async function prepareSession(
   const earlyHints: AuthHint[] = [];
   const onEvent = (event: SshEvent) => {
     if (session.disposed) return;
-    if (event.type === "authHint") {
+    if (event.type === "hosttoolsrestored" || event.type === "hosttoolsstatus") {
+      if (session.id) window.dispatchEvent(new CustomEvent(event.type === "hosttoolsrestored" ? "lazysh-host-tools-restored" : "lazysh-host-tools-status", {detail: session.id}));
+    } else if (event.type === "authHint") {
       if (session.id) announceAuthHint({sessionId: session.id, hint: event.hint});
       else if (earlyHints.length < 8) earlyHints.push(event.hint);
     } else if (event.type === "data")
@@ -738,7 +740,7 @@ export function ConnectDialog({
   connected: (session: LiveSession) => void;
   close: () => void;
   launch?: DesktopHostLaunch;
-  recovery?: {sessionId:string;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void};
+  recovery?: {sessionId:string;current?:()=>boolean;restored:()=>void};
   /** The saved intent of a lost tab: its transport and multiplexer attachment come back after sign-in. */
   reconnect?: SessionIntent;
 }) {
@@ -862,9 +864,8 @@ export function ConnectDialog({
       if(recovery) {
         if(recovery.current && !recovery.current())return;
         const generation=exportGeneration.current;
-        const restore=recovery.purpose==='hostTools'?api.restoreHostTools:api.restoreFileTransfer;
-        const result=await restore(recovery.sessionId,credentials,{useSavedCredentials});
-        if(!result || typeof result!=='object' || result.schemaVersion!==1 || result.status!=='restored' || Object.keys(result).some(key=>!['schemaVersion','status'].includes(key)))throw new LocalUiError(recovery.purpose==='hostTools'?'hostToolsRestoreInvalid':'attachmentRestoreInvalid');
+        const result=await api.restoreFileTransfer(recovery.sessionId,credentials,{useSavedCredentials});
+        if(!result || typeof result!=='object' || result.schemaVersion!==1 || result.status!=='restored' || Object.keys(result).some(key=>!['schemaVersion','status'].includes(key)))throw new LocalUiError('attachmentRestoreInvalid');
         if(alive.current && lease.current() && generation===exportGeneration.current && !document.hidden && (!recovery.current || recovery.current())) {setPassword('');setPrivateKey('');setPassphrase('');recovery.restored();}
         return;
       }
@@ -945,7 +946,7 @@ export function ConnectDialog({
     <Dialog
       mobilePresentation={trust ? "sheet" : "page"}
       initialFocus={() => destination.current}
-      title={recovery ? t(recovery.purpose==='hostTools'?"hostToolsRestoreTitle":"attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
+      title={recovery ? t("attachmentRestoreTitle",{value1:host.name}) : trust ? t("appVerifyThisHost") : t("appConnectToValue1", {value1: host.name})}
       close={() => {void cancel();}}
     >
       {trust ? (
@@ -1197,7 +1198,7 @@ export function ConnectDialog({
           <div className="dialog-actions">
             <button type="button" className="subtle-button" onClick={()=>{void cancel();}}>{t("appCancel")}</button>
             <button type="submit" className="primary-button" disabled={busy || (transport === 'auto' && !capabilitiesReady)}>
-              {busy ? t("appConnecting") : t(recovery ? recovery.purpose==='hostTools'?"hostToolsRestore":"attachmentRestore" : "appConnect")}
+              {busy ? t("appConnecting") : t(recovery ? "attachmentRestore" : "appConnect")}
               <ChevronRight size={16} />
             </button>
           </div>
@@ -1258,7 +1259,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const [editor, setEditor] = useState<Host | "new" | null>(null);
   const [editorMux,setEditorMux]=useState(false);
   const [connectingHost, setConnectingHost] = useState<Host | null>(null);
-  const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;purpose?:'files'|'hostTools';current?:()=>boolean;restored:()=>void}|null>(null);
+  const [fileRecovery,setFileRecovery]=useState<{sessionId:string;host:Host;current?:()=>boolean;restored:()=>void}|null>(null);
   const [hostLaunch, setHostLaunch] = useState<DesktopHostLaunch>();
   const [muxLaunch, setMuxLaunch] = useState<DesktopMuxRequest>();
   // Capabilities belong to the connection that performed discovery.
@@ -1420,13 +1421,6 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
       ||currentView.current.view!=='attachments'||closingSessions.current.has(sessionId))return;
     stageComposerAttachment(sessionId,{path,...uploaded});
     returnToContext(true);
-  }
-  function beginHostToolsRecovery(source: LiveSession, restored:()=>void) {
-    const current=()=>mounted.current && lease.current() && !document.hidden
-      && currentView.current.activeId===source.id && !closingSessions.current.has(source.id)
-      && sessionsRef.current.some(session=>session===source && session.connected && !session.disposed);
-    const host=hosts.find(host=>host.id===source.hostId);
-    if(source.mosh && host && current())setFileRecovery({sessionId:source.id,host,purpose:'hostTools',current,restored});
   }
   // A returning or switched network may leave plain SSH routes dead without an EOF; ask them to answer now.
   const online = useNetworkOnline(()=>{
@@ -2424,9 +2418,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
         </nav>
         <div ref={agentScroll} className="workspace-navigation-scroll" hidden={navigationEntry.mode==='connections'}>
         <WorkspaceSessions sessions={sessions} activeId={activeId} compact={!wideSidebar} visible={navigationEntry.mode==='workspaces'} busy={pendingMuxRequest} onChoose={chooseLiveSession}/>{remoteActive && active?.attached && !muxTools[active.id] && <p role="status">{t('muxVersionUnknown')}</p>}
-        {companionActive && active && <AgentPanel key={active.id} hostKey={active.hostId} hostLabel={active.local?localHostLabel():hosts.find(host=>host.id===active.hostId)?.name ?? active.destination} hosts={boardHosts} local={active.local} companionSource={active.local?companionSourceOf(localTools(localCapability)?.companionSource):undefined} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={active.local?undefined:reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation statusGroups={herdrStatusGroups} statusHostId={active.hostId} key={active.id} navigationOnly={!muxTools[active.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId)?restored=>beginHostToolsRecovery(active,restored):undefined}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{
-            if(navigationOwner.current.agents)beginHostToolsRecovery(active,restored);
-          }:undefined}/>}
+        {companionActive && active && <AgentPanel key={active.id} hostKey={active.hostId} hostLabel={active.local?localHostLabel():hosts.find(host=>host.id===active.hostId)?.name ?? active.destination} hosts={boardHosts} local={active.local} companionSource={active.local?companionSourceOf(localTools(localCapability)?.companionSource):undefined} showHerdr={false} activityVisible={agentSection==='activity'} sessionId={active.id} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} activityRef={reportedAgentContent} activityId={`${agentContentId}-activity`} renderNavigation={active.local?undefined:reports=><div ref={liveAgentContent} id={`${agentContentId}-live`} hidden={navigationEntry.mode==='agents'&&agentSection!=='live'} role="group" aria-label={t(navigationEntry.mode==='agents'?'herdrAgentsTitle':'herdrNavigationSpaces')} tabIndex={-1}><HerdrNavigation statusGroups={herdrStatusGroups} statusHostId={active.hostId} key={active.id} navigationOnly={!muxTools[active.id]?.some(tool=>tool.kind==='herdr' && tool.support==='full')} sessionId={active.id} hostLabel={active.destination} herdrSession={active.attached?.kind==='herdr'?active.attached.name:undefined} reports={reports} mode={navigationEntry.mode==='agents'?'agents':'spaces'} visible={herdrNavigationVisible} onOpenCompanion={()=>showAgentSetup(active)} onContentSettled={agentContentSettled} onServerChange={()=>{herdrNavigationIntent.current=null;agentDrawerOffset.current=undefined;agentDrawerReceipt.current=undefined;}} onClose={()=>{herdrNavigationIntent.current=null;setSidebar(false);setView('terminal');}} onNavigate={(name,target,owner,current)=>openHerdrTarget(active,name,target,owner,current)} onAttach={(name,owner,current)=>openHerdrTarget(active,name,undefined,owner,current)}/></div>} visible={agentsVisible} onUseReportedHistory={source=>openReportedHistory(source,historyNavigationGeneration)} />}
         {navigationEntry.mode==='workspaces' && <div className="workspace-navigation-content">
           {remoteActive && <>
             <button className="subtle-button" disabled={pendingMuxRequest} onClick={()=>visitView('sessions')}>{t('navigationManageSessions')}</button>
@@ -2639,7 +2631,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 ))}
                 {active.connected && view === "usage" && (
                   <div className="usage-view">
-                  <AccountUsageDetails model={accountUsage} onOpenCompanion={companionActive ? ()=>showAgentSetup(active):undefined} onRestoreHostTools={active.mosh && hosts.some(host=>host.id===active.hostId) ? restored=>{if(currentView.current.view==='usage')beginHostToolsRecovery(active,restored);}:undefined}/>
+                  <AccountUsageDetails model={accountUsage} onOpenCompanion={companionActive ? ()=>showAgentSetup(active):undefined}/>
                   {!active.local && <UsageCollectorPanel key={`collector-${active.id}`} sessionId={active.id} />}
                   {companionActive && <UsagePanel key={active.id} sessionId={active.id} onShareAppleUsage={report=>setAppleUsage(previous=>({...previous,[active.id]:report}))} />}
                   </div>
@@ -2748,7 +2740,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           close={() => {setEditor(null);setEditorMux(false);}}
         />
       )}
-      {fileRecovery && <ConnectDialog key={`file-recovery-${fileRecovery.sessionId}`} host={fileRecovery.host} hosts={hosts} connected={()=>{}} recovery={{sessionId:fileRecovery.sessionId,purpose:fileRecovery.purpose,current:fileRecovery.current,restored:()=>{fileRecovery.restored();setFileRecovery(null);}}} close={()=>setFileRecovery(null)} />}
+      {fileRecovery && <ConnectDialog key={`file-recovery-${fileRecovery.sessionId}`} host={fileRecovery.host} hosts={hosts} connected={()=>{}} recovery={{sessionId:fileRecovery.sessionId,current:fileRecovery.current,restored:()=>{fileRecovery.restored();setFileRecovery(null);}}} close={()=>setFileRecovery(null)} />}
       {signInRecovery && <ConnectDialog key={`reconnect-${signInRecovery.sessionId}`} host={signInRecovery.host} hosts={hosts} reconnect={signInRecovery.intent}
         connected={fresh=>signedInAfterLoss(signInRecovery.sessionId,fresh)} close={()=>setSignInRecovery(null)}/>}
       {connectingHost && (

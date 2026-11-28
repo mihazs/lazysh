@@ -77,10 +77,17 @@ impl Control {
             .map(|handle| handle.clone())
             .map_err(|_| unavailable())
     }
-    fn report_automatic(&self, error: Option<SshError>) {
+    fn report_automatic(&self, error: Option<SshError>) -> bool {
         if let Ok(mut slot) = self.automatic_error.lock() {
+            if slot.as_ref().map(|e| (e.kind(), e.message()))
+                == error.as_ref().map(|e| (e.kind(), e.message()))
+            {
+                return false;
+            }
             *slot = error;
+            return true;
         }
+        false
     }
     pub(super) fn command_unavailable(&self) -> SshError {
         let detail = self
@@ -88,8 +95,20 @@ impl Control {
             .lock()
             .ok()
             .and_then(|error| error.clone());
+        let kind = match detail.as_ref().map(SshError::kind) {
+            Some("credentials_required" | "authentication_failed") => "ssh_host_tools_credentials",
+            Some("ssh_control_host_changed" | "host_key_changed" | "unknown_host_key") => {
+                "ssh_host_tools_host_changed"
+            }
+            Some("ssh_control_unavailable") => "ssh_host_tools_unsupported",
+            Some("missing_host") => "ssh_host_tools_host_missing",
+            None | Some("ssh_error" | "timeout" | "disconnected" | "cancelled") => {
+                "ssh_host_tools_closed"
+            }
+            _ => "ssh_host_tools_unavailable",
+        };
         SshError::new(
-            "ssh_host_tools_closed",
+            kind,
             detail.map_or_else(
                 || "The host-tools SSH connection is closed; automatic recovery is pending".into(),
                 |error| error.message,
@@ -196,8 +215,13 @@ async fn session_replaced(state: &AppState, id: &str, session: &Arc<Session>) {
 }
 
 /// One session owns one watcher. A failed command is never passed to this loop or replayed.
-async fn automatic_watch<F, Fut>(state: AppState, id: String, session: Arc<Session>, mut attempt: F)
-where
+async fn automatic_watch<F, Fut>(
+    state: AppState,
+    id: String,
+    session: Arc<Session>,
+    mut attempt: F,
+    mut notify: impl FnMut(bool),
+) where
     F: FnMut(AccessLease) -> Fut,
     Fut: std::future::Future<Output = Result<Restored>>,
 {
@@ -245,7 +269,9 @@ where
                         if !unchanged {
                             match silent_recovery_host(original, &host) {
                                 Err(error) => {
-                                    control.report_automatic(Some(error));
+                                    if control.report_automatic(Some(error)) {
+                                        notify(false);
+                                    }
                                     blocked = Some((host, generation, revision));
                                     delay = Duration::from_secs(30);
                                 }
@@ -262,6 +288,7 @@ where
                                         };
                                         match result {
                                             Ok(_) => {
+                                                notify(true);
                                                 blocked = None;
                                                 delay = Duration::from_secs(1);
                                             }
@@ -279,14 +306,16 @@ where
                                                         | "cancelled"
                                                 ) =>
                                             {
-                                                control.report_automatic(Some(SshError::new(
+                                                if control.report_automatic(Some(SshError::new(
                                                     "ssh_error",
                                                     "Host tools are reconnecting",
-                                                )));
+                                                ))) {
+                                                    notify(false);
+                                                }
                                                 delay = (delay * 2).min(Duration::from_secs(30));
                                             }
                                             Err(error) => {
-                                                control.report_automatic(Some(SshError::new(error.kind(), "Automatic host-tools recovery cannot authenticate or verify the saved host")));
+                                                if control.report_automatic(Some(SshError::new(error.kind(), "Automatic host-tools recovery cannot authenticate or verify the saved host"))) { notify(false); }
                                                 blocked = Some((host, generation, revision));
                                                 delay = Duration::from_secs(30);
                                             }
@@ -296,14 +325,19 @@ where
                             }
                         }
                     } else {
-                        control.report_automatic(Some(SshError::new(
+                        if control.report_automatic(Some(SshError::new(
                             "missing_host",
                             "The saved host is no longer available",
-                        )));
+                        ))) {
+                            notify(false);
+                        }
                         delay = Duration::from_secs(30);
                     }
                 } else {
-                    control.report_automatic(Some(unavailable()));
+                    if control.report_automatic(Some(unavailable())) {
+                        notify(false);
+                    }
+                    delay = Duration::from_secs(30);
                 }
             }
         }
@@ -325,53 +359,66 @@ pub(crate) fn start_automatic(
     state: AppState,
     id: String,
     session: Arc<Session>,
+    events: Channel<SshEvent>,
 ) {
     let attempt_state = state.clone();
     let attempt_id = id.clone();
     let attempt_session = session.clone();
-    tauri::async_runtime::spawn(automatic_watch(state, id, session, move |lease| {
-        let app = app.clone();
-        let state = attempt_state.clone();
-        let id = attempt_id.clone();
-        let session = attempt_session.clone();
-        async move {
-            let operation = app.vault().operation();
-            let auth_app = app.clone();
-            let auth_state = state.clone();
-            let auth_lease = lease.clone();
-            let auth_operation = operation.clone();
-            restore_for(
-                Purpose::Commands,
-                &state,
-                &id,
-                &session,
-                &lease,
-                &operation,
-                move |original, permit| async move {
-                    authenticated_connection(
-                        auth_app,
-                        &auth_state,
-                        original.id.clone(),
-                        crate::vault::Credentials {
-                            password: None,
-                            private_key: None,
-                            passphrase: None,
-                        },
-                        true,
-                        None,
-                        &auth_operation,
-                        &auth_lease,
-                        None,
-                        Some(&original),
-                        Some(permit),
-                        true,
-                    )
-                    .await
-                },
-            )
-            .await
-        }
-    }));
+    tauri::async_runtime::spawn(automatic_watch(
+        state,
+        id,
+        session,
+        move |lease| {
+            let app = app.clone();
+            let state = attempt_state.clone();
+            let id = attempt_id.clone();
+            let session = attempt_session.clone();
+            async move {
+                let operation = app.vault().operation();
+                let auth_app = app.clone();
+                let auth_state = state.clone();
+                let auth_lease = lease.clone();
+                let auth_operation = operation.clone();
+                restore_for(
+                    Purpose::Commands,
+                    &state,
+                    &id,
+                    &session,
+                    &lease,
+                    &operation,
+                    move |original, permit| async move {
+                        authenticated_connection(
+                            auth_app,
+                            &auth_state,
+                            original.id.clone(),
+                            crate::vault::Credentials {
+                                password: None,
+                                private_key: None,
+                                passphrase: None,
+                            },
+                            true,
+                            None,
+                            &auth_operation,
+                            &auth_lease,
+                            None,
+                            Some(&original),
+                            Some(permit),
+                            true,
+                        )
+                        .await
+                    },
+                )
+                .await
+            }
+        },
+        move |ready| {
+            let _ = events.send(if ready {
+                SshEvent::HostToolsRestored
+            } else {
+                SshEvent::HostToolsStatus
+            });
+        },
+    ));
 }
 
 struct Fresh {
@@ -674,6 +721,7 @@ mod tests {
             "owned-mosh".into(),
             fixture.session.clone(),
             attempt,
+            |_| {},
         ))
     }
     #[tokio::test]
@@ -708,6 +756,22 @@ mod tests {
                 silent_recovery_host(&host, &host).unwrap_err().kind(),
                 "ssh_control_unavailable"
             );
+        }
+    }
+    #[tokio::test]
+    async fn unavailable_control_reports_safe_recovery_reasons() {
+        let f = fixture().await;
+        let control = f.session.file_control.as_ref().unwrap();
+        for (cause, expected) in [
+            ("authentication_failed", "ssh_host_tools_credentials"),
+            ("host_key_changed", "ssh_host_tools_host_changed"),
+            ("ssh_control_unavailable", "ssh_host_tools_unsupported"),
+            ("missing_host", "ssh_host_tools_host_missing"),
+            ("storage", "ssh_host_tools_unavailable"),
+            ("timeout", "ssh_host_tools_closed"),
+        ] {
+            control.report_automatic(Some(SshError::new(cause, "private diagnostic")));
+            assert_eq!(control.command_unavailable().kind(), expected);
         }
     }
     #[tokio::test]
@@ -775,51 +839,56 @@ mod tests {
         let operation = tauri_plugin_lazysh_vault::CredentialOperations::default().begin();
         let state = f.state.clone();
         let session = f.session.clone();
-        let worker = watch(&f, move |lease| {
-            let state = state.clone();
-            let session = session.clone();
-            let fresh = fresh.clone();
-            let operation = operation.clone();
-            async move {
-                let auth_state = state.clone();
-                restore_for(
-                    Purpose::Commands,
-                    &state,
-                    "owned-mosh",
-                    &session,
-                    &lease,
-                    &operation,
-                    move |host, _| async move {
-                        Ok(AuthenticatedConnection {
-                            _guard: auth_state.credential_guard(&host.id).await,
-                            host,
-                            credentials: crate::vault::Credentials {
-                                password: None,
-                                private_key: None,
-                                passphrase: None,
-                            },
-                            handle: fresh,
-                        })
-                    },
-                )
-                .await
-            }
-        });
+        let notified = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = notified.clone();
+        let worker = tokio::spawn(automatic_watch(
+            f.state.clone(),
+            "owned-mosh".into(),
+            f.session.clone(),
+            move |lease| {
+                let state = state.clone();
+                let session = session.clone();
+                let fresh = fresh.clone();
+                let operation = operation.clone();
+                async move {
+                    let auth_state = state.clone();
+                    restore_for(
+                        Purpose::Commands,
+                        &state,
+                        "owned-mosh",
+                        &session,
+                        &lease,
+                        &operation,
+                        move |host, _| async move {
+                            Ok(AuthenticatedConnection {
+                                _guard: auth_state.credential_guard(&host.id).await,
+                                host,
+                                credentials: crate::vault::Credentials {
+                                    password: None,
+                                    private_key: None,
+                                    passphrase: None,
+                                },
+                                handle: fresh,
+                            })
+                        },
+                    )
+                    .await
+                }
+            },
+            move |ready| {
+                if ready {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+        ));
         timeout(Duration::from_secs(3), async {
-            while f
-                .session
-                .file_control
-                .as_ref()
-                .unwrap()
-                .command_handle()
-                .unwrap()
-                .is_closed()
-            {
+            while notified.load(std::sync::atomic::Ordering::SeqCst) == 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
         .unwrap();
+        assert_eq!(notified.load(std::sync::atomic::Ordering::SeqCst), 1);
         let control = f.session.file_control.as_ref().unwrap();
         assert!(Arc::ptr_eq(&control.current().unwrap(), &f.session.handle));
         assert!(Arc::ptr_eq(
@@ -838,10 +907,22 @@ mod tests {
         let f = automatic_fixture().await;
         let calls = Arc::new(AtomicUsize::new(0));
         let attempts = calls.clone();
-        let worker = watch(&f, move |_| {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            async { Err(SshError::new("authentication_failed", "owned rejection")) }
-        });
+        let notices = Arc::new(AtomicUsize::new(0));
+        let count = notices.clone();
+        let worker = tokio::spawn(automatic_watch(
+            f.state.clone(),
+            "owned-mosh".into(),
+            f.session.clone(),
+            move |_| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                async { Err(SshError::new("authentication_failed", "owned rejection")) }
+            },
+            move |ready| {
+                if !ready {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        ));
         timeout(Duration::from_secs(2), async {
             while calls.load(Ordering::SeqCst) == 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -851,6 +932,7 @@ mod tests {
         .unwrap();
         tokio::time::sleep(Duration::from_millis(1200)).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(notices.load(Ordering::SeqCst), 1);
         for _ in 0..65 {
             let _ = f.state.credential_changes.send("another-host".into());
         }
@@ -867,14 +949,14 @@ mod tests {
         })
         .await
         .unwrap();
-        assert!(f
+        let unavailable = f
             .session
             .file_control
             .as_ref()
             .unwrap()
-            .command_unavailable()
-            .message()
-            .contains("cannot authenticate"));
+            .command_unavailable();
+        assert_eq!(unavailable.kind(), "ssh_host_tools_credentials");
+        assert!(unavailable.message().contains("cannot authenticate"));
         f.session.cancel.send_replace(true);
         timeout(Duration::from_secs(2), worker)
             .await

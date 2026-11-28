@@ -173,6 +173,14 @@ describe('a bound conversation with a live watch',()=>{
     await advance(0);
     expect(starts).toEqual([]);
   });
+  it('restarts only its own live watch after host-tools recovery',async()=>{
+    const view=render_();await advance(0);await goLive();const old=channel;
+    act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'other'})));expect(starts).toHaveLength(1);
+    act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'host'})));await advance(0);
+    expect(starts).toHaveLength(2);expect(stops).toEqual([{sessionId:'host',watchId:'watch-1'}]);
+    await act(async()=>old.onmessage({type:'closed'}));expect(starts).toHaveLength(2);
+    view.rerender({shown:false});act(()=>window.dispatchEvent(new CustomEvent('lazysh-host-tools-restored',{detail:'host'})));await advance(0);expect(starts).toHaveLength(2);
+  });
   it('closes the channel when the view is hidden and opens a new one when it is shown again',async()=>{
     const view=render_();await advance(0);await goLive();
     view.rerender({shown:false});await advance(0);

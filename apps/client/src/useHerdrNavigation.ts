@@ -98,6 +98,7 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports,inter
   const refresh=useRef<()=>Promise<void>>(async()=>{});
   useEffect(()=>{
     let current=true;
+    let recoveryPending=false;
     setResult(previous=>previous?.host===sessionId?{...previous,server:selected,rows:[],snapshot:undefined,loaded:false}:null);setFailure(null);setBusy(false);
     const read=async()=>{
       if(!current || !visible || document.hidden || !lease.current() || flight.current)return;
@@ -125,16 +126,21 @@ export function useHerdrNavigation({sessionId,herdrSession,visible,reports,inter
         }
         if(owns())setFailure(null);
       }catch(error){if(owns()){setResult(previous=>previous?.host===sessionId?{...previous,rows:[],snapshot:undefined,loaded:false}:null);setFailure({host:sessionId,cause:captureUiError(error)});}}
-      finally{flight.current=false;if(current)setBusy(false);else void refresh.current();}
+      finally{flight.current=false;if(current)setBusy(false);else void refresh.current();if(recoveryPending){recoveryPending=false;void read();}}
     };
     refresh.current=read;
     if(visible)void read();
+    const recovered=(event:Event)=>{
+      if((event as CustomEvent<unknown>).detail!==sessionId || !visible || document.hidden || !lease.current())return;
+      if(flight.current)recoveryPending=true;else void read();
+    };
+    window.addEventListener('lazysh-host-tools-restored',recovered);
     let quiet=0;
     const timer=visible?window.setInterval(()=>{
       if(live.current && ++quiet<LIVE_SAFETY_TICKS)return;
       quiet=0;void read();
     },intervalMs):undefined;
-    return()=>{current=false;window.clearInterval(timer);};
+    return()=>{current=false;window.clearInterval(timer);window.removeEventListener('lazysh-host-tools-restored',recovered);};
   },[sessionId,selected,visible,invoke,lease,intervalMs,clientFocus]);
   const owned=result?.host===sessionId?result:null;
   const [shown,setShown]=useState(()=>!document.hidden);

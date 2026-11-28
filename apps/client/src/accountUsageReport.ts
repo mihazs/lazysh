@@ -9,9 +9,9 @@ export type AccountUsageEntry = {
   rows:(AccountUsageMetric|AccountUsageText)[];
   resetCredits:{available:number;credits:{title:string|null;expiresAt:string|null}[]}|null;
 };
-export type AccountUsageResponse = {schemaVersion:1;source?:'builtin'|'external_cli'|null;state:'ready'|'companion_required'|'invalid_report'|'busy'|'disconnected'|'timeout'|'unavailable'|'disabled';report:{primary:string|null;entries:AccountUsageEntry[]}|null};
+export type AccountUsageResponse = {schemaVersion:1;source?:'builtin'|'external_cli'|null;state:'ready'|'companion_required'|'invalid_report'|'busy'|'disconnected'|'host_tools_credentials'|'host_tools_host_changed'|'host_tools_unsupported'|'host_tools_host_missing'|'host_tools_unavailable'|'timeout'|'unavailable'|'disabled';report:{primary:string|null;entries:AccountUsageEntry[]}|null};
 export const accountUsageMessages = {
-  companion_required:'accountUsageCompanionRequired',invalid_report:'accountUsageInvalid',busy:'accountUsageBusy',disconnected:'accountUsageDisconnected',timeout:'accountUsageTimeout',unavailable:'accountUsageUnavailable',disabled:'accountUsageDisabled',
+  companion_required:'accountUsageCompanionRequired',invalid_report:'accountUsageInvalid',busy:'accountUsageBusy',disconnected:'accountUsageDisconnected',host_tools_credentials:'hostToolsCredentials',host_tools_host_changed:'hostToolsHostChanged',host_tools_unsupported:'hostToolsUnsupported',host_tools_host_missing:'hostToolsHostMissing',host_tools_unavailable:'hostToolsUnavailable',timeout:'accountUsageTimeout',unavailable:'accountUsageUnavailable',disabled:'accountUsageDisabled',
 } as const satisfies Record<Exclude<AccountUsageResponse['state'],'ready'>,UiKey>;
 export function accountUsagePercent(percent:number,reading:'used'|'left') {return t('accountUsagePercent',{percent:formatNumber(percent),reading:t(reading==='used'?'accountUsageUsed':'accountUsageLeft')});}
 

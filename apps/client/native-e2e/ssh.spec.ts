@@ -10,7 +10,7 @@ import {prepareRecordedConversation,recordedCompanionBytes} from '../../../tests
 import {recordedPageCall} from '../../../tests/support/recordedCards';
 import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedSshWith,typeText,workspaceAction,startOwnedReceiver} from './sshUi';
+import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedRememberedMosh,openOwnedSshWith,typeText,workspaceAction,startOwnedReceiver} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -19,13 +19,16 @@ async function ownedMoshFixture() {
   return fixture.ssh=await SshFixture.start(undefined,{privateTtyGroup:true,moshBinary:binary});
 }
 
-/** A fresh owned Herdr server and GUI with the saved Herdr default entered through Mosh. */
-async function openOwnedHerdrMosh() {
+async function ownedMoshHerdr() {
   fixture.captureSafe=false;
   const binary=process.env.LAZYSH_NATIVE_MOSH_SERVER;
   if(!binary)throw new Error('Explicit pinned Mosh binary required');
-  const herdr=await HerdrFixture.start(herdrTools(),binary);
-  fixture.ssh=herdr;
+  return fixture.ssh=await HerdrFixture.start(herdrTools(),binary);
+}
+
+/** A fresh owned Herdr server and GUI with the saved Herdr default entered through Mosh. */
+async function openOwnedHerdrMosh() {
+  const herdr=await ownedMoshHerdr();
   const gui=fixture.gui=await NativeGui.start();
   return {herdr,gui,...await openOwnedSsh(gui,herdr.ssh,'mosh',undefined,{kind:'herdr',name:herdr.name})};
 }
@@ -432,6 +435,34 @@ it('enters the saved Herdr default through Mosh in the actual GUI and queues onl
   expect(await readFile(join(herdr.ssh.directory,'mosh-bootstraps'),'utf8')).toBe('bootstrap\n');
   await disconnectOwnedSsh(gui,terminal,`Owned SSH GUI host / ${herdr.name}`);
 });
+
+it('recovers host tools and refreshes Herdr without replacing the owned Mosh terminal',async()=>{
+  const herdr=await ownedMoshHerdr();
+  const relay=await OwnedSshRelay.start(herdr.ssh.port);
+  const gui=fixture.gui=await NativeGui.startWithDisposableVault();
+  try {
+    const {browser,terminal,owner}=await openOwnedRememberedMosh(gui,herdr.ssh,{kind:'herdr',name:herdr.name},relay.port);
+    await gui.assertDisposableCredential('saved');fixture.captureSafe=true;
+    const tab=await browser.$('[role="tab"][aria-selected="true"]');
+    const workspaces=await (await browser.$('.workspace-navigation-modes')).$('button=Workspaces');
+    await workspaces.click();
+    const navigation=await browser.$('.herdr-navigation');
+    await (await navigation.$('.herdr-navigation-tree')).waitForDisplayed({timeout:20_000});
+    gui.stage='owned Mosh host-tools route cut';relay.block();
+    await browser.waitUntil(async()=>relay.refused>0,{timeout:45_000,interval:250,timeoutMsg:'No host-tools recovery reached the blocked route'});
+    await browser.waitUntil(async()=>(await navigation.getText()).includes('unavailable'),{timeout:25_000,interval:250,timeoutMsg:'Herdr did not report its closed control connection'});
+    expect(await browser.execute(original=>original.isConnected,terminal)).toBe(true);
+    expect(await (await browser.$('[role="tab"][aria-selected="true"]')).elementId).toBe(tab.elementId);
+    gui.stage='owned Mosh host-tools recovery';relay.unblock();
+    await (await navigation.$('.herdr-navigation-tree')).waitForDisplayed({timeout:75_000,timeoutMsg:'Herdr did not refresh after recovery'});
+    expect(await browser.execute(original=>original.isConnected,terminal)).toBe(true);
+    expect(await (await browser.$('[role="tab"][aria-selected="true"]')).elementId).toBe(tab.elementId);
+    expect(await readFile(join(herdr.ssh.directory,'mosh-bootstraps'),'utf8')).toBe('bootstrap\n');
+    expect(await gui.appOwner()).toEqual(owner);
+    await gui.assertDisposableCredential('unchanged');
+    expect(await (await browser.$('[role="dialog"][aria-label*="Reconnect"]')).isExisting()).toBe(false);
+  } finally {await relay.stop();}
+},240_000);
 
 it('keeps real app sessions first in Workspaces and returns to the same owned terminals without reconnecting or typing',async()=>{
   fixture.captureSafe=false;
