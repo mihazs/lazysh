@@ -567,11 +567,13 @@ pub(super) fn inspect(target: Target, source: &Path) -> Result<Inspection> {
         .as_ref()
         .map(|contents| Record::decode(contents.as_bytes()).map_err(rejected))
         .transpose()?;
-    if record.as_ref().is_some_and(|record| {
-        record.agent != target.agent
-            || record.profile != profile.path
-            || profile.identity().ok() != Some(record.profile_identity)
-    }) {
+    // A profile's device and inode legitimately change (a btrfs subvolume gets a new anonymous device number
+    // after a reboot, a restored or copied profile gets a new inode). The record's own checksum, the settings
+    // classification below and the plan's identity check at apply time keep it bound; the next write rebinds it.
+    if record
+        .as_ref()
+        .is_some_and(|record| record.agent != target.agent || record.profile != profile.path)
+    {
         return Err(rejected("HooksForeignRecord"));
     }
     let observation = record

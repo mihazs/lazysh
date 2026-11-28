@@ -1224,6 +1224,89 @@ fn actual_managed_hook_cli_previews_and_lifecycle_use_only_the_selected_profile(
     }
 }
 
+/// A profile whose directory was copied, restored or remounted keeps its settings and ownership record
+/// but not its device and inode; the foreign hooks stay untouched and setup stays usable.
+#[cfg(unix)]
+#[test]
+fn a_recreated_profile_directory_keeps_status_and_removal_working_and_the_foreign_hooks_intact() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let foreign = r#"{ "model":"opus", "hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/usr/local/bin/other-tool guard"}]}],"Stop":[{"hooks":[{"type":"command","command":"notify-send done"}]}]} }"#;
+    let fixture = ProfileFixture::new(record::Agent::Claude);
+    fs::write(fixture.provider(), foreign).unwrap();
+    fs::set_permissions(fixture.provider(), fs::Permissions::from_mode(0o600)).unwrap();
+    let status = fixture.cli("status", None);
+    assert_eq!(
+        fixture.cli("install", status["installPlan"].as_str())["outcome"]["status"],
+        "configured"
+    );
+    let installed = fs::read_to_string(fixture.provider()).unwrap();
+    let profile = &fixture.target.profile;
+    let old = profile.with_extension("old");
+    fs::rename(profile, &old).unwrap();
+    fs::create_dir(profile).unwrap();
+    fs::set_permissions(profile, fs::Permissions::from_mode(0o755)).unwrap();
+    for name in ["settings.json", ".lazysh-hooks-claude.json"] {
+        fs::rename(old.join(name), profile.join(name)).unwrap();
+    }
+    let status = fixture.cli("status", None);
+    assert_eq!(status["supported"], true);
+    assert_eq!(status["state"], "configured");
+    assert_eq!(fs::read_to_string(fixture.provider()).unwrap(), installed);
+    for (action, plan, outcome) in [
+        ("install", "installPlan", "reused"),
+        ("remove", "removePlan", "removed"),
+    ] {
+        assert_eq!(
+            fixture.cli(action, status[plan].as_str())["outcome"]["status"],
+            outcome
+        );
+    }
+    let cleaned = fs::read_to_string(fixture.provider()).unwrap();
+    assert!(!cleaned.contains("ingest --agent"));
+    let (cleaned, foreign): (Value, Value) = (
+        serde_json::from_str(&cleaned).unwrap(),
+        serde_json::from_str(foreign).unwrap(),
+    );
+    for event in ["PreToolUse", "Stop"] {
+        assert_eq!(cleaned["hooks"][event], foreign["hooks"][event]);
+    }
+    assert_eq!(cleaned["model"], foreign["model"]);
+}
+
+/// An ownership record written for another profile folder is not trusted: status says so and changes nothing,
+/// and install or remove refuse without touching the settings.
+#[cfg(unix)]
+#[test]
+fn an_ownership_record_of_another_profile_folder_is_reported_by_status_and_never_applied() {
+    use std::fs;
+    let mut fixture = ProfileFixture::new(record::Agent::Claude);
+    fs::write(fixture.provider(), r#"{"theme":"dark"}"#).unwrap();
+    let status = fixture.cli("status", None);
+    fixture.cli("install", status["installPlan"].as_str());
+    let installed = fs::read(fixture.provider()).unwrap();
+    let moved = fixture.target.profile.with_extension("moved");
+    fs::rename(&fixture.target.profile, &moved).unwrap();
+    fixture.target.profile = moved;
+    let status = fixture.cli("status", None);
+    assert_eq!(status["supported"], false);
+    assert_eq!(status["reason"], "HooksForeignRecord");
+    let plan = "0".repeat(64);
+    for action in ["install", "remove"] {
+        let output = std::process::Command::new(&fixture.companion)
+            .env_clear()
+            .env("PATH", "")
+            .env("LAZYSH_STATE_DIR", fixture.state())
+            .args(["hooks", action, "--agent", "claude", "--profile-root"])
+            .arg(&fixture.target.profile)
+            .args(["--expected-plan", &plan])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HooksForeignRecord"));
+    }
+    assert_eq!(fs::read(fixture.provider()).unwrap(), installed);
+}
+
 /// The store's file names and the bytes of every file it can have: database, write-ahead log and shared-memory index.
 #[cfg(target_os = "linux")]
 fn store_fingerprint(state: &std::path::Path) -> (Vec<String>, Vec<Vec<u8>>) {
