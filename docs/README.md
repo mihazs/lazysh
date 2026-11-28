@@ -79,6 +79,7 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Theme QR evidence and platform acceptance status | [Theme QR acceptance](theme-qr-acceptance.md) |
 | Planned sign-in tunnel and device browser: settings, schemas, limits | [Sign-in tunnel contracts](reference/auth-tunnel.md) |
 | What `aws`, `gcloud`, `az`, `gh`, `claude`, `codex` and other login commands do: callback or device code, launchers, listeners | [Observed sign-in flows](reference/sso-login-flows.md) |
+| What the sign-in tunnel's tests prove, what they cannot, and the manual checks with `aws`, `gcloud` and `gh` | [Sign-in tunnel validation](reference/auth-tunnel-validation.md) |
 | Host device Android SDK and iOS Simulator idb acceptance | [Device acceptance](reference/devices-acceptance.md) |
 | Attachment destination paths, cancellation and transfer limits | [Attachment transfer](reference/attachments.md) |
 | Sync categories, conflict behavior and cryptography | [Encrypted sync](reference/sync.md) |
