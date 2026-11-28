@@ -226,6 +226,17 @@ The report is additive in both directions. A client that predates it ignores
 companion sends none, and ignores a report with another `schemaVersion` or a
 malformed `localEvent` instead of failing the status.
 
+### A busy store does not lose the event
+
+An `ingest` waits at most three seconds for the store's write lock, which is inside every provider's hook
+deadline (Codex allows three, Claude Code five). Under sustained load (many agent sessions, a slow or full disk)
+that wait can run out. The hook then still fails with `StorageError: operation failed (sqlite_code=5)`, but the
+event is no longer lost: the companion keeps it as a small file in `pending-ingest` beside the store and the next
+`ingest` records it first, oldest first, then its own event. A kept event older than ten minutes is dropped
+instead of replayed, because the next report supersedes it. At most 256 events are kept; past that, and when the
+disk will not take the file, the event is lost as before. Only plain events are kept; a reported-history source
+and a Kimi approval still fail without a copy.
+
 ## Claude Code, Codex and OpenCode
 
 `lazysh-agent claude-config` prints the existing Claude configuration fragment.

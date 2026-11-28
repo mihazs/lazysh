@@ -94,3 +94,36 @@ fn native_statement_failure_records_the_exact_boundary_without_its_private_messa
     let output = invoke(dir.path(), Some("1"), PAYLOAD);
     assert_diagnostic_failure(output, record::Phase::SessionWrite, 1811);
 }
+
+const FINISHED: &[u8] = br#"{"schemaVersion":1,"sessionId":"private-session","agent":"private-agent","project":"private-project","state":"done","summary":"private-summary"}"#;
+
+/// Issue #2812: an ingest that outwaits a held writer still fails as before, but its event is kept and
+/// recorded, in order, by the next ingest instead of being lost.
+#[test]
+fn an_event_refused_by_a_busy_writer_is_recorded_by_the_next_ingest_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    drop(Store::open(dir.path()).unwrap());
+    let blocker = rusqlite::Connection::open(dir.path().join("events.sqlite3")).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let refused = invoke(dir.path(), None, PAYLOAD);
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(String::from_utf8(refused.stderr).unwrap(), LEGACY_ERROR);
+    blocker.execute_batch("ROLLBACK").unwrap();
+    assert!(Store::open(dir.path())
+        .unwrap()
+        .snapshot(10, chrono::Utc::now())
+        .unwrap()
+        .sessions
+        .is_empty());
+    let next = invoke(dir.path(), None, FINISHED);
+    assert!(next.status.success());
+    assert!(next.stderr.is_empty());
+    let sessions = Store::open(dir.path())
+        .unwrap()
+        .snapshot(10, chrono::Utc::now())
+        .unwrap()
+        .sessions;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].event_count, 2);
+    assert_eq!(sessions[0].event.state, lazysh_agent::SessionState::Done);
+}
