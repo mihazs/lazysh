@@ -41,6 +41,7 @@
     "packages/account-usage/CHANGELOG.md",
     "packages/apple-speech/CHANGELOG.md",
     "packages/apple-status/CHANGELOG.md",
+    "packages/auth-tab/CHANGELOG.md",
     "packages/common/CHANGELOG.md",
     "packages/companion-release/CHANGELOG.md",
     "packages/credential-vault/CHANGELOG.md",

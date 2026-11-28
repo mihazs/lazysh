@@ -130,7 +130,7 @@
     },
     "packages/auth-tab": {
       "name": "@lazysh/auth-tab",
-      "version": "1.102.3",
+      "version": "1.108.0",
     },
     "packages/common": {
       "name": "@lazysh/common",
