@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 #[test]
 fn default_config_and_ingest_remain_unchanged_until_explicit_opt_in() {
     let directory = tempfile::tempdir().unwrap();
-    let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"opaque' $(id)","cwd":"/owned","transcript_path":directory.path().join("history 世界.jsonl "),"prompt":"never leak"});
+    let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"opaque' $(id)","cwd":"/owned","transcript_path":directory.path().join("history 世界.jsonl "),"response":"never leak"});
     let config = run(directory.path(), &["claude-config"], &Value::Null);
     assert!(config.status.success());
     assert_eq!(
@@ -79,7 +79,7 @@ fn unsupported_opt_in_and_disabled_discovery_fail_without_fabricated_results() {
 fn codex_opt_in_reports_its_transcript_with_the_pane_of_its_lifecycle_row() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("rollout codex 世界.jsonl");
-    let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"019a-codex","cwd":"/owned","transcript_path":path,"model":"gpt","prompt":"never leak"});
+    let payload = json!({"hook_event_name":"UserPromptSubmit","session_id":"019a-codex","cwd":"/owned","transcript_path":path,"model":"gpt","response":"never leak"});
     let output = |args: &[&str], input: &Value| {
         let output = run(directory.path(), args, input);
         assert!(

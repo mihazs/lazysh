@@ -190,7 +190,7 @@ mod tests {
     use super::*;
 
     fn hook(id: &str, path: Value) -> Value {
-        json!({"hook_event_name":"UserPromptSubmit","session_id":id,"transcript_path":path,"cwd":"/owned","prompt":"never stored"})
+        json!({"hook_event_name":"UserPromptSubmit","session_id":id,"transcript_path":path,"cwd":"/owned","response":"never stored"})
     }
     fn ingest(store: &mut Store, payload: &Value, at: DateTime<Utc>) {
         let (event, source) = read_hook(

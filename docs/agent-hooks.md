@@ -188,8 +188,10 @@ Companion lifecycle reports describe observed activity. They do not grant termin
 input access, answer permission prompts, install an agent or discover processes
 that have not emitted a report. Transcript readers are separate from lifecycle
 adapters. Reports contain bounded session identity, agent name, project path,
-status, a generic summary and the inherited tmux pane hint, when available.
-Prompts, tool arguments, transcript paths and provider credentials are discarded.
+status, a generic summary, a session title and the inherited tmux pane hint, when
+available. The title is one line of at most 80 characters cut from the first prompt
+(see [Session title](companion.md#session-title)); the rest of a prompt, tool
+arguments, transcript paths and provider credentials are discarded.
 
 ### Setup readiness
 

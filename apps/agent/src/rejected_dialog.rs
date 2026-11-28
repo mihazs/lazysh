@@ -124,6 +124,7 @@ impl Store {
                         // Kept: writing None would delete the row's stored pane server binding.
                         pane_server: row.get(4)?,
                         waiting: None,
+                        title: None,
                     },
                     row.get::<_, f64>(3)?,
                 ))

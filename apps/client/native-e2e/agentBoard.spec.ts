@@ -14,8 +14,8 @@ async function hook(ssh:SshFixture,companion:string,command:string,pane:string,e
   return process;
 }
 async function report(ssh:SshFixture,companion:string,pane:string,session:string,project:string,event:Hook) {
-  // The prompt and tool input are private to the host: the board must never receive them.
-  const ingest=await hook(ssh,companion,'ingest --agent claude',pane,{session_id:session,cwd:project,prompt:'PRIVATE-PROMPT',tool_input:{token:'SECRET-TOKEN'},...event});
+  // Everything but the event name, session and folder is private to the host: the board must never receive it.
+  const ingest=await hook(ssh,companion,'ingest --agent claude',pane,{session_id:session,cwd:project,response:'PRIVATE-PROMPT',tool_input:{token:'SECRET-TOKEN'},...event});
   await ingest.finish(`owned companion lifecycle report for ${session}`,10_000);
 }
 

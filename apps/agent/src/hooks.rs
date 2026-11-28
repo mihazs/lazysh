@@ -122,6 +122,9 @@ pub(crate) fn grok_event(payload: &Value, pane: Option<&str>) -> Result<Option<E
         pane_id: pane.map(str::to_owned),
         pane_server: None,
         waiting,
+        title: (kind == "UserPromptSubmit")
+            .then(|| crate::session_title::from_payload(payload))
+            .flatten(),
     }))
 }
 
@@ -245,14 +248,18 @@ pub(crate) fn cursor_event(payload: &Value, pane: Option<&str>) -> Result<Option
         }
         _ => return Err(crate::Error::InvalidEvent),
     };
-    Ok(Some(report(
+    let mut event = report(
         field(payload, "conversation_id", 256)?,
         "Cursor CLI",
         project,
         (state, summary),
         pane,
         None,
-    )))
+    );
+    if kind == "beforeSubmitPrompt" {
+        event.title = crate::session_title::from_payload(payload);
+    }
+    Ok(Some(event))
 }
 
 /// A lifecycle report from the pane a hook runs in; the pane's server is attached later, where its environment is read.
@@ -273,6 +280,7 @@ fn report(
         pane_id: pane.map(str::to_owned),
         pane_server: None,
         waiting,
+        title: None,
     }
 }
 

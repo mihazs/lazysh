@@ -286,15 +286,15 @@ fn generated_shell_handlers_execute_the_quoted_absolute_companion_with_an_empty_
         let (event, payload) = match agent {
             record::Agent::Gemini => (
                 "BeforeAgent",
-                json!({"hook_event_name":"BeforeAgent","session_id":"owned-hook","cwd":"/owned/project","prompt":"must not be retained"}),
+                json!({"hook_event_name":"BeforeAgent","session_id":"owned-hook","cwd":"/owned/project","response":"must not be retained"}),
             ),
             record::Agent::Cursor => (
                 "beforeSubmitPrompt",
-                json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"owned-hook","workspace_roots":["/owned/project"],"prompt":"must not be retained"}),
+                json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"owned-hook","workspace_roots":["/owned/project"],"response":"must not be retained"}),
             ),
             _ => (
                 "UserPromptSubmit",
-                json!({"hook_event_name":"UserPromptSubmit","session_id":"owned-hook","cwd":"/owned/project","prompt":"must not be retained"}),
+                json!({"hook_event_name":"UserPromptSubmit","session_id":"owned-hook","cwd":"/owned/project","response":"must not be retained"}),
             ),
         };
         let state = directory.path().join(agent.name());
