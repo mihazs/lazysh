@@ -1029,7 +1029,15 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
                     named(&mut event);
                     event
                 });
-                if event.is_some() || source.is_some() {
+                if let (Some(event), None) = (&event, &source) {
+                    lazysh_agent::ingest_spool::ingest(
+                        &lazysh_agent::state_directory()?,
+                        agent,
+                        event,
+                        chrono::Utc::now(),
+                    )?;
+                    wake_sender = true;
+                } else if source.is_some() {
                     let (mut store, admission) = open_admitting(agent)?;
                     store.ingest_with_reported_history(
                         event.as_ref(),
