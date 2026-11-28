@@ -9,8 +9,9 @@ The Agents panel shows host settings after a valid companion snapshot is availab
 1. Connect to the host, open **Agents**, and obtain a valid snapshot.
 2. In host settings, change the required switches and choose **Save host settings**.
 3. A host whose companion has `lazysh-agent auto-update` also shows **Companion updates**: **Update automatically** (the default: a companion older than this app updates itself to this app's version, on the host, never through the phone, and never during an agent turn), **Only tell me** or **Never**. It is saved with the other switches and changes `lazysh-agent auto-update` on the host. While a host updates, the Agents panel shows one line, **Updating the host companion to X…**, and then the new version; it never blocks the board.
-4. If the companion is unsupported or unavailable, update it before retrying. If another client changed the revision, refresh and review its values before saving again.
-5. Start a new operation to use the new values. Stop any existing stream separately; saving settings does not terminate it.
+4. A companion that cannot update itself (one older than the first release with `lazysh-agent auto-update`) is not changed behind your back: the first time the app connects to such a host that is older than the app, it asks once, **Update the host companion to match this app?**, with **Always**, **Not now** and **Never**. **Always** updates it through the host (the host downloads and installs; nothing is downloaded on this device) now and on later connections, **Not now** asks again next time, and **Never** is remembered. The answer is remembered per host on this device, shown under the settings below, and can be set back to **Ask me**.
+5. If the companion is unsupported or unavailable, update it before retrying. If another client changed the revision, refresh and review its values before saving again.
+6. Start a new operation to use the new values. Stop any existing stream separately; saving settings does not terminate it.
 
 ### Host browser
 

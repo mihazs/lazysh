@@ -436,6 +436,7 @@ pub fn run() {
                 companion::check_companion_update,
                 companion::install_managed_herdr,
                 companion::remove_managed_herdr,
+                companion::companion_version,
                 companion::hooks::companion_hooks,
                 companion::hooks::companion_hook_discovery,
                 companion_settings::get_companion_settings,
