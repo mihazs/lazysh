@@ -149,6 +149,11 @@ The client validates every field strictly, as ChatPanel does for schema 1.
 - The Agent view is full screen: a header strip (agent, model, mode, state dot and
   word, elapsed time, **Terminal** shortcut), the timeline, a dock for the pending
   interaction, a pinned plan chip, and the composer.
+- A turn that ended is not a finished session. When the companion's report says the session still runs
+  background work (`background` on its snapshot row: sub-agents, workflows, shell commands and monitors), the
+  header and the row above the composer read **Working in the background** with what runs ("2 sub-agents, 1
+  shell or monitor"), the board row lists the same under its summary, and a Herdr pane status of idle or done
+  does not outrank it. A companion that sends no `background` changes nothing.
 - Each turn is one block: the user prompt, then a folded activity row
   ("Ran 3 commands, edited 2 files, 1m 12s") that expands to tool cards, then the
   answer. A finished turn collapses to its answer. Long prompts collapse.
