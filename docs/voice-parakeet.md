@@ -114,8 +114,19 @@ the Google build of the Android app."
   (about 0.5–0.9 s each), a restart that reported the model installed but not
   ready and re-prepared it from the stored archive on the first transcription
   (107 s in a debug build), and removal. The app process held 1.0–1.15 GB resident
-  with the model loaded. No CI job runs this yet: the instrumentation case needs
-  the Android Whisper harness (#1604).
+  with the model loaded. The same path is now an instrumentation case,
+  `NativeWorkspaceTest#ownedParakeetInstallsTranscribesAndRemovesThroughTheBundledWebView`
+  (`bun run test:android-voice`, job `native-android-auxiliary`, see
+  [Android testing](android-testing.md#local-voice-acceptance)): it expects
+  `voice_parakeet_status` to report available and not installed, installs the
+  pinned archive through the app's own download, transcribes the LibriSpeech
+  sample with a normalized word error rate of at most 0.10 and removes the model.
+  On the Waydroid guest (Android 13, x86_64) it passed on 2026-11-16 with a word
+  error rate of 0 (install, transcription and removal in about two minutes with
+  the whisper case alongside; the Linux host has 24 threads and a fast link, so
+  the 4 vCPU runners are untimed). It runs on an x86_64 emulator only; the
+  Android parity cell stays `implemented` until the job is green on `main`
+  (#1815).
 - **Not measured.** Peak and retained memory, latency, thermals and battery on a
   phone-class device, and the cost on a low-memory phone, where Android may end
   the app while the model is loaded. The emulator shares a 24-thread desktop CPU,

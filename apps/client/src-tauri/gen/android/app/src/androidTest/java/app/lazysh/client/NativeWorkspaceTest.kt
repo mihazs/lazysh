@@ -7643,19 +7643,18 @@ class NativeWorkspaceTest {
         throw AssertionError("Sample has no data chunk")
     }
 
-    /**
-     * Local Whisper on the device (#1604): imports the pinned English model through the product's chunked IPC, transcribes the
-     * public JFK sample with the bundled whisper.cpp, then removes the model. The owned acceptance run stages both files.
-     */
-    @Test fun ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView() {
+    /** The private directory the owned voice run staged its fixtures in; any other path is refused. */
+    private fun voiceFixtureDirectory(): String {
         val directory = InstrumentationRegistry.getArguments().getString("lazyshVoiceFixtures")
         require(directory != null && Regex("/data/local/tmp/lazysh-voice-[a-f0-9]{32}").matches(directory)) {
-            "An owned Whisper fixture directory is required"
+            "An owned voice fixture directory is required"
         }
-        val model = "ggml-tiny.en.bin"
-        val name = JSONObject.quote(model)
-        val scenario = NativeActivityFixture.scenario
-        awaitUnlockedWorkspace(scenario, "Local Whisper IPC")
+        return directory
+    }
+
+    /** Waits for the unlocked workspace and defines `window.__lazyshVoice.call` (the product's IPC with its access header) and `.chunk`. */
+    private fun voiceBridge(scenario: ActivityScenario<MainActivity>, stage: String) {
+        awaitUnlockedWorkspace(scenario, stage)
         evaluate(scenario, """(() => {
           const call = async (command, args) => {
             const access = await window.__TAURI_INTERNALS__.invoke('app_lock_status', {});
@@ -7666,6 +7665,18 @@ class NativeWorkspaceTest {
             call('voice_import_chunk', {id, offset, bytes: Array.from(Uint8Array.from(atob(base64), c => c.charCodeAt(0)))})};
           return true;
         })()""")
+    }
+
+    /**
+     * Local Whisper on the device (#1604): imports the pinned English model through the product's chunked IPC, transcribes the
+     * public JFK sample with the bundled whisper.cpp, then removes the model. The owned acceptance run stages both files.
+     */
+    @Test fun ownedWhisperTranscribesAndRemovesModelThroughTheBundledWebView() {
+        val directory = voiceFixtureDirectory()
+        val model = "ggml-tiny.en.bin"
+        val name = JSONObject.quote(model)
+        val scenario = NativeActivityFixture.scenario
+        voiceBridge(scenario, "Local Whisper IPC")
         fun call(stage: String, command: String, args: String, seconds: Long = 120) =
             voiceReply(scenario, stage, "window.__lazyshVoice.call('$command', $args)", seconds)
         fun models() = call("Whisper model list", "voice_models", "{}") as JSONArray
@@ -7711,6 +7722,71 @@ class NativeWorkspaceTest {
             // Leave the emulator as found, whichever stage failed; a cleanup rejection never replaces the first failure.
             runCatching { openImport?.let { call("Whisper import cancel", "voice_import_finish", "{id:${JSONObject.quote(it)}, cancel:true}") } }
             runCatching { call("Whisper model cleanup", "voice_remove_model", "{id:$name}") }
+            runCatching { evaluate(scenario, "delete window.__lazyshVoice; delete window.__lazyshVoiceResult; true") }
+        }
+    }
+
+    /** Word error rate of `hypothesis` against `reference`, both split on anything but ASCII letters and digits and upper-cased as the desktop test does. */
+    private fun normalizedWordErrorRate(reference: String, hypothesis: String): Double {
+        fun words(text: String) = text.uppercase().split(Regex("[^A-Z0-9]+")).filter { it.isNotEmpty() }
+        val expected = words(reference)
+        val actual = words(hypothesis)
+        var previous = IntArray(actual.size + 1) { it }
+        for (row in 1..expected.size) {
+            val current = IntArray(actual.size + 1)
+            current[0] = row
+            for (column in 1..actual.size) {
+                current[column] = minOf(previous[column] + 1, current[column - 1] + 1,
+                    previous[column - 1] + if (expected[row - 1] == actual[column - 1]) 0 else 1)
+            }
+            previous = current
+        }
+        return previous[actual.size].toDouble() / expected.size
+    }
+
+    /**
+     * Local Parakeet on the device (#1815, parity gap group 24): the app downloads, verifies and prepares its one pinned archive
+     * itself, so the owned run stages only the public LibriSpeech sample and its reference. The case drives the product commands
+     * through the bundled WebView: status, install, transcription (word error rate <= 0.10, as the desktop test) and removal.
+     */
+    @Test fun ownedParakeetInstallsTranscribesAndRemovesThroughTheBundledWebView() {
+        val directory = voiceFixtureDirectory()
+        val utterance = "1272-128104-0000"
+        val wav = shellOutput("cat $directory/$utterance.wav") { it.readBytes() }
+        assertEquals("The staged sample is the pinned public LibriSpeech utterance",
+            "799f78ed4beb4de7ceae3a809262d4ce242394342ccd1d58cef7d49dbc2def46",
+            java.security.MessageDigest.getInstance("SHA-256").digest(wav).joinToString("") { "%02x".format(it) })
+        val samples = pcmSamples(wav)
+        assertEquals("The sample is 93,680 frames", 93_680, samples.size)
+        val reference = shellOutput("cat $directory/reference.txt") { String(it.readBytes(), Charsets.UTF_8).trim() }
+        assertEquals("The reference transcript is the utterance's 17 words: $reference", 17, reference.split(" ").size)
+        val scenario = NativeActivityFixture.scenario
+        voiceBridge(scenario, "Local Parakeet IPC")
+        fun call(stage: String, command: String, args: String, seconds: Long = 120) =
+            voiceReply(scenario, stage, "window.__lazyshVoice.call('$command', $args)", seconds)
+        fun request() = "requestId:${JSONObject.quote(UUID.randomUUID().toString())}"
+        fun status(stage: String) = call(stage, "voice_parakeet_status", "{}") as JSONObject
+        val before = status("Parakeet status")
+        assertTrue("Parakeet is unavailable in this build: ${before.optString("reason")}", before.getBoolean("available"))
+        assertFalse("A fresh emulator holds no Parakeet model; remove it before this case: $before", before.getBoolean("installed"))
+        try {
+            // The progress channel is the panel's `Channel`: its id is a registered callback, passed as `__CHANNEL__:<id>`.
+            call("Parakeet install", "voice_parakeet_install",
+                "{${request()}, events:'__CHANNEL__:' + window.__TAURI_INTERNALS__.transformCallback(() => {})}", 1_200)
+            val installed = status("Parakeet status after install")
+            assertTrue("Parakeet is installed, ready and idle after install: $installed",
+                installed.getBoolean("installed") && installed.getBoolean("ready") && !installed.getBoolean("busy"))
+            val transcript = (call("Parakeet transcription", "voice_parakeet_transcribe",
+                "{${request()}, samples:[${samples.joinToString(",")}]}", 600) as JSONObject).getString("text")
+            val wer = normalizedWordErrorRate(reference, transcript)
+            assertTrue("On-device Parakeet word error rate $wer exceeds 0.10: ${JSONObject.quote(transcript)}", wer <= 0.10)
+            call("Parakeet model removal", "voice_parakeet_remove", "{${request()}}")
+            val removed = status("Parakeet status after removal")
+            assertFalse("Removal leaves Parakeet not installed: $removed", removed.getBoolean("installed"))
+            println("lazysh native parakeet: samples=${samples.size} wer=$wer transcript=${JSONObject.quote(transcript)} removed=true")
+        } finally {
+            // Leave the emulator as found, whichever stage failed; a cleanup rejection never replaces the first failure.
+            runCatching { call("Parakeet model cleanup", "voice_parakeet_remove", "{${request()}}") }
             runCatching { evaluate(scenario, "delete window.__lazyshVoice; delete window.__lazyshVoiceResult; true") }
         }
     }
