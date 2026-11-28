@@ -1,5 +1,24 @@
 # @lazysh/client
 
+## 1.104.2
+
+### Patch Changes
+
+- fix(onboarding): make the gesture tour match the hidden gesture lines ([#2784](https://github.com/mihazs/lazysh/pull/2784))
+
+  <details><summary>Details</summary>
+
+  The tour no longer draws a handle line or tells you to start from one while Show gesture lines is off, which is the default. On Android gesture navigation it now says to start in the strip just inside the system's zone, and where to turn the lines on.
+
+  </details>
+- fix(chat): Send and Stop in the Chat terminal input work from an open touch-keyboard composition ([#2783](https://github.com/mihazs/lazysh/pull/2783))
+
+  <details><summary>Details</summary>
+
+  Leaving the field ends the open composition first, then Send or Request stop acts once on the committed draft instead of staying disabled.
+
+  </details>
+
 ## 1.104.1
 
 ### Patch Changes
