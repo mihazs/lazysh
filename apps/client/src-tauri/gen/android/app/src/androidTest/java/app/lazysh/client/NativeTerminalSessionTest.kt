@@ -1419,7 +1419,12 @@ class NativeTerminalSessionTest {
 
     private fun NativeSessionDriver.checkMoshResize() {
         val device = UiDevice.getInstance(instrumentation)
+        val imeSetting = "show_ime_with_hard_keyboard"
+        val previousIme = shell("settings get secure $imeSetting").decodeToString().trim()
         try {
+            // The emulator has a hardware keyboard, so this setting decides whether its soft keyboard shows. The page asks for the keyboard whenever the
+            // pane takes focus, so hiding it once is undone; kept off, the landscape pane keeps the rows the remote pty's answer needs (it was one row).
+            shell("settings put secure $imeSetting 0")
             device.setOrientationNatural()
             val id = startNativeSession()
             val transport = ".workspace-footer > span:last-child"
@@ -1429,8 +1434,6 @@ class NativeTerminalSessionTest {
             } catch (error: AssertionError) {
                 throw AssertionError("${error.message}: ${text(transport)}", error)
             }
-            // The owned CI emulator shows its keyboard: in landscape it would leave one row, too few to read the remote pty's answer.
-            hideTheSoftKeyboardBeforeLayoutChecks()
             typeIntoTheSurface("printf 'native-%s:%s\\n' mosh \"\$\$\"")
             val pid = awaitRow(id, "the original Mosh shell PID", { Regex("native-mosh:\\d+").matches(it) })
                 .lineSequence().map(String::trim).last { Regex("native-mosh:\\d+").matches(it) }.substringAfter(':')
@@ -1444,15 +1447,8 @@ class NativeTerminalSessionTest {
             assertEquals("The original native surface still owns the session", id, session())
             Evidence.record("native-mosh-resize", evidence.put("sameShell", true).put("transport", "mosh"))
         } finally {
-            device.setOrientationNatural()
-            device.unfreezeRotation()
-        }
-    }
-
-    private fun NativeSessionDriver.hideTheSoftKeyboardBeforeLayoutChecks() {
-        ui { activity -> SoftKeyboard.set(activity.window, false) }
-        PageDriver.poll("the soft keyboard to be hidden before layout checks", 30) {
-            ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { !it }
+            runCatching { device.setOrientationNatural(); device.unfreezeRotation() }
+            runCatching { shell("settings ${if (previousIme == "null") "delete secure $imeSetting" else "put secure $imeSetting $previousIme"}") }
         }
     }
 
@@ -1487,6 +1483,7 @@ class NativeTerminalSessionTest {
         Evidence.recordPicture("native-session-$name", bitmap)
         assertTrue("$name: the grid is whole cells of the surface: $columns columns of ${cell.first}px in ${bitmap.width}px", columns >= bitmap.width / cell.first - 1 && columns <= bitmap.width / cell.first)
         assertTrue("$name: the grid is whole rows of the surface: $rows rows of ${cell.second}px in ${bitmap.height}px", rows >= bitmap.height / cell.second - 1 && rows <= bitmap.height / cell.second)
+        if (rows < 3) throw AssertionError("$name: $rows rows are too few to read the remote pty's answer: ${paneState(session)}")
         assertEquals("$name: the remote pty has the grid the pane holds", fits, ptyGrid(session, tag))
         return fits
     }
@@ -1523,7 +1520,10 @@ class NativeTerminalSessionTest {
         val imeSetting = "show_ime_with_hard_keyboard"
         val previousIme = shell("settings get secure $imeSetting").decodeToString().trim()
         try {
-            hideTheSoftKeyboardBeforeLayoutChecks()
+            ui { activity -> SoftKeyboard.set(activity.window, false) }
+            PageDriver.poll("the soft keyboard to be hidden before layout checks", 30) {
+                ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { !it }
+            }
             val portrait = assertThePaneHoldsItsGrid(id, "portrait", "pa")
 
             // A rotation: the window turns, the pane is placed again at its new size and the core is refitted to it.

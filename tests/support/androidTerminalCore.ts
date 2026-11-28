@@ -111,4 +111,4 @@ export const androidNativeSessionAcceptance=(root?:string,softwareGpu=true)=>run
   evidenceName:'native-session-evidence',evidence:['native-session.json'],keyboard:softwareGpu?'aosp-latin':undefined,arguments:softwareGpu?['lazyshSoftwareGpu=true']:[]},root);
 
 export const androidNativeMoshResize=(moshBinary:string)=>runTerminalCases({title:'native Mosh resize',classes:[sessionClass],cases:sessionCases,
-  evidenceName:'native-mosh-resize-evidence',evidence:['native-mosh-resize.json'],keyboard:'aosp-latin',arguments:['lazyshSoftwareGpu=true'],moshBinary});
+  evidenceName:'native-mosh-resize-evidence',evidence:['native-mosh-resize.json'],arguments:['lazyshSoftwareGpu=true'],moshBinary});
