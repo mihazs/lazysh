@@ -4001,6 +4001,7 @@ dependencies = [
  "tauri-plugin-deep-link",
  "tauri-plugin-lazysh-apple-speech",
  "tauri-plugin-lazysh-apple-status",
+ "tauri-plugin-lazysh-auth-tab",
  "tauri-plugin-lazysh-display-idle",
  "tauri-plugin-lazysh-push",
  "tauri-plugin-lazysh-vault",
@@ -7949,6 +7950,15 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "uuid",
+]
+
+[[package]]
+name = "tauri-plugin-lazysh-auth-tab"
+version = "1.109.0"
+dependencies = [
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

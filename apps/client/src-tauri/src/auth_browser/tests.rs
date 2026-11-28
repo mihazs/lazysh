@@ -314,3 +314,49 @@ async fn a_local_session_still_opens_when_the_cli_holds_the_port() {
         (Ok(Outcome::Opened), true)
     );
 }
+
+#[derive(Default)]
+struct FakePresenter(std::sync::atomic::AtomicUsize);
+
+impl Presenter for FakePresenter {
+    fn dismiss(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl FakePresenter {
+    fn dismissals(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[test]
+fn the_tab_is_dismissed_once_when_the_tunnel_it_waits_on_ends() {
+    let (tab, presenter) = (Tab::default(), FakePresenter::default());
+    tab.shown(vec![8085]);
+    tab.ended(8085, &presenter);
+    assert_eq!(presenter.dismissals(), 1);
+    // Every end reason reports the same way; a second end finds no tab to close.
+    tab.ended(8085, &presenter);
+    assert_eq!(presenter.dismissals(), 1);
+}
+
+#[test]
+fn no_dismiss_is_requested_when_no_tab_was_presented_or_it_waits_on_another_tunnel() {
+    let (tab, presenter) = (Tab::default(), FakePresenter::default());
+    tab.ended(8085, &presenter);
+    tab.shown(vec![9000]);
+    tab.ended(8085, &presenter);
+    assert_eq!(presenter.dismissals(), 0);
+}
+
+#[test]
+fn a_newer_tab_replaces_the_one_before_it() {
+    let (tab, presenter) = (Tab::default(), FakePresenter::default());
+    tab.shown(vec![8085]);
+    tab.shown(vec![9000]);
+    tab.ended(8085, &presenter);
+    assert_eq!(presenter.dismissals(), 0);
+    tab.ended(9000, &presenter);
+    assert_eq!(presenter.dismissals(), 1);
+}
