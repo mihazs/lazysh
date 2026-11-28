@@ -1,6 +1,8 @@
 //! A turn that ended is not a finished session (#2956): the snapshot reads Claude Code's own session registry and the
 //! `turn_duration` record of the conversation and keeps a row the hooks left `done` at `working` while a background shell,
 //! monitor, sub-agent or workflow runs. The registry and record shapes are those of Claude Code 2.1.326, with no text.
+// Windows never believes a registry file (no process start time to compare), so there is nothing to observe there.
+#![cfg(unix)]
 #[path = "support/claude_host.rs"]
 mod claude_host;
 #[path = "support/json_output.rs"]
@@ -84,7 +86,6 @@ impl Host {
     }
 }
 
-#[cfg(unix)]
 mod live_process {
     use super::*;
 
