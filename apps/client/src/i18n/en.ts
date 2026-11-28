@@ -103,6 +103,8 @@ export const english = {
   hooksKimiCodeCapability: "Update the companion to discover managed Kimi Code setup.",
   hooksKimiCodeConfigRequired: "This Kimi Code profile has no config.toml. Create it in Kimi Code first; setup never creates or rewrites it.",
   hooksKimiCodeGuide: "Restart Kimi Code to load the hooks. They report root approval requests only, and an extra line after the lazysh block makes setup stop with a conflict.",
+  hooksGrokCapability: "Update the companion to discover managed Grok Build setup.",
+  hooksGrokGuide: "Start a new Grok Build session, or press r in /hooks to reload, then review the lazysh hooks in /hooks. A hook file in the profile needs no folder trust, but an organization's allow_managed_hooks_only policy skips it, and a hook disabled in /hooks stays disabled. Setup does not verify live reporting.",
   hooksAmpGuide: "Start a new Amp session using this configuration. Workspace plugins can mask the system plugin; setup does not verify loading.",
   hooksClineGuide: "Start a new Cline session with this profile to load the root-only plugin, then start a turn. Existing plugin restrictions still apply.",
   hooksTrust: "Review provider trust settings and start a new agent session to verify reporting. Codex trust is never accepted automatically.",

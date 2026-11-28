@@ -993,8 +993,10 @@ Evidence is official `xai-org/grok-build` commit `2bdd1d6a6369de0e8c68132ea4539e
 The Agent view follows the Grok Build session of a tmux pane when a hook of that session names the pane. Grok Build runs
 hooks from `~/.grok/hooks/*.json` (and, unless disabled, from `~/.claude/settings.json`) with the event as JSON on stdin; its
 input carries `session_id`, `cwd`, Claude's PascalCase `hook_event_name` and, once the file exists, `transcript_path`, the
-session's `updates.jsonl`. Print the fragment, review it and save it as `~/.grok/hooks/lazysh.json` (the companion never
-writes Grok's configuration; managed setup for Grok is [#1843](https://github.com/mihazs/lazysh/issues/1843)):
+session's `updates.jsonl`. Install the hooks from **Agents → Agent hook setup** (explicit version-5 discovery,
+`lazysh-agent hooks install --agent grok`; see [Agent lifecycle hooks](agent-hooks.md#grok-build)), which owns
+`~/.grok/hooks/lazysh.json` and binds it to the inspected companion. Or print the fragment yourself, review it and save it
+under that name (the print-only command never writes Grok's configuration; a hand-saved file is a conflict for managed setup):
 
 ```sh
 lazysh-agent grok-config --reported-history
