@@ -232,6 +232,8 @@ export class WebDriver {
   property = (element: string, name: string) => this.call('GET', `/element/${element}/property/${name}`);
   /** Type into one form control. */
   type = (element: string, text: string) => this.call('POST', `/element/${element}/value`, { text });
+  /** Replace what a form control holds with `text` (a port field starts with its default). */
+  replace = async (element: string, text: string) => { await this.call('POST', `/element/${element}/clear`, {}); return this.type(element, text); };
   /** Press keys on whatever has focus, as the real keyboard does ('\uE007' is Enter); needed for the terminal's hidden input. */
   keys = (text: string) => this.call('POST', '/actions', { actions: [{ type: 'key', id: 'keyboard',
     actions: [...text].flatMap(value => [{ type: 'keyDown', value }, { type: 'keyUp', value }]) }] });
