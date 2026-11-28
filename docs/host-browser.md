@@ -83,7 +83,7 @@ Security and data (each is tested, not only stated):
 | Mode | Headless by default: nothing appears on the host's screen. **Headed** is an explicit choice for a host with a display; it shows a window to anyone at the host and switching tabs changes what they see. |
 | Flags | Chrome: `--headless=new --remote-debugging-pipe --user-data-dir=<private> --no-first-run --no-default-browser-check`. Firefox: `--headless --no-remote --profile <private> --remote-debugging-port 0`. `--remote-allow-origins=*` and `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS` are never used. |
 | Lifetime | Starts when the user opens the tool, stops when the user closes it, the SSH channel closes, the session ends or the companion exits. An idle timer stops it after a configurable time. |
-| Start cost | 130 ms (Chromium) and 410 ms (Firefox) to a usable endpoint, so on demand is cheap. |
+| Start cost | 130 ms (Chromium) and 410 ms (Firefox) to a usable endpoint, so on demand is cheap. A browser that has not published its endpoint after 90 seconds (Chromium and Firefox alike) ends the session with `BrowserStartTimeout`; on a loaded host a cold start took a multiple of these figures. |
 
 **Keep profile** is an explicit option for flows that need a sign-in to survive (it keeps cookies on the host's
 disk until **Clear browser data**). It is off by default and labelled with what it stores. In the launcher and in the
