@@ -265,6 +265,9 @@ file, for example because `CLAUDE_CONFIG_DIR` is set in the agent's terminal but
 snapshot (the Agent view's conversation list has the same limit), the row stays as the hooks left it until the
 next prompt or `SessionEnd`. A row nobody reads stays as it is until the next snapshot.
 
+A turn's end is not the end of its background work (a shell, a monitor, a sub-agent, a workflow): see
+[Background work and session status](reference/agent-background-work.md) for what each agent proves.
+
 Esc on a running Claude Code turn sends no hook either ([#1956](https://github.com/mihazs/lazysh/issues/1956)),
 so the row would report `working` until the next prompt. The same snapshot read marks a `working` Claude Code
 row done, summary "Turn interrupted", when the last main-thread record of its conversation file is the

@@ -66,6 +66,7 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | Planned native Agent view: co-existence rules, data model and per-agent capabilities | [Agent view](agent-view.md) |
 | Agent view load performance: method, fixtures, baseline and budgets (desktop only; no phone number yet) | [Agent view performance](reference/agent-view-performance.md) |
 | Agent view parity: every agent screen element, reference apps, status and open gaps | [Agent view parity](reference/agent-view-parity.md) |
+| Which signals prove an agent still has work in the background, per agent, and how the session status uses them | [Background work and session status](reference/agent-background-work.md) |
 | Agent view design: the brief, the rules and the type, spacing and colour scale of the Agent view | [Agent view design](reference/agent-view-design.md) |
 | Planned local-session parity: host context, per-platform capabilities and slices | [Local workspace](local-workspace.md) |
 | Planned tmux, Zellij, Herdr and rmux capability checklist, versions and platforms | [Multiplexer compatibility](multiplexer-compatibility.md) |
