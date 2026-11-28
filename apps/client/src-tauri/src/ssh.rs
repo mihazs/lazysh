@@ -3916,6 +3916,7 @@ fn reported_conversation_command(
 
 /// Reads the conversation a reference names, newest messages unless a window says otherwise.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Native-injected lease and states plus the typed IPC fields.
 pub async fn agent_reported_conversation(
     lease: AccessLease,
     state: State<'_, AppState>,
