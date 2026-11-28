@@ -990,7 +990,8 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             agent,
             reported_history,
         } => {
-            let pane = lazysh_agent::pane_identity();
+            // A Herdr pane is named exactly, as an approval's pane is; a terminal lazysh launched names itself only when no multiplexer does.
+            let pane = lazysh_agent::approval_pane_identity().or_else(lazysh_agent::pane_identity);
             // The environment's server belongs to the environment's pane, not to a pane a generic payload names itself.
             let named = |event: &mut lazysh_agent::Event| {
                 if let Some(server) = lazysh_agent::pane_server().filter(|_| event.pane_id == pane)

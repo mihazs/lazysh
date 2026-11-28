@@ -225,6 +225,18 @@ it('shows the fallback without a transcript picker when no hook report names thi
   expect(calls('tmux_chat').every(args=>(args as {action:{kind:string}}).action.kind==='snapshot')).toBe(true);
 });
 
+it('ignores a report of another tmux server for the same pane id and binds the one of the attached server',async()=>{
+  host('codex',[{...row('Codex','%3','needs_attention'),paneServer:'tmux:default'}],'missing',[[]]);
+  const {unmount}=render(<AgentView sessionId="ssh" shown tmux paneServer="tmux:work" onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText('No agent conversation for this terminal.')).toBeTruthy();
+  unmount();
+  host('codex',[{...row('Codex','%3','needs_attention'),paneServer:'tmux:default'},{...row('Claude Code','%3','needs_attention'),paneServer:'tmux:work'}],'missing',[[]]);
+  render(<AgentView sessionId="ssh" shown tmux paneServer="tmux:work" onShowTerminal={()=>{}}/>);
+  await advance(0);
+  expect(screen.getByText(/^The last Claude Code report names this pane/)).toBeTruthy();
+});
+
 it('labels a detected agent without a reported conversation as partial and never reads a transcript',async()=>{
   host('codex',[{...row('Codex','%3','needs_attention'),summary:'Turn failed'}],'missing',[[]]);
   render(<AgentView sessionId="ssh" shown tmux onShowTerminal={()=>{}}/>);

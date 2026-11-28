@@ -2,10 +2,10 @@ import {t} from './i18n/core';
 import { useSyncExternalStore } from 'react';
 import { parseSnapshot } from './agentReports';
 import { localHostLabel } from './localHost';
-import { zellijPane } from './agentPaneIdentity';
+import { attachedPaneServer, herdrPaneOf, zellijPane } from './agentPaneIdentity';
 
 export type InboxSession = { id: string; hostId: string; name: string; connected: boolean; local?: boolean; attached?: { kind: string; name?: string } };
-export type InboxRow = { id: string; eventId: string; sessionId: string; hostId: string; hostName: string; agent: string; project: string; agentSessionId: string; state: 'working' | 'needs_attention' | 'done'; updatedAt: string; paneId: string | null };
+export type InboxRow = { id: string; eventId: string; sessionId: string; hostId: string; hostName: string; agent: string; project: string; agentSessionId: string; state: 'working' | 'needs_attention' | 'done'; updatedAt: string; paneId: string | null; /** `tmux:<label>` or `rmux:<label>`: the server `paneId` belongs to, from a companion that records it. */paneServer?: string };
 type InboxState = { version: 1; monitoring: boolean; notifications: boolean; rows: InboxRow[]; latest: Record<string, string>; error: string };
 const storageKey = 'lazysh.inbox.v1';
 const eventName = 'lazysh-inbox';
@@ -17,7 +17,7 @@ export function parseInbox(value: unknown): InboxState {
   if (!value || typeof value !== 'object') return defaults();
   const data = value as Record<string, unknown>;
   if (data.version !== 1 || !Array.isArray(data.rows) || data.rows.length > 100 || !data.latest || typeof data.latest !== 'object' || Array.isArray(data.latest) || Object.keys(data.latest).length > 4000) return defaults();
-  const rows = data.rows.filter((row): row is InboxRow => !!row && typeof row === 'object' && text(row.id, 64) && hashPattern.test(row.id) && text(row.eventId, 64) && hashPattern.test(row.eventId) && text(row.sessionId, 100) && text(row.hostId, 100) && text(row.hostName, 80) && text(row.agent, 80) && text(row.project, 200) && text(row.agentSessionId, 4096) && ['working', 'needs_attention', 'done'].includes(row.state) && text(row.updatedAt, 64) && Number.isFinite(Date.parse(row.updatedAt)) && (row.paneId === null || text(row.paneId, 256))).map(row => ({ id: row.id, eventId: row.eventId, sessionId: row.sessionId, hostId: row.hostId, hostName: row.hostName, agent: row.agent, project: row.project, agentSessionId: row.agentSessionId, state: row.state, updatedAt: row.updatedAt, paneId: row.paneId }));
+  const rows = data.rows.filter((row): row is InboxRow => !!row && typeof row === 'object' && text(row.id, 64) && hashPattern.test(row.id) && text(row.eventId, 64) && hashPattern.test(row.eventId) && text(row.sessionId, 100) && text(row.hostId, 100) && text(row.hostName, 80) && text(row.agent, 80) && text(row.project, 200) && text(row.agentSessionId, 4096) && ['working', 'needs_attention', 'done'].includes(row.state) && text(row.updatedAt, 64) && Number.isFinite(Date.parse(row.updatedAt)) && (row.paneId === null || text(row.paneId, 256)) && (row.paneServer === undefined || text(row.paneServer, 256))).map(row => ({ id: row.id, eventId: row.eventId, sessionId: row.sessionId, hostId: row.hostId, hostName: row.hostName, agent: row.agent, project: row.project, agentSessionId: row.agentSessionId, state: row.state, updatedAt: row.updatedAt, paneId: row.paneId, ...(row.paneServer === undefined ? {} : { paneServer: row.paneServer }) }));
   const latest = Object.fromEntries(Object.entries(data.latest).filter(([key, value]) => hashPattern.test(key) && typeof value === 'string' && hashPattern.test(value)));
   return { version: 1, monitoring: data.monitoring === true, notifications: data.notifications === true, rows, latest, error: '' };
 }
@@ -55,7 +55,7 @@ export async function collectInbox(session: InboxSession, snapshot: unknown, bas
   const events = await Promise.all(reported.map(async row => {
     const id = await hash([session.hostId, row.agent, row.sessionId]);
     const eventId = await hash([id, row.eventCount, row.updatedAt, row.state]);
-    const event: InboxRow = { id, eventId, sessionId: session.id, hostId: session.hostId, hostName: summaryText(session.local ? localHostLabel() : session.name, 80), agent: summaryText(row.agent, 80), project: summaryText(row.project, 200), agentSessionId: row.sessionId, state: row.state, updatedAt: new Date(row.updatedAt).toISOString(), paneId: row.paneId?.slice(0, 256) || null };
+    const event: InboxRow = { id, eventId, sessionId: session.id, hostId: session.hostId, hostName: summaryText(session.local ? localHostLabel() : session.name, 80), agent: summaryText(row.agent, 80), project: summaryText(row.project, 200), agentSessionId: row.sessionId, state: row.state, updatedAt: new Date(row.updatedAt).toISOString(), paneId: row.paneId?.slice(0, 256) || null, ...(row.paneServer === undefined ? {} : { paneServer: row.paneServer }) };
     return event;
   }));
   if (!canCommit()) return [];
@@ -79,20 +79,24 @@ export async function collectInbox(session: InboxSession, snapshot: unknown, bas
 }
 
 type PaneSession = { id: string; attached?: { kind: string; name?: string; tmuxServer?: string } };
-/** Makes the pane that raised an event the pane its attached terminal shows, so the Agent view follows that agent and not another one in the session: a tmux `%N` on the attached tmux server, a `zellij:<session>:<pane>` of the attached Zellij session (Zellij also switches to the pane's tab). A pane of any other multiplexer or Zellij session is left alone, never guessed.
- * shortcut: the companion records only `TMUX_PANE`, not its tmux server, so the id is looked up on the server the terminal is attached to; record the socket in the report to bind the exact server. A closed pane still opens its session. */
-export async function focusInboxPane(invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>, session: PaneSession, paneId: string | null | undefined): Promise<void> {
+/** Makes the pane that raised an event the pane its attached terminal shows, so the Agent view follows that agent and not another one in the session: a tmux or rmux `%N` on the attached server, a `zellij:<session>:<pane>` of the attached Zellij session (Zellij also switches to the pane's tab), a `herdr:<session>:<pane id>` of the attached Herdr server. A pane of any other multiplexer, session or server is left alone, never guessed.
+ * A tmux or rmux report that names its server (`paneServer`) is focused only when the terminal is attached to that server; one from a companion that records none is looked up on the attached server. A closed pane still opens its session. */
+export async function focusInboxPane(invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>, session: PaneSession, paneId: string | null | undefined, paneServer?: string): Promise<void> {
   const attached = session.attached;
   const zellij = zellijPane(paneId);
-  let request: [string, Record<string, unknown>] | undefined;
-  if (zellij) {
-    if (attached?.kind === 'zellij' && attached.name === zellij.session) request = ['zellij_action', { sessionId: session.id, name: zellij.session, action: { type: 'focusPane', pane: zellij.pane } }];
-  } else if (paneId && /^%\d{1,10}$/.test(paneId) && attached?.kind === 'tmux') {
-    const server = attached.tmuxServer;
-    request = ['tmux_action', { sessionId: session.id, action: { type: 'selectPane', target: paneId }, ...(server && server !== 'default' ? { tmuxServer: server } : {}) }];
-  }
-  if (!request) return;
-  try { await invoke(...request); } catch { /* The pane may be gone; the session still opens. */ }
+  const herdr = herdrPaneOf(paneId);
+  try {
+    if (herdr) {
+      if (attached?.kind !== 'herdr' || attached.name !== herdr.session) return;
+      const tree = await invoke('herdr_tree', { sessionId: session.id, name: herdr.session }) as { panes: { pane_id: string }[] };
+      if (tree.panes.some(pane => pane.pane_id === herdr.pane)) await invoke('herdr_action', { sessionId: session.id, name: herdr.session, action: { type: 'focusPane', target: herdr.pane } });
+    } else if (zellij) {
+      if (attached?.kind === 'zellij' && attached.name === zellij.session) await invoke('zellij_action', { sessionId: session.id, name: zellij.session, action: { type: 'focusPane', pane: zellij.pane } });
+    } else if (paneId && /^%\d{1,10}$/.test(paneId) && (attached?.kind === 'tmux' || attached?.kind === 'rmux') && (paneServer === undefined || paneServer === attachedPaneServer(attached))) {
+      const server = attached.tmuxServer;
+      await invoke('tmux_action', { sessionId: session.id, action: { type: 'selectPane', target: paneId }, ...(server && server !== 'default' ? { tmuxServer: server } : {}), ...(attached.kind === 'rmux' ? { kind: 'rmux' } : {}) });
+    }
+  } catch { /* The pane may be gone; the session still opens. */ }
 }
 
 /** `waiting` asks the app for the Agent view: only a needs-you event of an agent whose pane the Agent view can follow has a pending card to show. */
@@ -104,6 +108,6 @@ export function openInboxEvent(eventId: string, sessions: InboxSession[], expect
 }
 
 /** Asks the app to open a reported agent's connection: the session, and for a waiting agent its pending card. `section` picks what the Agents drawer shows. */
-export function dispatchInboxOpen(row: Pick<InboxRow, 'sessionId' | 'paneId' | 'state' | 'agent'>, section?: 'activity') {
-  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId, paneId: row.paneId, waiting: row.state === 'needs_attention' && !!row.paneId && ['Claude Code', 'Codex'].includes(row.agent), ...(section ? { section } : {}) } }));
+export function dispatchInboxOpen(row: Pick<InboxRow, 'sessionId' | 'paneId' | 'paneServer' | 'state' | 'agent'>, section?: 'activity') {
+  window.dispatchEvent(new CustomEvent('lazysh-inbox-open', { detail: { sessionId: row.sessionId, paneId: row.paneId, ...(row.paneServer === undefined ? {} : { paneServer: row.paneServer }), waiting: row.state === 'needs_attention' && !!row.paneId && ['Claude Code', 'Codex'].includes(row.agent), ...(section ? { section } : {}) } }));
 }

@@ -7,7 +7,12 @@ use std::{
     process::{Command, Output},
 };
 
-const SERVER_VARIABLES: [&str; 6] = [
+const LAUNCHED: &str = "0123456789abcdef0123456789abcdef";
+const SERVER_VARIABLES: [&str; 10] = [
+    "LAZYSH_TERMINAL",
+    "HERDR_ENV",
+    "HERDR_PANE_ID",
+    "HERDR_SOCKET_PATH",
     "TMUX",
     "TMUX_PANE",
     "RMUX",
@@ -244,4 +249,57 @@ fn a_hook_inside_a_real_named_tmux_server_reports_that_server_and_pane() {
     let row = session(dir.path(), "real");
     assert_eq!(row["paneId"], pane.as_str());
     assert_eq!(row["paneServer"], format!("tmux:{label}"));
+}
+
+/// A `herdr` that lists one running session, as `herdr session list --json` does; returns the `PATH` that finds it.
+#[cfg(unix)]
+fn fake_herdr(directory: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = directory.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = bin.join("herdr");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n[ \"$*\" = 'session list --json' ] || exit 1\necho '{\"sessions\":[{\"default\":false,\"name\":\"work\",\"running\":true,\"socket_path\":\"/run/herdr/work.sock\"}]}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_lifecycle_hook_in_a_herdr_pane_reports_that_pane_and_a_tmux_pane_in_it_keeps_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = fake_herdr(dir.path());
+    let herdr = [
+        ("HERDR_ENV", "1"),
+        ("HERDR_PANE_ID", "w3V:p1"),
+        ("HERDR_SOCKET_PATH", "/run/herdr/work.sock"),
+        ("PATH", path.as_str()),
+        ("LAZYSH_TERMINAL", LAUNCHED),
+    ];
+    ingest(dir.path(), &herdr, &hook("herdr"));
+    let row = session(dir.path(), "herdr");
+    assert_eq!(row["paneId"], "herdr:work:w3V:p1");
+    assert!(row.get("paneServer").is_none(), "{row}");
+    // tmux started inside a Herdr pane names its own pane, as before.
+    let mut nested = herdr.to_vec();
+    nested.extend([("TMUX_PANE", "%7"), ("TMUX", "/tmp/tmux-1000/work,812,0")]);
+    ingest(dir.path(), &nested, &hook("nested"));
+    let row = session(dir.path(), "nested");
+    assert_eq!(
+        (&row["paneId"], &row["paneServer"]),
+        (&json!("%7"), &json!("tmux:work"))
+    );
+    // A terminal lazysh launched, with no multiplexer, still reports itself.
+    ingest(
+        dir.path(),
+        &[("LAZYSH_TERMINAL", LAUNCHED)],
+        &hook("launched"),
+    );
+    assert_eq!(
+        session(dir.path(), "launched")["paneId"],
+        format!("lazysh:{LAUNCHED}")
+    );
 }
