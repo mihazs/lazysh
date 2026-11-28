@@ -19,12 +19,6 @@ const translations = {
   agentsSections: ["Seções de agentes", "Secciones de agentes"],
   agentsJumpLive: ["Agentes ativos", "Agentes activos"],
   agentsJumpActivity: ["Atividade", "Actividad"],
-  agentsHostProcesses: ["Processos de agentes em execução", "Procesos de agentes en ejecución"],
-  agentsHostProcessesIdentity: ["Identificados pelo nome do executável. Um processo também pode ter uma sessão informada.", "Identificados por el nombre del ejecutable. Un proceso también puede tener una sesión notificada."],
-  agentsHostProcessesUnavailable: ["A descoberta de processos não está disponível neste host.", "La detección de procesos no está disponible en este host."],
-  agentsHostProcessesTruncated: ["Exibindo os primeiros 100 processos.", "Se muestran los primeros 100 procesos."],
-  agentsHostProcessesEmpty: ["Nenhum processo de agente compatível encontrado.", "No se encontraron procesos de agentes compatibles."],
-  agentsHostProcessId: ["Processo {{pid}}", "Proceso {{pid}}"],
   agentsReportedActivity: ["Atividade informada dos agentes", "Actividad informada de agentes"],
 
   appConnectionOptions: ['Opções de conexão', 'Opciones de conexión'],
