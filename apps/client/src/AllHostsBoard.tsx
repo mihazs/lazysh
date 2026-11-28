@@ -5,7 +5,8 @@ import {formatNumber, t, useUi} from './i18n/core';
 import {captureUiError, uiErrorText, type UiErrorCause} from './i18n/localError';
 import {captureAccess} from './access';
 import {isArchived, readArchives} from './agentArchive';
-import {parseReports, projectGroups, reportKey, reportedStateNames, states, type AgentSession, type AgentState} from './agentReports';
+import {readHostNames, withNames} from './agentSessionNames';
+import {parseReports, projectGroups, reportKey, reportLabel, reportedStateNames, states, type AgentSession, type AgentState} from './agentReports';
 import {ReportRowContent, SearchField, StateFilter} from './AgentReportParts';
 import {dispatchInboxOpen} from './notificationStore';
 import {pathBasename, useNow} from './relativeTime';
@@ -92,12 +93,13 @@ export default function AllHostsBoard({hosts, visible, onOpen}: {hosts: readonly
     return () => window.clearInterval(timer);
   }, [visible, signature]);
 
-  // Read once per host set: nothing here writes an archive, and the host boards own their changes.
+  // Read once per host set: nothing here writes an archive or a name, and the host boards own their changes.
   const archives = useMemo(() => readArchives(shown.map(host => host.hostKey)), [signature]);
-  const entries = shown.flatMap(host => results[host.sessionId]?.error === '' ? results[host.sessionId].rows.map(row => ({host, row})) : []);
+  const names = useMemo(() => readHostNames(shown.map(host => host.hostKey)), [signature]);
+  const entries = shown.flatMap(host => results[host.sessionId]?.error === '' ? withNames(results[host.sessionId].rows, names[host.hostKey] ?? {}).map(row => ({host, row})) : []);
   const listed = entries.filter(({host, row}) => !isArchived(archives[host.hostKey] ?? [], row));
   const term = query.trim().toLowerCase();
-  const matching = listed.filter(({host, row}) => [row.agent, row.project, row.summary, host.hostLabel].some(value => value.toLowerCase().includes(term)));
+  const matching = listed.filter(({host, row}) => [row.agent, row.project, row.summary, row.title ?? '', host.hostLabel].some(value => value.toLowerCase().includes(term)));
   const rows = matching.filter(({row}) => filter === 'all' || row.state === filter);
   const now = useNow(30000, visible && rows.length > 0);
   const failures = shown.filter(host => results[host.sessionId]?.error);
@@ -125,7 +127,7 @@ export default function AllHostsBoard({hosts, visible, onOpen}: {hosts: readonly
           <h5 className="agent-project-heading"><span className="agent-project-name" title={host.hostLabel}>{host.hostLabel}</span><span className="status-group-count">{formatNumber(own.length)}</span></h5>
           {projectGroups(own).map(([project, group]) => <section key={project} className="agent-project-group" aria-label={t('agentsProjectGroup', {project: pathBasename(project), host: host.hostLabel})}>
             <h6 className="agent-project-heading"><span className="agent-project-name" title={project}>{pathBasename(project)}</span><span className="status-group-count">{formatNumber(group.length)}</span></h6>
-            {group.map(row => <article className="agent-card" key={reportKey(row)}><button type="button" className="agent-report-row" aria-label={t('agentsOpenReport', {agent: row.agent, project: row.project, host: host.hostLabel})} onClick={() => { dispatchInboxOpen({sessionId: host.sessionId, paneId: row.paneId, state: row.state, agent: row.agent}, 'activity'); onOpen(); }}><ReportRowContent row={row} now={now}/></button></article>)}
+            {group.map(row => <article className="agent-card" key={reportKey(row)}><button type="button" className="agent-report-row" aria-label={t('agentsOpenReport', {agent: reportLabel(row), project: row.project, host: host.hostLabel})} onClick={() => { dispatchInboxOpen({sessionId: host.sessionId, paneId: row.paneId, state: row.state, agent: row.agent}, 'activity'); onOpen(); }}><ReportRowContent row={row} now={now}/></button></article>)}
           </section>)}
         </section>;
       })}

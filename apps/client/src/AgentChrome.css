@@ -99,3 +99,4 @@
 .workspace-agent-full > .workspace-header, .workspace-agent-full > .session-tabs, .workspace-agent-full .workspace-footer { display: none; }
 .workspace-agent-full .agent-view-header { padding-top: env(safe-area-inset-top); min-height: calc(44px + env(safe-area-inset-top)); }
 .workspace-agent-full .agent-view { padding-bottom: env(safe-area-inset-bottom); }
+.agent-view-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
