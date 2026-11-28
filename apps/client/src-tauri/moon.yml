@@ -3,7 +3,7 @@ layer: tool
 stack: frontend
 tags: [cargo]
 # Cargo [target.'cfg(..)'.dependencies] and [patch] edges that moon cannot infer.
-dependsOn: [agent, mosh-transport, portable-pty-vendor, deep-link-vendor, wry-vendor]
+dependsOn: [agent, mosh-transport, portable-pty-vendor, deep-link-vendor, wry-vendor, ssh-key-vendor]
 tasks:
   # Everything the native-linux job verifies for this crate and its Cargo dependencies.
   verify-native:

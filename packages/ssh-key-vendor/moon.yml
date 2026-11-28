@@ -1,0 +1,4 @@
+language: rust
+layer: library
+stack: systems
+tags: [vendor]
