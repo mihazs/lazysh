@@ -8,7 +8,18 @@ tasks:
   # Everything the native-linux job verifies for this crate and its Cargo dependencies.
   verify-native:
     command: noop
-    deps: ['~:test-rust', '~:lint', '~:format-check', '^:test-rust', '^:lint', '^:format-check']
+    deps: ['~:test-rust', '~:lint', '~:format-check', '~:test-feature-graph', '^:test-rust', '^:lint', '^:format-check']
+  # The default build still compiles Whisper and Parakeet; only `--no-default-features` leaves them out (cargo tree, no compile).
+  test-feature-graph:
+    type: test
+    command: 'bun test ../../../tests/cargo-feature-graph.test.ts'
+  # The lightweight development build (no Whisper, no Parakeet); never part of a gate. See docs/reference/build-performance.md.
+  check-rust-light:
+    type: test
+    command: 'cargo check --locked --no-default-features --lib'
+  test-rust-light:
+    type: test
+    command: 'cargo test --locked --no-default-features --lib'
   # Cargo-driven integration tests that need real tools or fixtures; run them on purpose.
   test-resume-policy:
     type: test

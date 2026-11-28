@@ -7,6 +7,12 @@ exclude = ["packages/ai-usagebar-vendor", "packages/portable-pty-vendor", "packa
 tauri-plugin-deep-link = { path = "packages/deep-link-vendor" }
 wry = { path = "packages/wry-vendor" }
 
+# Dev and test builds keep file and line for panics and backtraces but not variable-level debuginfo: the 12 GB debug target of
+# the app's tests shrinks to 7 GB and a clean build compiles faster (docs/reference/build-performance.md). A debugger session
+# that inspects locals opts back in with `CARGO_PROFILE_DEV_DEBUG=2`. Release profile and its artifacts are unchanged.
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.package]
 version = "1.104.2"
 license = "GPL-3.0-or-later"

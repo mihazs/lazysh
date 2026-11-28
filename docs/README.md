@@ -56,6 +56,7 @@ New to lazysh or to contributing? The [community guides](community/README.md) in
 | moon projects, tags, task ids and the `bun run` aliases | [moon task reference](reference/moon-tasks.md) |
 | Measured build-time options (mold, wild, Cranelift), moon task granularity and the Android build, with the decision for each | [Linkers, moon and Android build measurements](reference/linkers-moon-and-android-build-measurements.md) |
 | What the Rust dependency graph costs to build, measured, and which fixes were taken or rejected | [Rust build graph audit](reference/rust-build-graph-audit.md) |
+| Dev profile, the lightweight development build and the parallelism measurements | [Build performance](reference/build-performance.md) |
 | Per-platform reference-client parity status, evidence and gaps | [Parity matrix](reference/parity-matrix.md) |
 | Companion switches, defaults, revision conflicts and strict schema | [Companion settings](reference/companion-settings.md) |
 | Companion update, rollback and dry run: flags, JSON result, exit codes and what is verified | [Companion update](reference/companion-update.md) |

@@ -5,6 +5,12 @@ edition = "2021"
 license.workspace = true
 description = "Owned synchronous CPU Parakeet runtime with a sealed pinned model bundle"
 
+[features]
+default = ["native"]
+# The CMake/C++ sherpa-onnx build and its FFI. Without it the crate is empty: the lightweight development build of the app
+# (`--no-default-features`, see docs/reference/build-performance.md) links nothing from here.
+native = []
+
 [dependencies]
 lazysh-common = { path = "../common" }
 bzip2 = "0.6"
