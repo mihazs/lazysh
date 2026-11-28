@@ -164,6 +164,31 @@ mod tests {
     use super::linux::scan;
     use std::{fs, os::unix::fs::MetadataExt};
 
+    /// Scans until the stand-in Codex `pid` is listed. Right after a spawn returns, the child has switched to its new image
+    /// but the kernel has not yet published its `cmdline` (the vfork parent resumes first), so for a few tens of
+    /// microseconds an exec'd agent reads as an empty command and is not recognised; the next scan sees it. On a
+    /// deadline the failure says what the scans saw instead of only that the pid was missing.
+    fn scan_until_seen(pid: u32, uid: u32) {
+        let started = std::time::Instant::now();
+        loop {
+            let seen = scan(std::path::Path::new("/proc"), uid);
+            if seen
+                .processes
+                .iter()
+                .any(|process| process.pid == pid && process.agent == "Codex")
+            {
+                return;
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "after {:?} the scan of pid {pid} saw {seen:?}; /proc/{pid}/cmdline is {:?}",
+                started.elapsed(),
+                fs::read(format!("/proc/{pid}/cmdline")),
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn an_owned_agent_process_appears_and_disappears() {
         use std::{os::unix::fs::symlink, process::Command};
@@ -173,13 +198,10 @@ mod tests {
         let mut child = Command::new(binary).arg("60").spawn().unwrap();
         let pid = child.id();
         let uid = unsafe { libc::geteuid() };
-        let seen = scan(std::path::Path::new("/proc"), uid);
-        assert!(seen
-            .processes
-            .iter()
-            .any(|process| process.pid == pid && process.agent == "Codex"));
+        scan_until_seen(pid, uid);
         child.kill().unwrap();
         child.wait().unwrap();
+        // A reaped process has no /proc entry, so it must be absent at once, with no waiting.
         assert!(!scan(std::path::Path::new("/proc"), uid)
             .processes
             .iter()
