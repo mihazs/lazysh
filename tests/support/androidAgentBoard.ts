@@ -10,7 +10,7 @@ import {join} from 'node:path';
  * eight days back, past the seven-day retention, as if the report had been made then.
  */
 const boardEvents=[
-  ['%3',{hook_event_name:'UserPromptSubmit',session_id:'board-alpha',cwd:'/work/alpha',prompt:'PRIVATE-PROMPT'}],
+  ['%3',{hook_event_name:'UserPromptSubmit',session_id:'board-alpha',cwd:'/work/alpha',response:'PRIVATE-PROMPT'}],
   ['%3',{hook_event_name:'PreToolUse',session_id:'board-alpha',cwd:'/work/alpha',tool_name:'Bash',tool_input:{token:'SECRET-TOKEN'}}],
   ['%3',{hook_event_name:'Stop',session_id:'board-alpha',cwd:'/work/alpha'}],
   ['%4',{hook_event_name:'Notification',notification_type:'permission_prompt',session_id:'board-beta',cwd:'/work/beta'}],

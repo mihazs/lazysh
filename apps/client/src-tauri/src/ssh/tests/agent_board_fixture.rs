@@ -251,6 +251,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
         pane_id: None,
         pane_server: None,
         waiting: None,
+        title: None,
     };
     let recorded = chrono::Utc::now() - chrono::TimeDelta::days(8);
     let mut store = lazysh_agent::Store::open(&directory.join("state")).unwrap();
@@ -268,7 +269,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
 
     // Real hook events move one session through Working, Needs you and Done in one row.
     let alpha = |event: &str, extra: Value| {
-        let mut payload = json!({"hook_event_name":event,"session_id":"board-alpha","cwd":"/work/alpha","prompt":"PRIVATE-PROMPT","tool_input":{"token":"SECRET-TOKEN"}});
+        let mut payload = json!({"hook_event_name":event,"session_id":"board-alpha","cwd":"/work/alpha","response":"PRIVATE-PROMPT","tool_input":{"token":"SECRET-TOKEN"}});
         payload
             .as_object_mut()
             .unwrap()

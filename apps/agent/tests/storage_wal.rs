@@ -26,6 +26,7 @@ fn event() -> Event {
         summary: "Synthetic".into(),
         pane_id: None,
         pane_server: None,
+        title: None,
         waiting: None,
     }
 }

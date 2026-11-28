@@ -36,6 +36,8 @@ pub mod rejected_dialog;
 pub mod relay;
 pub mod reported_history;
 pub mod review;
+mod session_title;
+pub use session_title::Title;
 pub mod settings;
 pub mod skills;
 #[cfg(feature = "storage-observation")]
@@ -235,6 +237,9 @@ pub struct Event {
     pub pane_server: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Waiting>,
+    /// What the session is about, from its first prompt or the agent's own title; absent from a companion that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<Title>,
 }
 impl Event {
     fn validate(&self) -> Result<()> {
@@ -242,6 +247,9 @@ impl Event {
         text(&self.agent, 80)?;
         text(&self.project, 4096)?;
         text(&self.summary, 512)?;
+        if let Some(title) = &self.title {
+            text(title.as_str(), session_title::MAX)?;
+        }
         if let Some(pane) = &self.pane_id {
             text(pane, 256)?;
         }
@@ -322,7 +330,11 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
             if payload.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
                 return Err(Error::InvalidEvent);
             }
-            serde_json::from_value::<Event>(payload.clone()).map_err(|_| Error::InvalidEvent)?
+            let mut event = serde_json::from_value::<Event>(payload.clone())
+                .map_err(|_| Error::InvalidEvent)?;
+            // A title the agent reports is cleaned and bounded, never a reason to drop the report.
+            event.title = event.title.and_then(|title| Title::vendor(title.as_str()));
+            event
         }
         Agent::Opencode | Agent::Cursor | Agent::Amp | Agent::Cline | Agent::Grok => {
             match match agent {
@@ -484,6 +496,9 @@ pub fn normalize(payload: &Value, agent: Agent, pane: Option<&str>) -> Result<Op
                 pane_id: pane.map(str::to_owned),
                 pane_server: None,
                 waiting,
+                title: matches!(kind, "UserPromptSubmit" | "BeforeAgent")
+                    .then(|| session_title::from_payload(payload))
+                    .flatten(),
             }
         }
     };
@@ -684,6 +699,7 @@ fn apply_schema(
         EVICTED_WORKING_SCHEMA,
         kimi_code::SCHEMA,
         PANE_SERVER_SCHEMA,
+        session_title::SCHEMA,
     ] {
         transaction
             .execute_batch(schema)
@@ -815,6 +831,10 @@ fn write_event(
         ),
     }
     .map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
+    if let Some(title) = &event.title {
+        session_title::write(transaction, event, title)
+            .map_err(|e| storage_failure(StoragePhase::SessionWrite, e.into()))?;
+    }
     transaction.execute("INSERT INTO sessions VALUES (?1,?2,?3,?4,?5,?6,?7,1)
         ON CONFLICT(agent,session_id) DO UPDATE SET project=excluded.project,state=excluded.state,
         summary=excluded.summary,pane_id=excluded.pane_id,updated_at=excluded.updated_at,event_count=sessions.event_count+1",
@@ -851,7 +871,7 @@ fn apply_retention(transaction: &rusqlite::Transaction<'_>, now: f64) -> Result<
     transaction.execute("INSERT INTO evicted_working SELECT 1,MAX(CASE WHEN typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 THEN ?2 ELSE updated_at END) FROM sessions WHERE (typeof(state) != 'text' OR state NOT IN ('working','done','needs_attention') OR typeof(updated_at) NOT IN ('real','integer') OR updated_at NOT BETWEEN -62135596800 AND 253402300799 OR (state NOT IN ('done','needs_attention') AND updated_at > ?1)) AND rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100) HAVING COUNT(*) > 0 ON CONFLICT(id) DO UPDATE SET updated_at=MAX(updated_at,excluded.updated_at)",[now - ACTIVE_TURN_SECONDS as f64,now]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
     // Keep the board’s newest-100 ordering; the sentinel keeps evicted active evidence separately.
     transaction.execute("DELETE FROM sessions WHERE rowid NOT IN (SELECT rowid FROM sessions ORDER BY updated_at DESC,rowid DESC LIMIT 100)",[]).map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
-    for table in ["session_waiting", "session_pane_server"] {
+    for table in ["session_waiting", "session_pane_server", "session_title"] {
         transaction
             .execute(&format!("DELETE FROM {table} WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE sessions.agent={table}.agent AND sessions.session_id={table}.session_id)"), [])
             .map_err(|e| storage_failure(StoragePhase::RetentionCount, e.into()))?;
@@ -1068,7 +1088,7 @@ impl Store {
             "DELETE FROM sessions WHERE typeof(state) = 'text' AND state IN ('working','done','needs_attention') AND typeof(updated_at) IN ('real','integer') AND updated_at BETWEEN -62135596800 AND 253402300799 AND updated_at < ?1",
             [now.timestamp_micros() as f64 / 1_000_000.0 - RETENTION_SECONDS],
         )?;
-        let mut statement=self.connection.prepare("SELECT session_id,agent,project,state,summary,pane_id,updated_at,event_count,kind,since,server FROM sessions LEFT JOIN session_waiting USING (agent,session_id) LEFT JOIN session_pane_server USING (agent,session_id) ORDER BY updated_at DESC,sessions.rowid DESC LIMIT ?1")?;
+        let mut statement=self.connection.prepare("SELECT session_id,agent,project,state,summary,pane_id,updated_at,event_count,kind,since,server,title FROM sessions LEFT JOIN session_waiting USING (agent,session_id) LEFT JOIN session_pane_server USING (agent,session_id) LEFT JOIN session_title USING (agent,session_id) ORDER BY updated_at DESC,sessions.rowid DESC LIMIT ?1")?;
         let mut rows = statement.query([limit])?;
         let mut sessions = Vec::new();
         while let Some(row) = rows.next()? {
@@ -1104,6 +1124,7 @@ impl Store {
                     pane_id: row.get(5)?,
                     pane_server: row.get(10)?,
                     waiting,
+                    title: row.get::<_, Option<String>>(11)?.map(Title::from),
                 },
                 updated_at,
                 waiting_since,
@@ -1829,6 +1850,7 @@ mod tests {
                         pane_id: None,
                         pane_server: None,
                         waiting: None,
+                        title: None,
                     },
                     now + chrono::TimeDelta::microseconds(i),
                 )

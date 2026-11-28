@@ -16,6 +16,7 @@ fn event(state: SessionState) -> Event {
         summary: "private-prompt-tool-transcript".into(),
         pane_id: Some("private-pane".into()),
         pane_server: None,
+        title: None,
         waiting: None,
     }
 }

@@ -74,6 +74,7 @@ fn observe(payload: &Value, pane: Option<&str>) -> Result<Option<Observation>> {
             summary: "Approval requested".into(),
             pane_id: pane.map(str::to_owned),
             pane_server: None,
+            title: None,
             waiting: Some(Waiting::Approval),
         },
         request,
