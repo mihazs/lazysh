@@ -1068,6 +1068,8 @@ The ignored Linux case `contention_cases_keep_their_budget_beside_slow_shared_fl
 cargo test --locked --package lazysh-agent --test cli contention_cases_keep_their_budget_beside_slow_shared_flushes -- --ignored --exact
 ```
 
+Every test that opens a store or runs the companion holds the gate (shared), not only the bursts: an ungated cold `Store::open` is about seven durable flushes, about 0.33 s of the shared volume at 50 ms each, and it queues in front of a running sixteen-writer burst. With the real companion, a sixteen-writer burst took 2.1 s alone, 2.7 s beside two such opens, 3.5 s beside six and failed writers (`sqlite_code=5` after the three-second wait) beside twelve or more (issue [#2976](https://github.com/mihazs/lazysh/issues/2976)). When the meta case fails, its message now carries the inner failure details, not only the summary lines.
+
 The shim models a queue of flushes, not NTFS itself. Windows coverage is the companion candidate job, which runs the same gated cases natively.
 
 ## Antigravity explicit step records
