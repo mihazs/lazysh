@@ -1,4 +1,6 @@
+import {agentBoardContainer} from './agentBoardContainer';
 import {createRoot} from 'react-dom/client';
+import {useState} from 'react';
 import AgentPanel from '../../src/AgentPanel';
 import {accessSnapshot,acknowledgeAccessReady,applyAccessStatus} from '../../src/access';
 import {agentApproval,agentBoardRecord,agentBoardSession,companionSettings,notificationPolicy,inactiveBoardDisplay} from '../../src/test/agentBoardData';
@@ -30,8 +32,12 @@ export function mountAgentBoard(host?:{key:string;label:string}){
     if(command==='board_keep_awake_status')return inactiveBoardDisplay;
     throw new Error('Unexpected agent board fixture command');
   }}});
-  const container=document.createElement('div');container.className='agent-board-fixture';
-  Object.assign(container.style,{position:'fixed',inset:'0',overflow:'auto',zIndex:'100',background:'var(--theme-bg)',padding:'12px'});document.body.append(container);
-  const root=createRoot(container);root.render(<AgentPanel sessionId={agentBoardSession} hostKey={host?.key} hostLabel={host?.label}/>);
+  const container=agentBoardContainer();
+  const root=createRoot(container);
+  function Fixture() {
+    const [target,setTarget]=useState<HTMLDivElement|null>(null),[opened,setOpened]=useState(false);
+    return <><AgentPanel sessionId={agentBoardSession} hostKey={host?.key} hostLabel={host?.label} settingsTarget={target} settingsActive={opened} onOpenSetup={()=>setOpened(true)}/><div ref={setTarget} hidden={!opened}/></>;
+  }
+  root.render(<Fixture/>);
   return {calls,setReports(rows:typeof reports){reports=rows;},setUpdate(next?:typeof update){update=next;},setCompanionVersion(next?:string){companion=next;},complete(){decided=true;finish({schemaVersion:1,accepted:true});},dispose(){root.unmount();container.remove();}};
 }

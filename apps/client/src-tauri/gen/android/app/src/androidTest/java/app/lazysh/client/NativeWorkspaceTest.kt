@@ -2169,8 +2169,10 @@ class NativeWorkspaceTest {
     // Called only from the real, authenticated owned-SSH UI flow below. Native
     // Window reads observe the shipping plugin; no test fixture changes its flag.
     private fun verifyBoardKeepAwake(scenario: ActivityScenario<MainActivity>, herdr: JSONObject? = null) {
-        val checkbox = ".keep-awake-control input[type=checkbox]"
-        val active = "This board owns an acknowledged idle-inhibition request."
+        // The switch lives on Preferences > Agents, which the board's Setup button opens, and is in the document only while that page is open.
+        val setup = ".agent-panel:not([hidden]) > .tool-bar button[title=Setup]"
+        val checkbox = "[data-settings-page=agents]:not([hidden]) .keep-awake-control input[type=checkbox]"
+        val preferencesClosed = "!document.querySelector(\"button[aria-label='Close Preferences']\")"
         val off = "Keep awake is off."
         val paused = "Keep awake is paused until this board is visible and focused."
         var observedActivity: MainActivity? = null
@@ -2182,11 +2184,19 @@ class NativeWorkspaceTest {
             }
             return enabled
         }
-        fun awaitFlag(expected: Boolean, stage: String) {
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        fun awaitFlag(expected: Boolean, stage: String, seconds: Long = 5) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
             while (flag() != expected) {
                 assertTrue("Native display flag did not settle at $stage", System.nanoTime() < deadline)
                 Thread.sleep(25)
+            }
+        }
+        // The board asks again as soon as it is shown, so a flag that must stay off is watched for a moment.
+        fun flagStays(expected: Boolean, stage: String) {
+            val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+            while (System.nanoTime() < end) {
+                assertEquals("Native display flag changed at $stage", expected, flag())
+                Thread.sleep(50)
             }
         }
         fun navigation(name: String) {
@@ -2194,35 +2204,38 @@ class NativeWorkspaceTest {
                 "//nav[contains(@class,'workspace-navigation-modes')]/button[normalize-space(.)='$name']"))
                 .perform(webScrollIntoView()).perform(webClick())
         }
-        fun toggle() {
+        fun closeSettings() {
+            closePreferences()
+            awaitDocument(scenario, "agent settings closed", preferencesClosed)
+        }
+        // Runs `block` with Preferences > Agents open over the board, then closes it again.
+        fun inSettings(block: () -> Unit) {
             onWebView().withElement(findElement(Locator.CSS_SELECTOR,
                 ".agent-section-jumps:not([hidden]) button[aria-label='Reported agent activity']"))
                 .perform(webScrollIntoView()).perform(webClick())
-            val setup = ".agent-panel:not([hidden]) > .tool-bar button[aria-expanded]"
-            val expanded = evaluate(scenario, """
-                (()=>{const buttons=document.querySelectorAll(${JSONObject.quote(setup)});
-                  if(buttons.length!==1)return null;
-                  const state=buttons[0].getAttribute('aria-expanded');
-                  return state==='true'?true:state==='false'?false:null;})()
-            """)
-            assertTrue("One current board Setup disclosure is required", expanded == "true" || expanded == "false")
-            if (expanded == "false") {
-                val button = onWebView().withElement(findElement(Locator.CSS_SELECTOR, setup))
-                button.perform(webScrollIntoView())
-                assertEquals("Current board Setup must be hit-testable", "true", evaluate(scenario,
-                    workspaceButtonVisible(".agent-panel:not([hidden]) > .tool-bar", "Setup")))
-                button.perform(webClick())
-            }
+            val button = onWebView().withElement(findElement(Locator.CSS_SELECTOR, setup))
+            button.perform(webScrollIntoView())
+            assertEquals("Current board Setup must be hit-testable", "true", evaluate(scenario,
+                workspaceButtonVisible(".agent-panel:not([hidden]) > .tool-bar", "Setup")))
+            button.perform(webClick())
+            awaitDocument(scenario, "agent settings page", "Boolean(document.querySelector('$checkbox'))")
+            try { block() } finally { runCatching { closePreferences() } }
+            awaitDocument(scenario, "agent settings closed", preferencesClosed)
+        }
+        // Flips the switch in Preferences, lets `settle` observe the result there, and returns to the board.
+        fun toggle(settle: () -> Unit) = inSettings {
             val control = onWebView().withElement(findElement(Locator.CSS_SELECTOR, checkbox))
             control.perform(webScrollIntoView())
             assertEquals("Current keep-awake checkbox must be hit-testable", "true", evaluate(scenario,
                 workspaceElementVisible(checkbox, true)))
             control.perform(webClick())
+            settle()
         }
         fun status(text: String) = "Array.from(document.querySelectorAll('.keep-awake-control [role=status]')).some(x=>x.textContent===${JSONObject.quote(text)})"
-        fun awaitActive(stage: String) {
-            awaitDocument(scenario, stage, "document.querySelector('$checkbox:not(:disabled)')?.checked===true && ${status(active)}")
-            awaitFlag(true, stage)
+        // Preferences covers the board, so with the switch on it reads "paused" and holds no display flag until Preferences closes.
+        fun awaitCovered(stage: String) {
+            awaitDocument(scenario, stage, "document.querySelector('$checkbox:not(:disabled)')?.checked===true && ${status(paused)}")
+            awaitFlag(false, stage)
         }
         val liveHerdr = herdr?.let {
             val agent = it.getJSONObject("agent")
@@ -2255,10 +2268,10 @@ class NativeWorkspaceTest {
             awaitFlag(false, "connected terminal before opt-in")
             sessionView(scenario, "Agents")
             val boardDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120)
-            val keepAwakeReady = "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}"
-            awaitDocument(scenario, "board keep-awake off and owned live Herdr navigation",
-                "($keepAwakeReady) && ($liveHerdr)", deadline = boardDeadline, observe = { remaining ->
-                    evaluateIfPresent(scenario, "JSON.stringify({keepAwakeReady:Boolean($keepAwakeReady),liveHerdrReady:Boolean($liveHerdr)})", remaining) ?: "unavailable"
+            val setupReady = "Boolean(document.querySelector(${JSONObject.quote(setup)}))"
+            awaitDocument(scenario, "board Setup and owned live Herdr navigation",
+                "($setupReady) && ($liveHerdr)", deadline = boardDeadline, observe = { remaining ->
+                    evaluateIfPresent(scenario, "JSON.stringify({setupReady:$setupReady,liveHerdrReady:Boolean($liveHerdr)})", remaining) ?: "unavailable"
                 })
             if (herdr != null) {
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".herdr-navigation:not([hidden]) .herdr-navigation-row"))
@@ -2323,34 +2336,43 @@ class NativeWorkspaceTest {
             assertEquals("A fresh owned fixture must not have opted in", "true", evaluate(scenario,
                 "localStorage.getItem('lazysh.agent-board.keep-awake.v1')!=='true'"))
             awaitFlag(false, "board default off")
-            toggle()
-            awaitActive("explicit board opt-in")
-            toggle()
-            awaitDocument(scenario, "explicit board disable", status(off))
-            awaitFlag(false, "explicit board disable")
-            toggle()
-            awaitActive("second explicit board opt-in")
+            inSettings {
+                awaitDocument(scenario, "board keep-awake off",
+                    "Boolean(document.querySelector('$checkbox:not(:disabled)')) && document.querySelector('$checkbox').checked===false && ${status(off)}")
+            }
+            toggle { awaitCovered("explicit board opt-in under Preferences") }
+            awaitFlag(true, "explicit board opt-in", 30)
+            toggle {
+                awaitDocument(scenario, "explicit board disable", status(off))
+                awaitFlag(false, "explicit board disable")
+            }
+            flagStays(false, "board shown after the explicit disable")
+            toggle { awaitCovered("second explicit board opt-in under Preferences") }
+            awaitFlag(true, "second explicit board opt-in", 30)
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
             awaitFlag(false, "actual Activity background")
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-            awaitActive("actual Activity foreground")
+            awaitFlag(true, "actual Activity foreground", 30)
             navigation("Connections")
+            // Preferences edits the preference while the mounted board is hidden; the board itself stays released.
+            openPreferences(scenario)
+            preferencesCategory(scenario, "agents")
             awaitDocument(scenario, "persistent board mounted but hidden",
                 "document.querySelectorAll('.keep-awake-control').length===1 && " +
                     "document.querySelector('.workspace-navigation-agents')?.hidden===true && " +
-                    "document.querySelector('.keep-awake-control')?.hidden===true && " +
-                    "document.querySelector('$checkbox:disabled')?.checked===true && ${status(paused)}")
+                    "document.querySelector('$checkbox:not(:disabled)')?.checked===true && ${status(paused)}")
             assertEquals("Hidden board must preserve explicit opt-in", "true", evaluate(scenario,
                 "localStorage.getItem('lazysh.agent-board.keep-awake.v1')==='true'"))
             awaitFlag(false, "persistent board hidden")
+            closeSettings()
             navigation("Agents")
-            awaitDocument(scenario, "persistent board revealed",
-                "document.querySelector('.workspace-navigation-agents')?.hidden===false && " +
-                    "document.querySelector('.keep-awake-control')?.hidden===false")
-            awaitActive("persisted opt-in on board reveal")
-            toggle()
-            awaitDocument(scenario, "final explicit board off", status(off))
-            awaitFlag(false, "final explicit board off")
+            awaitDocument(scenario, "persistent board revealed", "document.querySelector('.workspace-navigation-agents')?.hidden===false")
+            awaitFlag(true, "persisted opt-in on board reveal", 30)
+            toggle {
+                awaitDocument(scenario, "final explicit board off", status(off))
+                awaitFlag(false, "final explicit board off")
+            }
+            flagStays(false, "board shown after the final explicit off")
             assertEquals("Owned board preference must finish off", "true", evaluate(scenario,
                 "localStorage.getItem('lazysh.agent-board.keep-awake.v1')==='false'"))
             println("lazysh board keep-awake: packaged opt-in/off, background/foreground and persistent board hide/reveal verified against actual Window flag")
@@ -2362,9 +2384,10 @@ class NativeWorkspaceTest {
             try {
                 if (scenario.state != androidx.lifecycle.Lifecycle.State.RESUMED)
                     scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-                if (evaluate(scenario, "document.querySelector('$checkbox')?.checked===true") == "true") {
+                runCatching { closePreferences() }
+                if (evaluate(scenario, "localStorage.getItem('lazysh.agent-board.keep-awake.v1')==='true'") == "true") {
                     navigation("Agents")
-                    toggle()
+                    toggle {}
                 }
                 navigation("Connections")
                 onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".sidebar-close")).perform(webClick())
@@ -5394,7 +5417,9 @@ class NativeWorkspaceTest {
             val originalProcess = android.os.Process.myPid()
             terminalProof(false)
             openReportedActivity()
-            val panel = ".workspace-navigation-agents:not([hidden]) > .agent-panel:not([hidden]) > .agent-configuration:not([hidden]) > details.companion-install:not([hidden])[data-install-outcome]"
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, ".agent-panel:not([hidden]) button[title='Setup']"))
+                .perform(webScrollIntoView()).perform(webClick())
+            val panel = "[data-settings-page=agents]:not([hidden]) .agent-configuration > details.companion-install:not([hidden])[data-install-outcome]"
             awaitDocument(scenario, "owned companion installation visible", present(panel))
             val phases = setOf("detecting", "checkingRelease", "downloading", "uploading", "verifying", "selfTesting", "installing", "checkingInstalled", "cleaningUp", "preflight")
             val failures = setOf("none", "companion_install_busy", "companion_install_unsupported", "companion_release_unavailable", "companion_newer_installed", "companion_installer_invalid", "companion_staging", "companion_install_timeout", "companion_host_network", "companion_host_tool_missing", "companion_verification_failed", "companion_self_test_failed", "companion_rolled_back", "companion_host_busy", "companion_unsafe_location", "disconnected", "app_locked", "ssh_error", "remote_command_failed", "invalid_output", "output_too_large", "timeout")
@@ -5482,6 +5507,7 @@ class NativeWorkspaceTest {
                     proof.getBoolean("textMatches") && proof.getBoolean("pathMatches") && proof.getBoolean("residueAbsent"))
                 assertEquals("Owned companion must keep the packaged native process", originalProcess, android.os.Process.myPid())
             }
+            onWebView().withElement(findElement(Locator.CSS_SELECTOR, "button[aria-label='Close Preferences']")).perform(webClick())
             returnToTerminal()
             terminalProof(true)
             println("lazysh packaged companion: actual Install and Update reused results, public version/path, original terminal shell and cleanup completed")

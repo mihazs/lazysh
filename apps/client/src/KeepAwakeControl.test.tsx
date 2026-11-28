@@ -415,3 +415,31 @@ it('observes another window disabling the preference while this board is hidden'
   await waitFor(()=>expect(toggle()).toHaveProperty('disabled',false));expect(toggle()).toHaveProperty('checked',false);
   expect(vi.mocked(invoke).mock.calls.some(([name])=>name==='board_keep_awake_acquire')).toBe(false);
 });
+it('edits the board preference in Preferences while the board is hidden and acquires only on return',async()=>{
+  const native=backend();const target=document.createElement('div');document.body.append(target);
+  try {
+    const view=render(<KeepAwakeControl sessionId="a" visible={false} settingsTarget={target} settingsActive/>);
+    await optIn();
+    expect(localStorage.getItem(boardAwakeKey)).toBe('true');
+    expect(native.active()).toBeUndefined();
+    view.rerender(<KeepAwakeControl sessionId="a" visible settingsTarget={target} settingsActive/>);
+    await waitFor(()=>expect(native.active()).toBeTruthy());
+    view.rerender(<KeepAwakeControl sessionId="a" visible settingsTarget={null} settingsActive/>);
+    expect(native.active()).toBeTruthy();
+    view.unmount();await waitFor(()=>expect(native.active()).toBeUndefined());
+  } finally {target.remove();}
+});
+it('says an off preference is off, not paused, in Preferences while the board is hidden',async()=>{
+  const native=backend();const target=document.createElement('div');document.body.append(target);
+  const status=()=>screen.getByRole('status').textContent;
+  try {
+    render(<KeepAwakeControl sessionId="a" visible={false} settingsTarget={target} settingsActive/>);
+    await waitFor(()=>expect(toggle()).toHaveProperty('disabled',false));
+    expect(status()).toBe('Keep awake is off.');
+    fireEvent.click(toggle());
+    await waitFor(()=>expect(status()).toBe('Keep awake is paused until this board is visible and focused.'));
+    fireEvent.click(toggle());
+    await waitFor(()=>expect(status()).toBe('Keep awake is off.'));
+    expect(native.active()).toBeUndefined();
+  } finally {target.remove();}
+});

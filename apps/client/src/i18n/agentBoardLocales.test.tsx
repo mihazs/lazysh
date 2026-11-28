@@ -17,16 +17,26 @@ afterEach(async()=>{cleanup();vi.useRealTimers();vi.restoreAllMocks();vi.clearAl
 async function languagesKeep(check:()=>void){const calls=[...vi.mocked(invoke).mock.calls];for(const locale of ['pt-BR','es','en']){await act(async()=>{await uiI18n.changeLanguage(locale);});check();expect(vi.mocked(invoke).mock.calls).toEqual(calls);}}
 it('preserves reported rows, unsaved switches and all child ownership while translating the complete board',async()=>{
   vi.mocked(invoke).mockImplementation(async command=>command==='agent_snapshot'?{schemaVersion:1,sessions:[agentBoardRecord]}:command==='agent_approvals'?{schemaVersion:1,requests:[]}:command==='get_companion_settings'?companionSettings:command==='get_host_browser_settings'?hostBrowserSettings:command==='get_notification_policy'?notificationPolicy:inactiveBoardDisplay);
-  const view=render(<AgentPanel sessionId={agentBoardSession}/>);
-  await screen.findByText(agentBoardRecord.summary);fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));const usage=await screen.findByLabelText(t('companionUsage'));fireEvent.click(usage);usage.focus();
-  const card=view.container.querySelector('.agent-card');const keepAwake=screen.getByRole('region',{name:t('keepAwakeRegion')});
-  await languagesKeep(()=>{
-    expect(screen.getByLabelText(t('companionUsage'))).toBe(usage);expect(usage).toHaveProperty('checked',false);expect(document.activeElement).toBe(usage);
-    expect(view.container.querySelector('.agent-card')).toBe(card);expect(screen.getByText(agentBoardRecord.summary)).toBeTruthy();expect(screen.getByRole('region',{name:t('agentsNeedsYou')})).toBeTruthy();
-    expect(screen.getByRole('region',{name:t('keepAwakeRegion')})).toBe(keepAwake);expect(card?.querySelector('time')?.getAttribute('datetime')).toBe(agentBoardRecord.updatedAt);
-  });
-  expect(vi.mocked(invoke).mock.calls.some(([command])=>command==='update_companion_settings')).toBe(false);
-  expect(view.container.textContent).not.toContain('c'.repeat(64));expect(view.container.querySelector('img,script')).toBeNull();
+  const settings=document.createElement('div');
+  document.body.append(settings);
+  const open=vi.fn();
+  const board=(active:boolean)=><AgentPanel sessionId={agentBoardSession} onOpenSetup={open} settingsTarget={active?settings:null} settingsActive={active}/>;
+  const view=render(board(false));
+  try {
+    await screen.findByText(agentBoardRecord.summary);
+    fireEvent.click(screen.getByRole('button',{name:t('agentsSetupAction')}));
+    expect(open).toHaveBeenCalledOnce();
+    view.rerender(board(true));
+    const usage=await screen.findByLabelText(t('companionUsage'));fireEvent.click(usage);usage.focus();
+    const card=view.container.querySelector('.agent-card');const keepAwake=screen.getByRole('region',{name:t('keepAwakeRegion')});
+    await languagesKeep(()=>{
+      expect(screen.getByLabelText(t('companionUsage'))).toBe(usage);expect(usage).toHaveProperty('checked',false);expect(document.activeElement).toBe(usage);
+      expect(view.container.querySelector('.agent-card')).toBe(card);expect(screen.getByText(agentBoardRecord.summary)).toBeTruthy();expect(screen.getByRole('region',{name:t('agentsNeedsYou')})).toBeTruthy();
+      expect(screen.getByRole('region',{name:t('keepAwakeRegion')})).toBe(keepAwake);expect(card?.querySelector('time')?.getAttribute('datetime')).toBe(agentBoardRecord.updatedAt);
+    });
+    expect(vi.mocked(invoke).mock.calls.some(([command])=>command==='update_companion_settings')).toBe(false);
+    expect(document.body.textContent).not.toContain('c'.repeat(64));expect(document.body.querySelector('img,script')).toBeNull();
+  } finally {view.unmount();settings.remove();}
 });
 it.each(['allow','deny'] as const)('binds one held %s decision to its original hash/session/pane',async decision=>{
   const request=agentApproval();let complete!:(value:unknown)=>void;
