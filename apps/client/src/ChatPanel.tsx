@@ -969,7 +969,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
       {preview && preview.source===previewSource && access.current() && previewRetained && <RecordedImagePreview key={preview.attempt} image={preview.image} access={access} onBusy={updatePreviewBusy} onClose={()=>setPreview(undefined)} />}
       {timeline && bound && <AgentStatusPanel messages={messages} work={work} onOpen={openChild} stop={agent === 'claude' ? stopper : undefined} />}
       {timeline && bound && <AgentPlanChip messages={flow} />}
-      {timeline && <AgentWorkingRow state={workState} label={liveState?.label} since={workSince} {...(turnRunning ? progress : {})} />}
+      {timeline && <AgentWorkingRow state={workState} label={liveState?.label} background={liveState?.background} since={workSince} {...(turnRunning ? progress : {})} />}
       {/* A conversation that can neither stage nor send has nothing to compose: no dead input box. */}
       {(!bound || allowStage || terminalInput) && <div className="chat-draft">
         <div className="chat-draft-header">
