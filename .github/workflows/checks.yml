@@ -1460,6 +1460,19 @@ jobs:
       - name: Exercise the client OSC 52 handler
         if: runner.os == 'Windows'
         run: bun run --cwd apps/client test:osc52
+      - name: Exercise the companion's real desktop lock reader and process table on this OS
+        shell: bash
+        run: |
+          # A renamed case must not turn this step into a zero-test pass.
+          if [ "$RUNNER_OS" = Windows ]; then
+            cases=(desktop_lock::windows::tests::the_real_session_query_names_this_process_session nested_agent::windows::tests::the_real_snapshot_reports_a_child_of_this_process_by_parent_id_and_image_name)
+          else
+            cases=(desktop_lock::macos::tests::the_real_window_server_dictionary_is_read_without_error nested_agent::tests::the_real_process_table_reports_this_process_parent_by_proc_and_by_ps)
+          fi
+          for case_name in "${cases[@]}"; do
+            cargo test --locked -p lazysh-agent --lib -- --list --exact "$case_name" | grep -Fx -- "$case_name: test"
+          done
+          cargo test --locked -p lazysh-agent --lib -- desktop_lock:: nested_agent::
       - name: Exercise the remote Herdr user-install admission script with Darwin stat
         if: runner.os == 'macOS'
         run: "cargo test --locked -p lazysh --lib herdr_path::"
