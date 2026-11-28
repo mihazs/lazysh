@@ -20,7 +20,7 @@ use super::{
     },
     tabs::{self, Tab, MAX_TABS},
     wire::{self, Client, Viewport},
-    FIREFOX_CANDIDATES,
+    FIREFOX_CANDIDATES, START_TIMEOUT,
 };
 use crate::{Error, Result};
 use base64::Engine;
@@ -38,7 +38,6 @@ use std::{
 
 /// The oldest Firefox this adapter was exercised on. An older one is named and refused, never guessed at.
 const MIN_VERSION: u32 = 159;
-const START_TIMEOUT: Duration = Duration::from_secs(30);
 const PORT_FILE: &str = "WebDriverBiDiServer.json";
 /// Screenshot requests in flight at once: enough that the round trip does not pace the browser.
 const PIPELINE: usize = 2;
@@ -223,6 +222,7 @@ fn wait_for_port(
     browser: &mut Running,
     inbox: &mpsc::Receiver<Event>,
     backlog: &mut VecDeque<Event>,
+    detail: &mut Option<String>,
 ) -> Result<u16> {
     let started = Instant::now();
     loop {
@@ -241,6 +241,10 @@ fn wait_for_port(
             return Err(Error::Browser("BrowserExited"));
         }
         if started.elapsed() > START_TIMEOUT {
+            *detail = Some(format!(
+                "no {PORT_FILE} after {} s",
+                started.elapsed().as_secs()
+            ));
             return Err(Error::Browser("BrowserStartTimeout"));
         }
     }
@@ -282,7 +286,7 @@ fn launch<'a>(
     own_process_group(&mut command);
     die_with_launcher(&mut command);
     let mut browser = Running(command.spawn()?);
-    let port = wait_for_port(profile.path(), &mut browser, inbox, backlog)?;
+    let port = wait_for_port(profile.path(), &mut browser, inbox, backlog, detail)?;
     let (reader, writer) = bidi::connect(port, "/session")
         .map_err(|_| Error::Browser("BrowserEndpointUnreachable"))?;
     let live = Arc::new(AtomicBool::new(true));

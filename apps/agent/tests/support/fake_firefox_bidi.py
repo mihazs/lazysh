@@ -199,6 +199,8 @@ server = socket.socket()
 server.bind(("127.0.0.1", 0))
 server.listen(8)
 port = server.getsockname()[1]
+if mode == "slow-start":
+    time.sleep(35)  # longer than the 30 s the relay once allowed, as a cold browser on a loaded CI runner can take
 with open(os.path.join(profile, "WebDriverBiDiServer.json"), "w") as f:
     json.dump({"ws_host": "127.0.0.1", "ws_port": port}, f)
 while True:
