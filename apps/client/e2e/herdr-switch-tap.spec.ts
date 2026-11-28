@@ -1,11 +1,13 @@
 import {expect,type Page} from '@playwright/test';
 import {test} from './fixtures/terminalBackend';
+import {requestedBackend} from '../src/e2eTerminalBackend';
 import {openHistoryWorkspace} from './fixtures/terminalHistory';
 import {onAdapter,terminalCell,terminalDrawn,terminalSize} from './fixtures/terminalState';
 import {forgetKeyboardRequests,keyboardRequests,trackKeyboardRequests} from './fixtures/keyboardRequests';
 import type {mountGestureHarness} from './fixtures/GestureHarness';
-declare global {interface Window {gestures:ReturnType<typeof mountGestureHarness>}}
+declare global {interface Window {gestures:Awaited<ReturnType<typeof mountGestureHarness>>}}
 
+test.use({syntheticBackend:true});
 test.skip(({isMobile})=>!isMobile,'Touch screens raise a soft keyboard.');
 test.afterEach(async({page})=>{await page.evaluate(()=>window.gestures?.dispose());});
 
@@ -21,16 +23,25 @@ const frame=(page:Page,screen:'terminal'|'switcher'|'plain')=>onAdapter(page,asy
 },screen);
 const focused=(page:Page)=>onAdapter(page,adapter=>document.activeElement===adapter.inputElement());
 const columns=async(page:Page)=>(await terminalSize(page)).columns;
-const writes=(page:Page)=>page.evaluate(()=>window.gestures.steps.flat().join(''));
+async function mouseReport(page:Page,column:number,row:number) {
+  if (requestedBackend()==='native') {
+    expect(await page.evaluate(()=>window.gestures.core!.mice)).toEqual(
+      ['press','release'].map(action=>({type:'mouse',action,button:'left',x:column,y:row,mods:{shift:false,ctrl:false,alt:false,meta:false}})),
+    );
+  } else {
+    const bytes=await page.evaluate(()=>window.gestures.steps.flat().join(''));
+    expect(bytes).toContain(`\x1b[<0;${column+1};${row+1}M\x1b[<0;${column+1};${row+1}m`);
+  }
+}
 
 async function mount(page:Page) {
   await page.setViewportSize({width:415,height:900});
   await trackKeyboardRequests(page);
   await openHistoryWorkspace(page);
-  await page.evaluate(async()=>{
+  await page.evaluate(async engine=>{
     const fixture=await import('/e2e/fixtures/GestureHarness.tsx');
-    window.gestures=fixture.mountGestureHarness('herdr');
-  });
+    window.gestures=await fixture.mountGestureHarness('herdr',engine);
+  },requestedBackend()??'xterm');
   await terminalDrawn(page);
 }
 async function tap(page:Page,column:number,row:number) {
@@ -49,7 +60,7 @@ test("a tap on Herdr's switch button reaches Herdr without raising the soft keyb
   expect(await keyboardRequests(page)).toEqual([]);
   expect(await focused(page)).toBe(false);
   // Herdr still got the click: an SGR press and release over the button.
-  expect(await writes(page)).toMatch(new RegExp(`\\x1b\\[<0;${cols-3};2M\\x1b\\[<0;${cols-3};2m`));
+  await mouseReport(page,cols-4,1);
   await page.screenshot({path:testInfo.outputPath('switch-button.png')});
 });
 
@@ -58,7 +69,7 @@ test("a tap in Herdr's switcher reaches Herdr without raising the soft keyboard"
   await frame(page,'switcher');
   await tap(page,6,5);
   expect(await keyboardRequests(page)).toEqual([]);
-  expect(await writes(page)).toMatch(/\x1b\[<0;7;6M\x1b\[<0;7;6m/);
+  await mouseReport(page,6,5);
   await page.screenshot({path:testInfo.outputPath('switcher.png')});
 });
 

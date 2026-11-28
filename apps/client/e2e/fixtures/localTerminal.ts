@@ -1,4 +1,5 @@
 import {expect,type Page,type TestInfo} from '@playwright/test';
+import {installStdioBrowserTerminal} from './stdioBrowserTerminal';
 import {terminalDrawn} from './terminalState';
 
 declare global {interface Window {simpleShortcutCopies:string[];simpleShortcutWrites:string[];simpleShortcutSteps:string[][];simpleShortcutResizes:{cols:number;rows:number}[];simpleShortcutTouchMoves:number;simpleShortcutPointerMoves:number;simpleShortcutTouchTarget:Element|null;simpleShortcutOutput:(text:string)=>void;simpleShortcutOpened:string[];simpleShortcutInput?:(data:string)=>void;simpleShortcutWriteFailure?:'backpressure'|'input_closed';simpleShortcutPrivateKeyboard:boolean[];simpleShortcutKeyboard?:(action:string)=>boolean|null;simpleShortcutFiles?:Record<string,string>;simpleShortcutHostCalls:string[]}}
@@ -8,13 +9,15 @@ export async function installLocalTerminal(page:Page) {
   await page.addInitScript(()=>{
     window.simpleShortcutWrites=[];window.simpleShortcutPrivateKeyboard=[];window.simpleShortcutSteps=[];window.simpleShortcutResizes=[];window.simpleShortcutOpened=[];window.simpleShortcutHostCalls=[];
     Object.defineProperty(window,'isTauri',{value:true});
-    Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args:Record<string,unknown>={})=>{
+    window.nativeFixtureInvoke=async(command,args={})=>{
       if (command==='desktop_launch_read') return {directoryReceipt:null,hostReceipt:null,notice:null};
       if (command==='ui_locale_status') return {nativeAuthority:false};
       if (command==='app_lock_status') return {initialized:true,supported:false,reason:'Synthetic shortcut access fixture.',enabled:false,locked:false,generation:'0'};
       if (command==='app_lock_ready' || command==='adopt_session') return;
       if (command==='list_hosts') return [];
       if (command==='clipboard_is_android') return false;
+      // No screen reader: otherwise the terminal selection requires an accessible backend and a native terminal falls back to xterm.js.
+      if (command==='screen_reader_active') return false;
       // Android's IME controller: a spec that installs `simpleShortcutKeyboard` plays the native side, otherwise there is none (null).
       if (command==='soft_keyboard') return window.simpleShortcutKeyboard?.(args.action as string) ?? null;
       // Host files: `simpleShortcutFiles` maps an absolute path to its text; any other path does not exist.
@@ -51,7 +54,8 @@ export async function installLocalTerminal(page:Page) {
       if (['local_ack','local_disconnect'].includes(command))return;
       if (command.startsWith('plugin:event|'))return 1;
       throw new Error(`Unexpected shortcut fixture command: ${command}`);
-    }}});
+    };
+    Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:(command:string,args:Record<string,unknown>={})=>window.nativeFixtureInvoke(command,args)}});
   });
 }
 
@@ -63,12 +67,22 @@ export async function openLocalTerminal(page:Page,testInfo:TestInfo) {
 }
 
 /** Opens that terminal with the browser's real clipboard, seeded with `BEFORE`. */
-export async function openClipboardTerminal(page:Page) {
+export async function openClipboardTerminal(page:Page,nativeBinary?:string) {
   await installLocalTerminal(page);
   await page.goto('/');
   await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(page.url()).origin});
   await page.evaluate(()=>navigator.clipboard.writeText('BEFORE'));
-  await connectLocalTerminal(page);
+  if(nativeBinary) {
+    await installStdioBrowserTerminal(page,nativeBinary);
+    await page.evaluate(async()=>{
+      const fixture=await import('/e2e/fixtures/NativeSurfaceHarness.tsx');
+      const {stdioPageCore}=await import('/e2e/fixtures/stdioPageCore.ts');
+      const bridge=stdioPageCore(text=>window.simpleShortcutWrites.push(text));
+      window.nativeSurface=await fixture.mountNativeSurfaceHarness({engine:'native',bridge});
+      window.simpleShortcutOutput=window.nativeSurface.output;
+    });
+    await terminalDrawn(page);
+  } else await connectLocalTerminal(page);
 }
 
 /** Installs that terminal, opens the app and starts the local terminal (through the hosts drawer on a phone). */

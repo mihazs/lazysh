@@ -8,7 +8,7 @@ Layers and where they run:
 | --- | --- | --- |
 | Vitest over the stand-in core (`createHeadlessCore`) | `client` (`client:test`) | The first choice: the real adapter and pane, no device. |
 | Vitest over the real core (`nativeTerminalAdapter.realCore.test.ts`) | `herdr-native` | The runtime crate's stdio harness. |
-| Playwright (`e2e/terminal-native-*.spec.ts`, `terminal-engine-*.spec.ts`) | `client` (`client:test-e2e`) | A stand-in core in a browser; the `LAZYSH_E2E_TERMINAL_BACKEND=native` arm of the six xterm specs is skipped there ([#2123](https://github.com/mihazs/lazysh/issues/2123)). |
+| Playwright (`e2e/terminal-native-*.spec.ts`, `terminal-engine-*.spec.ts`) | `client` (`client:test-e2e`) | The browser registry spec exercises output, IME, clipboard consent and touch selection with a stand-in core. Herdr tap and selection tests use both backends. Clipboard and link tests use the real Rust core in `herdr-native`. The App Mosh fixture exercises early output and remote resize on both backends. Native browser input exercises repeated CJK and emoji, hardware input, canceled composition and a SwiftKey-shaped Chromium replay of predictive edits, Backspace and Enter. The xterm arm covers WebView edit history and observer behavior ([#2123](https://github.com/mihazs/lazysh/issues/2123)). |
 | Rust renderer and surface host tests | `native-terminal-bridge` | A software GPU; not a required check. |
 | Instrumentation, a placed native session | `native-android-terminal-session` | Dedicated job, new Android UI cases go here. |
 | Instrumentation, the core in the app | `native-android-terminal-core` | `NativeTerminalCoreTest`. |
@@ -32,6 +32,7 @@ Layers and where they run:
 | --- | --- | --- | --- |
 | Adapter contract: bytes in order, modes, scroll, selection, search, OSC 7 and OSC 52 events, active switching, disposal | `terminalAdapter.contract.ts` run by `terminalBackends.contract.test.ts` | Vitest | `client` |
 | The same contract over the real core | `nativeTerminalAdapter.realCore.test.ts` | Vitest over the real core | `herdr-native` |
+| Mosh keyboard viewport | `e2e/mosh-keyboard.spec.ts` exercises the actual workspace with canonical frames from a synthetic host on both browser engines. It checks remote grid intents, prompt rows above the toolbar and one typed answer during viewport shrink. Native uses the adapter grid and cell bounds, while xterm.js measures DOM rows. | Playwright | `client` |
 | Adapter semantics: window of rows, paste bracketing, wheel, search, canonical Mosh resize, input order | `nativeTerminalAdapter.test.ts` | Vitest | `client` |
 | Renderer look (theme, font, cursor, bold) sent once per change | `nativeTerminalAdapter.look.test.ts`; `panes.rs` host tests | Vitest; Rust | `client`; `native-terminal-bridge` |
 | Saved toolbar actions | `TerminalPane.test.tsx` runs a saved chord and a held alternate over a native session. It checks the exact transport bytes, suppresses the duplicate menu and click events, and inserts the edited snippet through the native adapter without submitting it. | Vitest | `client` |

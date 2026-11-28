@@ -148,13 +148,14 @@ jobs:
         id: playwright-chromium
         run: bunx playwright install --with-deps chromium
         working-directory: apps/client
-      # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six named terminal specs ask
-      # for xterm.js through the developer override, and a terminal of another backend fails them.
+      # The xterm arm of the terminal backend matrix (apps/client/e2e/fixtures/terminalBackend.ts): the six legacy specs
+      # and the synthetic browser spec ask for xterm.js, and a terminal of another backend fails them.
       - if: steps.e2e.outputs.client == 'true'
         run: bunx moon run client:test-e2e
         env:
           LAZYSH_E2E_TERMINAL_BACKEND: xterm
-      # The native arm: skipped, with the backend registry's reason in the log, until the native backend is registered; then it runs.
+      # The native arm checks Herdr taps, selection, App Mosh, DOM IME and SwiftKey-shaped input through the browser registry.
+      # The clipboard spec uses the real core in herdr-native. Backend-specific cases retain their own oracles (#2123).
       - if: steps.e2e.outputs.client == 'true'
         run: bun run test:e2e:terminal
         working-directory: apps/client
@@ -380,6 +381,14 @@ jobs:
           bun run --cwd apps/client vitest run src/nativeTerminalAdapter.realCore.test.ts --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/real-core.json"
           # The file skips itself without the harness: a run that skipped is not a pass.
           jq -e '.numPassedTests > 0 and .numPendingTests == 0 and .numFailedTests == 0' "$RUNNER_TEMP/real-core.json"
+
+      - *playwright-chromium
+      - name: Run browser clipboard and link tests over the real terminal core
+        working-directory: apps/client
+        env:
+          LAZYSH_CONTROL_STDIO: ${{ runner.temp }}/lazysh-herdr-native/target/debug/examples/control_stdio
+          LAZYSH_E2E_TERMINAL_BACKEND: native
+        run: bunx playwright test e2e/terminal-clipboard.spec.ts --workers 2
 
       # The wgpu renderer has its own lock file and nested workspace. The runner has no GPU: its tests run
       # on Mesa's software Vulkan (lavapipe) or software OpenGL, which the test policy accepts and the
