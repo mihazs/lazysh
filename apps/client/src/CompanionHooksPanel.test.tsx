@@ -434,3 +434,24 @@ it('reports a missing Kimi Code config.toml only for the kimi-code provider and 
   expect(await screen.findByText(/has no config\.toml/)).toBeTruthy();
   expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();
 });
+
+it.each([
+  ['HooksForeignRecord',/was written for another folder.*Delete the \.lazysh-hooks-\*\.json file/],
+  ['HooksUnsafeBinary',/companion executable cannot be bound safely.*Update the companion/],
+  ['HooksStalePlan',/changed after it was inspected/],
+  ['HooksSomethingNew',/Hook setup could not finish/],
+] as const)('shows what to do for the companion failure %s and never the internal kind',async(kind,text)=>{
+  hooks.mockRejectedValue({kind:'remote_command_failed',message:`lazysh-agent: ${kind}: operation failed`});
+  render(<CompanionHooksPanel sessionId="owned-failure" visible/>);selectProfile('claude');
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  const alert=await screen.findByRole('alert');
+  expect(alert.textContent).toMatch(text);
+  expect(alert.textContent).not.toMatch(/Hooks[A-Z]|operation failed/);
+});
+it('reports a status the companion refuses because of another folder record without an install plan',async()=>{
+  hooks.mockResolvedValue({schemaVersion:1,supported:false,reason:'HooksForeignRecord',reporting:'notChecked',trust:'notChecked'});
+  render(<CompanionHooksPanel sessionId="owned-record" visible/>);selectProfile('claude');
+  fireEvent.click(screen.getByRole('button',{name:'Inspect setup'}));
+  expect(await screen.findByText(/was written for another folder/)).toBeTruthy();
+  expect(screen.queryByRole('button',{name:'Install or update hooks'})).toBeNull();
+});
