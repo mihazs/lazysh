@@ -14,9 +14,9 @@ pub(super) fn environment(directory: &Path) -> String {
     format!("SetEnv PATH={}:/usr/bin:/bin HOME={} XDG_CONFIG_HOME={} XDG_DATA_HOME={} LAZYSH_STATE_DIR={} ZDOTDIR={} BASH_ENV=/dev/null ENV=/dev/null\n",directory.join("bin").display(),directory.display(),directory.join(".config").display(),directory.join("data").display(),directory.join("state").display(),directory.display())
 }
 
-type App = tauri::App<tauri::test::MockRuntime>;
+pub(super) type App = tauri::App<tauri::test::MockRuntime>;
 
-async fn board(app: &App, id: &str) -> Vec<Value> {
+pub(super) async fn board(app: &App, id: &str) -> Vec<Value> {
     let snapshot = agent_snapshot(access_lease(), app.state(), app.state(), id.into())
         .await
         .unwrap()
@@ -35,7 +35,7 @@ fn row<'a>(rows: &'a [Value], session: &str) -> &'a Value {
     matching[0]
 }
 
-async fn approvals(app: &App, id: &str) -> Vec<Value> {
+pub(super) async fn approvals(app: &App, id: &str) -> Vec<Value> {
     let listed =
         crate::approvals::agent_approvals(app.state(), app.state(), id.into(), access_lease())
             .await
@@ -46,7 +46,7 @@ async fn approvals(app: &App, id: &str) -> Vec<Value> {
     listed["requests"].as_array().unwrap().clone()
 }
 
-async fn decide(
+pub(super) async fn decide(
     app: &App,
     id: &str,
     request: &Value,
@@ -84,9 +84,18 @@ async fn decide_with(
     .map_err(|error| error.into_inner().unwrap().kind().to_owned())
 }
 
+/// A hash that differs from `hash` in its first character, as a stale request's would.
+pub(super) fn altered(hash: &str) -> String {
+    format!(
+        "{}{}",
+        if hash.starts_with('0') { "1" } else { "0" },
+        &hash[1..]
+    )
+}
+
 /// The companion refuses a stale or mismatched identity by exiting non-zero; a
 /// transport or lock failure would surface as a different kind.
-async fn refused(
+pub(super) async fn refused(
     app: &App,
     id: &str,
     request: &Value,
@@ -123,8 +132,28 @@ struct WaitingHook {
     pid: PathBuf,
 }
 
-/// Starts a blocking Claude PermissionRequest hook on the host. Its process ID is
-/// recorded so the test can end it the way Claude does after an answer at the host.
+/// The shell text of a blocking Claude PermissionRequest hook: its process ID is recorded so a test can end it the
+/// way Claude does after an answer at the host, and `redirect` places its output.
+pub(super) fn hook_command(
+    directory: &Path,
+    companion: &Path,
+    name: &str,
+    payload: &Value,
+    redirect: &str,
+) -> (String, PathBuf) {
+    let input = directory.join(format!("{name}.json"));
+    fs::write(&input, payload.to_string()).unwrap();
+    let pid = directory.join(format!("{name}.pid"));
+    let command = format!(
+        "echo $$ > {}; exec {} approval-request --agent claude --timeout-seconds 90 < {} {redirect}",
+        quote(pid.to_str().unwrap()),
+        quote(companion.to_str().unwrap()),
+        quote(input.to_str().unwrap())
+    );
+    (command, pid)
+}
+
+/// Starts a blocking Claude PermissionRequest hook on the host, as a tmux pane would run it.
 fn waiting_hook(
     session: Arc<Session>,
     directory: &Path,
@@ -133,16 +162,8 @@ fn waiting_hook(
     pane: &str,
     payload: Value,
 ) -> WaitingHook {
-    let input = directory.join(format!("{name}.json"));
-    fs::write(&input, payload.to_string()).unwrap();
-    let pid = directory.join(format!("{name}.pid"));
-    let command = format!(
-        "TMUX_PANE={}; export TMUX_PANE; echo $$ > {}; exec {} approval-request --agent claude --timeout-seconds 90 < {}",
-        quote(pane),
-        quote(pid.to_str().unwrap()),
-        quote(companion.to_str().unwrap()),
-        quote(input.to_str().unwrap())
-    );
+    let (command, pid) = hook_command(directory, companion, name, &payload, "");
+    let command = format!("TMUX_PANE={}; export TMUX_PANE; {command}", quote(pane));
     let task = tokio::spawn(async move {
         exec_bounded(
             &session,
@@ -157,7 +178,7 @@ fn waiting_hook(
     WaitingHook { task, pid }
 }
 
-async fn pending(app: &App, id: &str, session: &str) -> Value {
+pub(super) async fn pending(app: &App, id: &str, session: &str) -> Value {
     timeout(Duration::from_secs(20), async {
         loop {
             if let Some(request) = approvals(app, id)
@@ -183,23 +204,33 @@ async fn hook_decision(hook: WaitingHook) -> Value {
     serde_json::from_str::<Value>(&output).unwrap()["hookSpecificOutput"]["decision"].clone()
 }
 
+/// The client installs the current-source companion on the host; its path there. Boxed: the install future is large,
+/// and a debug test thread's stack holds it once more for every caller that awaits it inline.
+pub(super) fn install_companion(
+    session: &Arc<Session>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = PathBuf> + '_>> {
+    Box::pin(async move {
+        let binary = super::companion_fixture::owned_agent_binary();
+        let installed = serde_json::to_value(
+            crate::companion::Owned::new(&binary, env!("CARGO_PKG_VERSION"))
+                .install(
+                    session.clone(),
+                    &access_lease(),
+                    crate::companion::install::Route::Device,
+                )
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(installed["status"], "installed");
+        PathBuf::from(installed["path"].as_str().unwrap())
+    })
+}
+
 pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
-    let binary = super::companion_fixture::owned_agent_binary();
     let session = app.state::<AppState>().session(id).await.unwrap();
     let lease = access_lease();
-    let installed = serde_json::to_value(
-        crate::companion::Owned::new(&binary, env!("CARGO_PKG_VERSION"))
-            .install(
-                session.clone(),
-                &lease,
-                crate::companion::install::Route::Device,
-            )
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(installed["status"], "installed");
-    let companion = PathBuf::from(installed["path"].as_str().unwrap());
+    let companion = install_companion(&session).await;
     assert!(
         board(app, id).await.is_empty(),
         "a fresh host has no reports"
@@ -343,12 +374,7 @@ pub(super) async fn verify(app: &App, id: &str, directory: &Path) {
     assert_eq!(waiting["state"], "needs_attention");
     assert_eq!(waiting["summary"], "Bash");
     let hash = listed["expectedHash"].as_str().unwrap();
-    let altered = format!(
-        "{}{}",
-        if hash.starts_with('0') { "1" } else { "0" },
-        &hash[1..]
-    );
-    refused(app, id, &listed, &altered, Some("%7"), "allow").await;
+    refused(app, id, &listed, &altered(hash), Some("%7"), "allow").await;
     refused(app, id, &listed, hash, Some("%8"), "allow").await;
     refused(app, id, &listed, hash, None, "allow").await;
     assert_eq!(
