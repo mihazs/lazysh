@@ -27,7 +27,7 @@ export function reconnectDelay(attempt: number, random: () => number = Math.rand
 const finalKinds = new Set([
   'authentication_failed', 'credentials_required', 'host_key_changed', 'unknown_host_key',
   'identity_invalid', 'identity_passphrase_required', 'identity_unsupported', 'forwarding_requires_key',
-  'credentials_unavailable', 'vault_locked', 'storage', 'host_not_found', 'cancelled',
+  'credentials_unavailable', 'vault_locked', 'storage', 'host_not_found', 'cancelled', 'multiplexer_session_missing',
 ]);
 function field(error: unknown, name: 'kind' | 'message') {
   const value = error && typeof error === 'object' && name in error ? (error as Record<string, unknown>)[name] : undefined;

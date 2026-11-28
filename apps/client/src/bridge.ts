@@ -139,7 +139,7 @@ export const api = {
   inspectAuthUrl: (url: string) => invoke<AuthUrlInspection>("inspect_auth_url", { url }),
   /** Opens a sign-in page on this device once the tunnel its redirect needs listens; a phone uses an in-app tab unless told otherwise. */
   openAuthUrl: (url: string, browser?: 'inApp' | 'system') => invoke<AuthUrlOutcome>("open_auth_url", { url, browser }),
-  attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>,onEvent:(event:SshEvent)=>void) =>
+  attachDefaultMultiplexer: (sessionId:string,target:NonNullable<Host['defaultMultiplexer']>&{tmuxServer?:string},onEvent:(event:SshEvent)=>void) =>
     createRemoteSession('attach_multiplexer',{sessionId,...target,createIfMissing:true,cols:100,rows:30},onEvent),
   /** `reattach` (reconnect and restore) never creates the session: Zellij fails when it is gone instead of starting an empty one. */
   attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void, reattach=false, tmuxServer?: string) => {

@@ -4052,11 +4052,21 @@ pub async fn attach_multiplexer(
                     return Err(SshError::new("invalid_target", "Only Herdr has a managed backend"));
                 }
             }
-            if create_if_missing.unwrap_or(false) {
+            let create = create_if_missing.unwrap_or(false);
+            // A saved rmux session lives in its daemon's memory: check it before attaching so a vanished one is reported
+            // as such (restore then offers to recreate it) instead of opening a terminal that exits at once.
+            if create || matches!(kind, crate::multiplexer::MultiplexerKind::Rmux) {
                 check_size(cols, rows)?;
-                if tmux_server.is_some() {return Err(SshError::new("invalid_tmux_server","Default entry uses the default multiplexer server"));}
-                let parent=state.session(&session_id).await?;
-                crate::multiplexer::prepare_default_entry(&parent,&lease,kind,&name).await?;
+                let parent = state.session(&session_id).await?;
+                crate::multiplexer::Entry {
+                    kind,
+                    name: name.clone(),
+                    tmux_server: tmux_server.clone(),
+                    create_if_missing: create,
+                    backend: None,
+                }
+                .prepare(&parent, &lease)
+                .await?;
             }
             // Both public tmux attachment entry points must establish the same
             // native display binding; frontend routing is not the authority.
