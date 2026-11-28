@@ -1618,10 +1618,14 @@ class NativeTerminalSessionTest {
     private fun NativeSessionDriver.unicodeInTheirCells(id: String) {
         run {
             evidence.put("systemFonts", shell("ls /system/fonts").decodeToString().lines().filter { it.isNotBlank() }.take(200).joinToString(" "))
+            // The SSH fixture runs POSIX sh, including dash, whose printf only supports octal byte escapes.
             typeIntoTheSurface(
-                "printf '\\ncjk:\\xe6\\x97\\xa5\\xe6\\x9c\\xac\\xe8\\xaa\\x9e|\\nemo:\\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x9a\\x80|\\ncmb:e\\xcc\\x81a\\xcc\\x88|\\nzwj:\\xf0\\x9f\\x91\\xa8\\xe2\\x80\\x8d\\xf0\\x9f\\x91\\xa9|\\nend:|\\n'"
+                "printf '\\ncjk:\\346\\227\\245\\346\\234\\254\\350\\252\\236|\\nemo:\\360\\237\\230\\200\\360\\237\\232\\200|\\ncmb:e\\314\\201a\\314\\210|\\nzwj:\\360\\237\\221\\250\\342\\200\\215\\360\\237\\221\\251|\\nend:|\\n'"
             )
-            awaitRow(id, "the last printed line", { it == "end:|" })
+            val output = awaitRow(id, "the last printed line", { it == "end:|" }).lines().map(String::trim)
+            for (expected in listOf("cjk:日本語|", "emo:😀🚀|", "cmb:e\u0301a\u0308|", "zwj:👨\u200d👩|")) {
+                assertTrue("the SSH fixture printed $expected as UTF-8 before the pixel check", expected in output)
+            }
             // Plain-text output joins wrapped lines. Search gives the current physical screen row.
             fun rowOf(prefix: String): Int {
                 val state = JSONObject(invoke("terminal_core_snapshot", id)).getJSONObject("state")
