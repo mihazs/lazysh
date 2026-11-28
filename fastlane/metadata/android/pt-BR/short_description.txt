@@ -1,0 +1,1 @@
+Terminal SSH e espaço de trabalho para agentes de programação
