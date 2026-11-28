@@ -222,12 +222,7 @@ fn require_desktop() -> Result<(), String> {
     }
 }
 /// Reads the saved token and starts the poller; the first poll only records a baseline.
-fn resume(
-    app: &AppHandle,
-    state: &RemoteState,
-    ticket: u64,
-    meta: &Meta,
-) -> Result<(), String> {
+fn resume(app: &AppHandle, state: &RemoteState, ticket: u64, meta: &Meta) -> Result<(), String> {
     let stored = Zeroizing::new(
         app.vault()
             .get(ACCOUNT)
