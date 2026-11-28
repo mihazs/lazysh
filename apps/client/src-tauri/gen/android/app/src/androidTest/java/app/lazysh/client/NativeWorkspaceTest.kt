@@ -3515,11 +3515,12 @@ class NativeWorkspaceTest {
     // case drives only the packaged UI: discovery, attach, Jump To, the numbered
     // window control, confirmed Chat input to the displayed pane, a top/bottom split and zoom of beta's pane
     // from the Sessions panel, a two-finger pinch zoom and unzoom and window swipes on the display,
-    // tab-close detach and reattach. The host independently proves the remote
+    // tab-close detach and reattach, then has the display print a tmux-wrapped OSC 52 and observes the system
+    // clipboard after Allow. The host independently proves the remote
     // window state, the Chat draft in the original pane, that the split left the original pane untouched
     // and the zoom returned, that the gestures changed the zoom flag and active window in order,
     // and that the original server and panes survived.
-    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, label: String, native: Boolean) {
+    private fun verifyOwnedTmux(scenario: ActivityScenario<MainActivity>, tmux: JSONObject, parent: String, nonce: String, label: String, native: Boolean) {
         val server = tmux.getString("name")
         require(server == "owned-tmux") { "Owned tmux fixture required" }
         val windows = tmux.getJSONArray("windows")
@@ -3752,6 +3753,13 @@ class NativeWorkspaceTest {
         }
         val lifecycle = tmux.getJSONArray("lifecycle")
         require(lifecycle.length() == 2) { "Owned tmux window names required" }
+        // The fixture's tmux has allow-passthrough on, so it strips the wrapper and the attached display gets a bare OSC 52,
+        // which the app holds for consent. The shell is beta's, the window the display shows after the reattach.
+        fun clipboardThroughPassthrough() {
+            val copied = "TMUX52_$nonce"
+            sendOwnedCommand(scenario, osc52Command(copied, tmuxPassthrough = true), label)
+            allowRemoteClipboardCopy(scenario, copied)
+        }
         var primaryFailure: Throwable? = null
         try {
             attach(alpha, "before detach")
@@ -3789,8 +3797,9 @@ class NativeWorkspaceTest {
             windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
             visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
             gestures()
+            clipboardThroughPassthrough()
             detach("after reattach")
-            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom, two-finger window swipes, tab-close detach and reattach completed")
+            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom, two-finger window swipes, tab-close detach, reattach and OSC 52 passthrough to the system clipboard completed")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
@@ -5560,7 +5569,7 @@ class NativeWorkspaceTest {
                         window.dispatchEvent(new StorageEvent('storage', {key: '$key'}));
                         return true;
                     })()""")
-                    verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, label, nativeTmux)
+                    verifyOwnedTmux(scenario, fixture.getJSONObject("tmux"), name, nonce, label, nativeTmux)
                     if (!nativeTmux) verifyOwnedTmuxDefault(scenario, fixture, name, label)
                 } finally {
                     if (nativeTmux) evaluate(scenario, PageDriver.restoreStorageScript(key, previous))
@@ -6371,6 +6380,32 @@ class NativeWorkspaceTest {
     }
 
     /**
+     * A shell line that prints an OSC 52 write of `text`, wrapped in the DCS that tmux forwards when asked. The base64 is
+     * computed by the remote shell, so the text never appears in the line the test types.
+     */
+    private fun osc52Command(text: String, tmuxPassthrough: Boolean): String {
+        val (open, close) = if (tmuxPassthrough) "\\033Ptmux;\\033\\033" to "\\007\\033\\\\" else "\\033" to "\\007"
+        val command = "printf '$open]52;c;%s$close' \"\$(printf %s $text | base64)\""
+        require(!command.contains("]52;c;$text")) { "Owned OSC 52 text must not appear in its input" }
+        return command
+    }
+
+    /** Requires the consent region for `copied`, proves the clipboard is untouched before Allow, taps Allow and waits for the system clipboard to hold it. */
+    private fun allowRemoteClipboardCopy(scenario: ActivityScenario<MainActivity>, copied: String) {
+        awaitDocument(scenario, "owned OSC 52 consent", regionShows("Remote clipboard request", copied))
+        // The composer's own paste left the command on the clipboard; the remote text must not replace it before consent.
+        assertTrue("The OSC 52 text must not reach the clipboard before Allow", systemClipboardText() != copied)
+        tapCss { buttonCenter(scenario, "Allow this copy") }
+        val copyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (systemClipboardText() != copied) {
+            assertTrue("Allow did not write the OSC 52 text to the system clipboard", System.nanoTime() < copyDeadline)
+            Thread.sleep(100)
+        }
+        // SystemUI previews the copied clip over the bottom-left for a few seconds; wait it out before the next tap.
+        awaitClipboardPreviewGone(System.nanoTime())
+    }
+
+    /**
      * What a remote shell can ask of the device, observed at the operating system: an OSC 52 write reaches the system
      * clipboard only after the Allow tap, and Open on a terminal link starts an ACTION_VIEW intent for exactly that URL.
      */
@@ -6381,20 +6416,8 @@ class NativeWorkspaceTest {
             connectOwnedPrimaryWithKey(scenario, parity, name)
 
             val copied = "OSC52_${parity.nonce}"
-            val osc = "printf '\\033]52;c;%s\\007' \"\$(printf %s $copied | base64)\""
-            require(!osc.contains("]52;c;$copied")) { "Owned OSC 52 text must not appear in its input" }
-            sendOwnedCommand(scenario, osc, parity.label)
-            awaitDocument(scenario, "owned OSC 52 consent", regionShows("Remote clipboard request", copied))
-            // The composer's own paste left the command on the clipboard; the remote text must not replace it before consent.
-            assertTrue("The OSC 52 text must not reach the clipboard before Allow", systemClipboardText() != copied)
-            tapCss { buttonCenter(scenario, "Allow this copy") }
-            val copyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-            while (systemClipboardText() != copied) {
-                assertTrue("Allow did not write the OSC 52 text to the system clipboard", System.nanoTime() < copyDeadline)
-                Thread.sleep(100)
-            }
-            // SystemUI previews the copied clip over the bottom-left for a few seconds; wait it out before the next tap.
-            awaitClipboardPreviewGone(System.nanoTime())
+            sendOwnedCommand(scenario, osc52Command(copied, tmuxPassthrough = false), parity.label)
+            allowRemoteClipboardCopy(scenario, copied)
 
             val url = "https://example.invalid/l/${parity.nonce.take(8)}"
             sendOwnedCommand(scenario, "printf '%s\\n' $url", parity.label)
