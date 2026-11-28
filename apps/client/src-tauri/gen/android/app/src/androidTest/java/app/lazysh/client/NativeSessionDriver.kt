@@ -112,11 +112,32 @@ internal class NativeSessionDriver {
         else { js("window.__lz.click(\"button[aria-label='Open hosts']\")"); js("window.__lz.click(\"button[data-workspace-mode='connections']\")"); null }
     }
 
+    /**
+     * Waits for Settings to offer Native. The app's GPU probe answers no for now when it overruns its 2 s budget (a cold start on a loaded emulator)
+     * and keeps its real answer for the next start of the page (#2221): a new page asks again and gets it, so an overrun is retried once.
+     */
+    private fun awaitNativeOffered() {
+        val offered = "(() => { const r = document.querySelector(${quoted(native)}); return !!r && !r.disabled; })()"
+        val overran = "(document.querySelector('#terminal-engine-native-off')?.textContent ?? '').includes('probe took longer')"
+        fun await(what: String) {
+            try { until(what, 60, "$offered || $overran") }
+            catch (error: AssertionError) { throw AssertionError("${error.message}: ${text("#terminal-engine-native-off")}", error) }
+        }
+        await("the Native engine offered")
+        if (js(offered) == "true") return
+        evidence.put("probeOverranOnce", true)
+        scenario.recreate()
+        PageDriver.awaitStartPage()
+        PageDriver.js(pageScript)
+        openTerminalSettings()
+        await("the Native engine offered by a new page")
+        if (js(offered) != "true") throw AssertionError("A new page was refused Native too: ${text("#terminal-engine-native-off")}")
+    }
+
     fun chooseNative() {
         openTerminalSettings()
         try {
-            try { until("the Native engine offered", 60, "(() => { const r = document.querySelector(${quoted(native)}); return !!r && !r.disabled; })()") }
-            catch (error: AssertionError) { throw AssertionError("${error.message}: ${text("#terminal-engine-native-off")}", error) }
+            awaitNativeOffered()
             choose(native)
             choseEngine = true
             until("Native chosen", 30, "document.querySelector(${quoted(native)}).checked")
@@ -131,11 +152,11 @@ internal class NativeSessionDriver {
         revealHosts()
         click("button[aria-label='Add host']")
         set("input[placeholder='Home workstation']", hostName)
-        set("input[placeholder='workstation.local']", "127.0.0.1")
+        val mosh = fixture.optBoolean("mosh", false)
+        set("input[placeholder='workstation.local']", if (mosh) "10.0.2.2" else "127.0.0.1")
         set("input[placeholder='Your SSH username']", fixture.getString("username"))
         set(".port-field input", fixture.getInt("port").toString())
-        // The default transport is Auto, which would try Mosh first; this case is about the native engine on the SSH route.
-        set("[role=dialog] select:has(option[value='ssh'])", "ssh")
+        set("[role=dialog] select:has(option[value='ssh'])", if (mosh) "mosh" else "ssh")
         click("button", "Save host")
         savingHost = true
         connectSavedHost(trustNewKey = true, ready = ready)
