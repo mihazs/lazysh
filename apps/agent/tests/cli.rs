@@ -1279,7 +1279,8 @@ fn sustained_storage_contention_is_bounded_and_reports_only_the_sqlite_code() {
 fn oversized_stdin_fails_before_opening_storage() {
     let dir = tempfile::tempdir().unwrap();
     let mut payload = event("a", "working");
-    payload["unused"] = json!("x".repeat(256 * 1024));
+    // Past the hook bound (`MAX_HOOK_INPUT`, 32 MiB); a 300 KiB tool result is accepted since #2912.
+    payload["unused"] = json!("x".repeat(32 * 1024 * 1024));
     let output = ingest(dir.path(), "generic", &payload);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
