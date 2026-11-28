@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 /// The pages the relay lists. A page opened beyond this is closed again, so a page that opens windows in a loop
 /// cannot grow the list or the work of showing each one.
 pub const MAX_TABS: usize = 16;
-const MAX_TITLE: usize = 200;
+pub const MAX_TITLE: usize = 200;
 const MAX_ID: usize = 64;
 pub const MAX_URL: usize = 2048;
 const MAX_DIALOG: usize = 1000;
@@ -32,6 +32,19 @@ impl Tab {
         (info["type"] == "page").then(|| Self {
             id: id.to_string(),
             title: bounded(info["title"].as_str().unwrap_or_default(), MAX_TITLE),
+            url: bounded(info["url"].as_str().unwrap_or_default(), MAX_URL),
+        })
+    }
+}
+
+impl Tab {
+    /// A top-level browsing context of Firefox (`browsingContext.getTree`), which has an address but no title: the
+    /// title is read separately.
+    pub fn context(info: &Value) -> Option<Self> {
+        let id = info["context"].as_str().filter(|id| id.len() <= MAX_ID)?;
+        Some(Self {
+            id: id.to_string(),
+            title: String::new(),
             url: bounded(info["url"].as_str().unwrap_or_default(), MAX_URL),
         })
     }
@@ -120,6 +133,20 @@ mod tests {
             json!({"type": "page", "targetId": "x".repeat(65)}),
         ] {
             assert_eq!(Tab::page(&bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_context_has_an_address_and_a_bounded_id() {
+        let tab = Tab::context(&json!({"context": "C1", "url": "u".repeat(3000)})).unwrap();
+        assert_eq!((tab.id.as_str(), tab.title.as_str()), ("C1", ""));
+        assert_eq!(tab.url.len(), MAX_URL);
+        for bad in [
+            json!({}),
+            json!({"context": 1}),
+            json!({"context": "x".repeat(65)}),
+        ] {
+            assert_eq!(Tab::context(&bad), None, "{bad}");
         }
     }
 

@@ -371,20 +371,6 @@ pub(super) fn running_state(browser: &str, viewport: Viewport, capabilities: Val
     })
 }
 
-/// Count a refused message of `reason`, and tell the client about the first refusal of a reason and every doubling
-/// after it, so that a flood stays small.
-pub(super) fn refuse(
-    outbox: &Outbox,
-    refused: &mut BTreeMap<&'static str, u64>,
-    reason: &'static str,
-) {
-    let count = refused.entry(reason).or_default();
-    *count += 1;
-    if count.is_power_of_two() {
-        outbox.control(json!({"type": "refused", "reason": reason, "count": *count}));
-    }
-}
-
 /// "HeadlessChrome/120.0.6099.109", "Chrome/120.0.6099.109" and "Firefox/160.0" are versions 120 and 160.
 pub(super) fn major(product: &str) -> Option<u32> {
     product.split_once('/')?.1.split('.').next()?.parse().ok()
@@ -689,7 +675,10 @@ impl Relay {
     }
 
     fn refuse(&mut self, reason: &'static str) {
-        refuse(&self.outbox, &mut self.refused, reason);
+        if let Some(count) = tally(&mut self.refused, reason) {
+            self.outbox
+                .control(json!({"type": "refused", "reason": reason, "count": count}));
+        }
     }
 
     /// The browser refused to do `kind` for the page: a download or a file chooser, denied before it began.
@@ -1073,7 +1062,7 @@ impl Handler for Relay {
 
 /// Count one more of `kind`. It is `Some` for the first and for every doubling after it, which is what the
 /// client is told, so a flood stays small.
-fn tally(counts: &mut BTreeMap<&'static str, u64>, kind: &'static str) -> Option<u64> {
+pub(super) fn tally(counts: &mut BTreeMap<&'static str, u64>, kind: &'static str) -> Option<u64> {
     let count = counts.entry(kind).or_default();
     *count += 1;
     count.is_power_of_two().then_some(*count)
