@@ -1,4 +1,5 @@
 use super::*;
+use crate::tmux_server::Binary;
 use futures_util::FutureExt;
 use std::collections::VecDeque;
 #[cfg(unix)]
@@ -608,9 +609,53 @@ fn tmux_and_zellij_plans_run_the_agent_argv_with_every_hostile_literal_intact() 
 }
 
 #[test]
+fn an_rmux_plan_names_rmux_and_escapes_only_what_rmux_expands() {
+    let rmux = plan_of(
+        serde_json::json!({"kind":"rmux","name":"s 'q;","tmuxServer":"srv"}),
+        hostile_launch(),
+    )
+    .unwrap();
+    // rmux stores the window name as typed and reads the start directory as a literal
+    // format (`#{l:...}`); a trailing `;` is escaped for both.
+    assert_eq!(
+        rmux[1],
+        (
+            "window",
+            args(&[
+                "rmux",
+                "-u",
+                "-L",
+                "srv",
+                "new-window",
+                "-d",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "-t",
+                "=s 'q;:",
+                "-n",
+                "a#{x}\\;",
+                "-c",
+                "#{l:/srv/it's ##{y#};}",
+                "--",
+                "claude",
+                "say 'hi'\n$(id)\\;",
+            ])
+        )
+    );
+    let default = plan_of(
+        serde_json::json!({"kind":"rmux","name":"w"}),
+        hostile_launch(),
+    )
+    .unwrap();
+    assert_eq!(default[1].1[..4], args(&["rmux", "-u", "-L", "default"]));
+}
+
+#[test]
 fn a_worktree_launch_creates_the_worktree_before_the_window_or_pane() {
     for (multiplexer, stage) in [
         (serde_json::json!({"kind":"tmux","name":"w"}), "window"),
+        (serde_json::json!({"kind":"rmux","name":"w"}), "window"),
         (serde_json::json!({"kind":"zellij","name":"w"}), "pane"),
     ] {
         let steps = plan_of(
@@ -633,7 +678,7 @@ fn a_worktree_launch_creates_the_worktree_before_the_window_or_pane() {
 fn a_launch_needs_an_agent_an_existing_session_and_a_valid_prompt() {
     let bare =
         || request(serde_json::json!({"target":{"type":"directory","label":"x","directory":"/x"}}));
-    for kind in ["tmux", "zellij"] {
+    for kind in ["tmux", "rmux", "zellij"] {
         let error = plan_of(serde_json::json!({"kind":kind,"name":"w"}), bare()).unwrap_err();
         assert_eq!(error.message(), "Choose an agent to start", "{kind}");
         let creating = plan_of(
@@ -699,6 +744,12 @@ fn a_launch_binds_to_the_named_tmux_server_and_session() {
     assert!(matches!(
         Host::of(&named, None).unwrap(),
         Host::Tmux("w", ref server) if server.argv()[3] == "srv"
+    ));
+    let rmux = entry(serde_json::json!({"kind":"rmux","name":"w","tmuxServer":"srv"}));
+    assert!(matches!(
+        Host::of(&rmux, None).unwrap(),
+        Host::Tmux("w", ref server)
+            if server.binary() == Binary::Rmux && server.argv() == ["rmux", "-u", "-L", "srv"]
     ));
     let herdr = entry(serde_json::json!({"kind":"herdr","name":"w"}));
     assert!(matches!(Host::of(&herdr, None).unwrap(), Host::Herdr("w")));
@@ -1085,7 +1136,7 @@ impl AgentRoot {
     }
     /// The one environment of the multiplexer server, the plan steps and the observers.
     fn configure(&self, command: &mut Command) {
-        let tools: Vec<_> = ["tmux", "zellij"]
+        let tools: Vec<_> = ["tmux", "rmux", "zellij"]
             .iter()
             .filter_map(|name| on_path(name)?.parent().map(|dir| dir.display().to_string()))
             .collect();
@@ -1103,6 +1154,7 @@ impl AgentRoot {
             .env("SHELL", "/bin/sh")
             .env("TERM", "xterm-256color")
             .env("TMUX_TMPDIR", root)
+            .env("RMUX_TMPDIR", root)
             .env("XDG_RUNTIME_DIR", root)
             .env("XDG_CACHE_HOME", root)
             .env("XDG_CONFIG_HOME", root)
@@ -1268,11 +1320,22 @@ fn assert_agent_launches<R: Remote>(
 #[test]
 #[ignore = "requires git and tmux on PATH; runs an isolated temporary server"]
 fn real_tmux_agent_window() {
+    tmux_family_agent_window(Binary::Tmux);
+}
+#[cfg(unix)]
+#[test]
+#[ignore = "requires git and the pinned rmux on PATH; runs an isolated temporary daemon"]
+fn real_rmux_agent_window() {
+    tmux_family_agent_window(Binary::Rmux);
+}
+#[cfg(unix)]
+fn tmux_family_agent_window(binary: Binary) {
+    let program = binary.name();
     let root = AgentRoot::new();
     let label = format!("lz{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
     let session = "work 'q$(touch NO)";
     root.start(
-        "tmux",
+        program,
         &[
             "-f",
             "/dev/null",
@@ -1290,8 +1353,8 @@ fn real_tmux_agent_window() {
             "sleep 3600",
         ],
     );
-    let _stop = Stop(&root, "tmux", args(&["-L", &label, "kill-server"]));
-    let server = TmuxServer::parse(Some(&label)).unwrap();
+    let _stop = Stop(&root, program, args(&["-L", &label, "kill-server"]));
+    let server = TmuxServer::parse_for(binary, Some(&label)).unwrap();
     let mut remote = sh(|command| root.configure(command));
     assert_agent_launches(
         &root,
@@ -1304,7 +1367,7 @@ fn real_tmux_agent_window() {
             let rows = run_ok(
                 remote,
                 &[
-                    "tmux",
+                    program,
                     "-u",
                     "-L",
                     &label,
