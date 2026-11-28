@@ -780,6 +780,7 @@ export const english = {
   muxBrowseRmux: "Browse rmux sessions",
   muxBrowseTmux: "Browse tmux sessions",
   muxNoRmux: "No rmux sessions found.",
+  muxLimitedHerdrSchema: "This Herdr reports API schema {{schema}}, but full support needs schema 1. Only navigation is available.",
   muxPersistentName: "Persistent session name",
   muxListSessions: "List {{kind}} sessions",
   muxOpenSession: "Open/create {{kind}} session",
