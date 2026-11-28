@@ -78,7 +78,7 @@ arm implements the step in Rust instead of a script:
 
 | Remote script | Local replacement |
 | --- | --- |
-| `command -v tmux herdr zellij …` discovery | PATH lookup in Rust (with `PATHEXT` on Windows) |
+| `command -v tmux herdr zellij …` discovery | PATH lookup in Rust (on Windows each directory with the `.com` and `.exe` entries of `PATHEXT`, as below) |
 | `herdr_path` ADMIT (`~/.local/bin` fallback) | Same owner-checked fallback directories, checked with `std::fs` |
 | Companion POSIX probe (`resolve::detect`) | `std::env::consts` plus the app's data directory; no probe |
 | `ss -H -ltnp \|\| lsof` (previews) | `ss`/`lsof` argv on Linux, `netstat -ano -p TCP` argv on Windows, output parsed in Rust |
@@ -91,6 +91,13 @@ version-manager paths that the user's terminal has; children receive that captur
 `PATH`. Windows uses the process `PATH` as is. Children also drop `TMUX`, `ZELLIJ`,
 `ZELLIJ_SESSION_NAME`, `HERDR_SESSION`, `HERDR_SOCKET_PATH`, `ENV` and `BASH_ENV`, so
 a lazysh started inside a multiplexer does not hit nested-session refusals.
+
+On Windows, discovery, one-shot actions and attach find a native program one way, described in
+[Attaching a multiplexer session](local-terminal.md#attaching-a-multiplexer-session): each `PATH`
+directory in order, with the name plus the `.com` and `.exe` entries of `PATHEXT`, and the file found
+is what runs, so a `.com` Herdr that is listed is also the one the actions start. Herdr is looked up
+on the `PATH` only; the owner-checked `~/.local/bin` fallback is a Unix install location, and no
+per-user Windows directory is searched.
 
 ### Local targets and launch specs
 

@@ -1,6 +1,10 @@
 //! Finding a native program the way Windows starts one: through the PATH directories in order,
 //! each tried with the program name plus every `PATHEXT` extension a process can be started from.
-use std::{ffi::OsStr, path::PathBuf};
+//! Discovery, one-shot actions and attach all go through here, so they agree on what is installed.
+use std::{
+    ffi::{OsStr, OsString},
+    path::PathBuf,
+};
 
 /// The `PATHEXT` entries a PTY can start without a shell. `.bat` and `.cmd` are `PATHEXT` entries
 /// too, but a batch file needs `cmd.exe` and its unsafe argument escaping, so they never resolve.
@@ -28,6 +32,34 @@ pub(crate) fn resolve(path: &OsStr, pathext: Option<&OsStr>, program: &str) -> O
             })
             .find(|candidate| candidate.is_file())
     })
+}
+
+/// Whether `program` resolves on `path`: on Windows as `resolve` finds it, elsewhere a file of
+/// that name in a `PATH` directory.
+pub(crate) fn on_path(windows: bool, path: &OsStr, pathext: Option<&OsStr>, program: &str) -> bool {
+    if windows {
+        resolve(path, pathext, program).is_some()
+    } else {
+        std::env::split_paths(path).any(|directory| directory.join(program).is_file())
+    }
+}
+
+/// What a local one-shot command starts. Windows starts the file `resolve` finds, so a `.com`
+/// program that `CreateProcess` would not search for still runs; a program that is not found keeps
+/// its name and fails to start with the usual error. Elsewhere the name is left to the `PATH`
+/// search of the spawn.
+pub(crate) fn start(
+    windows: bool,
+    path: &OsStr,
+    pathext: Option<&OsStr>,
+    program: &str,
+) -> OsString {
+    if windows {
+        if let Some(found) = resolve(path, pathext, program) {
+            return found.into_os_string();
+        }
+    }
+    program.into()
 }
 
 #[cfg(test)]
