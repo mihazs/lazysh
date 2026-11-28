@@ -488,6 +488,7 @@ pub(crate) async fn begin(
     consent: Consent,
     events: Channel<TunnelEvent>,
     config: Config,
+    on_end: impl FnOnce(u16) + Send + 'static,
 ) -> Result<AuthTunnel> {
     let session = state.session(&session_id).await?;
     let origin = session.handle.origin();
@@ -626,6 +627,7 @@ pub(crate) async fn begin(
         };
         store.lock().await.flows.remove(&worker_id);
         let _ = events.send(TunnelEvent::Ended { reason });
+        on_end(device_port);
         let _ = finished.send(true);
     });
     Ok(tunnel)
@@ -636,6 +638,7 @@ pub(crate) async fn begin(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn start_auth_tunnel(
+    app: tauri::AppHandle,
     access: AccessLease,
     state: State<'_, AppState>,
     tunnels: State<'_, AuthTunnelState>,
@@ -656,6 +659,10 @@ pub async fn start_auth_tunnel(
             consent,
             events,
             Config::default(),
+            move |port| {
+                use tauri::Manager;
+                app.state::<crate::auth_browser::Tab>().ended(port, &app);
+            },
         ))
         .await
 }

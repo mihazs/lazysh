@@ -16,7 +16,7 @@ const projects: Map<string, { source: string; dependsOn: string[]; tags: string[
 test('the workspace loads with its layer and tag constraints satisfied', async () => {
   expect(await withMoonLock(() => Bun.spawn([process.execPath, moonScript, 'projects'], { cwd: root, stdout: 'pipe', stderr: 'pipe' }).exited)).toBe(0);
   expect([...projects.keys()].sort()).toEqual([
-    'account-usage', 'agent', 'ai-usagebar-vendor', 'apple-speech', 'apple-status', 'client', 'client-native', 'common',
+    'account-usage', 'agent', 'ai-usagebar-vendor', 'apple-speech', 'apple-status', 'auth-tab', 'client', 'client-native', 'common',
     'companion-release', 'credential-vault', 'deep-link-vendor', 'display-idle', 'et-transport', 'herdr-guard', 'herdr-upstream', 'mosh-transport',
     'notification-client', 'notification-service', 'parakeet-runtime', 'portable-pty-vendor', 'push-registration',
     'share-service', 'ssh-key-vendor', 'terminal-renderer-wgpu', 'terminal-runtime', 'transcription-service', 'wry-vendor',

@@ -15,6 +15,10 @@
 //! exemption, so a request that arrives while another app is in front becomes a notification that
 //! opens the page when tapped.
 //!
+//! On iOS the tab is presented by `tauri-plugin-lazysh-auth-tab`, which can close it again: [`Tab`] remembers
+//! which tunnel ports the tab waits on and dismisses it when the tunnel for one of them ends (#1519).
+//! Android offers no way to close another app's Custom Tab.
+//!
 //! Nothing here logs or stores a URL: its query carries the OAuth `state` and a PKCE challenge.
 use crate::app_lock::{AccessLease, Guarded, GuardedError};
 use crate::auth_tunnel::AuthTunnelState;
@@ -25,6 +29,7 @@ use std::{
     future::Future,
     io::ErrorKind,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener},
+    sync::{Mutex, PoisonError},
 };
 
 type Protected<T> = Result<Guarded<T>, GuardedError<String>>;
@@ -208,6 +213,41 @@ where
     .await
 }
 
+/// Something that can close the tab it presented.
+pub(crate) trait Presenter {
+    fn dismiss(&self);
+}
+
+impl Presenter for tauri::AppHandle {
+    fn dismiss(&self) {
+        use tauri_plugin_lazysh_auth_tab::AuthTabExt;
+        self.auth_tab().dismiss();
+    }
+}
+
+/// The device ports the presented tab waits on, when one is showing. One tab shows at a time: a new one
+/// replaces the old.
+#[derive(Default)]
+pub struct Tab(Mutex<Option<Vec<u16>>>);
+
+impl Tab {
+    #[cfg(any(target_os = "ios", test))]
+    fn shown(&self, ports: Vec<u16>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(ports);
+    }
+
+    /// The sign-in tunnel on device `port` ended, whatever the reason: closes the tab that waited on it, once.
+    /// A tab presented for another port, or no tab, is left alone.
+    pub(crate) fn ended(&self, port: u16, presenter: &impl Presenter) {
+        let mut shown = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if shown.as_ref().is_some_and(|ports| ports.contains(&port)) {
+            *shown = None;
+            drop(shown);
+            presenter.dismiss();
+        }
+    }
+}
+
 #[cfg(target_os = "android")]
 struct Handle(tauri::plugin::PluginHandle<tauri::Wry>);
 
@@ -244,11 +284,20 @@ async fn present(app: tauri::AppHandle, url: String, browser: Browser) -> Result
     }
     #[cfg(not(target_os = "android"))]
     {
+        #[cfg(not(target_os = "ios"))]
+        let _ = browser; // only iOS has an in-app tab here
+        #[cfg(target_os = "ios")]
+        if browser == Browser::InApp {
+            use tauri::Manager;
+            use tauri_plugin_lazysh_auth_tab::AuthTabExt;
+            app.auth_tab().present(&url).map_err(|_| FAILED)?;
+            let ports = inspect_validated(&url)?.1.into_iter().map(|(_, port)| port);
+            app.state::<Tab>().shown(ports.collect());
+            return Ok(Outcome::Opened);
+        }
         use tauri_plugin_opener::OpenerExt;
-        // Only iOS has an in-app tab here; the opener plugin ignores the argument on a desktop.
-        let with = (cfg!(target_os = "ios") && browser == Browser::InApp).then_some("inAppBrowser");
         app.opener()
-            .open_url(url, with)
+            .open_url(url, None::<&str>)
             .map(|()| Outcome::Opened)
             .map_err(|_| FAILED.into())
     }

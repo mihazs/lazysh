@@ -52,6 +52,7 @@
         "@axe-core/playwright": "^4.14.0",
         "@lazysh/apple-speech": "workspace:*",
         "@lazysh/apple-status": "workspace:*",
+        "@lazysh/auth-tab": "workspace:*",
         "@lazysh/credential-vault": "workspace:*",
         "@lazysh/push-registration": "workspace:*",
         "@playwright/test": "^1.55.1",
@@ -127,6 +128,10 @@
       "dependencies": {
         "@lazysh/common": "workspace:*",
       },
+    },
+    "packages/auth-tab": {
+      "name": "@lazysh/auth-tab",
+      "version": "1.109.0",
     },
     "packages/common": {
       "name": "@lazysh/common",
@@ -504,6 +509,8 @@
     "@lazysh/apple-speech": ["@lazysh/apple-speech@workspace:packages/apple-speech"],
 
     "@lazysh/apple-status": ["@lazysh/apple-status@workspace:packages/apple-status"],
+
+    "@lazysh/auth-tab": ["@lazysh/auth-tab@workspace:packages/auth-tab"],
 
     "@lazysh/client": ["@lazysh/client@workspace:apps/client"],
 
