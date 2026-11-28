@@ -1,9 +1,10 @@
 import { chromium, expect, test, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { waitForDevToolsEndpoint } from './fixtures/devToolsEndpoint';
 
 /**
  * Host browser prototype (docs/host-browser.md, "Prototype"): a real headless Chrome-family browser plays the host
@@ -34,11 +35,9 @@ async function startHostBrowser(origin: string, pageUrl: string) {
     '--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, `--remote-allow-origins=${origin}`,
     '--no-sandbox', '--no-first-run', '--no-default-browser-check', '--disable-gpu', pageUrl,
   ], { stdio: 'ignore', detached: true, env: { ...process.env, HOME: home } });
-  const file = join(profile, 'DevToolsActivePort');
-  for (let waited = 0; !existsSync(file) && waited < 20000; waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
-  const [port, path] = readFileSync(file, 'utf8').split('\n');
+  const endpoint = await waitForDevToolsEndpoint(join(profile, 'DevToolsActivePort'));
   return {
-    endpoint: `ws://127.0.0.1:${port}${path}`,
+    endpoint,
     /** Every file under the browser's home and profile whose name contains `name`. */
     filesNamed(name: string) {
       const walk = (directory: string): string[] => readdirSync(directory, { withFileTypes: true })
@@ -93,6 +92,23 @@ async function viewHost(page: Page, baseURL: string | undefined, html: string, b
     await new Promise(resolve => (server ? server.close(resolve) : resolve(undefined)));
   }
 }
+test('waits for the whole DevToolsActivePort file before giving an endpoint', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'lazysh-devtools-port-'));
+  const file = join(directory, 'DevToolsActivePort');
+  try {
+    const endpoint = waitForDevToolsEndpoint(file, 5000);
+    writeFileSync(file, '');
+    await new Promise(resolve => setTimeout(resolve, 150));
+    writeFileSync(file, '4242\n');
+    await new Promise(resolve => setTimeout(resolve, 150));
+    writeFileSync(file, '4242\n/devtools/browser/fake-id\n');
+    expect(await endpoint).toBe('ws://127.0.0.1:4242/devtools/browser/fake-id');
+    await expect(waitForDevToolsEndpoint(join(directory, 'missing'), 100)).rejects.toThrow('never held a port');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 const controlSwitch = (page: Page) => page.getByRole('switch', { name: 'Control' });
 
 test('shows the host page, follows a tap and types text into it', async ({ page, baseURL }) => {
