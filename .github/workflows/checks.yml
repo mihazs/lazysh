@@ -2564,7 +2564,8 @@ jobs:
     if: needs.changes.outputs.android_auxiliary == 'true'
     runs-on: ubuntu-24.04
     # The F-Droid, QR and local Whisper runs took about 18 minutes before Whisper joined them; its download, import and inference add under ten.
-    timeout-minutes: 40
+    # Parakeet adds its native build, the 487 MB archive download and its preparation, none timed on the 4 vCPU runners yet (#1815): re-check on the first main run.
+    timeout-minutes: 55
     env:
       ANDROID_SERIAL: emulator-5580
       LAZYSH_ANDROID_RUNTIME_OWNER: auxiliary
