@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import { agentViewShortcut, appShortcut, navigationShortcut, paletteShortcut, shiftedChordHint } from "./keyboard";
+import { navigationShortcutKeys } from "./navigationShortcuts";
 afterEach(() => {document.body.innerHTML = "";});
 function shortcut(key: string, target: Element = document.body, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", {key, ctrlKey: true, bubbles: true, cancelable: true, ...options});
@@ -66,6 +67,23 @@ describe("hardware app shortcuts", () => {
     for (const options of [{ctrlKey: true, shiftKey: false}, {ctrlKey: true, altKey: true}, {ctrlKey: true, repeat: true}, {ctrlKey: true, isComposing: true}, {}]) expect(press("A", terminal, options)).toBeUndefined();
     expect(press("P", terminal, {ctrlKey: true})).toBeUndefined();
     expect(shortcut("w", terminal)).toEqual({action: "closeSession"});
+  });
+  it("follows the saved Agents and Workspaces keys: the new chord acts, the old one goes back to the shell, and an off chord never matches", () => {
+    document.body.innerHTML = '<div class="terminal-canvas"><textarea data-terminal-editor=""></textarea></div>';
+    const terminal = document.querySelector("textarea")!;
+    const press = (key: string, keys: Parameters<typeof navigationShortcut>[1]) => {
+      let result: ReturnType<typeof navigationShortcut>;
+      terminal.addEventListener("keydown", e => {result = navigationShortcut(e as KeyboardEvent, keys);}, {once: true});
+      terminal.dispatchEvent(new KeyboardEvent("keydown", {key, ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true}));
+      return result;
+    };
+    const keys = navigationShortcutKeys({navigationAgents: "B", navigationWorkspaces: "A"});
+    expect(press("B", keys)).toBe("agents");
+    expect(press("A", keys)).toBe("workspaces");
+    expect(press("W", keys)).toBeUndefined();
+    const off = navigationShortcutKeys({navigationAgents: "off"});
+    expect(press("A", off)).toBeUndefined();
+    expect(press("W", off)).toBe("workspaces");
   });
   it("matches the Agent view toggle from the terminal and Agent draft, but not other editable controls", () => {
     document.body.innerHTML = '<div class="terminal-canvas"><textarea data-terminal-editor=""></textarea></div><div class="agent-view"><div class="chat-draft"><textarea></textarea></div></div><input><div role="dialog"><button></button></div>';

@@ -1,7 +1,8 @@
 import {t} from './i18n/core';
 import type {Host} from './bridge';
 import type {PaletteCommand} from './paletteModel';
-import {navigationShortcutKeys, shiftedChordHint, type ChordHint} from './keyboard';
+import {shiftedChordHint, type ChordHint} from './keyboard';
+import type {NavigationShortcut, NavigationShortcutKeys} from './navigationShortcuts';
 
 type Action = () => void;
 type ActionRow = readonly [id: string, label: string, run: Action, disabled?: boolean, aliases?: readonly string[], shortcut?: ChordHint];
@@ -15,6 +16,8 @@ export type PaletteContext = Readonly<{
   currentTool?: string;
   /** Tools and workspaces wait while a multiplexer launch owns the session. */
   navigationBusy: boolean;
+  /** The keys of the Ctrl/Cmd+Shift chords that open Agents and Workspaces; a chord that is off has none. */
+  navigationKeys: NavigationShortcutKeys;
   local: Readonly<{available: boolean; busy: boolean; reason: string}>;
   run: Readonly<{
     host: (host: Host) => void; local: Action; addHost: Action; session: (id: string) => void;
@@ -35,16 +38,17 @@ export function paletteCommands(context: PaletteContext): PaletteCommand[] {
   const {run} = context;
   const host = t('paletteGroupHost'), session = t('paletteGroupSession'), tool = t('paletteGroupTool'), action = t('paletteGroupAction');
   const active = context.sessions.find(item => item.id === context.activeId);
+  const hint = (view: NavigationShortcut) => { const key = context.navigationKeys[view]; return key ? shiftedChordHint(key) : undefined; };
   const commands: PaletteCommand[] = [
     {id: 'local', group: 'host', label: t('appLocalTerminalThisDevice'), keywords: [host, 'local'], disabled: !context.local.available || context.local.busy, reason: context.local.reason, run: run.local},
     ...context.hosts.map((item): PaletteCommand => ({id: `host:${item.id}`, group: 'host', label: item.name, detail: `${item.username}@${item.hostname}`, keywords: [host], run: () => run.host(item)})),
     ...context.sessions.map((item): PaletteCommand => ({id: `session:${item.id}`, group: 'session', label: item.name, detail: item.destination, keywords: [session], current: item.id === context.activeId, disabled: !item.connected, run: () => run.session(item.id)})),
-    ...context.tools.map((item): PaletteCommand => ({id: `tool:${item.id}`, group: 'tool', label: item.label, detail: active?.name, keywords: [tool, ...(toolAliases[item.id] ?? [])], current: item.id === context.currentTool, disabled: item.id === 'agents' && context.navigationBusy, shortcut: item.id === 'agents' ? shiftedChordHint(navigationShortcutKeys.agents) : undefined, run: () => run.tool(item.id)})),
+    ...context.tools.map((item): PaletteCommand => ({id: `tool:${item.id}`, group: 'tool', label: item.label, detail: active?.name, keywords: [tool, ...(toolAliases[item.id] ?? [])], current: item.id === context.currentTool, disabled: item.id === 'agents' && context.navigationBusy, shortcut: item.id === 'agents' ? hint('agents') : undefined, run: () => run.tool(item.id)})),
   ];
   const actions: ActionRow[] = [
     ['add-host', t('appAddANewHost'), run.addHost, !context.native, ['ssh', 'new']],
     ...(active ? [
-      ['workspaces', t('navigationWorkspaces'), run.workspaces, context.navigationBusy, ['tmux', 'zellij', 'herdr'], shiftedChordHint(navigationShortcutKeys.workspaces)],
+      ['workspaces', t('navigationWorkspaces'), run.workspaces, context.navigationBusy, ['tmux', 'zellij', 'herdr'], hint('workspaces')],
       ['switcher', t('appSwitchTerminalSession'), run.switcher, false, ['tab']],
     ] satisfies ActionRow[] : []),
     ['preferences', t('appPreferences'), run.preferences, false, ['settings']],

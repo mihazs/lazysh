@@ -234,8 +234,25 @@ inside a dialog. The command palette shows them beside **Agents** and
 **Workspaces**, and screen readers announce them as the commands' keyboard
 shortcuts. Agents needs a connected remote session, so in the local terminal
 Ctrl+Shift+A stays an ordinary terminal keypress, the Agents toolbar key is
-disabled and an Agents gesture does nothing. The chords themselves are fixed;
-the gestures and toolbar keys below are configurable.
+disabled and an Agents gesture does nothing.
+
+To move a chord, open Preferences → Keyboard and gestures → Toolbar and shortcuts
+and choose a letter under **Keyboard shortcut for Agents** or **Keyboard shortcut
+for Workspaces**, or **Off** to leave the chord to the terminal. The modifiers stay
+Ctrl/Cmd+Shift, so the shell keeps every unshifted Ctrl chord and the app's own
+Ctrl/Cmd+K, O, N, W and 1-9 never clash. Keys already taken by Ctrl/Cmd+Shift are
+not offered: **F** (find in the terminal), **P** (command palette) and **Y**
+(Terminal and Agent view); the two chords also need different letters, so to swap
+them turn one off or move it first. The command palette's hint and screen-reader
+shortcut follow the saved key and disappear while a chord is off. **Default** goes
+back to Ctrl+Shift+A and Ctrl+Shift+W; **Reset gestures** leaves these two
+settings alone. A saved or imported value that is not a free letter, or two
+chords on one letter, falls back to the defaults.
+
+Settings sync carries the choice inside the existing gesture-chords setting, not in
+a new field. A client that predates rebinding still imports the rest of the
+snapshot and keeps Ctrl/Cmd+Shift+A and W; a chord left at its default adds nothing
+to the snapshot. The gestures and toolbar keys below are configurable separately.
 
 On a touch screen, a two-finger swipe up in a plain terminal opens Agents and a
 two-finger swipe down opens Workspaces. In tmux, Herdr and Zellij these swipes
@@ -247,7 +264,8 @@ its view, or returns to the terminal when that view is already open. On a phone
 the view covers the terminal, so use its back arrow (**Return to terminal**) to
 go back.
 
-Playwright drives the chords with desktop key presses, the swipes with CDP touch
+Playwright drives the chords, and a rebound or turned-off chord with its palette
+hint, with desktop key presses, the swipes with CDP touch
 in both the phone and desktop projects, and the toolbar keys with clicks, against
 a synthetic SSH session. The Android runtime suite adds both toolbar keys to a
 real SSH connection and opens and leaves each view.

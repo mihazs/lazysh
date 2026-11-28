@@ -10,6 +10,8 @@ import {useOptionAsMetaSupport} from './useOptionAsMetaSupport';
 import {applyPreferenceIntent, nativeLocale, PreferenceStorageError, useNativeLocale} from './i18n/nativeLocale';
 import ThemeImportPanel from "./ThemeImportPanel";
 import ChordBuilder from "./ChordBuilder";
+import {shiftedChordHint} from "./keyboard";
+import {navigationKeyAvailable, navigationShortcutDefaults, navigationShortcutKeys, navigationShortcutOff, navigationShortcutSlots, navigationShortcutViews, parseNavigationShortcuts, type NavigationShortcut} from "./navigationShortcuts";
 import ToolbarKeysEditor from "./ToolbarKeysEditor";
 import GestureBindingField from "./GestureBindingField";
 import {setShowTopBar, useShowTopBar} from "./sideMenuMode";
@@ -32,6 +34,7 @@ export const settingsSections=():SettingsSection[]=>[
   {id:"help",title:t("settingsSectionHelp")},
   {id:"reset",footer:t("settingsResetFooter")},
 ];
+const letters = Array.from({length: 26}, (_, i) => String.fromCharCode(65 + i));
 const count=(items:readonly unknown[])=>items.length?formatNumber(items.length):undefined;
 const usageItemLabels={follow:"preferencesUsageFollow",fixed:"preferencesUsageFixed",hidden:"preferencesUsageHidden"} as const satisfies Record<UsageBarMode,UiKey>;
 
@@ -72,6 +75,11 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[],termi
   }
   function binding(slot: GestureSlot, label: string, action: GestureAction, change: (action: GestureAction) => void, allowed: readonly GestureAction[] = discreteGestureActions) {
     return <GestureBindingField key={slot} label={label} action={action} keys={preferences.gestureChords[slot]} allowed={allowed} onAction={change} onKeys={keys => update({gestureChords: {...preferences.gestureChords, [slot]: keys}})} />;
+  }
+  const navigationKeys = navigationShortcutKeys(preferences.gestureChords);
+  function changeNavigationShortcut(view: NavigationShortcut, choice: string) {
+    const {[navigationShortcutSlots[view]]: _previous, ...others} = preferences.gestureChords;
+    update({gestureChords: {...others, ...(choice ? {[navigationShortcutSlots[view]]: choice} : {})}});
   }
   const usageItem=preferences.usageItem ?? "follow";
   const appThemeName=preferences.appTheme==="custom"?preferences.customThemeInfo?.name??t("preferencesCustom"):preferences.appTheme==="forest"?"lazysh":t(themeLabels[preferences.appTheme]);
@@ -141,6 +149,12 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[],termi
     <h3 className="settings-group-title">{t("settingsGroupToolbarAndShortcuts")}</h3>
     <label>{t("preferencesTabStrip")}<select value={preferences.tabStrip ?? "auto"} aria-describedby="tab-strip-help" onChange={e => update({tabStrip: e.target.value === "auto" ? undefined : e.target.value as "on" | "off"})}><option value="auto">{t("preferencesTabStripAuto")}</option><option value="on">{t("preferencesTabStripOn")}</option><option value="off">{t("preferencesTabStripOff")}</option></select></label>
     <p id="tab-strip-help">{t("preferencesTabStripHelp")}</p>
+    {navigationShortcutViews.map(view => <label key={view}>{t("preferencesNavigationShortcut", {view: t(view === "agents" ? "appAgents" : "navigationWorkspaces")})}<select value={preferences.gestureChords[navigationShortcutSlots[view]] ?? ""} aria-describedby="navigation-shortcut-help" onChange={e => changeNavigationShortcut(view, e.target.value)}>
+      <option value="">{t("preferencesNavigationShortcutDefault", {chord: shiftedChordHint(navigationShortcutDefaults[view]).label})}</option>
+      <option value={navigationShortcutOff}>{t("preferencesNavigationShortcutOff")}</option>
+      {letters.map(letter => <option key={letter} value={letter} disabled={letter !== navigationKeys[view] && !navigationKeyAvailable(letter, view, navigationKeys)}>{shiftedChordHint(letter).label}</option>)}
+    </select></label>)}
+    <p id="navigation-shortcut-help">{t("preferencesNavigationShortcutHelp")}</p>
 
 </>},
 {id:"preferencesTerminalTouchGestures",title:t("preferencesTerminalTouchGestures"),parent:"input",content:<>
@@ -161,7 +175,7 @@ export default function PreferencesPanel({pages=[],footer,usageAccounts=[],termi
       {levelGestureSlots.map(slot => binding(slot, t(({pinch:"gesturePinch",pullShallow:"gesturePullShallow",pullDeep:"gesturePullDeep"} as const)[slot]), preferences.bodyGestures[slot], action => update({bodyGestures: {...preferences.bodyGestures, [slot]: action}}), slot === "pinch" ? gestureActions : levelAwareGestureActions))}
       <p>{t("preferencesAddTheDPadItemUnderToolbarKeysTo")}</p>
       {(["left", "right"] as const).map(corner => binding(corner === "left" ? "cornerLeft" : "cornerRight", t(corner === "left" ? "gestureDpadLeft" : "gestureDpadRight"), preferences.dpadCorners[corner], action => update({dpadCorners: {...preferences.dpadCorners, [corner]: action}}), ["none", "backspace", "interrupt", "custom"]))}
-      <button onClick={() => update({bodyGestures: {...defaults.bodyGestures}, gestures: {...defaults.gestures}, gestureChords: {}, dpadCorners: {...defaults.dpadCorners}, pinchZoom: defaults.pinchZoom, dismissKeyboardOnOverscroll: defaults.dismissKeyboardOnOverscroll, edgeGestures: undefined})}>{t("preferencesResetGestures")}</button>
+      <button onClick={() => update({bodyGestures: {...defaults.bodyGestures}, gestures: {...defaults.gestures}, gestureChords: parseNavigationShortcuts(preferences.gestureChords), dpadCorners: {...defaults.dpadCorners}, pinchZoom: defaults.pinchZoom, dismissKeyboardOnOverscroll: defaults.dismissKeyboardOnOverscroll, edgeGestures: undefined})}>{t("preferencesResetGestures")}</button>
 
 </>},
 {id:"gestureTestTitle",title:t("gestureTestTitle"),parent:"input",content:<GestureTestPage />},
