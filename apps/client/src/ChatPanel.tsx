@@ -708,7 +708,8 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   const workState = liveState?.state ?? activity;
   // A turn the transcript already closed is not what a live "working" is running: the row then starts its own clock.
   const turnRunning = !history.newer && (activity === 'working' || activity === 'waiting' || (!activity && !lastTurn?.answer));
-  const workSince = turnRunning ? (lastTurn?.prompt ?? lastTurn?.event)?.timestamp : undefined;
+  // shortcut: a text-only last message mid-turn also counts as closed, so the clock then restarts at the row instead of the prompt.
+  const workSince = turnRunning && !lastTurn?.answer ? (lastTurn?.prompt ?? lastTurn?.event)?.timestamp : undefined;
   // Conversation only hides the folded tool work, so it cannot be searched either.
   const searchable = useMemo(() => reading?.full === false ? turns.flatMap(turn => [turn.event, turn.prompt, turn.answer].filter((message): message is Message => !!message)) : flow, [reading?.full, turns, flow]);
   // The folds that hold a match of the search draw their rows, so the search can open the one it is on.
