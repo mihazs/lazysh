@@ -11,6 +11,7 @@ mod json_output;
 mod process;
 use chrono::{Duration, Utc};
 use claude_host::{at, carry_on, queue_operation, sidechain_text, Host, SESSION};
+use lazysh_agent::background::holds_done;
 use serde_json::{json, Value};
 use std::fs;
 
@@ -216,6 +217,31 @@ mod live_process {
             .find(|row| row["agent"] == "Codex")
             .unwrap();
         assert_eq!(codex["state"], "done");
+    }
+
+    #[test]
+    fn the_done_push_of_a_session_is_held_exactly_while_it_still_works() {
+        let host = Host::new();
+        host.finished_turn();
+        let reported = Utc::now() - Duration::seconds(1);
+        let held = || holds_done(host.config.path(), SESSION, reported, Utc::now());
+        assert!(!held(), "nothing is known");
+
+        host.register(std::process::id(), SESSION, "shell", Duration::seconds(-30));
+        host.turn_ended(0, 0, Duration::seconds(30));
+        assert!(held(), "a shell or monitor runs");
+        host.register(std::process::id(), SESSION, "idle", Duration::seconds(-1));
+        assert!(!held(), "it ended");
+
+        host.turn_ended(2, 0, Duration::zero());
+        assert!(held(), "sub-agents run");
+        host.turn_ended(0, 0, Duration::zero());
+        assert!(!held(), "a later turn ended without them");
+
+        host.register(std::process::id(), SESSION, "busy", Duration::seconds(5));
+        assert!(held(), "a turn started after the report");
+        host.register(std::process::id(), SESSION, "busy", Duration::seconds(-30));
+        assert!(!held(), "the turn the report ended");
     }
 
     #[test]
