@@ -1,12 +1,14 @@
 # Agent board display keep-awake
 
-The agent activity panel has a **Keep display awake while this board is open**
-control. It defaults off and stores only an exact boolean preference on this
+**Preferences > Agents** (opened by the agent board's Setup button) has a
+**Keep display awake while this board is open** control. It defaults off and stores only an exact boolean preference on this
 device (`lazysh.agent-board.keep-awake.v1`); it is not part of synced preferences.
 Choosing it never connects an agent, extends a remote process, changes a terminal
 session or creates a background execution task.
 
-The board must remain mounted, visible, foreground and unlocked. Disabling the
+The board must remain mounted, visible, foreground and unlocked. Preferences covers
+the board, so while it is open the control reads "off" or, with the preference on,
+"paused", holds no native request, and asks again when Preferences closes. Disabling the
 control, leaving/switching the board, losing window/document focus, backgrounding,
 locking/revoking access and replacing/destroying the view release native ownership.
 A later visible board obtains a fresh native ticket; old completions do not renew
@@ -43,9 +45,9 @@ schema, native permission text or credential policy change.
 
 The Linux native GUI suite (`apps/client/native-e2e/keepAwake.spec.ts`, described in
 [native GUI testing](native-gui-testing.md)) drives the real bundled app against an owned portal
-server on a private bus. It checks the opt-in, the exact request closed on window focus loss, on
-leaving the board and on disabling, no reacquisition while unfocused, and the error shown without a
-portal. It does not run a compositor, a real display timer or a battery, and nothing here has been
+server on a private bus. It checks the opt-in, the exact request closed when Preferences opens over the board, on window
+focus loss and on leaving the board, no reacquisition while covered or unfocused, nothing asked after
+an opt-out, and the error shown without a portal. It does not run a compositor, a real display timer or a battery, and nothing here has been
 run on Windows or macOS hardware.
 
 Native policy tests, actual OS API round trips, synthetic browser lifecycle tests
