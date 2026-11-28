@@ -1,5 +1,9 @@
 # @lazysh/client
 
+## 1.105.1
+
+No changes in this release.
+
 ## 1.105.0
 
 ### Minor Changes

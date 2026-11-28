@@ -1,0 +1,2 @@
+- stop hook failures after large file reads in Claude
+Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.105.1

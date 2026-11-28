@@ -1,5 +1,17 @@
 # @lazysh/agent
 
+## 1.105.1
+
+### Patch Changes
+
+- fix(agent): stop hook failures after large file reads in Claude ([#2913](https://github.com/mihazs/lazysh/pull/2913))
+
+  <details><summary>Details</summary>
+
+  The hook command rejected any event over 256 KiB, so a `Read` of a large file ended in `PostToolUse:Read hook failed: lazysh-agent: InvalidEvent` and the activity event was lost. Hook events now accept up to 32 MiB; approvals and reported history keep their smaller bound.
+
+  </details>
+
 ## 1.105.0
 
 ### Minor Changes
