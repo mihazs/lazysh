@@ -95,7 +95,8 @@ export default function KeepAwakeControl({sessionId,visible:boardVisible=true,se
     if (!native) return;
     if (!access.current()) {cleanupFailure.current='';setPhase('paused');setStatus(undefined);setError('');return;}
     if (requireOptIn.current && enabled) {setPhase('error');return;}
-    if (!boardVisible || !foreground.visible || !visible()) {setPhase(cleanupFailure.current?'error':'paused');return;}
+    // An opted-out board has nothing to pause; Preferences, which hides the board, must read "off" by default.
+    if (!boardVisible || !foreground.visible || !visible()) {setPhase(cleanupFailure.current?'error':enabled?'paused':'off');return;}
     setError(cleanupFailure.current);setPhase(cleanupFailure.current?'error':'checking');
     void (async()=>{
       try {
