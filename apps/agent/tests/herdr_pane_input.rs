@@ -350,7 +350,42 @@ async fn a_start_the_session_lookup_missed_is_tried_again_before_the_actor_is_ju
     )
     .unwrap();
     std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    fake_herdr::wait_runnable(&shim);
     let actor = started(directory.path(), "retry").await;
     assert!(directory.path().join("failed").exists());
     assert!(actor.exit_success().await);
+}
+
+#[test]
+fn a_stand_in_a_forked_child_still_holds_open_is_waited_for_before_the_actor_runs_it() {
+    use std::{
+        io::{Read, Write},
+        os::unix::process::CommandExt,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let herdr = directory.path().join("herdr");
+    let mut writer = std::fs::File::create(&herdr).unwrap();
+    writer.write_all(b"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&herdr, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    // A child forked now inherits the open writer and holds it for 300 ms before it execs.
+    let (mut forked, signal) = std::io::pipe().unwrap();
+    let lingering = std::thread::spawn(move || {
+        let mut child = std::process::Command::new("true");
+        // SAFETY: the closure only writes a byte and sleeps, both async-signal-safe.
+        unsafe {
+            child.pre_exec(move || {
+                (&signal).write_all(b"x")?;
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                Ok(())
+            })
+        };
+        child.status().unwrap();
+    });
+    forked.read_exact(&mut [0]).unwrap();
+    drop(writer);
+    let busy = std::process::Command::new(&herdr).status().unwrap_err();
+    assert_eq!(busy.kind(), std::io::ErrorKind::ExecutableFileBusy);
+    fake_herdr::wait_runnable(&herdr);
+    assert!(std::process::Command::new(&herdr).status().is_ok());
+    lingering.join().unwrap();
 }

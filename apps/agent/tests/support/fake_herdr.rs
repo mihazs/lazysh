@@ -6,7 +6,26 @@ use std::{
     io::{BufRead, BufReader},
     os::unix::{fs::PermissionsExt, net::UnixStream},
     path::Path,
+    process::{Command, Stdio},
 };
+#[path = "executable_retry.rs"]
+mod executable_retry;
+
+/// Returns once the kernel will run `script`. A child another test thread forked while the file was open for writing
+/// keeps it "text file busy" until that child execs, and the actor, which runs `herdr`, then ends before it is ready.
+/// The script's own exit status does not matter, only that it started.
+pub fn wait_runnable(script: &Path) {
+    let probe = || {
+        Command::new(script)
+            .args(["session", "list", "--json"])
+            .env_clear()
+            .env("HOME", "/nonexistent")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+    };
+    executable_retry::with_executable_retry(probe).unwrap();
+}
 
 /// Writes `directory/herdr`, which answers only `session list --json`.
 pub fn install(directory: &Path, name: &str, socket: &Path) {
@@ -21,6 +40,7 @@ pub fn install(directory: &Path, name: &str, socket: &Path) {
     )
     .unwrap();
     fs::set_permissions(&herdr, fs::Permissions::from_mode(0o700)).unwrap();
+    wait_runnable(&herdr);
 }
 
 /// The one request line a client sent on `stream`.
