@@ -1,5 +1,17 @@
 # @lazysh/client
 
+## 1.107.1
+
+### Patch Changes
+
+- fix(release): restore publishing by moving the managed Herdr target directory out of the job-level env ([#2942](https://github.com/mihazs/lazysh/pull/2942))
+
+  <details><summary>Details</summary>
+
+  The release workflow was rejected by GitHub because a job-level env value read the runner context, so no version could be published after the managed Herdr job was added. The target directory is now exported from a step.
+
+  </details>
+
 ## 1.107.0
 
 ### Minor Changes

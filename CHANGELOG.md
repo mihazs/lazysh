@@ -10,6 +10,12 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.107.1] - 2026-11-28
+
+### Fixed
+
+- **release:** restore publishing by moving the managed Herdr target directory out of the job-level env ([#2942](https://github.com/mihazs/lazysh/pull/2942))
+
 ## [1.107.0] - 2026-11-28
 
 ### New
