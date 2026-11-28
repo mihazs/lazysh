@@ -67,6 +67,14 @@ intact; owned entry separators and whitespace may change. A foreign same-name
 plugin is never overwritten. The private prepared receipt records own
 templates and hashes/identities, never a copy of provider configuration.
 
+A hook group for the same event that differs from the managed one only in the companion path (the bare
+`lazysh-agent ingest --agent claude` of a printed fragment, or `.../lazysh-agent` of an older install) is a
+legacy duplicate: it would ingest every event a second time into the same store, and an older companion rejects
+newer events. `status` lists each one in `legacyDuplicates` (`event` and `command`), and `install` removes exactly
+those groups together with the managed update, also when setup was never installed. A group that adds a matcher or
+another field, another executable name, or extra arguments is a foreign hook and is never touched, and `remove`
+only removes the managed entries. Providers whose hook is a file or a TOML suffix report none.
+
 The receipt is bound to the agent and the physical profile path. It is also checked against the
 profile directory's device and inode when a plan is applied, but not when it is read: a profile that
 was copied, restored or remounted (a btrfs subvolume gets a new device number after a reboot) keeps

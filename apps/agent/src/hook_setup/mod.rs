@@ -270,7 +270,7 @@ fn manage(command: Command) -> Result<Value> {
         other => other?,
     };
     Ok(
-        json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":install.digest()?,"removePlan":remove.digest()?,"binary":install.binary,"reporting":"notChecked","trust":"notChecked","readiness":readiness::report(target.agent)}),
+        json!({"schemaVersion":1,"supported":true,"agent":target.agent.agent(),"profileRoot":target.profile_root,"state":inspected.observation,"installPlan":install.digest()?,"removePlan":remove.digest()?,"binary":install.binary,"legacyDuplicates":inspected.legacy_duplicates().into_iter().map(|(event, command)| json!({"event":event,"command":command})).collect::<Vec<_>>(),"reporting":"notChecked","trust":"notChecked","readiness":readiness::report(target.agent)}),
     )
 }
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]

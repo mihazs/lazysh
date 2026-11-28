@@ -98,7 +98,7 @@ pub(super) struct Target {
     pub agent: Agent,
     pub profile: PathBuf,
 }
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(super) enum Action {
     Install,
@@ -426,6 +426,22 @@ impl Inspection {
             plugin_sha256,
         })
     }
+    /// The event and command of each group lazysh wrote for another companion path in these settings: a legacy
+    /// duplicate that would run beside the managed hook. Installing retires them; nothing else is touched.
+    pub(super) fn legacy_duplicates(&self) -> Vec<(String, String)> {
+        let (Some(contents), false) = (
+            &self.provider.contents,
+            self.target.agent.is_whole_file() || self.target.agent == Agent::KimiCode,
+        ) else {
+            return Vec::new();
+        };
+        render::entries(self.target.agent, &self.binary.path)
+            .ok()
+            .and_then(|entries| {
+                json::legacy(contents, &entries, self.target.agent == Agent::Droid).ok()
+            })
+            .unwrap_or_default()
+    }
     pub(super) fn plan(&self, action: Action) -> Result<Plan> {
         let previous = self.previous()?;
         let next = match action {
@@ -448,7 +464,8 @@ impl Inspection {
         {
             return Err(rejected("HooksForeignPlugin"));
         }
-        let reuse = previous == next && self.observation != Some(Observation::Prepared);
+        let retires = action == Action::Install && !self.legacy_duplicates().is_empty();
+        let reuse = previous == next && self.observation != Some(Observation::Prepared) && !retires;
         let transition = if reuse {
             None
         } else {
