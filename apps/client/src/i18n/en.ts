@@ -2685,6 +2685,7 @@ export const english = {
   chatEventPlanModeExit: "Plan mode off",
   chatEventRecap: "Recap",
   chatEventHookFailed: "Hook failed",
+  chatEventUnmapped: "Not shown natively",
   agentTurnCommands: "Ran {{count}} commands",
   agentTurnCommands_zero: "Ran {{count}} commands",
   agentTurnCommands_one: "Ran {{count}} command",

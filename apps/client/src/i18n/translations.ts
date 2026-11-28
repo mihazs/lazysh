@@ -2691,6 +2691,7 @@ const translations = {
   chatEventPlanModeExit: ["Modo de plano desativado", "Modo de plan desactivado"],
   chatEventRecap: ["Resumo", "Resumen"],
   chatEventHookFailed: ["Hook falhou", "Falló el hook"],
+  chatEventUnmapped: ["Ainda sem exibição nativa", "Aún sin vista nativa"],
   agentTurnCommands: ["Executou {{count}} comandos", "Ejecutó {{count}} comandos"],
   agentTurnCommands_zero: ["Executou {{count}} comandos", "Ejecutó {{count}} comandos"],
   agentTurnCommands_one: ["Executou {{count}} comando", "Ejecutó {{count}} comando"],
