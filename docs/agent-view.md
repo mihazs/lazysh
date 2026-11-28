@@ -428,7 +428,12 @@ transcript, so it works for dialogs no hook or transcript record describes.
 - **Fail closed.** The lift returns a dialog only for one whole, simple list that has a full-width rule above it, exactly one highlighted
   row, a footer that says Enter takes the highlighted row and how to leave, and no check boxes, second list or tabs. Anything else (a tabbed
   dialog, a multi-select, a text field, a dialog whose footer this profile does not know) shows **The agent is waiting for you in the
-  terminal** with **Show terminal**, and sends nothing. The view never switches by itself.
+  terminal** with **Show terminal**, and sends nothing. The view never switches by itself. The banner carries the dialog's own rows as read-only
+  text (`agentDialogScreen.ts`: from the frame Claude Code draws above a dialog, or from the text above Codex's options or the first row of its
+  full-screen table, down to the footer; at most 40 rows of 200 characters), so the user sees what the agent asks even where the card cannot
+  answer (`/permissions`, `/config`, `/login`, Codex's `/resume`). Nothing is inferred from those rows and nothing is sent from them; a screen
+  without a footer that says how to leave (an idle prompt, a working agent's `esc to interrupt` row) shows nothing. Claude Code's `Esc to clear`
+  footer (`/config`'s search box) counts as a dialog footer, so the composer is held while that dialog is open.
 - **Choosing is what a person presses.** The card reads the screen again, checks the bound pane is still the one the agent's report names,
   then sends the guarded `pick` input: arrow keys that move the highlight to the chosen option. It reads the screen back and presses Enter
   (a second `pick`) only once the dialog shows the chosen option highlighted. Nothing is sent when the screen no longer shows the dialog

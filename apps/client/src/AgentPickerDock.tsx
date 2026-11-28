@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {liftDialog, none, type Lift} from './agentDialogLift';
 import {liftCodexDialog} from './agentDialogLiftCodex';
+import {dialogCopy} from './agentDialogScreen';
 import {publishDialogOpen, useComposerControl} from './agentDialogAnswer';
 import {t} from './i18n/core';
 import type {TerminalAdapter} from './terminalAdapter';
@@ -172,7 +173,8 @@ export default function AgentPickerDock({sessionId, shown, terminal, agent = 'Cl
   // A dialog that cannot be read exactly, a menu the agent reported that is not on screen, or an approval or plan decision of an
   // agent whose dialogs were never captured (Grok Build, Gemini CLI, OpenCode): the terminal has it.
   const unreadable = !hasDialogProfile(agent) && (waiting === 'approval' || waiting === 'plan');
-  const question = questionScreen(agent, screenRows);
+  // A question is shown as it is drawn; any other dialog the profile cannot read exactly shows its own rows, read-only.
+  const question = questionScreen(agent, screenRows) || dialogCopy(agent, screenRows);
   if (shown && !ownCard && (lift.kind === 'unliftable' || waiting === 'menu' || unreadable)) return <section className="agent-picker" aria-label={t('agentPickerTitle')}>
     {question && <pre className="agent-picker-screen">{question}</pre>}
     <p role="status">{t('agentWaitingInTerminal')}</p>

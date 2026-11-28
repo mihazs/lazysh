@@ -72,9 +72,10 @@ describe('liftDialog on recorded Claude Code screens', () => {
     ['a tabbed dialog without a highlighted row', 'permissions-tabs'],
     ['the login menu, whose footer does not say what Enter does', 'login'],
     ['the read-only hooks menu, whose Enter only opens a view', 'hooks'],
+    ['the settings list, whose footer says Esc clears its search box and has a search box and tabs', 'config'],
   ])('refuses %s', (_, name) => expect(lift(name).kind).toBe('unliftable'));
 
-  it.each(['idle', 'model-closed', 'config'])('finds no dialog on the %s screen', name => expect(lift(name).kind).toBe('none'));
+  it.each(['idle', 'model-closed'])('finds no dialog on the %s screen', name => expect(lift(name).kind).toBe('none'));
 
   it('recognises the page after a choice, which has a numbered highlighted row but no footer, as a dialog it cannot read', () => {
     expect(lift('rewind-confirm').kind).toBe('unliftable');

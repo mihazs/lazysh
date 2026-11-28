@@ -25,7 +25,7 @@ export type Lift = Readonly<{kind: 'none' | 'unliftable'} | {kind: 'dialog'; dia
 export const none: Lift = {kind: 'none'}, unliftable: Lift = {kind: 'unliftable'};
 
 /** The Claude Code 2.1.x profile is data: Esc leaves the dialog, and one of these footers says Enter takes the highlighted row. */
-const escape = /\bEsc to (?:cancel|close|go back|dismiss)\b|\bctrl\+g to edit in\b/i;
+export const escape = /\bEsc to (?:cancel|close|go back|dismiss|clear)\b|\bctrl\+g to edit in\b/i;
 const enterTakesRow = [/\bEnter to (?:select|confirm|continue|set as default)\b/, /\bType to search\b/, /\bctrl\+g to edit in\b/];
 // These belong to a question dialog, which has its own card.
 const questionRows = /Type something|Chat about this/;

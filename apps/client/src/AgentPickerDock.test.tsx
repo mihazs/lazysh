@@ -428,3 +428,16 @@ it('releases a replaced guard without letting its result release the new answer'
   await act(async () => {releaseNew(true);});
   await closedByOneEnter();
 });
+
+it.each([
+  ['Claude Code', 'config', 'Auto-compact'],
+  ['Claude Code', 'login', 'Select login method:'],
+  ['Claude Code', 'permissions-tabs', 'Recently blocked'],
+  ['Codex', 'codex-resume', 'No sessions yet'],
+])('shows the rows of the %s %s dialog it cannot read exactly, read-only, with the way to the terminal, and sends nothing', async (agent, file, text) => {
+  mount(onTmux(fixture(file).slice(0, 39)), {agent});
+  expect((await screen.findByRole('status')).textContent).toBe(t('agentWaitingInTerminal'));
+  expect(screen.getByText(new RegExp(text)).closest('pre')).not.toBeNull();
+  expect(screen.getByRole('button', {name: t('agentViewShowTerminal')})).toBeTruthy();
+  expect(keys()).toEqual([]);
+});
