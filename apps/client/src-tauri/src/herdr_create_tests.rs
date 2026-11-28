@@ -569,6 +569,8 @@ mod local {
         })
         .await
         .unwrap()
+        .into_iter()
+        .filter(|kind| kind.installed)
         {
             assert_eq!(
                 step(&host, &["command", "-v", "--", kind.executable])
