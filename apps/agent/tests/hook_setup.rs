@@ -3057,3 +3057,132 @@ fn discovery_v4_promotes_only_the_current_kimi_code_profile_and_keeps_older_sche
     assert_eq!(discovery("copilot"), "managed");
     assert_eq!(discovery("amp"), "managed");
 }
+
+/// Issue #2812: an older companion's hook for the same events ran beside the managed one, so every event was
+/// ingested twice. Installing retires lazysh's own groups for another path and nothing else.
+#[test]
+fn installing_retires_only_lazysh_own_legacy_groups_and_keeps_every_other_group_byte_for_byte() {
+    let group = |command: &str| {
+        format!(r#"{{"hooks":[{{"type":"command","command":"{command}","timeout":3}}]}}"#)
+    };
+    let (bare, old, new) = (
+        group("lazysh-agent ingest --agent claude"),
+        group("'/home/u/.local/bin/lazysh-agent' ingest --agent claude"),
+        owned("'/new/companion' ingest --agent claude"),
+    );
+    let foreign = [
+        group("/opt/tool/lazysh-agent ingest --agent claude --extra"),
+        r#"{"matcher":"Bash","hooks":[{"type":"command","command":"lazysh-agent ingest --agent claude","timeout":3}]}"#.to_owned(),
+        group("lazysh-agent-other ingest --agent claude"),
+        group("notify-send done"),
+    ];
+    let both = |texts: &[&str]| format!("[{}]", texts.join(" , "));
+    let input = format!(
+        r#"{{"hooks":{{"Stop":{},"Other":{}}}}}"#,
+        both(&[
+            &bare,
+            &foreign[0],
+            &old,
+            &old,
+            &foreign[1],
+            &foreign[2],
+            &bare,
+            &foreign[3]
+        ]),
+        both(&[&old, &bare]),
+    );
+    let report = json::legacy(&input, std::slice::from_ref(&new), false).unwrap();
+    assert_eq!(report.len(), 4);
+    let installed = rewrite(&input, &[], std::slice::from_ref(&new)).unwrap();
+    let hooks = serde_json::from_str::<Value>(&installed).unwrap()["hooks"].clone();
+    let stop: Vec<Value> = foreign
+        .iter()
+        .map(|text| serde_json::from_str(text).unwrap())
+        .chain([new.group.clone()])
+        .collect();
+    assert_eq!(hooks["Stop"], Value::Array(stop));
+    // An event the install does not own is never touched, whatever it holds.
+    assert!(installed.contains(&format!(r#""Other":{}"#, both(&[&old, &bare]))));
+    for text in &foreign {
+        assert!(installed.contains(text.as_str()), "{text}");
+    }
+    assert!(json::legacy(&installed, std::slice::from_ref(&new), false)
+        .unwrap()
+        .is_empty());
+    // Only legacy groups: the array holds just the managed one.
+    let alone = format!(r#"{{"hooks":{{"Stop":{}}}}}"#, both(&[&bare, &old]));
+    let alone = rewrite(&alone, &[], std::slice::from_ref(&new)).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&alone).unwrap()["hooks"]["Stop"],
+        json!([new.group])
+    );
+    let removed = rewrite(&installed, std::slice::from_ref(&new), &[]).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&removed).unwrap()["hooks"]["Stop"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn status_names_a_legacy_duplicate_and_install_replaces_it_whether_or_not_setup_was_installed_before(
+) {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let fixture = ProfileFixture::new(record::Agent::Claude);
+    let legacy = |event: &str, command: &str| {
+        format!(
+            r#""{event}":[{{"hooks":[{{"type":"command","command":"{command}","timeout":5}}]}}]"#
+        )
+    };
+    let foreign = r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/usr/local/bin/other-tool guard"}]}]}}"#;
+    let settings =
+        |extra: &str| foreign.replacen(r#"{"hooks":{"#, &format!(r#"{{"hooks":{{{extra},"#), 1);
+    let write = |text: &str| {
+        fs::write(fixture.provider(), text).unwrap();
+        fs::set_permissions(fixture.provider(), fs::Permissions::from_mode(0o600)).unwrap();
+    };
+    write(&settings(&format!(
+        "{},{}",
+        legacy("Stop", "lazysh-agent ingest --agent claude"),
+        legacy(
+            "UserPromptSubmit",
+            "'/old/bin/lazysh-agent' ingest --agent claude"
+        )
+    )));
+    let status = fixture.cli("status", None);
+    let duplicates = status["legacyDuplicates"].as_array().unwrap();
+    assert_eq!(duplicates.len(), 2);
+    assert!(duplicates
+        .iter()
+        .any(|d| d["event"] == "Stop" && d["command"] == "lazysh-agent ingest --agent claude"));
+    let configured = fixture.cli("install", status["installPlan"].as_str());
+    assert_eq!(configured["outcome"]["status"], "configured");
+    let status = fixture.cli("status", None);
+    assert_eq!(status["legacyDuplicates"], json!([]));
+    assert_eq!(status["state"], "configured");
+    let text = fs::read_to_string(fixture.provider()).unwrap();
+    assert_eq!(text.matches("ingest --agent claude").count(), 8);
+    assert!(!text.contains("/old/bin") && !text.contains("\"lazysh-agent ingest"));
+    assert!(text.contains(r#"{"matcher":"Bash","hooks":[{"type":"command","command":"/usr/local/bin/other-tool guard"}]}"#));
+    // A legacy hook added after setup is reported, and installing again is not a no-op.
+    let configured: Value = serde_json::from_str(&text).unwrap();
+    let mut added = configured.clone();
+    added["hooks"]["Stop"].as_array_mut().unwrap().insert(
+        0,
+        json!({"hooks":[{"type":"command","command":"lazysh-agent ingest --agent claude","timeout":5}]}),
+    );
+    write(&serde_json::to_string(&added).unwrap());
+    let status = fixture.cli("status", None);
+    assert_eq!(status["legacyDuplicates"].as_array().unwrap().len(), 1);
+    let again = fixture.cli("install", status["installPlan"].as_str());
+    assert_eq!(again["outcome"]["status"], "configured");
+    assert_eq!(
+        serde_json::from_str::<Value>(&fs::read_to_string(fixture.provider()).unwrap()).unwrap(),
+        configured
+    );
+    let removed = fixture.cli("remove", fixture.cli("status", None)["removePlan"].as_str());
+    assert_eq!(removed["outcome"]["status"], "removed");
+}
