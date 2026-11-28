@@ -72,8 +72,8 @@ unavailable credential source yields an error rather than an invented quota.
   scanned. Regular-file reads are bounded to 1 MiB; Unix NONBLOCK open prevents a
   regular-to-FIFO replacement from blocking. Symlinks to regular files work.
   Factor identical existing test-store constructors for zero duplication.
-  Windows rejects newly introduced nondefault environment selection (enabling
-  it is tracked in #1748). Every Windows store read runs on a reader thread
+  Windows follows the same environment selection as Unix (#1748; it used to
+  reject nondefault selection). Every Windows store read runs on a reader thread
   (`src/cline/bounded_read.rs`) that owns its handle and buffer: the caller
   waits 3 s, then asks Windows to cancel that thread's pending synchronous I/O
   and returns "no credential"; at most four readers are alive at once, so a
