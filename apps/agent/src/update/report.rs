@@ -164,6 +164,8 @@ pub struct Report {
     pub latest: Option<Latest>,
     /// `lastCheck` and `lastOperation` of `--status`.
     pub history: Option<(Value, Value)>,
+    /// The auto-update settings of `--status`: the app reads policy and last check in one call.
+    pub auto_update: Option<Value>,
 }
 impl Report {
     pub fn new(action: &'static str) -> Self {
@@ -204,6 +206,9 @@ impl Report {
         if let Some((check, operation)) = &self.history {
             value["lastCheck"] = check.clone();
             value["lastOperation"] = operation.clone();
+        }
+        if let Some(settings) = &self.auto_update {
+            value["autoUpdate"] = settings.clone();
         }
         value
     }
