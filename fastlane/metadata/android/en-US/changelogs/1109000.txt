@@ -1,0 +1,4 @@
+- open the exact tmux, rmux or Herdr pane that raised an agent notification
+- ask once per host before updating a companion that cannot update itself
+- keep hook events the busy store refuses and record them on the next report
+Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.109.0

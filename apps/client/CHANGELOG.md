@@ -1,5 +1,34 @@
 # @lazysh/client
 
+## 1.109.0
+
+### Minor Changes
+
+- feat(multiplexers): open the exact tmux, rmux or Herdr pane that raised an agent notification ([#2859](https://github.com/mihazs/lazysh/pull/2859))
+
+  <details><summary>Details</summary>
+
+  Opening an inbox row, tapping a desktop notification or choosing **Open session** now focuses the pane of the event on the tmux or rmux server the event names (`paneServer`), or on the attached Herdr server for a `herdr:<session>:<pane id>` pane. A tmux or rmux pane of another server than the one your terminal is attached to is refused instead of guessed, and the Agent view, the status bar's current-pane agent and Jump To ignore a report of another server, so `%7` of `tmux -L work` is no longer taken for `%7` of the default server. The companion now records the Herdr pane of a hook run inside Herdr. Reports from companions that record no server keep today's behaviour (the attached server). No defaults change.
+
+  </details>
+- feat(client): ask once per host before updating a companion that cannot update itself ([#2833](https://github.com/mihazs/lazysh/pull/2833))
+
+  <details><summary>Details</summary>
+
+  When the host companion is older than this app and does not update itself (it predates `lazysh-agent auto-update`), the Agents panel asks "Update the host companion to match this app?" with Always, Not now and Never. Always updates it through the host (nothing is downloaded on this device) now and on later connections, Not now asks again next time, Never is remembered. The answer is kept per host and can be set back to Ask me under Host companion settings. Companions that update themselves are never asked, and nothing changes without an answer. English, Brazilian Portuguese and Spanish.
+
+  </details>
+
+### Patch Changes
+
+- test(android): create a Herdr tab through the real Sessions panel in the shared navigation case ([#2819](https://github.com/mihazs/lazysh/pull/2819))
+
+  <details><summary>Details</summary>
+
+  The case now clicks `New Herdr tab` on the renamed workspace (a typed label and the fixture directory), waits for the panel to list the tab, and the host reads the tab back from Herdr itself (label, directory, workspace and tab count) while the zoomed pane and the two original workspaces stay as they were. Test-only; no behaviour changes.
+
+  </details>
+
 ## 1.108.0
 
 ### Minor Changes
