@@ -293,8 +293,8 @@ Esc on a running Claude Code turn sends no hook either ([#1956](https://github.c
 so the row would report `working` until the next prompt. The same snapshot read marks a `working` Claude Code
 row done, summary "Turn interrupted", when the last main-thread record of its conversation file is the
 interruption marker written after the row's last report. A newer prompt or tool call, a sub-agent's records
-and a marker older than the last report settle nothing; a turn a background agent keeps running after the
-marker is therefore also shown as done until its next report.
+and a marker older than the last report settle nothing. Work the interrupted turn left in the background is
+reported by the snapshot's `background` overlay below.
 
 Codex reports main-thread prompt/tool activity as working, permission requests as
 needing attention and Stop, Interrupt or SessionEnd as completed. SessionStart

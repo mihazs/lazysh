@@ -2,6 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 pub mod account_usage;
 pub mod approvals;
 pub mod auto_update;
+pub mod background;
 pub mod browser;
 pub mod desktop_lock;
 pub mod devices;
@@ -289,6 +290,9 @@ pub struct SessionSummary {
     /// When the current wait began; kept while the same wait is reported again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_since: Option<String>,
+    /// What the session still runs in the background after its turn ended; the row then reads `working`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<background::Background>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1144,6 +1148,7 @@ impl Store {
                 },
                 updated_at,
                 waiting_since,
+                background: None,
                 event_count: u64::try_from(row.get::<_, i64>(7)?)
                     .map_err(|_| Error::InvalidEvent)?,
             });

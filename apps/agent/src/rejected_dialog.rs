@@ -17,9 +17,16 @@ const AGENT: &str = "Claude Code";
 const TAIL: u64 = 64 * 1024;
 const MAX_PROJECTS: usize = 10_000;
 
+/// Where Claude Code keeps its sessions and conversations: `CLAUDE_CONFIG_DIR`, else `~/.claude`.
+pub(crate) fn claude_config_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".claude")))
+}
+
 /// `<projects>/<project>/<session id>.jsonl`, the file Claude Code appends the conversation to. The id names a file,
 /// so it holds nothing but the characters of the identifiers Claude Code writes.
-fn conversation(session_id: &str) -> Option<PathBuf> {
+pub(crate) fn conversation(session_id: &str) -> Option<PathBuf> {
     if session_id.is_empty()
         || !session_id
             .bytes()
@@ -27,10 +34,7 @@ fn conversation(session_id: &str) -> Option<PathBuf> {
     {
         return None;
     }
-    let root = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|home| home.join(".claude")))?;
-    fs::read_dir(root.join("projects"))
+    fs::read_dir(claude_config_dir()?.join("projects"))
         .ok()?
         .take(MAX_PROJECTS)
         .flatten()
@@ -42,16 +46,7 @@ fn conversation(session_id: &str) -> Option<PathBuf> {
 /// Whether the last record of the conversation is an interruption written at or after `since` (seconds since the
 /// epoch): nothing was said after the person rejected the dialog, and no newer dialog opened.
 fn interrupted_since(session_id: &str, since: f64) -> bool {
-    let Some(path) = conversation(session_id) else {
-        return false;
-    };
-    let Ok(file) = crate::transcript::open_transcript(&path) else {
-        return false;
-    };
-    let Ok(before) = crate::transcript::SourceSnapshot::capture(&file) else {
-        return false;
-    };
-    let Some(bytes) = stable_tail(&path, file, before) else {
+    let Some(bytes) = conversation(session_id).and_then(|path| read_tail(&path, TAIL)) else {
         return false;
     };
     let text = String::from_utf8_lossy(&bytes);
@@ -74,17 +69,25 @@ fn interrupted_since(session_id: &str, since: f64) -> bool {
     false
 }
 
+/// The last `limit` bytes of a conversation file, or `None` when the file changed while it was read.
+pub(crate) fn read_tail(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    let file = crate::transcript::open_transcript(path).ok()?;
+    let before = crate::transcript::SourceSnapshot::capture(&file).ok()?;
+    stable_tail(path, file, before, limit)
+}
+
 // The final observation bounds the evidence; later writes may still change the conversation.
 fn stable_tail(
     path: &Path,
     mut file: File,
     before: crate::transcript::SourceSnapshot,
+    limit: u64,
 ) -> Option<Vec<u8>> {
     let length = before.len();
-    let start = length.saturating_sub(TAIL);
+    let start = length.saturating_sub(limit);
     let mut bytes = Vec::new();
     file.seek(SeekFrom::Start(start)).ok()?;
-    (&mut file).take(TAIL).read_to_end(&mut bytes).ok()?;
+    (&mut file).take(limit).read_to_end(&mut bytes).ok()?;
     let selected = crate::transcript::open_transcript(path).ok()?;
     let after = crate::transcript::SourceSnapshot::capture(&selected).ok()?;
     before.same_file(&selected).ok()?;
@@ -162,7 +165,7 @@ mod tests {
             "new record"
         )
         .unwrap();
-        assert!(stable_tail(&path, file, before).is_none());
+        assert!(stable_tail(&path, file, before, TAIL).is_none());
 
         let (file, before) = capture();
         let modified = before.modified().unwrap() + std::time::Duration::from_secs(5);
@@ -173,16 +176,16 @@ mod tests {
             .unwrap()
             .set_times(fs::FileTimes::new().set_modified(modified))
             .unwrap();
-        assert!(stable_tail(&path, file, before).is_none());
+        assert!(stable_tail(&path, file, before, TAIL).is_none());
 
         let (file, before) = capture();
         fs::rename(&path, dir.path().join("old.jsonl")).unwrap();
         fs::write(&path, vec![b'x'; before.len() as usize]).unwrap();
-        assert!(stable_tail(&path, file, before).is_none());
+        assert!(stable_tail(&path, file, before, TAIL).is_none());
 
         let (file, before) = capture();
         assert_eq!(
-            stable_tail(&path, file, before).unwrap().len(),
+            stable_tail(&path, file, before, TAIL).unwrap().len(),
             TAIL as usize
         );
     }
