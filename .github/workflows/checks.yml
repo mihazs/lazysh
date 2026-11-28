@@ -1471,7 +1471,7 @@ jobs:
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --locked -p lazysh-agent --lib herdr:: -- --list | grep -Fx 'herdr::tests::real_named_pipe_carries_the_focus_request_and_reports_a_missing_pipe: test'
           cargo test --locked -p lazysh-agent --lib herdr::
-      # The OSC 52 handler is client code (xterm parser, bounded decoding, consent), so Windows runs its unit tests; no job runs a Windows client against a real multiplexer (#1747).
+      # The OSC 52 handler is client code (xterm parser, bounded decoding, consent), so Windows runs its unit tests; the real native multiplexers run through a local ConPTY in the step below (#1925), not through this handler (#1747).
       - name: Exercise the client OSC 52 handler
         if: runner.os == 'Windows'
         run: bun run --cwd apps/client test:osc52
@@ -1501,6 +1501,41 @@ jobs:
           LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent.exe
         run: |
           for case_name in companion::powershell::native_tests::real_windows_shells_identify_the_host_through_the_encoded_probe companion::powershell::native_tests::real_windows_shells_run_the_companion_with_every_argument_and_its_exit_status companion::powershell::native_tests::real_windows_shells_read_the_managed_namespace_and_run_what_it_admits_before_the_path; do
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          done
+      # Native Zellij and Herdr on a ConPTY through the client's own local session (#1925). Non-blocking until its first hosted pass is recorded there.
+      - name: Install the pinned Windows Zellij 0.45.1 and Herdr 0.9.5 releases outside the checkout
+        id: windows-multiplexers
+        if: runner.os == 'Windows' && !cancelled()
+        timeout-minutes: 5
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'lazysh-windows-multiplexers'
+          function Install-Pinned($name, $url, $sha256) {
+            $directory = Join-Path $root $name
+            New-Item -ItemType Directory -Force $directory | Out-Null
+            $archive = Join-Path $root "$name.zip"
+            Invoke-WebRequest -Uri $url -OutFile $archive -MaximumRedirection 5
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant() -ne $sha256) { throw "$name archive digest mismatch" }
+            # The conpty directory stays beside herdr.exe.
+            Expand-Archive -LiteralPath $archive -DestinationPath $directory
+            $directory
+          }
+          $zellij = Install-Pinned 'zellij' 'https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-pc-windows-msvc.zip' 'b854e7b223e67d0705c5f685ef50541c38a57981b13624d09c92bed419b6f80d'
+          $herdr = Install-Pinned 'herdr' 'https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-windows-x86_64.zip' 'd2c6c9c971c43a0bfdde8c692a9a1a7a45c3e4807cd01ae45662b4734fac1cbf'
+          if ((& "$zellij\zellij.exe" --version) -ne 'zellij 0.45.1') { throw 'unexpected Zellij version' }
+          if ((& "$herdr\herdr.exe" --version) -ne 'herdr 0.9.5') { throw 'unexpected Herdr version' }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $zellij, $herdr
+      - name: Exercise native Zellij and Herdr through a local ConPTY session
+        if: runner.os == 'Windows' && !cancelled() && steps.windows-multiplexers.outcome == 'success'
+        timeout-minutes: 15
+        continue-on-error: true
+        shell: bash
+        run: |
+          for case_name in local::attach_tests::real::real_local_zellij_lists_attaches_and_switches_a_tab local::attach_tests::real::real_local_herdr_lists_attaches_and_creates_a_workspace local::attach_tests::real::real_windows_local_session_offers_no_tmux_and_refuses_a_tmux_attach; do
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done

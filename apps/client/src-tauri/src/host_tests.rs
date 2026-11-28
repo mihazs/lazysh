@@ -53,7 +53,20 @@ pub(crate) mod local {
     #[cfg_attr(not(unix), allow(dead_code))]
     impl Isolated {
         pub(crate) fn new() -> Self {
-            Self(tempfile::tempdir().unwrap())
+            let home = Self(tempfile::tempdir().unwrap());
+            // No first-run dialogs or update checks over the attached screen.
+            fs::create_dir(home.path().join("zellij")).unwrap();
+            fs::write(
+                home.path().join("zellij/config.kdl"),
+                "show_release_notes false\nshow_startup_tips false\n",
+            )
+            .unwrap();
+            fs::write(
+                home.path().join("config.toml"),
+                "[update]\nversion_check = false\nmanifest_check = false\n",
+            )
+            .unwrap();
+            home
         }
         pub(crate) fn path(&self) -> &Path {
             self.0.path()
@@ -68,7 +81,24 @@ pub(crate) mod local {
             ]
             .map(|name| (name.to_owned(), path(self.path())))
             .into_iter()
-            .chain([("TERM".to_owned(), "xterm-256color".to_owned())])
+            .chain(
+                // Windows tools read their state from the profile folders, not from XDG variables.
+                ["USERPROFILE", "APPDATA", "LOCALAPPDATA"]
+                    .into_iter()
+                    .filter(|_| cfg!(windows))
+                    .map(|name| (name.to_owned(), path(self.path()))),
+            )
+            .chain([
+                ("TERM".to_owned(), "xterm-256color".to_owned()),
+                (
+                    "ZELLIJ_CONFIG_DIR".to_owned(),
+                    path(&self.path().join("zellij")),
+                ),
+                (
+                    "HERDR_CONFIG_PATH".to_owned(),
+                    path(&self.path().join("config.toml")),
+                ),
+            ])
             .collect()
         }
         /// An adopted local session, with its application state beside the isolated home.
