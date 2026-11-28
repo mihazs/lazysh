@@ -2565,7 +2565,7 @@ export const english = {
   agentViewTerminal: "Terminal",
   agentViewFinding: "Looking for the agent in this terminal…",
   agentViewNoConversation: "No agent conversation for this terminal.",
-  agentViewPartial: "The last {{agent}} report names this pane, but its conversation is unavailable. Turn on reported history in the companion to follow it here.",
+  agentViewPartial: "The last {{agent}} report names this pane, but its conversation is unavailable. Turn on reported history in the companion, and update the companion, to follow it here.",
   agentViewPartialState: "This view shows only the last reported state of {{agent}}. Its conversation stays in the terminal.",
   agentViewPartialRecords: "Partial: these are the records {{agent}} wrote for this pane, read-only, so they can lag behind the terminal and leave out what it does not record. Answer in the terminal.",
   agentViewShowTerminal: "Show terminal",

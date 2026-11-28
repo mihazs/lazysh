@@ -18,12 +18,12 @@ export type AgentViewOptions={
   queued?:{text:string;timestamp?:string}[];
 };
 declare global {interface Window {agentViewDesign:{inputs:{kind:string}[];/** Sends a frame down the open live stream, as the companion's watch would. */emit:(frame:unknown)=>void}}}
-const transcript='/home/owner/.claude/projects/-work/design.jsonl';
+const reference='4e0da3cb-f6d1-468c-89fb-52d2602bd310';
 
 /** The real app on a synthetic host: one tmux terminal whose pane a hook report ties to a recorded conversation, shown in the Agent view. */
 export async function openAgentView(page:Page,options:AgentViewOptions):Promise<Locator> {
   await installNativeBridge(page);
-  await page.addInitScript(({snapshot,bound,transcript,options})=>{
+  await page.addInitScript(({snapshot,bound,reference,options})=>{
     const claude=(options.agent??'claude')==='claude';
     window.agentViewDesign={inputs:[],emit:()=>{throw new Error('The live stream is not open yet');}};
     let connections=0;
@@ -52,8 +52,8 @@ export async function openAgentView(page:Page,options:AgentViewOptions):Promise<
           return {kind:'delivered',nextOperation:action.operation!+1};
         }
         case 'agent_snapshot':return {schemaVersion:1,sessions:[{sessionId:'design-thread',agent:claude?'Claude Code':'Codex',project:'/work/lazysh',state:options.state??'working',updatedAt:new Date().toISOString(),summary:'Working on your prompt',paneId:'%3',eventCount:4}]};
-        case 'agent_reported_history':return {schemaVersion:1,sessionId:'design-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
-        case 'agent_transcript':return {schemaVersion:1,agent:claude?'claude':'codex',view:'active_branch',nextOffset:0,hasMore:false,session:options.session,...(options.activity?{activity:options.activity}:{}),...(options.work?{work:options.work}:{}),...(options.queued?.length?{queued:options.queued}:{}),messages:options.messages};
+        case 'agent_reported_history_reference':return {schemaVersion:1,sessionId:'design-thread',status:'available',reference,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'};
+        case 'agent_reported_conversation':return {schemaVersion:1,agent:claude?'claude':'codex',view:'active_branch',nextOffset:0,hasMore:false,session:options.session,...(options.activity?{activity:options.activity}:{}),...(options.work?{work:options.work}:{}),...(options.queued?.length?{queued:options.queued}:{}),messages:options.messages};
         case 'list_directory':return [{name:'src',isDir:true,size:0},{name:'README.md',isDir:false,size:12},{name:'package.json',isDir:false,size:80}];
         case 'agent_approvals':return {schemaVersion:1,requests:[]};
         case 'agent_watch_start':{
@@ -68,7 +68,7 @@ export async function openAgentView(page:Page,options:AgentViewOptions):Promise<
         default:if(command.startsWith('plugin:event|'))return undefined;throw new Error(`Unexpected Agent view fixture command: ${command}`);
       }
     };
-  },{snapshot:tmuxChatSnapshot,bound:tmuxChatBound,transcript,options});
+  },{snapshot:tmuxChatSnapshot,bound:tmuxChatBound,reference,options});
   await page.goto('/');
   await page.getByRole('button',{name:'Restore previous workspace',exact:true}).click();
   // A phone has no tab strip: the restored session is the one shown.
