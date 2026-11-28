@@ -15,7 +15,7 @@ ssh-key = { path = "packages/ssh-key-vendor" }
 debug = "line-tables-only"
 
 [workspace.package]
-version = "1.110.0"
+version = "1.111.0"
 license = "GPL-3.0-or-later"
 
 [profile.release]
