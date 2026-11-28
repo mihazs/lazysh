@@ -1539,6 +1539,21 @@ jobs:
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done
+      # The adapter above runs through `cmd /c` and `powershell -Command`; this one runs it through the server's own command
+      # line, under each default shell in turn. Every case runs and each failure names its shell; a skipped case fails too.
+      - name: Exercise the app against an owned Windows OpenSSH server under cmd.exe and Windows PowerShell
+        if: runner.os == 'Windows' && !cancelled()
+        shell: bash
+        env:
+          LAZYSH_TEST_AGENT_BIN: ${{ github.workspace }}/target/debug/lazysh-agent.exe
+        run: |
+          failed=0
+          for case_name in registry_values_return_to_the_machines_own_or_to_their_absence_on_every_exit_path windows_openssh_under_cmd_exe_identifies_the_host_and_runs_the_companion windows_openssh_under_windows_powershell_identifies_the_host_and_runs_the_companion; do
+            case_path=ssh::tests::windows_openssh_fixture::$case_name
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_path" -- --list --ignored --exact | grep -Fx -- "$case_path: test" || { echo "::error::$case_name is not an ignored case of the client"; failed=1; continue; }
+            cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_path" -- --ignored --exact || { echo "::error::$case_name failed"; failed=1; }
+          done
+          exit $failed
       - name: Verify uploaded paths through the owned Mac host clipboard
         if: runner.os == 'macOS'
         env:
