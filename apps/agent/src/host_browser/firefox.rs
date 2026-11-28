@@ -7,14 +7,17 @@
 //! ends its session, and a browser that already holds one is replaced by a new one the relay owns.
 //!
 //! Everything the relay sends goes through [`allow::bidi`]. The client sees the same wire format as for Chrome.
+//! Navigation, history and tabs are `browsingContext` commands on a context id the relay itself listed from
+//! `getTree` or `create`; one that it never listed is refused here, before Firefox is asked.
 use super::{
     allow, bidi, die_with_launcher, find_in, input,
     outbox::Outbox,
     own_process_group, profile,
     relay::{
-        announce_page, await_reply, bounded, major, refuse, running_state, Event, Handler, Running,
+        announce_page, await_reply, bounded, major, running_state, tally, Event, Handler, Running,
         Serve, CLIENT_CLOSED,
     },
+    tabs::{self, Tab, MAX_TABS},
     wire::{self, Client, Viewport},
     FIREFOX_CANDIDATES,
 };
@@ -356,23 +359,22 @@ pub(super) fn session(
         backlog.retain(|event| !matches!(event, Event::Browser(_) | Event::BrowserGone));
     };
     let tree = launched.link.call("browsingContext.getTree", json!({}))?;
-    launched.context = tree["contexts"]
-        .as_array()
+    let tabs: Vec<Tab> = top_level(&tree)
         .into_iter()
-        .flatten()
-        .find(|context| context["parent"].is_null())
-        .and_then(|context| context["context"].as_str())
+        .map(|(tab, _)| tab)
+        .take(MAX_TABS)
+        .collect();
+    launched.context = tabs
+        .first()
         .ok_or(Error::Browser("BrowserNoPage"))?
-        .to_string();
+        .id
+        .clone();
     let viewport = open.viewport;
     launched.link.call(
         "browsingContext.setViewport",
-        json!({
-            "context": launched.context,
-            "viewport": {"width": viewport.width, "height": viewport.height},
-            "devicePixelRatio": viewport.scale,
-        }),
+        sized(&launched.context, viewport),
     )?;
+    // `stop` is false: Firefox 160 has no command to stop a load (`browsingContext.stop` is unknown, measured).
     outbox.control(running_state(
         &launched.product,
         viewport,
@@ -381,20 +383,49 @@ pub(super) fn session(
             "control": true,
             "pinch": false,
             "composition": false,
-            "navigation": false,
-            "tabs": false,
+            "navigation": true,
+            "tabs": true,
+            "stop": false,
             // Why, so that the viewer can say it and hide the control: Firefox did not scale the page when two
             // touch pointers spread (headless probe), and BiDi has neither `insertText` nor composition.
             "unavailable": {"pinch": "NoPagePinch", "composition": "NoTextInsertion"},
         }),
     ));
-    Stream::new(&mut launched, outbox, viewport).run()
+    Stream::new(&mut launched, outbox, viewport, tabs).run()
+}
+
+/// The top-level browsing contexts of a `getTree` result, each with the context that opened it, if any.
+fn top_level(result: &Value) -> Vec<(Tab, Option<String>)> {
+    result["contexts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|context| context["parent"].is_null())
+        .filter_map(|context| {
+            let opener = context["originalOpener"].as_str().map(str::to_string);
+            Some((Tab::context(context)?, opener))
+        })
+        .collect()
+}
+
+/// A page is sized like the phone, one context at a time.
+fn sized(context: &str, viewport: Viewport) -> Value {
+    json!({
+        "context": context,
+        "viewport": {"width": viewport.width, "height": viewport.height},
+        "devicePixelRatio": viewport.scale,
+    })
 }
 
 enum Pending {
-    Capture,
-    Tree,
-    Title,
+    /// A screenshot of this context: dropped when another one is shown by the time it arrives.
+    Capture(String),
+    /// The tree, as of this change count of the tab list; an older answer is ignored.
+    Tree(u32),
+    /// The title of this context.
+    Title(String),
+    /// A command whose failure is not the browser failing: a page that closed meanwhile, or a history that ends.
+    Action,
     /// An `input.performActions`; when it fails, what it left held is released.
     Input,
     Release,
@@ -419,11 +450,21 @@ struct Stream<'l, 'a> {
     polled: Instant,
     errors: u32,
     page: (String, String),
-    /// The page's title and address as last read, before they are cut for the client.
-    read: (String, String),
+    /// The top-level contexts the relay listed, in the order it learned them. A command only ever names one of
+    /// these; the shown one is `launched.context`.
+    tabs: Vec<Tab>,
+    /// How often the relay changed `tabs` itself, so that a tree asked for before a change cannot undo it.
+    epoch: u32,
+    /// The last `tabs` message sent.
+    sent: Value,
 }
 impl<'l, 'a> Stream<'l, 'a> {
-    fn new(launched: &'l mut Launched<'a>, outbox: &'l Arc<Outbox>, viewport: Viewport) -> Self {
+    fn new(
+        launched: &'l mut Launched<'a>,
+        outbox: &'l Arc<Outbox>,
+        viewport: Viewport,
+        tabs: Vec<Tab>,
+    ) -> Self {
         let now = Instant::now();
         Self {
             launched,
@@ -438,10 +479,13 @@ impl<'l, 'a> Stream<'l, 'a> {
             last: Vec::new(),
             same: 0,
             next_capture: now,
-            polled: now,
+            // The first read is due at once: it gives the titles and any page that opened meanwhile.
+            polled: now.checked_sub(PAGE_POLL).unwrap_or(now),
             errors: 0,
             page: Default::default(),
-            read: Default::default(),
+            tabs,
+            epoch: 0,
+            sent: Value::Null,
         }
     }
 
@@ -456,7 +500,7 @@ impl<'l, 'a> Stream<'l, 'a> {
     fn capturing(&self) -> usize {
         self.pending
             .iter()
-            .filter(|(_, kind)| matches!(kind, Pending::Capture))
+            .filter(|(_, kind)| matches!(kind, Pending::Capture(_)))
             .count()
     }
 
@@ -470,6 +514,8 @@ impl<'l, 'a> Stream<'l, 'a> {
 
     /// Handle events until the session ends; the value is the reason it ended.
     fn run(&mut self) -> Result<&'static str> {
+        self.publish();
+        self.send_tabs(false);
         loop {
             let now = Instant::now();
             if self.capture_due().is_some_and(|due| due <= now) {
@@ -487,12 +533,13 @@ impl<'l, 'a> Stream<'l, 'a> {
                         "origin": "viewport",
                         "format": {"type": "image/jpeg", "quality": QUALITY},
                     }),
-                    Pending::Capture,
+                    Pending::Capture(context),
                 )?;
             }
             if self.poll_due().is_some_and(|due| due <= now) {
                 self.polled = now;
-                self.poll_page()?;
+                let kind = Pending::Tree(self.epoch);
+                self.request("browsingContext.getTree", json!({}), kind)?;
             }
             let event = match self.launched.link.backlog.pop_front() {
                 Some(event) => event,
@@ -515,10 +562,8 @@ impl<'l, 'a> Stream<'l, 'a> {
         }
     }
 
-    /// `getTree` has no title, so it is one read of `document.title` in the relay's own realm.
-    fn poll_page(&mut self) -> Result<()> {
-        let context = self.launched.context.clone();
-        self.request("browsingContext.getTree", json!({}), Pending::Tree)?;
+    /// `getTree` has no title, so each page's is one read of `document.title` in the relay's own realm.
+    fn read_title(&mut self, context: &str) -> Result<()> {
         self.request(
             "script.evaluate",
             json!({
@@ -526,7 +571,7 @@ impl<'l, 'a> Stream<'l, 'a> {
                 "awaitPromise": false,
                 "target": {"context": context, "sandbox": SANDBOX},
             }),
-            Pending::Title,
+            Pending::Title(context.to_string()),
         )
     }
 
@@ -550,12 +595,11 @@ impl<'l, 'a> Stream<'l, 'a> {
     // upgrade when the viewer can start a drag and switch Control off in the same gesture.
     fn input(&mut self, message: &Client) -> Result<()> {
         if !self.control {
-            self.refuse(input::CONTROL_OFF);
-            return Ok(());
+            return self.refuse(input::CONTROL_OFF);
         }
         match input::bidi_commands(message, self.viewport) {
-            Err(reason) => self.refuse(reason),
-            Ok(_) if !self.limit.take(Instant::now()) => self.refuse(input::RATE_LIMITED),
+            Err(reason) => self.refuse(reason)?,
+            Ok(_) if !self.limit.take(Instant::now()) => self.refuse(input::RATE_LIMITED)?,
             Ok(calls) => {
                 for (method, mut params) in calls {
                     params["context"] = self.launched.context.clone().into();
@@ -569,11 +613,156 @@ impl<'l, 'a> Stream<'l, 'a> {
         Ok(())
     }
 
-    fn refuse(&mut self, reason: &'static str) {
-        refuse(self.outbox, &mut self.refused, reason);
+    /// Counted and told to the client at the first and every doubling, and the message is dropped.
+    fn refuse(&mut self, reason: &'static str) -> Result<()> {
+        if let Some(count) = tally(&mut self.refused, reason) {
+            self.outbox
+                .control(json!({"type": "refused", "reason": reason, "count": count}));
+        }
+        Ok(())
     }
 
-    /// `Some(reason)` ends the session: the page is gone.
+    fn listed(&self, id: &str) -> bool {
+        self.tabs.iter().any(|tab| tab.id == id)
+    }
+
+    /// A command on a context the relay listed. What the allow-list refuses (an address that is not `http`,
+    /// `https` or `about:blank`) and a context it never listed are counted and dropped, so that neither reaches
+    /// Firefox and neither is a failure of the relay.
+    fn act(&mut self, method: &str, params: Value) -> Result<()> {
+        let listed = params["context"].as_str().is_some_and(|id| self.listed(id));
+        match allow::bidi(method, &params) {
+            Ok(()) if listed => self.request(method, params, Pending::Action),
+            Ok(()) => self.refuse(allow::Refusal::Unlisted.reason()),
+            Err(refusal) => self.refuse(refusal.reason()),
+        }
+    }
+
+    /// Show another listed page: it is raised and sized like the phone, and its frames replace the old one's.
+    fn show(&mut self, id: &str) -> Result<()> {
+        self.act("browsingContext.activate", json!({"context": id}))?;
+        self.act("browsingContext.setViewport", sized(id, self.viewport))?;
+        self.launched.context = id.to_string();
+        self.last.clear();
+        self.same = 0;
+        self.next_capture = Instant::now();
+        self.page = Default::default();
+        self.publish();
+        self.send_tabs(false);
+        Ok(())
+    }
+
+    /// A page is gone. The shown one hands the view to the last page of the list; the session ends with
+    /// `PageClosed` only when the browser has none left.
+    fn gone(&mut self, id: &str) -> Result<Option<&'static str>> {
+        self.tabs.retain(|tab| tab.id != id);
+        self.epoch += 1;
+        if id != self.launched.context {
+            self.send_tabs(false);
+            return Ok(None);
+        }
+        match self.tabs.last().map(|tab| tab.id.clone()) {
+            Some(next) => self.show(&next).map(|()| None),
+            None => Ok(Some("PageClosed")),
+        }
+    }
+
+    /// The tree of every top-level page: pages that closed, pages that opened and the addresses. A page that the
+    /// shown one opened takes the view, like in a browser, and a page beyond [`MAX_TABS`] is closed again, so that
+    /// a page that opens windows in a loop cannot grow the list.
+    fn refresh(&mut self, result: &Value) -> Result<Option<&'static str>> {
+        let shown = self.launched.context.clone();
+        let (mut tabs, mut popup) = (Vec::<Tab>::new(), None);
+        for (mut tab, opener) in top_level(result) {
+            let title = self.tabs.iter().find(|known| known.id == tab.id);
+            if let Some(known) = title {
+                tab.title.clone_from(&known.title);
+            } else if tabs.len() >= MAX_TABS {
+                let params = json!({"context": tab.id});
+                self.request("browsingContext.close", params, Pending::Action)?;
+                continue;
+            } else if popup.is_none() && opener.as_deref() == Some(shown.as_str()) {
+                popup = Some(tab.id.clone());
+            }
+            tabs.push(tab);
+        }
+        self.tabs = tabs;
+        if !self.listed(&shown) {
+            return self.gone(&shown);
+        }
+        if let Some(id) = popup {
+            self.show(&id)?;
+        }
+        for id in self
+            .tabs
+            .iter()
+            .map(|tab| tab.id.clone())
+            .collect::<Vec<_>>()
+        {
+            self.read_title(&id)?;
+        }
+        self.publish();
+        self.send_tabs(false);
+        Ok(None)
+    }
+
+    /// A new blank page, listed at once; the caller shows it.
+    fn create_tab(&mut self) -> Result<String> {
+        let created = self.launched.link.call(
+            "browsingContext.create",
+            json!({"type": "tab", "background": true}),
+        )?;
+        let tab = Tab::context(&json!({"context": created["context"], "url": "about:blank"}))
+            .ok_or(Error::Browser("BrowserProtocolError"))?;
+        let id = tab.id.clone();
+        self.tabs.push(tab);
+        self.epoch += 1;
+        Ok(id)
+    }
+
+    fn new_tab(&mut self) -> Result<()> {
+        if self.tabs.len() >= MAX_TABS {
+            return self.refuse(allow::Refusal::Unlisted.reason());
+        }
+        let id = self.create_tab()?;
+        self.show(&id)
+    }
+
+    fn close_tab(&mut self, id: &str) -> Result<()> {
+        if !self.listed(id) {
+            return self.refuse(allow::Refusal::Unlisted.reason());
+        }
+        // A browser keeps a page: the last one is replaced by a blank one first, never left without any.
+        if self.tabs.len() == 1 {
+            self.create_tab()?;
+        }
+        self.act("browsingContext.close", json!({"context": id}))?;
+        self.gone(id).map(|_| ())
+    }
+
+    fn activate(&mut self, id: &str) -> Result<()> {
+        if id == self.launched.context {
+            Ok(())
+        } else if self.listed(id) {
+            self.show(id)
+        } else {
+            self.refuse(allow::Refusal::Unlisted.reason())
+        }
+    }
+
+    /// Send the tab list and what the controls show, when it is not what the client has.
+    // shortcut: BiDi has no history list, so back and forward are always offered and an end of history is a no-op
+    // (`no such history entry`, ignored); `loading` is always false because navigations do not wait. Upgrade if
+    // Firefox adds a history query or the viewer needs the loading state.
+    fn send_tabs(&mut self, force: bool) {
+        let view = tabs::view(&self.tabs, &self.launched.context, true, true, false);
+        if force || view != self.sent {
+            self.outbox.tabs(&view);
+            self.sent = view;
+        }
+    }
+
+    /// `Some(reason)` ends the session: no page is left.
     fn reply(&mut self, message: &Value) -> Result<Option<&'static str>> {
         let Some(position) = message["id"]
             .as_u64()
@@ -583,58 +772,49 @@ impl<'l, 'a> Stream<'l, 'a> {
         };
         let (_, kind) = self.pending.remove(position);
         if message["type"] == "error" {
-            return self.failed(&kind, message);
+            return self.failed(kind, message);
         }
         self.errors = 0;
         let result = &message["result"];
         match kind {
-            Pending::Capture => self.frame(result["data"].as_str().unwrap_or_default()),
-            Pending::Tree => {
-                let context = self.launched.context.as_str();
-                let Some(page) = result["contexts"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|page| page["context"] == context)
-                else {
-                    return Ok(Some("PageClosed"));
-                };
-                self.read.1 = page["url"].as_str().unwrap_or_default().to_string();
-                self.publish();
+            Pending::Capture(context) if context == self.launched.context => {
+                self.frame(result["data"].as_str().unwrap_or_default());
             }
-            Pending::Input | Pending::Release => {}
-            Pending::Title => {
-                if result["result"]["type"] == "string" {
-                    self.read.0 = result["result"]["value"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string();
-                    self.publish();
+            Pending::Tree(epoch) if epoch == self.epoch => return self.refresh(result),
+            Pending::Title(id) if result["result"]["type"] == "string" => {
+                let title = result["result"]["value"].as_str().unwrap_or_default();
+                if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
+                    tab.title = bounded(title, tabs::MAX_TITLE);
                 }
+                self.publish();
+                self.send_tabs(false);
             }
+            _ => {}
         }
         Ok(None)
     }
 
-    /// A page that is gone ends the session; a title that could not be read is only a title; anything else
-    /// a few times in a row is the browser failing.
-    fn failed(&mut self, kind: &Pending, message: &Value) -> Result<Option<&'static str>> {
-        if matches!(kind, Pending::Title | Pending::Release) {
-            return Ok(None);
-        }
-        if message["error"] == "no such frame" {
-            return Ok(Some("PageClosed"));
-        }
-        // A sequence that Firefox rejected may have pressed a key or a button already: let go of everything, and do
-        // not count it as the browser failing.
-        if matches!(kind, Pending::Input) {
-            let context = self.launched.context.clone();
-            self.request(
-                "input.releaseActions",
-                json!({"context": context}),
-                Pending::Release,
-            )?;
-            return Ok(None);
+    /// A page that is gone is dropped from the list; a title that could not be read is only a title, and a
+    /// command on a page or history that ended is only that; anything else a few times in a row is the browser
+    /// failing.
+    fn failed(&mut self, kind: Pending, message: &Value) -> Result<Option<&'static str>> {
+        match kind {
+            Pending::Title(_) | Pending::Action | Pending::Release => return Ok(None),
+            Pending::Capture(context) if message["error"] == "no such frame" => {
+                return self.gone(&context);
+            }
+            // A sequence that Firefox rejected may have pressed a key or a button already: let go of everything,
+            // and do not count it as the browser failing.
+            Pending::Input => {
+                let context = self.launched.context.clone();
+                self.request(
+                    "input.releaseActions",
+                    json!({"context": context}),
+                    Pending::Release,
+                )?;
+                return Ok(None);
+            }
+            _ => {}
         }
         self.errors += 1;
         if self.errors >= MAX_ERRORS {
@@ -674,24 +854,55 @@ impl<'l, 'a> Stream<'l, 'a> {
         });
     }
 
+    /// The shown page's title and address, as last read.
     fn publish(&mut self) {
-        announce_page(self.outbox, &mut self.page, &self.read.0, &self.read.1);
+        if let Some(tab) = self.tabs.iter().find(|tab| tab.id == self.launched.context) {
+            announce_page(self.outbox, &mut self.page, &tab.title, &tab.url);
+        }
     }
 }
 impl Handler for Stream<'_, '_> {
     fn client(&mut self, body: &[u8]) -> Result<()> {
         let message = serde_json::from_slice::<Client>(body).ok();
+        let shown = self.launched.context.clone();
         match message {
             Some(Client::Ack { .. }) => {
                 self.outbox.ack();
             }
             Some(Client::Pause {}) => self.pause(true),
             Some(Client::Resume {}) => self.pause(false),
+            // Navigation is not input: Control does not gate it. A navigation does not wait for the page to load.
+            Some(Client::Navigate { url }) => self.act(
+                "browsingContext.navigate",
+                json!({"context": shown, "url": url, "wait": "none"}),
+            )?,
+            Some(Client::Back {}) => self.act(
+                "browsingContext.traverseHistory",
+                json!({"context": shown, "delta": -1}),
+            )?,
+            Some(Client::Forward {}) => self.act(
+                "browsingContext.traverseHistory",
+                json!({"context": shown, "delta": 1}),
+            )?,
+            Some(Client::Reload {}) => self.act(
+                "browsingContext.reload",
+                json!({"context": shown, "wait": "none"}),
+            )?,
+            Some(Client::Tabs {}) => self.send_tabs(true),
+            Some(Client::ActivateTab { id }) => self.activate(&id)?,
+            Some(Client::NewTab {}) => self.new_tab()?,
+            Some(Client::CloseTab { id }) => self.close_tab(&id)?,
             Some(Client::Control { on }) => self.control = on,
-            // A second open, or any message outside the closed set: counted, never forwarded.
-            Some(Client::Open { .. }) | None => self.refuse(allow::Refusal::Unlisted.reason()),
-            // What is left is input; `input::bidi_commands` refuses a message that is not.
-            Some(message) => self.input(&message)?,
+            Some(
+                message @ (Client::Pointer { .. }
+                | Client::Wheel { .. }
+                | Client::Pinch { .. }
+                | Client::Text { .. }
+                | Client::Key { .. }),
+            ) => self.input(&message)?,
+            // A second open, any message outside the closed set, `stop` (Firefox has no command for it) and a
+            // dialog answer (a later slice): counted, never forwarded.
+            Some(_) | None => self.refuse(allow::Refusal::Unlisted.reason())?,
         }
         Ok(())
     }

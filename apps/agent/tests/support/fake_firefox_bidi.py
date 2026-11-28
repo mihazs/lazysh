@@ -36,11 +36,23 @@ session_open = mode == "leak-always" or (mode == "leak-first" and launches == 1)
 captures = 0
 JPEG = b"\xff\xd8fake-jpeg\xff\xd9"
 page_url = next((a for a in args if a.startswith(("http://", "https://", "about:"))), "about:blank")
+# The top-level contexts, in the order they were made: each has its history (`entries`, the shown one at `index`),
+# and the context that opened it. A navigation to an address containing "popup" opens another context from it.
+contexts = {"C1": {"entries": [page_url], "index": 0, "opener": None}}
+made = 1
+
+
+def shown(context):
+    return context["entries"][context["index"]]
+
+
+def title_of(context):
+    return "Fixture page" if shown(context) == page_url else "Title of " + shown(context).split("://", 1)[-1]
 
 
 def answer(message):
     """The reply to one command, or None to say nothing."""
-    global session_open, captures
+    global session_open, captures, made
     method, id = message["method"], message["id"]
     ok = lambda result: {"type": "success", "id": id, "result": result}
     error = lambda name, text: {"type": "error", "id": id, "error": name, "message": text}
@@ -55,10 +67,44 @@ def answer(message):
             return ok({})
         if not session_open:
             return error("invalid session id", "no session")
+        params = message.get("params", {})
+        context = contexts.get(params.get("context"))
         if method == "browsingContext.getTree":
             gone = mode == "close" and captures > 0
-            return ok({"contexts": [] if gone else [{"context": "C1", "parent": None, "url": page_url, "children": []}]})
-        if method == "browsingContext.setViewport":
+            return ok({"contexts": [] if gone else [
+                {"context": name, "parent": None, "url": shown(c), "children": [],
+                 **({"originalOpener": c["opener"]} if c["opener"] else {})}
+                for name, c in contexts.items()]})
+        if method == "browsingContext.create":
+            made += 1
+            contexts[f"C{made}"] = {"entries": ["about:blank"], "index": 0, "opener": None}
+            return ok({"context": f"C{made}", "userContext": "default"})
+        if method in ("browsingContext.navigate", "browsingContext.reload", "browsingContext.traverseHistory",
+                      "browsingContext.close", "browsingContext.activate", "browsingContext.setViewport",
+                      "browsingContext.captureScreenshot", "script.evaluate") and context is None:
+            context = contexts.get(params.get("target", {}).get("context"))
+            if context is None:
+                return error("no such frame", "no such context")
+        if method == "browsingContext.navigate":
+            context["entries"][context["index"] + 1:] = [params["url"]]
+            context["index"] += 1
+            # "popup" opens one page from this one, "popups" a page that opens windows without end.
+            for _ in range(20 if "popups" in params["url"] else "popup" in params["url"]):
+                made += 1
+                contexts[f"C{made}"] = {"entries": ["http://127.0.0.1:3000/popped"], "index": 0, "opener": params["context"]}
+            return ok({"navigation": "N1", "url": params["url"]})
+        if method == "browsingContext.reload":
+            return ok({"navigation": "N2", "url": shown(context)})
+        if method == "browsingContext.traverseHistory":
+            at = context["index"] + params["delta"]
+            if not 0 <= at < len(context["entries"]):
+                return error("no such history entry", "no such history entry")
+            context["index"] = at
+            return ok({})
+        if method == "browsingContext.close":
+            del contexts[params["context"]]
+            return ok({})
+        if method in ("browsingContext.activate", "browsingContext.setViewport"):
             return ok({})
         if method == "browsingContext.captureScreenshot":
             captures += 1
@@ -68,7 +114,9 @@ def answer(message):
                 return error("no such frame", "gone")
             time.sleep(0.005)
             same = mode == "same"
-            return ok({"data": base64.b64encode(JPEG + (b"" if same else bytes([captures % 256]))).decode()})
+            # The context is in the picture, so that a test can tell which page streams.
+            tag = params["context"].encode()
+            return ok({"data": base64.b64encode(JPEG + tag + (b"" if same else bytes([captures % 256]))).decode()})
         if method == "input.performActions":
             if mode == "input-error":
                 return error("invalid argument", "bad sequence")
@@ -76,7 +124,7 @@ def answer(message):
         if method == "input.releaseActions":
             return ok({})
         if method == "script.evaluate":
-            return ok({"type": "success", "realm": "R1", "result": {"type": "string", "value": "Fixture page"}})
+            return ok({"type": "success", "realm": "R1", "result": {"type": "string", "value": title_of(context)}})
     return error("unknown command", method)
 
 

@@ -317,12 +317,11 @@ launcher applies the address rule to its first page.
 
 ### The Firefox adapter
 
-Slice 1 of [#1257](https://github.com/mihazs/lazysh/issues/1257): the view of a Firefox, with the same relay, wire
-format and client messages as Chrome (`apps/agent/src/host_browser/firefox.rs`, `bidi.rs`), and slice 2,
-[#1715](https://github.com/mihazs/lazysh/issues/1715): its input. The capability record still says `navigation` and
-`tabs` are false, because their client messages are the Chrome slices
-[#1256](https://github.com/mihazs/lazysh/issues/1256) and [#1259](https://github.com/mihazs/lazysh/issues/1259),
-and the Firefox adapter follows each of them.
+Slices of [#1257](https://github.com/mihazs/lazysh/issues/1257): the view of a Firefox, with the same relay, wire
+format and client messages as Chrome (`apps/agent/src/host_browser/firefox.rs`, `bidi.rs`), its input
+([#1715](https://github.com/mihazs/lazysh/issues/1715)) and its navigation, history and tabs
+([#1716](https://github.com/mihazs/lazysh/issues/1716)). The capability record says `control`, `navigation` and
+`tabs` are true. `stop` is false (see below).
 
 - **Start.** `open {"browser": "firefox"}` runs `firefox --headless --no-remote --profile <private>
   --remote-debugging-port 0 <url>` (`firefox` or `firefox-esr` on `PATH`, or `--binary`; `--headless` is left out
@@ -350,10 +349,29 @@ and the Firefox adapter follows each of them.
   chosen from the [measurements](reference/host-browser-feasibility.md#firefox-host-cost); the adaptive ladder of
   [#1259](https://github.com/mihazs/lazysh/issues/1259) replaces it. The frame header's scroll offset is 0:
   the capture is the viewport, and a pointer is mapped into the viewport.
-- **Title and address.** Once a second, `browsingContext.getTree` gives the address and one `script.evaluate` of
-  `document.title`, in a sandbox realm of the relay's own (`lazysh`) that the page's script cannot see or replace,
-  gives the title. That evaluation is the only script the relay ever runs, and the allow-list refuses it with any
-  other expression.
+- **Title and address.** Once a second, `browsingContext.getTree` gives the address of every top-level page and
+  one `script.evaluate` of `document.title` per page, in a sandbox realm of the relay's own (`lazysh`) that the
+  page's script cannot see or replace, gives its title. That evaluation is the only script the relay ever runs, and
+  the allow-list refuses it with any other expression.
+- **Navigation and history.** `navigate` is `browsingContext.navigate` with `wait: "none"` (the relay never waits
+  for a load), `reload` is `browsingContext.reload`, and `back` and `forward` are `browsingContext.traverseHistory`
+  with a `delta` of exactly -1 or 1. The address rule of the Chrome adapter runs in the relay, in the allow-list,
+  before the command is built: a Firefox 160 opens `file:///etc/hostname` when asked, so the refusal cannot be left
+  to the browser, and a refused address is counted as `AddressRefused` and never sent. BiDi has no history list, so
+  `canGoBack` and `canGoForward` are always true, and a step past either end is Firefox's `no such history entry`,
+  which the relay ignores; `loading` is always false.
+- **Tabs.** The list is every top-level context of `getTree` (at most 16, in the order the relay learned them);
+  `newTab` is `browsingContext.create` of a background tab, then shown; `activateTab` is `browsingContext.activate`
+  and sizes the page like the phone; `closeTab` is `browsingContext.close`, and closing the last page makes a blank
+  one first. A context that `getTree` lists as opened by the shown one (`originalOpener`: a link with
+  `target="_blank"`, `window.open`) takes the view, like in a browser, and a page beyond sixteen is closed again.
+  Only the shown page is captured; a screenshot that arrives after another page was shown is dropped. A context id
+  is only ever one the relay itself listed from `getTree` or `create`: any other (`activateTab`, `closeTab`) is
+  refused as `OperationRefused` before Firefox is asked, and a page that closes hands the view to the last one of
+  the list, ending the session with `PageClosed` only when none is left.
+- **No stop.** Firefox 160 answers `browsingContext.stop` and `stopLoading` with `unknown command`, so `stop` is
+  refused as `OperationRefused` and the capability record says `stop: false`; a navigation replaced by a new one
+  is the only way to leave a loading page.
 - **Input.** `control {on}` and the input messages of the Chrome relay, with the same bounds
   (`input::check`), the same refusal classes and counts, the same token bucket and Control off at the start. Each
   message is one `input.performActions` in the page's context (`input::bidi_commands`), written without waiting
@@ -374,7 +392,9 @@ and the Firefox adapter follows each of them.
   only; `NoTextInsertion`: no `insertText` and no composition in BiDi), so that a viewer can hide the control
   and say why. Turning Control off while a button is held leaves it held until the next click, as in Chrome.
 - **What the phone cannot reach.** Every command passes `allow::bidi` before it is written: only
-  `session.new`, `session.end`, `browsingContext.getTree`, `setViewport` and `captureScreenshot`, the title
+  `session.new`, `session.end`, `browsingContext.getTree`, `setViewport`, `captureScreenshot`, `navigate`,
+  `reload`, `traverseHistory`, `create`, `activate` and `close` with exactly the parameters above (no `userContext`,
+  no `referenceContext`, no `promptUnload`, a fixed `wait`), the title
   evaluation, and `input.performActions` and `input.releaseActions` inside bounds (at most three action sources,
   mouse pointers only, coordinates inside the 2048 pixel viewport and relative to it, wheel deltas within 10000,
   a tick of at most a second, one key per value, no key of the private-use block but the named keys and
@@ -390,7 +410,7 @@ and the Firefox adapter follows each of them.
   checks are off; these were set, and their effect on the network was not observed. Firefox keeps its crash
   reports and a few cache files in the host user's own directories (`~/.config/mozilla`, `~/.cache/mozilla`),
   outside the profile; the crash reporter is turned off for the relay's Firefox.
-- **Not yet.** Page pinch and composition (not available), tabs, navigation, history, dialogs, the file chooser report and the
+- **Not yet.** Page pinch and composition (not available), dialogs, the file chooser report and the
   quality ladder for Firefox, a reconnect after the WebSocket drops (a Firefox whose connection dropped holds a
   leaked session, so the relay ends the session instead), a Firefox older than 159, Firefox from a snap or a
   Flatpak (its profile and port may sit behind the sandbox), Windows and macOS hosts, and a headed Firefox were not
