@@ -17,6 +17,7 @@
     "test:published-native-gui": "vitest run --config vitest.published-native.config.ts",
     "tauri": "tauri",
     "check": "tsc -b",
+    "agent-dialogs:check": "bun src/test/agentDialogDrift.ts",
     "mobile-e2e": "wdio run mobile-e2e/wdio.android.conf.ts",
     "mobile-e2e:setup": "bun mobile-e2e/support/setup.ts",
     "mobile-e2e:unit": "bun test ./mobile-e2e/support",
