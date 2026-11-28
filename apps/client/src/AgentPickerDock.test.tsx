@@ -428,3 +428,22 @@ it('releases a replaced guard without letting its result release the new answer'
   await act(async () => {releaseNew(true);});
   await closedByOneEnter();
 });
+
+it('answers the /model picker Claude Code 2.1.326 draws, with the keys a person presses: arrows to the chosen row, read back, then Enter', async () => {
+  // The recorded screen with the highlight on option `to`, as the TUI redraws it after an arrow key.
+  const picker = (to: number) => fixture('claude-2.1.326-model').map(row => row.replace(/^ {3}❯ (\d\.)/, '     $1').replace(new RegExp(`^ {5}${to}\\.`), `   ❯ ${to}.`));
+  let at = 4;
+  answers.length = 0;
+  bindTo(vi.fn(async (body: DialogAnswer) => {
+    answers.push(body);
+    if (body.kind === 'pick' && !body.enter) {at += body.rows; screenOf.set(picker(at));} else screenOf.set(closed);
+    return true;
+  }));
+  mount(picker(at));
+  const card = await screen.findByRole('region', {name: t('agentPickerTitle')});
+  expect(within(card).getByRole('heading', {name: 'Select model'})).toBeTruthy();
+  expect(within(card).getAllByRole('button').map(button => button.textContent?.split(/(?=[A-Z])/)[0])).toEqual(expect.arrayContaining(['Default (recommended)', 'Opus 5.5', 'More models']));
+  expect(option('Sonnet 5.5').getAttribute('aria-current')).toBe('true');
+  await chooseAndClose('Opus 5.5');
+  expect(keys()).toEqual([{kind: 'pick', rows: -2, enter: false}, {kind: 'pick', rows: 0, enter: true}]);
+});
