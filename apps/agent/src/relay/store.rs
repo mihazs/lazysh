@@ -136,6 +136,11 @@ pub(crate) fn admit_transition(
         return Ok(());
     }
     let config = policy.config.ok_or_else(invalid)?;
+    // A held `done` the session has since moved past (a resumed turn, a newer report) is not true any more.
+    transaction.execute(
+        "UPDATE relay_outbox SET state='cancelled' WHERE state='queued' AND kind='done' AND may_sent=0 AND next_attempt>created AND id IN (SELECT event_id FROM relay_event_owner WHERE agent=?1 AND session_id=?2)",
+        params![event.agent, event.session_id],
+    )?;
     let pending: i64 = transaction.query_row(
         "SELECT count(*) FROM relay_outbox WHERE state IN ('queued','sending')",
         [],
@@ -212,7 +217,55 @@ pub(super) fn resolve_owner(
     ).optional()?;
     Ok(owner)
 }
+/// How long a `done` push waits, and is looked at again, while its session still runs background work.
+const HOLD_RECHECK: i64 = 20;
+/// The longest a `done` push is held: a monitor or a dev server can run for days, and the person is told then.
+const HOLD_LIMIT: i64 = 3600;
+/// Whether the `done` push `id` is not true yet: Claude Code's own records say its session still runs background work
+/// (or a turn no hook reported) as of the turn the push reports. A push with no such evidence is sent.
+fn held(
+    connection: &Connection,
+    id: &str,
+    created: i64,
+    now: i64,
+    holds: &dyn Fn(&str, &str, i64, i64) -> bool,
+) -> Result<bool> {
+    if now - created >= HOLD_LIMIT {
+        return Ok(false);
+    }
+    let owner: Option<(String, String)> = connection
+        .query_row(
+            "SELECT agent,session_id FROM relay_event_owner WHERE event_id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(owner.is_some_and(|(agent, session)| holds(&agent, &session, created, now)))
+}
+/// `claim` as the sender runs it: Claude Code's records decide which `done` pushes wait.
 pub(super) fn claim(connection: &mut Connection, revision: i64, now: i64) -> Result<Option<Job>> {
+    claim_with(
+        connection,
+        revision,
+        now,
+        &|agent, session, created, now| {
+            let at = |seconds| chrono::DateTime::from_timestamp(seconds, 0);
+            agent == "Claude Code"
+                && crate::rejected_dialog::claude_config_dir()
+                    .zip(at(created))
+                    .zip(at(now))
+                    .is_some_and(|((root, created), now)| {
+                        crate::background::holds_done(&root, session, created, now)
+                    })
+        },
+    )
+}
+pub(super) fn claim_with(
+    connection: &mut Connection,
+    revision: i64,
+    now: i64,
+    holds: &dyn Fn(&str, &str, i64, i64) -> bool,
+) -> Result<Option<Job>> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let current = policy(&transaction)?;
     if !current.enabled || current.revision != revision {
@@ -220,8 +273,22 @@ pub(super) fn claim(connection: &mut Connection, revision: i64, now: i64) -> Res
         return Ok(None);
     }
     recover(&transaction, revision, now)?;
-    let row:Option<(String,String,String,i64)>=transaction.query_row("SELECT id,config,kind,attempts FROM relay_outbox WHERE revision=?1 AND state='queued' AND next_attempt<=?2 AND attempts<?3 ORDER BY rowid LIMIT 1",params![revision,now,RETRY_LIMIT],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
-    let Some((id, config, kind, attempts)) = row else {
+    let row = loop {
+        let row:Option<(String,String,String,i64,i64)>=transaction.query_row("SELECT id,config,kind,attempts,created FROM relay_outbox WHERE revision=?1 AND state='queued' AND next_attempt<=?2 AND attempts<?3 ORDER BY rowid LIMIT 1",params![revision,now,RETRY_LIMIT],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+        match row {
+            // A push already tried is a retry, never held again; the bump moves a held one out of this query.
+            Some((id, _, kind, 0, created))
+                if kind == "done" && held(&transaction, &id, created, now, holds)? =>
+            {
+                transaction.execute(
+                    "UPDATE relay_outbox SET next_attempt=?1 WHERE id=?2",
+                    params![now + HOLD_RECHECK, id],
+                )?;
+            }
+            row => break row,
+        }
+    };
+    let Some((id, config, kind, attempts, _)) = row else {
         trim_terminal(&transaction)?;
         transaction.commit()?;
         return Ok(None);

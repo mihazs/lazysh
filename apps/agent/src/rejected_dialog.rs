@@ -27,6 +27,9 @@ pub(crate) fn claude_config_dir() -> Option<PathBuf> {
 /// `<projects>/<project>/<session id>.jsonl`, the file Claude Code appends the conversation to. The id names a file,
 /// so it holds nothing but the characters of the identifiers Claude Code writes.
 pub(crate) fn conversation(session_id: &str) -> Option<PathBuf> {
+    conversation_in(&claude_config_dir()?, session_id)
+}
+pub(crate) fn conversation_in(root: &Path, session_id: &str) -> Option<PathBuf> {
     if session_id.is_empty()
         || !session_id
             .bytes()
@@ -34,7 +37,7 @@ pub(crate) fn conversation(session_id: &str) -> Option<PathBuf> {
     {
         return None;
     }
-    fs::read_dir(claude_config_dir()?.join("projects"))
+    fs::read_dir(root.join("projects"))
         .ok()?
         .take(MAX_PROJECTS)
         .flatten()
