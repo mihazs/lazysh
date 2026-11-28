@@ -526,6 +526,9 @@ pub enum Support {
 pub struct Tool {
     kind: MultiplexerKind,
     version: Option<String>,
+    /// Herdr's `herdr api schema` version when the host printed one.
+    #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
+    schema_version: Option<u32>,
     support: Support,
     missing: &'static [&'static str],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -563,6 +566,7 @@ fn rmux_tool(capabilities: &str, daemon: &str) -> Tool {
     let unsupported = |version: Option<String>, reason| Tool {
         kind: MultiplexerKind::Rmux,
         version,
+        schema_version: None,
         support: Support::Unsupported,
         missing: &[],
         reason: Some(reason),
@@ -578,6 +582,7 @@ fn rmux_tool(capabilities: &str, daemon: &str) -> Tool {
     Tool {
         kind: MultiplexerKind::Rmux,
         version,
+        schema_version: None,
         support: Support::Degraded,
         missing: RMUX_MISSING,
         reason: None,
@@ -588,11 +593,17 @@ fn numbers(value: &str) -> Option<Vec<u32>> {
     value.split('.').map(|part| part.parse().ok()).collect()
 }
 /// The one table from `(kind, version line)` to support; untested versions stay degraded.
+/// Herdr's line carries the host's `herdr api schema` version after a tab; a readable
+/// version other than 1 degrades it, an unreadable one keeps the version verdict.
 fn tool(kind: MultiplexerKind, line: &str) -> Tool {
     if matches!(kind, MultiplexerKind::Rmux) {
         let (capabilities, daemon) = line.rsplit_once('\t').unwrap_or((line, "ok"));
         return rmux_tool(capabilities, daemon);
     }
+    let (line, schema_version) = match (kind, line.rsplit_once('\t')) {
+        (MultiplexerKind::Herdr, Some((line, schema))) => (line, schema.parse().ok()),
+        _ => (line, None),
+    };
     let name = match kind {
         MultiplexerKind::Rmux => unreachable!("rmux is admitted by capabilities above"),
         MultiplexerKind::Tmux => "tmux",
@@ -648,11 +659,15 @@ fn tool(kind: MultiplexerKind, line: &str) -> Tool {
         )
         .is_some_and(|v| v.len() == 2 && (v[0], v[1]) >= (3, 4)),
         MultiplexerKind::Zellij => numbers(version).is_some_and(|v| v == [0, 45, 1]),
-        MultiplexerKind::Herdr => numbers(version)
-            .is_some_and(|v| v.len() == 3 && v[..2] == [0, 9] && (3..=5).contains(&v[2])),
+        MultiplexerKind::Herdr => {
+            numbers(version)
+                .is_some_and(|v| v.len() == 3 && v[..2] == [0, 9] && (3..=5).contains(&v[2]))
+                && schema_version.is_none_or(|schema| schema == 1)
+        }
     });
     Tool {
         kind,
+        schema_version,
         version: version
             .filter(|v| !v.is_empty() && v.len() <= 64 && !v.chars().any(char::is_control))
             .map(str::to_owned),
@@ -746,15 +761,26 @@ fn name(value: &str) -> Result<()> {
     Ok(())
 }
 // Version commands only print; none of them starts a server.
-fn probe(tool: &str, version: &str) -> String {
-    format!("if command -v {tool} >/dev/null 2>&1; then printf '{tool}\\t1\\t%s\\n' \"$({tool} {version} 2>/dev/null | head -n 1)\"; else printf '{tool}\\t0\\n'; fi")
+// `herdr api schema` prints the installed binary's embedded schema; it never contacts or starts a server.
+fn probe(tool: &str, version: &str, schema: &str) -> String {
+    let (field, value) = if schema.is_empty() {
+        ("", String::new())
+    } else {
+        (
+            "\\t%s",
+            format!(
+                " \"$({tool} {schema} 2>/dev/null | sed -n 's/^schema_version: //p' | head -n 1)\""
+            ),
+        )
+    };
+    format!("if command -v {tool} >/dev/null 2>&1; then printf '{tool}\\t1\\t%s{field}\\n' \"$({tool} {version} 2>/dev/null | head -n 1)\"{value}; else printf '{tool}\\t0\\n'; fi")
 }
 /// The chosen Herdr's probe. A managed Herdr that cannot run here reads as absent, never as the system one.
 fn herdr_probe(backend: crate::herdr_backend::HerdrBackend, positive_unix: bool) -> String {
     let absent = "printf 'herdr\\t0\\n'";
     backend
         .wrap_or(
-            &probe("herdr", "--version"),
+            &probe("herdr", "--version", "api schema"),
             positive_unix,
             &format!("{absent}; exit 0"),
         )
@@ -787,9 +813,9 @@ fn discovery_command(
     };
     format!(
         "{}; {}; {}; {rmux_probe}; {listing}",
-        probe("tmux", "-V"),
+        probe("tmux", "-V", ""),
         herdr_probe(backend, positive_unix),
-        probe("zellij", "--version")
+        probe("zellij", "--version", "")
     )
 }
 
@@ -1583,20 +1609,14 @@ mod tests {
             .unwrap();
         }
     }
+    /// Runs the product discovery script against stub tools and returns the parsed tree and the commands they saw.
     #[cfg(unix)]
-    #[test]
-    fn discovery_script_reports_installed_versions_without_starting_a_server() {
+    fn discover(tools: &[(&str, &str)]) -> (serde_json::Value, String) {
         use std::{os::unix::fs::PermissionsExt, process::Command};
-        let tools = tempfile::tempdir().unwrap();
-        let calls = tools.path().join("calls");
-        for (name, body) in [
-            (
-                "tmux",
-                "case \"$*\" in -V) echo 'tmux 3.2a';; *has-session*) exit 1;; *) exit 9;; esac",
-            ),
-            ("zellij", "echo 'zellij 0.45.1'"),
-        ] {
-            let path = tools.path().join(name);
+        let dir = tempfile::tempdir().unwrap();
+        let calls = dir.path().join("calls");
+        for (name, body) in tools {
+            let path = dir.path().join(name);
             std::fs::write(
                 &path,
                 format!(
@@ -1607,7 +1627,7 @@ mod tests {
             .unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        link_system_tools(tools.path(), &["sh", "head"]);
+        link_system_tools(dir.path(), &["sh", "head", "sed"]);
         let output = Command::new("/bin/sh")
             .args([
                 "-c",
@@ -1618,13 +1638,25 @@ mod tests {
                 ),
             ])
             .env_clear()
-            .env("PATH", tools.path())
+            .env("PATH", dir.path())
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let tree =
             serde_json::to_value(parse_tree(&String::from_utf8(output.stdout).unwrap()).unwrap())
                 .unwrap();
+        (tree, std::fs::read_to_string(calls).unwrap())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn discovery_script_reports_installed_versions_without_starting_a_server() {
+        let (tree, calls) = discover(&[
+            (
+                "tmux",
+                "case \"$*\" in -V) echo 'tmux 3.2a';; *has-session*) exit 1;; *) exit 9;; esac",
+            ),
+            ("zellij", "echo 'zellij 0.45.1'"),
+        ]);
         assert_eq!(
             (
                 &tree["tmuxAvailable"],
@@ -1641,9 +1673,77 @@ mod tests {
         assert_eq!(tree["tools"][0]["support"], "degraded");
         assert_eq!(tree["tools"][1]["support"], "full");
         assert_eq!(
-            std::fs::read_to_string(calls).unwrap(),
+            calls,
             "tmux -V\nzellij --version\ntmux -u -L default has-session\n"
         );
+    }
+    /// A shell body that answers `herdr --version` like 0.9.5 and `herdr api schema` with `schema`.
+    #[cfg(unix)]
+    fn herdr_printing(schema: &str) -> String {
+        format!("case \"$*\" in --version) echo 'herdr 0.9.5';; 'api schema') {schema};; *) exit 9;; esac")
+    }
+    #[cfg(unix)]
+    #[test]
+    fn herdr_api_schema_version_gates_full_support_without_starting_a_server() {
+        for (schema, shown, support) in [
+            (
+                "printf 'Herdr API schema\\nprotocol: 22\\nschema_version: 1\\nschemas: x\\n'",
+                Some(1),
+                "full",
+            ),
+            (
+                "printf 'Herdr API schema\\nprotocol: 22\\nschema_version: 2\\nschemas: x\\n'",
+                Some(2),
+                "degraded",
+            ),
+            // An unreadable schema keeps the version verdict: the issue only degrades a readable mismatch.
+            ("exit 2", None, "full"),
+            ("printf 'schema_version: new\\n'", None, "full"),
+        ] {
+            let (tree, calls) = discover(&[("herdr", &herdr_printing(schema))]);
+            let herdr = &tree["tools"][0];
+            assert_eq!(herdr["version"], "0.9.5", "{schema}");
+            assert_eq!(herdr["support"], support, "{schema}");
+            assert_eq!(
+                herdr.get("schemaVersion"),
+                shown.map(Into::into).as_ref(),
+                "{schema}"
+            );
+            assert_eq!(
+                herdr["missing"].as_array().unwrap().is_empty(),
+                support == "full",
+                "{schema}"
+            );
+            // Only the two print-only commands run: nothing talks to or starts a Herdr server.
+            assert_eq!(calls, "herdr --version\nherdr api schema\n", "{schema}");
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires LAZYSH_TEST_HERDR_STOCK, the same-run stock Herdr binary"]
+    fn real_herdr_api_schema_gates_discovery_support() {
+        let binary = std::env::var("LAZYSH_TEST_HERDR_STOCK").unwrap();
+        let line = lazysh_common::test_support::successful_output(
+            std::process::Command::new(&binary)
+                .arg("--version")
+                .env_clear(),
+        );
+        let version = line.lines().next().unwrap().strip_prefix("herdr ").unwrap();
+        let real = quote(&binary);
+        // The binary is real; the second stub only changes the schema number it prints.
+        let changed = format!("if [ \"$1 $2\" = 'api schema' ]; then {real} \"$@\" | sed 's/^schema_version: 1$/schema_version: 2/'; else exec {real} \"$@\"; fi");
+        for (body, schema, support) in [
+            (format!("exec {real} \"$@\""), 1, "full"),
+            (changed, 2, "degraded"),
+        ] {
+            let (tree, calls) = discover(&[("herdr", &body)]);
+            let herdr = &tree["tools"][0];
+            eprintln!("real Herdr discovery record: {herdr}");
+            assert_eq!(herdr["version"], version);
+            assert_eq!(herdr["schemaVersion"], schema);
+            assert_eq!(herdr["support"], support);
+            assert_eq!(calls, "herdr --version\nherdr api schema\n");
+        }
     }
     const RMUX_CAPABILITIES: &str = r#"{"version":"0.10.0","binary_contract_version":1,"wire_version":8,"public_contract":["cli","json-output","format-tokens","control-mode"],"capabilities":["rpc.detached"],"control_mode":{"entrypoint":"rmux -C"}}"#;
     #[test]
@@ -2801,7 +2901,8 @@ esac
             sandbox.assert_reaches(backend, &[HERDR_SESSIONS]);
             assert_eq!(
                 sandbox.run_wrapped(&herdr_probe(backend, true)),
-                (format!("herdr\t1\t{name} --version\n"), true)
+                // The stub prints no schema number, so the schema field is empty.
+                (format!("herdr\t1\t{name} --version\t\n"), true)
             );
         }
         // A managed Herdr that is not installed is absent, however good the system one is.
