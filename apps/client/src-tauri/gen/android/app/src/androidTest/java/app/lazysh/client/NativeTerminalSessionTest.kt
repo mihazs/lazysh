@@ -1256,6 +1256,10 @@ class NativeTerminalSessionTest {
     }
 
     @Test fun aNativeSessionDrawsTheShellTakesTypingAndIsDrawnAgainAfterStopAndStart() { with(driver) {
+        if (fixture.optBoolean("mosh", false)) {
+            checkMoshResize()
+            return
+        }
         val recoveryEngine = InstrumentationRegistry.getArguments().getString("lazyshRendererRecovery")
         if (recoveryEngine != null) {
             org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q)
@@ -1413,6 +1417,45 @@ class NativeTerminalSessionTest {
         evidence.put("sameShellAfterHandback", true).put("nativeSurfaceRetiredAfterHandback", true)
     }
 
+    private fun NativeSessionDriver.checkMoshResize() {
+        val device = UiDevice.getInstance(instrumentation)
+        try {
+            device.setOrientationNatural()
+            val id = startNativeSession()
+            val transport = ".workspace-footer > span:last-child"
+            try {
+                until("Mosh transport on the native pane", 30,
+                    "document.querySelector('$transport')?.textContent.trimStart().startsWith('Mosh')")
+            } catch (error: AssertionError) {
+                throw AssertionError("${error.message}: ${text(transport)}", error)
+            }
+            // The owned CI emulator shows its keyboard: in landscape it would leave one row, too few to read the remote pty's answer.
+            hideTheSoftKeyboardBeforeLayoutChecks()
+            typeIntoTheSurface("printf 'native-%s:%s\\n' mosh \"\$\$\"")
+            val pid = awaitRow(id, "the original Mosh shell PID", { Regex("native-mosh:\\d+").matches(it) })
+                .lineSequence().map(String::trim).last { Regex("native-mosh:\\d+").matches(it) }.substringAfter(':')
+            val portrait = assertThePaneHoldsItsGrid(id, "mosh-portrait", "ma")
+            device.setOrientationLeft()
+            awaitTheGridToFollow(id, true, portrait)
+            val landscape = assertThePaneHoldsItsGrid(id, "mosh-landscape", "mb")
+            assertTrue("Mosh changed columns and rows in landscape", landscape.first > portrait.first && landscape.second < portrait.second)
+            typeIntoTheSurface("printf 'rotated-%s:%s\\n' mosh \"\$\$\"")
+            awaitRow(id, "the same Mosh shell after rotation", { it == "rotated-mosh:$pid" })
+            assertEquals("The original native surface still owns the session", id, session())
+            Evidence.record("native-mosh-resize", evidence.put("sameShell", true).put("transport", "mosh"))
+        } finally {
+            device.setOrientationNatural()
+            device.unfreezeRotation()
+        }
+    }
+
+    private fun NativeSessionDriver.hideTheSoftKeyboardBeforeLayoutChecks() {
+        ui { activity -> SoftKeyboard.set(activity.window, false) }
+        PageDriver.poll("the soft keyboard to be hidden before layout checks", 30) {
+            ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { !it }
+        }
+    }
+
     /** The grid the core holds, as the pane told it (columns, rows). */
     private fun NativeSessionDriver.coreGrid(session: String) = JSONObject(invoke("terminal_core_snapshot", session)).getJSONObject("state").let { it.getInt("columns") to it.getInt("rows") }
 
@@ -1480,10 +1523,7 @@ class NativeTerminalSessionTest {
         val imeSetting = "show_ime_with_hard_keyboard"
         val previousIme = shell("settings get secure $imeSetting").decodeToString().trim()
         try {
-            ui { activity -> SoftKeyboard.set(activity.window, false) }
-            PageDriver.poll("the soft keyboard to be hidden before layout checks", 30) {
-                ui { activity -> SoftKeyboard.visible(activity.window) }.takeIf { !it }
-            }
+            hideTheSoftKeyboardBeforeLayoutChecks()
             val portrait = assertThePaneHoldsItsGrid(id, "portrait", "pa")
 
             // A rotation: the window turns, the pane is placed again at its new size and the core is refitted to it.
