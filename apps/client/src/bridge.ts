@@ -128,7 +128,7 @@ export const api = {
   clipboardIsAndroid: () => invoke<boolean>('clipboard_is_android'),
   clipboardRead: (request: {token: string; kind: 'text' | 'image'}) => invoke<unknown>('clipboard_read', {request}),
   clipboardCancel: (token: string) => acknowledgeInvoke<void>('clipboard_cancel', {token}),
-  connectLocal: (onEvent:(event:SshEvent)=>void, launchReceipt?:string, target?:string) => createSession('local_connect',{cols:100,rows:30,...(launchReceipt ? {launchReceipt} : {}),...(target && target!=='default' ? {target} : {})},onEvent),
+  connectLocal: (onEvent:(event:SshEvent)=>void, launchReceipt?:string, target?:string, attach?:MultiplexerEntry) => createSession('local_connect',{cols:100,rows:30,...(launchReceipt ? {launchReceipt} : {}),...(target && target!=='default' ? {target} : {}),...(attach ? {attach} : {})},onEvent),
   connectEt: (sessionId: string, options: {serverPath?: string; port?: number}, onEvent: (event: SshEvent) => void) => {
     return createRemoteSession("connect_et", {sessionId, options, cols:100, rows:30},onEvent);
   },
@@ -143,6 +143,8 @@ export const api = {
     createRemoteSession('attach_multiplexer',{sessionId,...target,createIfMissing:true,cols:100,rows:30},onEvent),
   /** `reattach` (reconnect and restore) never creates the session: Zellij fails when it is gone instead of starting an empty one. */
   attachMultiplexer: (sessionId: string, kind: MultiplexerKind, name: string, onEvent: (event: SshEvent) => void, reattach=false, tmuxServer?: string) => {
+    // A local session attaches on this device's own shell, so the entry rides on a new `local_connect`.
+    if(sessionId.startsWith('local:'))return api.connectLocal(onEvent,undefined,undefined,{kind,name,...(tmuxServer===undefined?{}:{tmuxServer}),...(reattach?{createIfMissing:false}:{})});
     return createRemoteSession('attach_multiplexer', { sessionId, kind, name, ...(tmuxServer === undefined ? {} : {tmuxServer}), cols: 100, rows: 30, ...(reattach ? {createIfMissing:false} : {}) },onEvent);
   },
   listHosts: () => invoke<Host[]>("list_hosts"),
@@ -213,19 +215,20 @@ export const api = {
   diff: (sessionId: string, path: string, staged = false) =>
     invoke<string>("get_diff", { sessionId, path, staged }),
   muxSessions: (sessionId: string, tmuxServer?: string) =>
-    remoteInvoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
-  zellijJumpSnapshot: async (sessionId: string, name: string) => zellijSnapshot(name, await remoteInvoke<ZellijJumpTabs>('zellij_jump_tabs', { sessionId, name })),
+    invoke<MuxSession[]>("list_multiplexer_sessions", { sessionId, ...(tmuxServer === undefined ? {} : {tmuxServer}) }),
+  zellijJumpSnapshot: async (sessionId: string, name: string) => zellijSnapshot(name, await invoke<ZellijJumpTabs>('zellij_jump_tabs', { sessionId, name })),
   /** Jumps to a tab by its stable id; Zellij applies it a moment later, so the result is the caller's to show. */
-  zellijJump: (sessionId: string, name: string, tabId: number) => remoteInvoke<void>('zellij_action', { sessionId, name, action: { type: 'jump', tabId } }),
-  tmuxJumpSnapshot: (sessionId: string) => remoteInvoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),
+  zellijJump: (sessionId: string, name: string, tabId: number) => invoke<void>('zellij_action', { sessionId, name, action: { type: 'jump', tabId } }),
+  tmuxJumpSnapshot: (sessionId: string) => invoke<TmuxJumpSnapshot>('tmux_jump_snapshot', { sessionId }),
   tmuxJump: (sessionId: string, generation: string, targetSessionId: string, windowId: string, paneId?: string) =>
-    remoteInvoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId, ...(paneId === undefined ? {} : { paneId }) }),
+    invoke<TmuxJumpSnapshot>('tmux_jump', { sessionId, generation, targetSessionId, windowId, ...(paneId === undefined ? {} : { paneId }) }),
   attachTmux: (
     sessionId: string,
     name: string,
     onEvent: (event: SshEvent) => void,
     tmuxServer?: string,
   ) => {
+    if(sessionId.startsWith('local:'))return api.connectLocal(onEvent,undefined,undefined,{kind:'tmux',name,...(tmuxServer===undefined?{}:{tmuxServer})});
     return createRemoteSession("attach_tmux", {
       ...(tmuxServer === undefined ? {} : {tmuxServer}),
       sessionId,

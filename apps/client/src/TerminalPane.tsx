@@ -312,8 +312,10 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   }
   // Auto: phones with a multiplexer, while the key toolbar is shown and there is something to switch between. Always: whenever attached.
   const tabStripMode = preferences.tabStrip ?? "auto";
-  const tabStrip = useMultiplexerStrip({sessionId: session.id, attached: session.local ? undefined : session.attached, onError: reportError,
-    enabled: active && session.connected && !session.local && !!session.attached && (tabStripMode === "on" || (tabStripMode === "auto" && phone && toolbarVisible))});
+  // A local Herdr terminal is a plain terminal until Herdr's tree and actions run on this device.
+  const attachment = session.local && session.attached?.kind === 'herdr' ? undefined : session.attached;
+  const tabStrip = useMultiplexerStrip({sessionId: session.id, attached: attachment, onError: reportError,
+    enabled: active && session.connected && !!attachment && (tabStripMode === "on" || (tabStripMode === "auto" && phone && toolbarVisible))});
   const tabStripShown = !!tabStrip.strip && (tabStripMode === "on" || tabStrip.strip.tabs.length > 1 || tabStrip.strip.group.choices.length > 1);
   const dpadEnabled=toolbarVisible&&dpadOpen&&preferences.toolbar.includes('dpad');
   dpadView.current={session,enabled:dpadEnabled};
@@ -402,7 +404,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     element.addEventListener('touchstart',start,{passive:false});
     return()=>element.removeEventListener('touchstart',start);
   },[active,session.id,session.adapter,session.connected,dpadEnabled,preferences.screenReader]);
-  const multiplexer = session.local ? undefined : session.attached?.kind;
+  const multiplexer = attachment?.kind;
   const nativeTapFocus = native && softKeyboard.open !== null;
   const customTouch = !preferences.screenReader && (nativeTapFocus || preferences.pinchZoom || Object.values(preferences.gestures).some(action => action !== "none") || bodyGestureSlots.some(slot => preferences.bodyGestures[slot] !== "none") || (!!multiplexer && preferences.bodyGestures.pinch !== "none"));
   const multiTap = customTouch && (preferences.bodyGestures.doubleTap !== "none" || preferences.bodyGestures.tripleTap !== "none");
@@ -1083,9 +1085,9 @@ export default function TerminalPane({ session, active, swiping = false, typingA
   /** Tab, pane and zoom actions reach the attached multiplexer: Zellij through its CLI, tmux and Herdr through their prefix keys. */
   function runMultiplexer(action: MultiplexerAction) {
     if (!navigationReady()) return;
-    if (!multiplexer || !session.attached) {reportError(new LocalUiError('terminalMultiplexerRequired')); return;}
+    if (!multiplexer || !attachment) {reportError(new LocalUiError('terminalMultiplexerRequired')); return;}
     if (multiplexer === 'herdr' && herdrNavigationOnly && action === 'zoomPane') {reportError(new LocalUiError('muxLimitedHerdr')); return;}
-    if (multiplexer === 'zellij') {if (!zellijBusy.current) navigateZellij(session.attached.name, action); return;}
+    if (multiplexer === 'zellij') {if (!zellijBusy.current) navigateZellij(attachment.name, action); return;}
     const prefix = storedPrefix(multiplexer);
     if (!validPrefix(prefix)) {reportError(new LocalUiError('muxShortcutInvalid')); return;}
     imeInput.current?.flush();
@@ -1098,8 +1100,8 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     const zellijActions = {nextZellijTab:'nextTab',previousZellijTab:'previousTab',nextZellijPane:'nextPane',previousZellijPane:'previousPane'} as const;
     if (Object.hasOwn(zellijActions, action)) {
       if (!navigationReady() || zellijBusy.current) return;
-      if (session.local || session.attached?.kind !== 'zellij') {reportError(new LocalUiError('terminalZellijRequired')); return;}
-      navigateZellij(session.attached.name, zellijActions[action as keyof typeof zellijActions]);
+      if (attachment?.kind !== 'zellij') {reportError(new LocalUiError('terminalZellijRequired')); return;}
+      navigateZellij(attachment.name, zellijActions[action as keyof typeof zellijActions]);
       return;
     }
     if (action === "find") {setSearching(true); requestAnimationFrame(() => focusTerminal(searchInput.current));}

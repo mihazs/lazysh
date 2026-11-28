@@ -142,6 +142,13 @@ it('persists local intent without inventing an SSH host or retaining output',()=
     localStorage.setItem('lazysh.workspace.v1',JSON.stringify([item]));expect(readWorkspace()).toEqual([]);
   }
 });
+it('saves the multiplexer a local terminal attached, and refuses an attachment in another target or with a bad name',()=>{
+  saveWorkspace([{local:true,attached:{kind:'tmux',name:'work',restoreName:'work',tmuxServer:'agents'}},{local:true,target:'pwsh',attached:{kind:'zellij',name:'dev'}}] as never);
+  expect(readWorkspace()).toEqual([{local:true,attached:{kind:'tmux',name:'work',tmuxServer:'agents'}},{local:true,target:'pwsh'}]);
+  for(const item of [{local:true,target:'pwsh',attached:{kind:'tmux',name:'work'}},{local:true,attached:{kind:'tmux',name:'bad\u0000name'}},{local:true,attached:{kind:'screen',name:'x'}},{local:true,attached:{kind:'zellij',name:'x',tmuxServer:'s'}}]) {
+    localStorage.setItem('lazysh.workspace.v1',JSON.stringify([item]));expect(readWorkspace()).toEqual([]);
+  }
+});
 it('saves the local target of a session, never the default one or anything that is not a target id',()=>{
   saveWorkspace([{local:true,target:'wsl:Ubuntu-22.04'},{local:true,target:'default'},{local:true,target:'pwsh'},{local:true,target:'..\\x'}] as never);
   expect(readWorkspace()).toEqual([{local:true,target:'wsl:Ubuntu-22.04'},{local:true},{local:true,target:'pwsh'},{local:true}]);

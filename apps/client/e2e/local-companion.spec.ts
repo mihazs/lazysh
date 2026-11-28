@@ -1,6 +1,7 @@
 import {expect,test,type Page} from '@playwright/test';
 import {installNativeBridge} from './fixtures/nativeBridge';
 import {workspaceControl} from './fixtures/workspaceControl';
+import {openLocalFromConnections} from './fixtures/localTerminal';
 import {companionSettings} from '../src/test/agentBoardData';
 
 declare global { interface Window { companionCalls:{command:string;sessionId:unknown}[];reportedEvents:number;localConnects:number } }
@@ -39,12 +40,7 @@ async function openLocal(page:Page,companion:boolean|undefined,inbox:{monitoring
   await openTab(page,1);
 }
 async function openTab(page:Page,count:number) {
-  if(test.info().project.name==='phone')await page.getByRole('button',{name:'Open hosts',exact:true}).click();
-  const open=page.getByRole('button',{name:'Open local terminal',exact:true});
-  // A session with a companion opens the menu on Agents; the connections page lists the local terminal.
-  if(!await open.isVisible())await page.locator('[data-workspace-mode=connections]').click();
-  await open.click();
-  await expect(page.getByText('Local PTY').first()).toBeVisible();
+  await openLocalFromConnections(page,test.info());
   expect(await page.evaluate(()=>window.localConnects)).toBe(count);
 }
 const calls=(page:Page,command:string)=>page.evaluate(command=>window.companionCalls.filter(call=>call.command===command),command);

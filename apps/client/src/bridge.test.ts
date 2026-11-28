@@ -11,6 +11,18 @@ it('passes typed Mosh entry separately from transport options on the owned nativ
   await api.connectMosh('entry-parent',{},()=>{},entry);
   expect(invoke).toHaveBeenLastCalledWith('connect_mosh',{sessionId:'entry-parent',options:{},cols:100,rows:30,events:expect.any(Object),entry},expect.anything());
 });
+it('attaches a multiplexer from a local session by starting a local terminal with the typed entry',async()=>{
+  invoke.mockResolvedValue({sessionId:'local:attached'});
+  await api.attachTmux('local:shell','work',()=>{},'agents');
+  await api.attachMultiplexer('local:shell','zellij','dev',()=>{},true);
+  expect(invoke.mock.calls.map(([command,args])=>[command,args.attach,args.sessionId])).toEqual([
+    ['local_connect',{kind:'tmux',name:'work',tmuxServer:'agents'},undefined],
+    ['local_connect',{kind:'zellij',name:'dev',createIfMissing:false},undefined],
+  ]);
+  invoke.mockClear();
+  await api.muxSessions('local:shell');await api.tmuxJumpSnapshot('local:shell');
+  expect(invoke.mock.calls.map(([command,args])=>[command,args.sessionId])).toEqual([['list_multiplexer_sessions','local:shell'],['tmux_jump_snapshot','local:shell']]);
+});
 it('sends a pane id with a Jump To request only when a pane row was chosen',async()=>{
   const generation='g'.repeat(36);
   await api.tmuxJump('display',generation,'$1','@2');
@@ -80,9 +92,9 @@ it('preserves the existing SSH terminal IO contract',async()=>{
   await api.write('ssh-id','hello');await api.resize('ssh-id',80,24);await api.ackOutput('ssh-id',5);await api.disconnect('ssh-id');
   expect(invoke.mock.calls.map(([command])=>command)).toEqual(['write_stdin','resize','ack_output','disconnect']);
 });
-it('rejects local sessions before invoking SSH-only file or multiplexer tools',async()=>{
+it('rejects local sessions before invoking SSH-only file or transport tools',async()=>{
   const id='local:7d019ac3-f86f-41fb-82be-49531d36b459';
-  for(const operation of [()=>api.hostClipboardCopy(id,'receipt'),()=>api.muxSessions(id),()=>api.tmuxJumpSnapshot(id),()=>api.tmuxJump(id,'generation','$1','@2'),()=>api.attachTmux(id,'work',()=>{}),()=>api.attachDefaultMultiplexer(id,{kind:'tmux',name:'work'},()=>{}),()=>api.connectEt(id,{},()=>{}),()=>api.connectMosh(id,{},()=>{})]) {
+  for(const operation of [()=>api.hostClipboardCopy(id,'receipt'),()=>api.attachDefaultMultiplexer(id,{kind:'tmux',name:'work'},()=>{}),()=>api.connectEt(id,{},()=>{}),()=>api.connectMosh(id,{},()=>{})]) {
     await expect(operation()).rejects.toThrow('requires an SSH connection');
   }
   expect(invoke).not.toHaveBeenCalled();
