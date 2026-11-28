@@ -377,8 +377,9 @@ impl Fixture {
             quote(self.socket().to_str().unwrap())
         )
     }
-    fn local(&self, args: &[&str]) -> String {
-        let output = Command::new(&self.tmux)
+    fn local_command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(&self.tmux);
+        command
             .arg("-u")
             .arg("-f")
             .arg("/dev/null")
@@ -390,15 +391,34 @@ impl Fixture {
             .env("ZDOTDIR", self.dir.path())
             .env("SHELL", "/bin/sh")
             .env_remove("ENV")
-            .env_remove("BASH_ENV")
-            .output()
-            .unwrap();
+            .env_remove("BASH_ENV");
+        command
+    }
+    fn local(&self, args: &[&str]) -> String {
+        let output = self.local_command(args).output().unwrap();
         assert!(
             output.status.success(),
             "owned tmux: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+    /// Kills the owned server and returns only once its process is gone, so that a following command starts a
+    /// replacement instead of reaching the dying server ("server exited unexpectedly").
+    fn kill_server(&self) {
+        let pid: i32 = self
+            .local(&["display-message", "-p", "#{pid}"])
+            .parse()
+            .unwrap();
+        lazysh_common::test_support::killed_server(&mut self.local_command(&["kill-server"]));
+        let started = std::time::Instant::now();
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                started.elapsed() < BOUND,
+                "owned tmux server {pid} did not exit after kill-server"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
     async fn display(&self, session: &str) -> Display {
         self.display_with_prefix(session, "").await
@@ -821,7 +841,7 @@ async fn jump_probe() {
     );
     let mut pinned = f.control(a).await;
     assert!(pinned.position(&next.identity).await.is_ok());
-    f.local(&["kill-server"]);
+    f.kill_server();
     pinned.ended().await;
     let reused = f.local(&[
         "new-session",
@@ -875,7 +895,7 @@ async fn real_tmux_display_accepts_output_before_owned_identity() {
     );
     control.close().await;
     display.close().await;
-    fixture.local(&["kill-server"]);
+    fixture.kill_server();
 }
 
 /// tmux up to 3.7c copies a NULL `client_tty` and the whole server dies with SIGSEGV when `#{L:}` walks a client that has
@@ -1208,7 +1228,7 @@ async fn product_actor_probe() {
             .unwrap(),
     )
     .unwrap();
-    f.local(&["kill-server"]);
+    f.kill_server();
     timeout(BOUND, retained.retired()).await.unwrap();
     let reused = f.local(&[
         "new-session",
@@ -1299,6 +1319,17 @@ async fn pane_target_probe() {
     tmux(&["split-window", "-d", "-t", "%2", sleep]);
     tmux(&["resize-pane", "-Z", "-t", "%2"]);
     tmux(&["new-session", "-d", "-s", "other", sleep]);
+    // A pane reports the forked `tmux` as its command until the child has exec'd into sleep.
+    timeout(BOUND, async {
+        while tmux(&["list-panes", "-a", "-F", "#{pane_current_command}"])
+            .lines()
+            .any(|command| command != "sleep")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("every pane must be running sleep");
     let (state, app, _access, lease) = chat_fixture_app(f.dir.path().join("pane-config"));
     let parent = f.neutral(&state, &lease).await;
     let display = chat_fixture_attach(&app, &lease, &parent.session_id, "work").await;
@@ -1639,6 +1670,9 @@ impl NamedServers<'_> {
         lazysh_common::test_support::successful_output(self.command(name).args(args))
             .trim_end_matches('\n')
             .to_owned()
+    }
+    fn kill_server(&self, name: &str) {
+        lazysh_common::test_support::killed_server(self.command(name).arg("kill-server"));
     }
 }
 impl Drop for NamedServers<'_> {
@@ -2430,7 +2464,7 @@ async fn real_tmux_jump_named_servers_keep_colliding_ids_and_jump_bound() {
         .direct(hostile, &["display-message", "-p", "#{pid}"])
         .parse()
         .unwrap();
-    servers.direct(hostile, &["kill-server"]);
+    servers.kill_server(hostile);
     timeout(BOUND, async {
         loop {
             if unsafe { libc::kill(server_pid, 0) } == -1 {
@@ -3050,7 +3084,7 @@ async fn chat_input_probe() {
     .is_err());
     let bound = chat_fixture_bind(&app, &renewed, &child, &source).await;
     eprintln!("tmux chat stage: server EOF");
-    servers.direct("chat-a", &["kill-server"]);
+    servers.kill_server("chat-a");
     chat_fixture_rejected(
         &app,
         &renewed,
@@ -3294,11 +3328,7 @@ async fn real_tmux_jump_fresh_ssh_restores_same_durable_named_pane() {
         crate::tmux_server::TmuxServer::parse(Some(saved_server)).unwrap()
     );
     drop(native);
-    crate::tmux_jump::tmux_jump_snapshot(lease, second.state(), second.state(), restored)
-        .await
-        .unwrap()
-        .into_inner()
-        .unwrap();
+    snapshot_value(&second, &lease, &restored).await;
     assert_eq!(identity(saved_server), selected_identity);
     assert_eq!(identity("other"), other_identity);
     diagnostics
