@@ -435,6 +435,8 @@ pub fn run() {
                 ssh::agent_snapshot,
                 ssh::agent_reported_history,
                 ssh::agent_relay_resolve,
+                ssh::agent_reported_history_reference,
+                ssh::agent_reported_conversation,
                 companion::install_companion,
                 companion::install_companion_from_device,
                 companion::check_companion_update,

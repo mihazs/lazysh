@@ -187,6 +187,8 @@
     "allow-agent-snapshot",
     "allow-agent-reported-history",
     "allow-agent-relay-resolve",
+    "allow-agent-reported-history-reference",
+    "allow-agent-reported-conversation",
     "allow-install-companion",
     "allow-install-companion-from-device",
     "allow-check-companion-update",

@@ -56,8 +56,8 @@ export function mountAgentLauncher(kind:Kind) {
         const destination={...tmuxChatSnapshot.destination,paneId:launched?pane:'%3'};
         return reply.kind==='destination'?{...tmuxChatSnapshot,destination}:reply.kind==='bound'?{...tmuxChatBound,destination}:reply;
       }
-      case 'agent_reported_history':return {schemaVersion:1,sessionId:'codex-new',status:'available',path:'/home/owner/.codex/sessions/new.jsonl',reportedAt:'2026-11-14T10:00:00Z',paneId:pane};
-      case 'agent_transcript':case 'agent_herdr_conversation':return page;
+      case 'agent_reported_history_reference':return {schemaVersion:1,sessionId:'codex-new',status:'available',reference:'7f0d5c1e-8a4b-4e57-9c1a-2b6f3d9e0a11',reportedAt:'2026-11-14T10:00:00Z',paneId:pane};
+      case 'agent_reported_conversation':case 'agent_herdr_conversation':return page;
       case 'list_directory':return args.path==='/'?[{name:'srv',isDir:true,size:0}]:[];
       case 'herdr_repository':return {root:'/srv/app',main:'/srv/app',head:'main',detached:false,worktrees:['/srv/app']};
       case 'herdr_agent_kinds':return [{kind:'codex',label:'Codex',executable:'codex',prompt:true,installed:true},{kind:'claude',label:'Claude Code',executable:'claude',prompt:true,installed:false},{kind:'opencode',label:'OpenCode',executable:'opencode',prompt:false,installed:true}];

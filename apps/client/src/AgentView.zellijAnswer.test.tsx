@@ -15,8 +15,8 @@ function zellij(host:Partial<Host>={}) {
   const state:Host={agent:'Claude Code',state:'needs_attention',paneId:'zellij:work:7',messages:[{id:'p',role:'user',blocks:[{type:'text',text:'Hello'}]}],screen:[],listed:0,...host};
   vi.mocked(invoke).mockImplementation(async(command,args)=>{
     if(command==='agent_snapshot')return {schemaVersion:1,sessions:[{sessionId:'the-session',agent:state.agent,project:'/work',state:state.state,updatedAt:new Date().toISOString(),summary:'Waiting',paneId:state.paneId,eventCount:3}]};
-    if(command==='agent_reported_history')return {schemaVersion:1,sessionId:'the-session',status:'available',path:'/home/owner/a.jsonl',reportedAt:'2026-11-09T10:00:00Z',paneId:state.paneId};
-    if(command==='agent_transcript')return {schemaVersion:1,agent:state.agent==='Codex'?'codex':'claude',view:'active_branch',messages:state.messages,nextOffset:0,hasMore:false,activity:'waiting'};
+    if(command==='agent_reported_history_reference')return {schemaVersion:1,sessionId:'the-session',status:'available',reference:'4e0da3cb-f6d1-468c-89fb-52d2602bd310',reportedAt:'2026-11-09T10:00:00Z',paneId:state.paneId};
+    if(command==='agent_reported_conversation')return {schemaVersion:1,agent:state.agent==='Codex'?'codex':'claude',view:'active_branch',messages:state.messages,nextOffset:0,hasMore:false,activity:'waiting'};
     if(command==='zellij_agent_screen')return state.screen;
     if(command==='zellij_agent_input'){state.press?.((args as {input:{kind:string}}).input);return null;}
     throw new Error(`Unexpected ${command}`);
