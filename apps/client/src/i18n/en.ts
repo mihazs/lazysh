@@ -2645,6 +2645,7 @@ export const english = {
   agentLaunchArgumentsHint: "Separate arguments with spaces and put quotes around one that holds spaces. Each one is passed to the agent as plain text.",
   agentLaunchArgumentsQuote: "Close every quote, and do not end with a backslash.",
   agentLaunchArgumentsLimit: "Use at most {{count}} arguments of {{length}} bytes each, without line breaks or control characters.",
+  agentLaunchArgumentsPlain: "Arguments here cannot be empty or hold a backslash.",
   agentLaunchYolo: "YOLO: skip approval prompts ({{flag}})",
   agentLaunchYoloHint: "YOLO turns off {{agent}}'s approval prompts and, where the flag says so, its sandbox ({{flag}}): it runs commands and changes files without asking. Leave it off unless you trust what it will do.",
   agentViewUsage: "Last response: {{input}} input, {{output}} output, {{read}} cache read, {{write}} cache write tokens",

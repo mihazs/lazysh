@@ -154,6 +154,9 @@ pub struct AgentRequest {
     name: String,
     #[serde(default)]
     prompt: Option<String>,
+    /// The person's own arguments (and the agent's YOLO flag when they chose it), one argv word each.
+    #[serde(default)]
+    args: Vec<String>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -227,6 +230,21 @@ fn literal_format(value: &str) -> String {
     tmux_word(&value.replace('#', "##"))
 }
 
+/// Agent arguments are argv words, never a shell string: bounded, single-line and free of
+/// backslashes like a prompt, so the plan's quoted command is a faithful copy of what runs.
+fn agent_args(values: &[String]) -> Result<()> {
+    if values.len() > 32 {
+        return Err(invalid("Use at most 32 agent arguments"));
+    }
+    values.iter().try_for_each(|value| {
+        text(
+            value,
+            512,
+            "Enter agent arguments of up to 512 bytes, without line breaks, control characters or backslashes",
+        )
+    })
+}
+
 struct Validated<'a> {
     label: &'a str,
     directory: &'a str,
@@ -234,6 +252,8 @@ struct Validated<'a> {
     create: bool,
     worktree: Option<[&'a str; 4]>,
     agent: Option<(&'static str, &'static str, &'a str, Option<&'a str>)>,
+    /// The agent's arguments, which go between its executable and its prompt.
+    agent_args: &'a [String],
 }
 /// `multiline` lets a prompt hold line breaks and tabs: only an argv word of a
 /// tmux or Zellij launch carries them verbatim; Herdr's `agent start` takes one line.
@@ -276,6 +296,7 @@ fn validate(request: &CreateRequest, multiline: bool) -> Result<Validated<'_>> {
         Some(value) => {
             let (kind, executable, prompts) = agent(&value.kind)?;
             agent_name(&value.name)?;
+            agent_args(&value.args)?;
             let prompt = value.prompt.as_deref().filter(|p| !p.trim().is_empty());
             if let Some(prompt) = prompt {
                 if !prompts {
@@ -306,6 +327,7 @@ fn validate(request: &CreateRequest, multiline: bool) -> Result<Validated<'_>> {
         create,
         worktree,
         agent,
+        agent_args: request.agent.as_ref().map_or(&[], |value| &value.args),
     })
 }
 fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<Step>> {
@@ -313,12 +335,13 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
     if let Host::Herdr(name) = host {
         server(name)?;
     }
-    // A tmux or Zellij launch is the agent's own argv: `executable [prompt]`.
+    // A tmux or Zellij launch is the agent's own argv: `executable [arguments] [prompt]`.
     let launch = match (host, valid.agent) {
         (Host::Herdr(_), _) => vec![],
         (_, None) => return Err(invalid("Choose an agent to start")),
         (_, Some((_, executable, _, prompt))) => {
             let mut argv = vec![executable];
+            argv.extend(valid.agent_args.iter().map(String::as_str));
             argv.extend(prompt);
             argv.into_iter().map(str::to_owned).collect()
         }
@@ -415,8 +438,15 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
             "--timeout",
             &timeout,
         ]);
-        if let Some(prompt) = prompt {
-            argv.extend(args(&["--", prompt]));
+        let trailing: Vec<&str> = valid
+            .agent_args
+            .iter()
+            .map(String::as_str)
+            .chain(prompt)
+            .collect();
+        if !trailing.is_empty() {
+            argv.push("--".to_owned());
+            argv.extend(trailing.into_iter().map(str::to_owned));
         }
         steps.push(step("agent", argv));
     }
