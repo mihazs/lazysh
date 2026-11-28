@@ -116,10 +116,11 @@ pub(super) fn claude_message(record: &Value, inline_images: bool, position: u64)
 }
 
 pub(super) fn is_conversation_record(record: &Value) -> bool {
-    matches!(
+    (matches!(
         record["type"].as_str(),
         Some("user" | "assistant" | "progress" | "system" | "attachment")
-    ) && record["uuid"].is_string()
+    ) || super::events::fallback_candidate(record))
+        && record["uuid"].is_string()
 }
 
 #[derive(Default)]

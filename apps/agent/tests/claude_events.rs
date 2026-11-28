@@ -8,28 +8,34 @@ use std::fs;
 
 const LOG: &str = include_str!("fixtures/claude-events.jsonl");
 
+/// Each message as its role, or, for an event, what `describe` makes of it.
+fn shape(path: &std::path::Path, describe: impl Fn(&Value) -> Value) -> Vec<Value> {
+    let page = conversation(path, TranscriptAgent::Claude, 100).unwrap();
+    page.messages
+        .iter()
+        .map(|message| {
+            if message["role"] == "event" {
+                describe(message)
+            } else {
+                json!(message["role"])
+            }
+        })
+        .collect()
+}
+
 #[test]
 fn chosen_events_become_event_messages_in_place_and_the_rest_stays_hidden() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("c.jsonl");
     fs::write(&path, LOG).unwrap();
-    let page = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
-    let shape: Vec<Value> = page
-        .messages
-        .iter()
-        .map(|message| {
-            if message["role"] == "event" {
-                json!([
-                    message["event"]["kind"],
-                    message["event"]["text"],
-                    message["event"]["detail"],
-                    message["blocks"]
-                ])
-            } else {
-                json!(message["role"])
-            }
-        })
-        .collect();
+    let shape = shape(&path, |message| {
+        json!([
+            message["event"]["kind"],
+            message["event"]["text"],
+            message["event"]["detail"],
+            message["blocks"]
+        ])
+    });
     assert_eq!(
         shape,
         vec![
@@ -54,6 +60,7 @@ fn chosen_events_become_event_messages_in_place_and_the_rest_stays_hidden() {
             json!("assistant"),
         ]
     );
+    let page = conversation(&path, TranscriptAgent::Claude, 100).unwrap();
     assert_eq!(page.messages[1]["timestamp"], "2026-11-11T10:01:00Z");
     assert_eq!(page.messages[1]["id"], "r1");
 }
@@ -68,4 +75,37 @@ fn the_records_view_keeps_its_message_shapes() {
         .messages
         .iter()
         .all(|message| message["role"] != "event"));
+}
+
+/// Synthetic records in the shape Claude Code writes: a plug-in status line of a record type lazysh does not map,
+/// a `system` record of an unmapped subtype, known housekeeping, and and a record without an id, which cannot sit on the branch.
+const UNMAPPED: &str = r#"{"uuid":"u0","parentUuid":null,"type":"user","message":{"role":"user","content":"hi"}}
+{"uuid":"u1","parentUuid":"u0","type":"plugin-status","timestamp":"2026-11-11T10:01:00Z","text":"build: 3 jobs running"}
+{"uuid":"u2","parentUuid":"u1","type":"system","subtype":"plugin_notice","content":"Plug-in x updated"}
+{"uuid":"u3","parentUuid":"u2","type":"system","subtype":"turn_duration","durationMs":5}
+{"type":"file-history-snapshot","messageId":"u3","text":"hidden bookkeeping"}
+{"uuid":"u6","parentUuid":"u3","type":"assistant","message":{"role":"assistant","id":"m","content":[{"type":"text","text":"ok"}]}}
+"#;
+
+#[test]
+fn a_record_lazysh_does_not_map_is_a_labelled_card_with_the_agents_own_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("c.jsonl");
+    fs::write(&path, UNMAPPED).unwrap();
+    let shape = shape(&path, |message| {
+        json!([
+            message["event"]["kind"],
+            message["event"]["text"],
+            message["event"]["detail"]
+        ])
+    });
+    assert_eq!(
+        shape,
+        vec![
+            json!("user"),
+            json!(["unmapped", "plugin-status", "build: 3 jobs running"]),
+            json!(["unmapped", "system/plugin_notice", "Plug-in x updated"]),
+            json!("assistant"),
+        ]
+    );
 }

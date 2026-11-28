@@ -136,6 +136,21 @@ screen-reading command: the terminal snapshot of the confirmed input
 | Gemini CLI | Footer: folder, sandbox state, model, context left, approval mode (default, auto-edit, YOLO) | The session file (`chats/session-*.jsonl`): the last recorded `model` and the prompt size. Folder, sandbox, approval mode and the window are not recorded | Partial: the model and tokens used show; the rest is on screen only ([#1125](https://github.com/mihazs/lazysh/issues/1125)) |
 | Grok Build | Status line (its contents are on screen only) | The session log (`updates.jsonl`) records neither a model nor token usage that was verified against a real session | Gap: the header shows the agent's name and its reported state; the conversation, tool cards and plan card come from the log ([#1657](https://github.com/mihazs/lazysh/issues/1657), real-agent check [#1842](https://github.com/mihazs/lazysh/issues/1842)). Questions, approvals and Stop stay in the terminal until their keys are checked on a real Grok Build |
 
+### Fallback for unmapped records and per-adapter coverage
+
+Tracked by [#2089](https://github.com/mihazs/lazysh/issues/2089). A record the adapter does not map must not vanish, so the Agent view shows it as a muted
+**Not shown natively** line (the `unmapped` event kind, see [the companion](../companion.md)) whose label is the record's own type, or `system/<subtype>`, and
+that opens to the agent's own text. Known housekeeping stays hidden: `queue-operation`, `permission-mode`, `cost-state`, `worktree-state`,
+`file-history-snapshot`, `summary`, titles and tags, and the `system` subtypes `turn_duration`, `compact_boundary`, `stop_hook_summary`, `local_command` and `api_error`.
+A `system` record needs text to show; a record without a `uuid` cannot sit on the active branch and is not shown. The table is the checklist for the
+remaining parity work: a row turns into mapped elements, issue by issue, and an adapter without a fallback is a gap.
+
+| Agent | Elements the TUI shows that leave a trace | Unmapped records today |
+| --- | --- | --- |
+| Claude Code | Status lines, slash-command output, hooks, skills, sub-agents, MCP state, background jobs, notices, recaps (see the tables above) | Fallback line for unknown record types and unmapped `system` subtypes. Unmapped `attachment` types stay hidden (hook successes, listings, environment wrappers outnumber the conversation); each cluster needs its own mapping issue. |
+| Codex, OpenCode, Gemini CLI, Grok Build | Plans, tool calls, reasoning, sub-agents, compaction, goals | Not covered: records the conversation adapter does not map are dropped. Gap. |
+| Copilot CLI, Kimi, Droid, Cursor, Amp, Cline, Pi and the rest | Records-only reads | Not covered by a conversation view; the records view lists what the reader keeps. Gap. |
+
 ### Records-only adapters
 
 The agents that have no conversation view here show one of two things for a pane that reports a session, and neither has a composer. GitHub Copilot CLI,

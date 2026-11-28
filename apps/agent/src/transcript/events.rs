@@ -3,6 +3,8 @@
 //! Chosen by recorded Claude Code shapes: a goal being set or reached, plan mode on and off, the away recap
 //! and a failed hook. Everything else the harness writes (hook successes, skill and tool listings, environment
 //! and instruction wrappers, repeated goal checks) stays hidden because it outnumbers the conversation.
+//! A record of a type or `system` subtype that is neither mapped nor known housekeeping is shown as an `unmapped`
+//! event with the agent's own text, so a feature Claude Code ships before lazysh maps it is never silently dropped.
 use serde_json::{json, Value};
 
 const MAX_TEXT: usize = 2000;
@@ -13,6 +15,67 @@ fn clip(value: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(|text| text.chars().take(MAX_TEXT).collect())
+}
+
+/// Record types that are housekeeping, not something the screen shows; they stay hidden.
+const QUIET_TYPES: [&str; 14] = [
+    "queue-operation",
+    "permission-mode",
+    "cost-state",
+    "worktree-state",
+    "file-history-snapshot",
+    "summary",
+    "last-prompt",
+    "custom-title",
+    "ai-title",
+    "agent-name",
+    "agent-color",
+    "pr-link",
+    "mode",
+    "tag",
+];
+/// `system` subtypes that are mapped elsewhere or are bookkeeping.
+const QUIET_SUBTYPES: [&str; 6] = [
+    "turn_duration",
+    "compact_boundary",
+    "stop_hook_summary",
+    "away_summary",
+    "local_command",
+    "api_error",
+];
+
+/// A record the fallback may show: an unknown type, or a `system` record of a subtype nothing maps.
+/// Only the type and subtype decide, so the kept-record filter and the session-read trim agree with `unmapped`.
+pub(super) fn fallback_candidate(record: &Value) -> bool {
+    match record["type"].as_str() {
+        Some("system") => record["subtype"]
+            .as_str()
+            .is_none_or(|subtype| !QUIET_SUBTYPES.contains(&subtype)),
+        Some("user" | "assistant" | "progress" | "attachment") | None => false,
+        Some(kind) => !QUIET_TYPES.contains(&kind),
+    }
+}
+
+/// The generic card: a labelled event with the record's own text (collapsed in the view), never dropped.
+fn unmapped(record: &Value) -> Option<Value> {
+    if !fallback_candidate(record) || record["isSidechain"] == true {
+        return None;
+    }
+    let kind = record["type"].as_str()?;
+    let label = match record["subtype"].as_str() {
+        Some(subtype) => format!("{kind}/{subtype}"),
+        None => kind.to_owned(),
+    };
+    let detail = ["content", "text", "message", "summary", "title"]
+        .iter()
+        .find_map(|key| clip(&record[*key]));
+    // A `system` record without text carries nothing to show.
+    if kind == "system" && detail.is_none() {
+        return None;
+    }
+    Some(
+        json!({"kind":"unmapped","text":label.chars().take(120).collect::<String>(),"detail":detail}),
+    )
 }
 
 fn event(record: &Value) -> Option<Value> {
@@ -46,7 +109,7 @@ fn event(record: &Value) -> Option<Value> {
 
 /// An `event` message for a conversation view, or `None` for every other record.
 pub(super) fn claude(record: &Value) -> Option<Value> {
-    let mut event = event(record)?;
+    let mut event = event(record).or_else(|| unmapped(record))?;
     if event["detail"].is_null() {
         event.as_object_mut()?.remove("detail");
     }
@@ -100,7 +163,7 @@ pub(super) fn trim(record: &mut Value) {
     if let Some(attachment) = record["attachment"].as_object_mut() {
         attachment.retain(|key, _| KEPT.contains(&key.as_str()));
     }
-    if record["subtype"] != "away_summary" {
+    if record["subtype"] != "away_summary" && !fallback_candidate(record) {
         if let Some(object) = record.as_object_mut() {
             object.remove("content");
         }
