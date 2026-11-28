@@ -1,11 +1,14 @@
 //! Control: what the phone's input messages become (docs/host-browser.md, "Input mapping for a phone").
 //!
-//! [`commands`] is the only producer of input protocol calls. It checks a message against the bounds below,
+//! [`commands`] (Chrome) and [`bidi_commands`] (Firefox) are the only producers of input protocol calls. It checks a message against the bounds below,
 //! refuses it with a class when it is outside them, and otherwise returns the calls that
 //! `inputCommands` in `apps/client/src/hostBrowser/cdp.ts` returns for the same message, so the developer
 //! prototype and the relay stay equal. The relay still asks [`super::allow::command`] before it writes each one.
 //! Nothing here keeps or logs a coordinate, a key or a text.
-use super::wire::{Button, Client, PointerKind, Viewport};
+use super::{
+    allow::{Refusal, BIDI_KEY_RANGE, BIDI_MODIFIER_KEYS, BIDI_NAMED_KEYS},
+    wire::{Button, Client, PointerKind, Viewport},
+};
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -47,13 +50,44 @@ const SPECIAL: [(&str, u32); 13] = [
     ("Delete", 46),
 ];
 
-/// The protocol calls for one input message, or the class it is refused with. Anything that is not an input
-/// message is out of range.
-pub fn commands(message: &Client, viewport: Viewport) -> Result<Vec<Call>, &'static str> {
+/// Whether the bounds allow `message`, or the class it is refused with. Every adapter asks it before it maps a
+/// message, so that Chrome and Firefox refuse exactly the same ones. Anything that is not an input message is out
+/// of range.
+pub fn check(message: &Client, viewport: Viewport) -> Result<(), &'static str> {
     let inside = |x: f64, y: f64| {
         (0.0..=f64::from(viewport.width)).contains(&x)
             && (0.0..=f64::from(viewport.height)).contains(&y)
     };
+    let allowed = match *message {
+        // A press or a release belongs to a button; only a move may have none.
+        Client::Pointer {
+            kind,
+            x,
+            y,
+            button,
+            click_count,
+        } => {
+            inside(x, y)
+                && click_count <= MAX_CLICKS
+                && (kind == PointerKind::Move || button != Button::None)
+        }
+        Client::Wheel {
+            x,
+            y,
+            delta_x,
+            delta_y,
+        } => inside(x, y) && delta_x.abs() <= MAX_WHEEL && delta_y.abs() <= MAX_WHEEL,
+        Client::Pinch { scale } => SCALE.contains(&scale),
+        Client::Text { ref text } => text.len() <= MAX_TEXT,
+        Client::Key { ref key, modifiers } => return key_code(key, modifiers).map(|_| ()),
+        _ => false,
+    };
+    allowed.then_some(()).ok_or(OUT_OF_RANGE)
+}
+
+/// The protocol calls for one input message, or the class it is refused with.
+pub fn commands(message: &Client, viewport: Viewport) -> Result<Vec<Call>, &'static str> {
+    check(message, viewport)?;
     match *message {
         Client::Pointer {
             kind,
@@ -62,13 +96,6 @@ pub fn commands(message: &Client, viewport: Viewport) -> Result<Vec<Call>, &'sta
             button,
             click_count,
         } => {
-            // A press or a release belongs to a button; only a move may have none.
-            if !inside(x, y)
-                || click_count > MAX_CLICKS
-                || (kind != PointerKind::Move && button == Button::None)
-            {
-                return Err(OUT_OF_RANGE);
-            }
             let (kind, held) = match kind {
                 PointerKind::Move => ("mouseMoved", 1),
                 PointerKind::Press => ("mousePressed", 1),
@@ -89,33 +116,106 @@ pub fn commands(message: &Client, viewport: Viewport) -> Result<Vec<Call>, &'sta
             y,
             delta_x,
             delta_y,
-        } => {
-            if !inside(x, y) || delta_x.abs() > MAX_WHEEL || delta_y.abs() > MAX_WHEEL {
-                return Err(OUT_OF_RANGE);
-            }
-            Ok(vec![mouse(
-                json!({"type": "mouseWheel", "x": x, "y": y, "deltaX": delta_x, "deltaY": delta_y}),
-            )])
-        }
-        Client::Pinch { scale } if SCALE.contains(&scale) => Ok(vec![(
+        } => Ok(vec![mouse(
+            json!({"type": "mouseWheel", "x": x, "y": y, "deltaX": delta_x, "deltaY": delta_y}),
+        )]),
+        Client::Pinch { scale } => Ok(vec![(
             "Emulation.setPageScaleFactor",
             json!({"pageScaleFactor": scale}),
         )]),
-        Client::Text { ref text } if text.len() <= MAX_TEXT => {
-            Ok(vec![("Input.insertText", json!({"text": text}))])
-        }
+        Client::Text { ref text } => Ok(vec![("Input.insertText", json!({"text": text}))]),
         Client::Key { ref key, modifiers } => key_events(key, modifiers),
         _ => Err(OUT_OF_RANGE),
     }
+}
+
+/// A BiDi key source with `events`, each a `keyDown` or a `keyUp` of one WebDriver key value.
+pub(super) fn key_source(events: Vec<(&'static str, char)>) -> Value {
+    let actions: Vec<_> = events
+        .into_iter()
+        .map(|(kind, value)| json!({"type": kind, "value": value.to_string()}))
+        .collect();
+    json!({"type": "key", "id": "keyboard", "actions": actions})
+}
+
+/// The WebDriver BiDi call for one input message, or the class it is refused with (`context` is the adapter's to add):
+/// the same bounds as [`commands`], so Firefox refuses what Chrome refuses. The pointer is a mouse, because a held
+/// touch gave no context menu and a right click did; a drag is a wheel action; text is one key action per character,
+/// because BiDi has no `insertText` and no composition; and there is no page pinch, so that message is refused as
+/// an operation the adapter does not have.
+pub fn bidi_commands(message: &Client, viewport: Viewport) -> Result<Vec<Call>, &'static str> {
+    check(message, viewport)?;
+    // BiDi takes whole CSS pixels.
+    let pixel = |value: f64| value.round() as i64;
+    let source = match *message {
+        Client::Pointer {
+            kind, x, y, button, ..
+        } => {
+            let number = if button == Button::Right { 2 } else { 0 };
+            let mut actions = vec![
+                json!({"type": "pointerMove", "x": pixel(x), "y": pixel(y), "origin": "viewport"}),
+            ];
+            match kind {
+                PointerKind::Move => {}
+                PointerKind::Press => {
+                    actions.push(json!({"type": "pointerDown", "button": number}))
+                }
+                PointerKind::Release => {
+                    actions.push(json!({"type": "pointerUp", "button": number}))
+                }
+            }
+            json!({"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": actions})
+        }
+        Client::Wheel {
+            x,
+            y,
+            delta_x,
+            delta_y,
+        } => json!({"type": "wheel", "id": "wheel", "actions": [
+            {"type": "scroll", "x": pixel(x), "y": pixel(y), "deltaX": pixel(delta_x), "deltaY": pixel(delta_y), "origin": "viewport"},
+        ]}),
+        // A character in the key range would be a key and not text: Control held for the rest of the text, say.
+        Client::Text { ref text } if text.chars().any(|c| BIDI_KEY_RANGE.contains(&c)) => {
+            return Err(OUT_OF_RANGE)
+        }
+        Client::Text { ref text } => key_source(
+            text.chars()
+                .flat_map(|c| [("keyDown", c), ("keyUp", c)])
+                .collect(),
+        ),
+        Client::Key { ref key, modifiers } => {
+            let value = match BIDI_NAMED_KEYS.iter().find(|(name, _)| name == key) {
+                Some(&(_, value)) => value,
+                None => key.chars().next().unwrap_or_default(),
+            };
+            let held: Vec<_> = [ALT, CONTROL, META, SHIFT]
+                .into_iter()
+                .zip(BIDI_MODIFIER_KEYS)
+                .filter(|(bit, _)| modifiers & bit != 0)
+                .map(|(_, value)| value)
+                .collect();
+            let presses = held.iter().map(|m| ("keyDown", *m));
+            let releases = held.iter().rev().map(|m| ("keyUp", *m));
+            key_source(
+                presses
+                    .chain([("keyDown", value), ("keyUp", value)])
+                    .chain(releases)
+                    .collect(),
+            )
+        }
+        _ => return Err(Refusal::Unlisted.reason()),
+    };
+    Ok(vec![("input.performActions", json!({"actions": [source]}))])
 }
 
 fn mouse(params: Value) -> Call {
     ("Input.dispatchMouseEvent", params)
 }
 
-/// A key down and a key up. A key is one of [`SPECIAL`], or one ASCII letter or digit with a Control or Meta
-/// modifier (a chord): everything else the person types reaches the page as `text`.
-fn key_events(key: &str, modifiers: u8) -> Result<Vec<Call>, &'static str> {
+/// The code and the virtual key code of a key the client may send: one of [`SPECIAL`], or one ASCII letter or digit
+/// with a Control or Meta modifier (a chord); everything else the person types reaches the page as `text`. An
+/// editing shortcut that reads or writes the host's clipboard is refused, as the client never sends one.
+fn key_code(key: &str, modifiers: u8) -> Result<(String, u32), &'static str> {
     let chord = modifiers & (CONTROL | META) != 0;
     let (code, virtual_key) = match (
         SPECIAL.iter().find(|(name, _)| *name == key),
@@ -134,12 +234,17 @@ fn key_events(key: &str, modifiers: u8) -> Result<Vec<Call>, &'static str> {
         }
         _ => return Err(OUT_OF_RANGE),
     };
-    // Editing shortcuts that read or write the host's clipboard: refused, as the client never sends them.
     let clipboard = (chord && matches!(key.to_ascii_lowercase().as_str(), "c" | "x" | "v"))
         || (modifiers & SHIFT != 0 && key == "Delete");
     if clipboard {
         return Err(CLIPBOARD);
     }
+    Ok((code, virtual_key))
+}
+
+/// A key down and a key up.
+fn key_events(key: &str, modifiers: u8) -> Result<Vec<Call>, &'static str> {
+    let (code, virtual_key) = key_code(key, modifiers)?;
     let base = json!({"key": key, "code": code, "windowsVirtualKeyCode": virtual_key, "modifiers": modifiers});
     // Enter types a line break; a chord and the other keys are not text, so they are raw key events.
     let types_text = key == "Enter" && modifiers & (ALT | CONTROL | META) == 0;
@@ -378,10 +483,8 @@ mod tests {
         }
     }
 
-    /// Whatever the client sends, every call is one the allow-list takes, and none carries editing commands
-    /// (the only way a key event reaches the clipboard).
-    #[test]
-    fn every_call_that_can_be_made_passes_the_allow_list() {
+    /// Every kind of message at its edges and beyond them, valid or not.
+    fn sweep() -> Vec<Client> {
         let numbers = [-1.0e9, -1.0, 0.0, 0.5, 1.0, 5.0, 411.5, 412.0, 915.0, 1.0e9];
         let mut messages = Vec::new();
         for kind in ["move", "press", "release"] {
@@ -397,7 +500,14 @@ mod tests {
             messages.push(json!({"type": "wheel", "x": x, "y": x, "deltaX": x, "deltaY": x}));
             messages.push(json!({"type": "pinch", "scale": x}));
         }
-        for text in ["", "ação 日本 😀", "\0", "'); drop table"] {
+        for text in [
+            "",
+            "ação 日本 😀",
+            "\0",
+            "'); drop table",
+            "\u{E009}v",
+            "\u{E000}",
+        ] {
             messages.push(json!({"type": "text", "text": text}));
         }
         let names = SPECIAL.map(|(name, _)| name);
@@ -409,11 +519,18 @@ mod tests {
                 messages.push(key(name, modifiers));
             }
         }
+        messages
+            .into_iter()
+            .filter_map(|value| serde_json::from_value(value).ok())
+            .collect()
+    }
+
+    /// Whatever the client sends, every call is one the allow-list takes, and none carries editing commands
+    /// (the only way a key event reaches the clipboard).
+    #[test]
+    fn every_call_that_can_be_made_passes_the_allow_list() {
         let mut forwarded = 0;
-        for value in messages {
-            let Ok(client) = serde_json::from_value::<Client>(value) else {
-                continue;
-            };
+        for client in sweep() {
             for (method, params) in commands(&client, PHONE).unwrap_or_default() {
                 forwarded += 1;
                 assert_eq!(allow::command(method, &params), Ok(()), "{method} {params}");
@@ -431,6 +548,117 @@ mod tests {
             }
         }
         assert!(forwarded > 500, "the sweep forwarded only {forwarded}");
+    }
+
+    /// The same sweep for Firefox: every call is an `input.performActions` the allow-list takes, with the page's
+    /// context added.
+    #[test]
+    fn every_bidi_call_that_can_be_made_passes_the_allow_list() {
+        let mut forwarded = 0;
+        for client in sweep() {
+            for (method, mut params) in bidi_commands(&client, PHONE).unwrap_or_default() {
+                forwarded += 1;
+                params["context"] = "c".into();
+                assert_eq!(method, "input.performActions");
+                assert_eq!(allow::bidi(method, &params), Ok(()), "{params}");
+            }
+        }
+        assert!(forwarded > 300, "the sweep forwarded only {forwarded}");
+    }
+
+    /// Firefox takes the same bounds as Chrome: what Chrome refuses it refuses with the same class, except that a
+    /// pinch is an operation it does not have and a text that names keys is not text.
+    #[test]
+    fn firefox_refuses_what_chrome_refuses_with_the_same_class() {
+        for client in sweep() {
+            let chrome = commands(&client, PHONE).map(|_| ());
+            let firefox = bidi_commands(&client, PHONE).map(|_| ());
+            match &client {
+                Client::Pinch { .. } if chrome.is_ok() => {
+                    assert_eq!(firefox, Err(Refusal::Unlisted.reason()));
+                }
+                Client::Text { text }
+                    if chrome.is_ok() && text.chars().any(|c| BIDI_KEY_RANGE.contains(&c)) =>
+                {
+                    assert_eq!(firefox, Err(OUT_OF_RANGE), "{text:?}");
+                }
+                _ => assert_eq!(firefox, chrome, "{client:?}"),
+            }
+        }
+    }
+
+    fn actions(value: Value) -> Vec<Value> {
+        let calls = bidi_commands(&message(value), PHONE).unwrap();
+        assert_eq!(calls.len(), 1);
+        let (method, params) = &calls[0];
+        assert_eq!(*method, "input.performActions");
+        assert!(params.get("context").is_none(), "the adapter adds it");
+        let sources = params["actions"].as_array().unwrap();
+        assert_eq!(sources.len(), 1);
+        sources[0]["actions"].as_array().unwrap().clone()
+    }
+
+    #[test]
+    fn firefox_input_becomes_one_action_sequence_per_message() {
+        let pointer = |kind: &str, button: &str, x: f64| json!({"type": "pointer", "kind": kind, "x": x, "y": 34, "button": button, "clickCount": 1});
+        let to = json!({"type": "pointerMove", "x": 13, "y": 34, "origin": "viewport"});
+        assert_eq!(
+            actions(pointer("move", "none", 12.5)),
+            std::slice::from_ref(&to)
+        );
+        assert_eq!(
+            actions(pointer("press", "left", 12.5)),
+            [to.clone(), json!({"type": "pointerDown", "button": 0})]
+        );
+        assert_eq!(
+            actions(pointer("press", "right", 12.5)),
+            [to.clone(), json!({"type": "pointerDown", "button": 2})]
+        );
+        assert_eq!(
+            actions(pointer("release", "left", 12.5)),
+            [to, json!({"type": "pointerUp", "button": 0})]
+        );
+        // Whole pixels, rounded away from zero.
+        assert_eq!(
+            actions(json!({"type": "wheel", "x": 5, "y": 6, "deltaX": -0.4, "deltaY": -120.5})),
+            [
+                json!({"type": "scroll", "x": 5, "y": 6, "deltaX": 0, "deltaY": -121, "origin": "viewport"})
+            ]
+        );
+        let key = |kind: &str, value: &str| json!({"type": kind, "value": value});
+        assert_eq!(
+            actions(json!({"type": "text", "text": "aç😀"})),
+            [
+                key("keyDown", "a"),
+                key("keyUp", "a"),
+                key("keyDown", "ç"),
+                key("keyUp", "ç"),
+                key("keyDown", "😀"),
+                key("keyUp", "😀"),
+            ]
+        );
+        assert_eq!(
+            actions(self::key("Enter", 0)),
+            [key("keyDown", "\u{E006}"), key("keyUp", "\u{E006}")]
+        );
+        // A chord holds its modifiers around the key, and lets go of them in the opposite order.
+        assert_eq!(
+            actions(self::key("a", CONTROL | SHIFT)),
+            [
+                key("keyDown", "\u{E009}"),
+                key("keyDown", "\u{E008}"),
+                key("keyDown", "a"),
+                key("keyUp", "a"),
+                key("keyUp", "\u{E008}"),
+                key("keyUp", "\u{E009}"),
+            ]
+        );
+        for (name, _) in SPECIAL {
+            assert!(
+                BIDI_NAMED_KEYS.iter().any(|(named, _)| *named == name),
+                "{name} has no WebDriver key"
+            );
+        }
     }
 
     #[test]

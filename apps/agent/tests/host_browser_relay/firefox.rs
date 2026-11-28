@@ -4,6 +4,7 @@
 use super::*;
 use lazysh_agent::host_browser::bidi;
 use std::{
+    collections::BTreeMap,
     io::Read,
     net::TcpStream,
     sync::{
@@ -67,7 +68,20 @@ fn frames_and_page_text_flow_two_at_a_time_until_the_device_acknowledges() {
         state["viewport"],
         json!({"width": 412, "height": 915, "scale": 1.0})
     );
-    assert_eq!(state["capabilities"]["control"], false);
+    // Control and the capabilities Firefox lacks, with why.
+    assert_eq!(state["capabilities"]["control"], true);
+    assert_eq!(
+        (
+            &state["capabilities"]["pinch"],
+            &state["capabilities"]["composition"],
+            &state["capabilities"]["unavailable"]
+        ),
+        (
+            &json!(false),
+            &json!(false),
+            &json!({"pinch": "NoPagePinch", "composition": "NoTextInsertion"})
+        )
+    );
     // The title and the address are read by two commands, so the page may be announced twice; frames come beside it.
     let (mut page, mut frames) = (None, Vec::new());
     while page.is_none() || frames.len() < 2 {
@@ -151,30 +165,182 @@ fn the_browser_only_ever_receives_allow_listed_commands() {
     );
 }
 
-/// This adapter reports `control: false`: a client that turns Control on anyway, and every valid input message,
-/// is refused and counted, and nothing but the view's own commands reaches the browser.
-#[test]
-fn control_and_input_are_refused_while_the_adapter_cannot_take_them() {
+/// A relay over the stand-in Firefox with its first frame in, and Control on when asked.
+fn started(mode: &str, control: bool) -> (Fixture, Relay) {
     let fixture = fixture();
-    let mut relay = serve(&fixture, "", "160.0");
+    let mut relay = serve(&fixture, mode, "160.0");
     relay.next("frame");
-    relay.control(true);
+    if control {
+        relay.control(true);
+    }
+    (fixture, relay)
+}
+
+/// The `input.*` commands the stand-in received, once at least `count` have arrived (it records them as it reads
+/// them). The relay writes in order, so a command sent last marks the end of what came before it.
+fn input_commands(fixture: &Fixture, count: usize) -> Vec<Value> {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let calls: Vec<_> = fixture
+            .commands()
+            .into_iter()
+            .filter(|command| command["method"].as_str().unwrap().starts_with("input."))
+            .collect();
+        if calls.len() >= count || Instant::now() > deadline {
+            return calls;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn with_control_off_which_is_how_a_session_starts_every_input_is_refused_and_counted() {
+    let (fixture, mut relay) = started("", false);
     for message in one_of_each_input() {
         relay.send(message);
     }
-    // Six messages: a reply at count 1, 2 and 4.
+    // A reply at 1, 2 and 4 of five messages.
     for count in [1, 2, 4] {
-        assert_eq!(relay.refused(), ("OperationRefused".to_string(), count));
+        assert_eq!(relay.refused(), ("ControlOff".to_string(), count));
     }
     relay.stop();
     assert!(
-        !fixture
-            .methods()
-            .iter()
-            .any(|method| method.starts_with("input.")),
-        "input reached the browser: {:?}",
-        fixture.methods()
+        input_commands(&fixture, 0).is_empty(),
+        "input reached the browser"
     );
+}
+
+#[test]
+fn with_control_on_each_message_becomes_exactly_its_actions_in_order() {
+    let (fixture, mut relay) = started("", true);
+    for message in session_input(false) {
+        relay.send(message);
+    }
+    let to = json!({"type": "pointerMove", "x": 200, "y": 300, "origin": "viewport"});
+    let mouse = |actions: Vec<Value>| json!({"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": actions});
+    let keys = |events: &[(&str, &str)]| json!({"type": "key", "id": "keyboard", "actions": events.iter().map(|(kind, value)| json!({"type": kind, "value": value})).collect::<Vec<_>>()});
+    let typed: Vec<_> = "ação 日本 😀"
+        .chars()
+        .flat_map(|c| [("keyDown", c.to_string()), ("keyUp", c.to_string())])
+        .collect();
+    let typed: Vec<_> = typed.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let expected = [
+        mouse(vec![to.clone()]),
+        mouse(vec![
+            to.clone(),
+            json!({"type": "pointerDown", "button": 0}),
+        ]),
+        mouse(vec![to.clone(), json!({"type": "pointerUp", "button": 0})]),
+        json!({"type": "wheel", "id": "wheel", "actions": [{"type": "scroll", "x": 200, "y": 300, "deltaX": 0, "deltaY": 121, "origin": "viewport"}]}),
+        keys(&typed),
+        keys(&[("keyDown", "\u{E006}"), ("keyUp", "\u{E006}")]),
+        keys(&[
+            ("keyDown", "\u{E009}"),
+            ("keyDown", "a"),
+            ("keyUp", "a"),
+            ("keyUp", "\u{E009}"),
+        ]),
+        mouse(vec![to, json!({"type": "pointerDown", "button": 2})]),
+    ];
+    let calls = input_commands(&fixture, expected.len());
+    let received: Vec<_> = calls
+        .iter()
+        .map(|call| (call["method"].as_str().unwrap(), call["params"].clone()))
+        .collect();
+    let wanted: Vec<_> = expected
+        .iter()
+        .map(|source| {
+            (
+                "input.performActions",
+                json!({"context": "C1", "actions": [source]}),
+            )
+        })
+        .collect();
+    assert_eq!(received, wanted);
+    relay.stop();
+    assert_every_command_is_allowed(&fixture, allow::bidi);
+}
+
+#[test]
+fn turning_control_off_stops_forwarding_at_once_and_on_again_resumes_it() {
+    let (fixture, mut relay) = started("", true);
+    assert_control_gates_input(&mut relay, |count| input_commands(&fixture, count).len());
+    relay.stop();
+}
+
+/// What Chrome refuses, Firefox refuses with the same class; a pinch is the one message Firefox has no mapping for.
+#[test]
+fn input_outside_its_bounds_a_clipboard_chord_a_pinch_or_an_unknown_message_is_refused() {
+    let (fixture, mut relay) = started("", true);
+    for message in [
+        json!({"type": "wheel", "x": 413, "y": 10, "deltaX": 0, "deltaY": 1}),
+        // Text that names keys would hold Control down for the rest of the text.
+        json!({"type": "text", "text": "\u{E009}v"}),
+        json!({"type": "key", "key": "v", "modifiers": 2}),
+        json!({"type": "pinch", "scale": 2}),
+        json!({"type": "dragEvent", "x": 1, "y": 1}),
+        json!({"type": "key", "key": "a", "modifiers": 2}),
+    ] {
+        relay.send(message);
+    }
+    let mut counts = BTreeMap::new();
+    // A reply at 1 and 2 of the classes that were refused twice, and at 1 of the one refused once.
+    for _ in 0..5 {
+        let (reason, count) = relay.refused();
+        counts.insert(reason, count);
+    }
+    assert_eq!(
+        counts,
+        [
+            ("InputOutOfRange".to_string(), 2),
+            ("OperationRefused".to_string(), 2),
+            ("PermissionRefused".to_string(), 1),
+        ]
+        .into()
+    );
+    // The valid key that came last is the only one that got through.
+    let calls = input_commands(&fixture, 1);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    relay.stop();
+}
+
+/// Firefox rejected a sequence: whatever it pressed before it did is let go of, and that is not the browser
+/// failing, however often it happens.
+#[test]
+fn a_rejected_sequence_is_released_and_the_session_goes_on() {
+    let (fixture, mut relay) = started("input-error", true);
+    for _ in 0..6 {
+        relay.send(pointer("press", "left", 1, 10, 10));
+    }
+    let calls = input_commands(&fixture, 12);
+    let methods: Vec<_> = calls
+        .iter()
+        .map(|call| call["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        methods
+            .iter()
+            .filter(|m| **m == "input.performActions")
+            .count(),
+        6
+    );
+    assert_eq!(
+        methods
+            .iter()
+            .filter(|m| **m == "input.releaseActions")
+            .count(),
+        6
+    );
+    for call in calls
+        .iter()
+        .filter(|call| call["method"] == "input.releaseActions")
+    {
+        assert_eq!(call["params"], json!({"context": "C1"}));
+    }
+    // Six failures in a row would have ended a failing capture; the view is still there.
+    relay.next("frame");
+    relay.stop();
+    assert_every_command_is_allowed(&fixture, allow::bidi);
 }
 
 #[test]
@@ -366,8 +532,8 @@ struct OnFixturePage {
     _home: tempfile::TempDir,
 }
 impl OnFixturePage {
-    fn start(binary: &Path) -> Self {
-        let (port, server) = fixture_page(GREEN_PAGE);
+    fn start(binary: &Path, page: &'static str) -> Self {
+        let (port, server) = fixture_page(page);
         let (fixture, home) = (Fixture::enabled(), tempfile::tempdir().unwrap());
         let page = format!("http://127.0.0.1:{port}/");
         Self {
@@ -386,7 +552,7 @@ fn a_real_firefox_streams_the_fixture_page_and_leaves_nothing_behind() {
     let Some(binary) = firefox() else {
         return;
     };
-    let mut shown = OnFixturePage::start(&binary);
+    let mut shown = OnFixturePage::start(&binary, GREEN_PAGE);
     // The relay allows Firefox 30 seconds to start, before the BiDi session is established.
     let state = shown
         .relay
@@ -404,6 +570,47 @@ fn a_real_firefox_streams_the_fixture_page_and_leaves_nothing_behind() {
     assert_real_browser_is_gone(&profile);
 }
 
+/// The color at a point of the viewport, in the next frame that has one, until `wanted` accepts it.
+fn wait_for_pixel(relay: &mut Relay, (x, y): (u32, u32), wanted: impl Fn([u8; 3]) -> bool) {
+    // The waits for the page's title read the frames that came meanwhile, and a page that stopped changing sends
+    // none: hiding the view and showing it again is what sends the current one.
+    relay.send(json!({"type": "pause"}));
+    assert_eq!(relay.next_json("state")["state"], "paused");
+    relay.send(json!({"type": "resume"}));
+    assert_eq!(relay.next_json("state")["state"], "running");
+    let (deadline, mut seen) = (Instant::now() + WAIT, Vec::new());
+    while Instant::now() < deadline {
+        if let Some(Message::Frame { sequence, jpeg, .. }) = relay.within(Duration::from_secs(1)) {
+            relay.send(json!({"type": "ack", "sequence": sequence}));
+            let image = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+            let pixel = image.get_pixel(x, y).0;
+            if wanted(pixel) {
+                return;
+            }
+            seen.push(pixel);
+        }
+    }
+    panic!("no frame ever showed the wanted color at {x},{y}; the frames showed {seen:?}");
+}
+
+/// The real browser takes the client's input through the relay: the page changes only because a tap, typed text
+/// and a scroll arrived, a tap that came while Control was off did not, and the BiDi session is ended afterwards.
+#[test]
+fn a_real_firefox_takes_a_tap_typed_text_and_a_scroll_only_while_control_is_on() {
+    let Some(binary) = firefox() else {
+        return;
+    };
+    let mut shown = OnFixturePage::start(&binary, INPUT_PAGE);
+    // The page turned the button blue, and a frame shows it.
+    drive_input_page(&mut shown.relay, |relay| {
+        wait_for_pixel(relay, (200, 100), |[red, _, blue]| blue > 150 && red < 60)
+    });
+
+    let profile = shown.fixture.profiles().remove(0);
+    shown.relay.stop();
+    assert_real_browser_is_gone(&profile);
+}
+
 /// Firefox allows one session. While the relay holds it a second client is refused, however it connects, and the
 /// relay's view is not disturbed. The `Host` and `Origin` rules the relay's own connection depends on are checked
 /// here too, on the Firefox the host has: a version that changed them would fail here, not in the field.
@@ -412,7 +619,7 @@ fn a_real_firefox_refuses_a_second_client_while_the_relay_holds_the_session() {
     let Some(binary) = firefox() else {
         return;
     };
-    let mut shown = OnFixturePage::start(&binary);
+    let mut shown = OnFixturePage::start(&binary, GREEN_PAGE);
     shown.relay.next_during("frame", WAIT * 2);
     let endpoint = fs::read_to_string(
         shown
