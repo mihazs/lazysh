@@ -523,7 +523,7 @@ What each multiplexer does on each client platform, with the CI job and test tha
 
 ## History
 
-The **Pane history** section of the Sessions panel (`MultiplexerHistory`) reads the scrollback of the pane you are viewing from the multiplexer on the host, not from the terminal's own buffer, so it survives a dropped connection, a reattach and a fresh client. It is shown for the attached tmux, Zellij or Herdr session unless discovery lists `history` as missing for that multiplexer's version. **Read history** (then **Refresh**) runs the one command `multiplexer_history` and shows the text read-only, with a line filter (**Search history**, case-insensitive) and **Copy these lines** for what is shown. Nothing is typed into the terminal.
+The **Pane history** section of the Sessions panel (`MultiplexerHistory`) reads the scrollback of the pane you are viewing from the multiplexer on the host, not from the terminal's own buffer, so it survives a dropped connection, a reattach and a fresh client. It is shown for the attached tmux, rmux, Zellij or Herdr session unless discovery lists `history` as missing for that multiplexer's version. **Read history** (then **Refresh**) runs the one command `multiplexer_history` and shows the text read-only, with a line filter (**Search history**, case-insensitive) and **Copy these lines** for what is shown. Nothing is typed into the terminal.
 
 | Multiplexer | Host command | Pane | Bound |
 | --- | --- | --- | --- |
@@ -531,7 +531,7 @@ The **Pane history** section of the Sessions panel (`MultiplexerHistory`) reads 
 | Zellij | `zellij --session=<session> action dump-screen --full` | The focused pane | Zellij's own `scroll_buffer_size` (default 10,000 lines); a dump over 8 MiB fails with `output_too_large` |
 | Herdr | `herdr --session <session> pane read <pane> --source recent-unwrapped --lines 1000`, where the pane is the focused one in a fresh `api snapshot` | The focused pane | Herdr serves at most the newest 1,000 lines of a pane and does not report that it cut, so a read that fills 1,000 lines is shown as cut |
 
-The view keeps at most the newest 20,000 lines and 2 MiB; when anything older was left out it says so. Control characters are removed from the text, and the blank rows of the screen below the cursor are trimmed. Zellij needs 0.45 or newer (`dump-screen --path`, stdout when omitted) and Herdr 0.9.3 to 0.9.5; other versions list `history` as missing and do not offer the section. The pane is resolved when you press **Read history**, so it follows the multiplexer's focus at that moment. History of a pane that is not the current one, a rmux pane and the OSC 52 checks of #1147 are separate slices.
+The view keeps at most the newest 20,000 lines and 2 MiB; when anything older was left out it says so. Control characters are removed from the text, and the blank rows of the screen below the cursor are trimmed. Zellij needs 0.45 or newer (`dump-screen --path`, stdout when omitted) and Herdr 0.9.3 to 0.9.5; rmux needs 0.10.0 (the same `capture-pane -p -J -S -N` as tmux); other versions list `history` as missing and do not offer the section. The pane is resolved when you press **Read history**, so it follows the multiplexer's focus at that moment. History of a pane that is not the current one and the OSC 52 checks of #1147 are separate slices.
 
 
 ## Native checks

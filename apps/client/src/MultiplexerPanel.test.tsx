@@ -276,7 +276,7 @@ it('offers History for the attached multiplexer only while discovery does not ma
   expect(screen.queryByRole('button', { name: 'Read history' })).toBeNull();
 });
 
-const rmuxTool = {kind:'rmux',version:'0.10.0',support:'degraded',missing:['jump','confirmedInput','history']};
+const rmuxTool = {kind:'rmux',version:'0.10.0',support:'degraded',missing:['jump','confirmedInput']};
 const rmuxTree = {...tree,tmuxAvailable:false,rmuxAvailable:true,sessions:[{...tree.sessions[0],name:'rmux work'}]};
 it('browses, labels and attaches rmux sessions on their own server and lists no Jump To',async()=>{
   vi.mocked(invoke).mockImplementation(async (command,args)=>command==='multiplexer_tree'
