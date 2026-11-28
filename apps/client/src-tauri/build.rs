@@ -285,6 +285,8 @@ fn main() {
         "agent_snapshot",
         "agent_reported_history",
         "agent_relay_resolve",
+        "agent_reported_history_reference",
+        "agent_reported_conversation",
         "install_companion",
         "install_companion_from_device",
         "check_companion_update",

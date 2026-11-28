@@ -55,6 +55,16 @@ it.each([
   render(<HerdrPanel sessionId="numbers-control" name={remoteMuxName}/>);
   expect(await screen.findByText(new RegExp(`^${labels.index.replaceAll('.','\\.').replaceAll(',','\\,')}: literal tab`),{selector:'summary'})).toBeTruthy();
 });
+it.each([
+  {locale:'en',notice:'This Herdr reports API schema 2, but full support needs schema 1. Only navigation is available.'},
+  {locale:'pt-BR',notice:'Este Herdr informa o esquema de API 2, mas o suporte completo exige o esquema 1. Somente a navegação está disponível.'},
+  {locale:'es',notice:'Este Herdr informa el esquema de API 2, pero el soporte completo requiere el esquema 1. Solo la navegación está disponible.'},
+])('$locale explains a supported Herdr version whose API schema is not 1',async({locale,notice})=>{
+  await uiI18n.changeLanguage(locale);
+  vi.mocked(invoke).mockResolvedValue({...muxFixture,herdrAvailable:true,tools:[{kind:'herdr',version:'0.9.5',schemaVersion:2,support:'degraded',missing:['create']}]});
+  render(<MuxPanel sessionId="schema-control" onAttach={vi.fn()}/>);
+  expect((await screen.findByRole('note')).textContent).toBe(notice);
+});
 it('changes language during a held Zellij operation without replacing the draft, focus or request',async()=>{
   let finish!:()=>void;vi.mocked(invoke).mockImplementation(()=>new Promise<void>(resolve=>{finish=resolve;}));
   render(<ZellijPanel sessionId="literal-control" name={remoteMuxName} projectDirectory={remoteMuxDirectory}/>);

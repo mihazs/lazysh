@@ -5,8 +5,12 @@
 //! [`script`]), and nothing is typed into an existing pane. An agent starts
 //! only after the renderer showed this plan and the user confirmed it: through
 //! `herdr agent start` in a new workspace's root pane, as the argv of a new tmux
-//! window (`new-window`) or as the argv of a new Zellij pane (`run`).
+//! window (`new-window`) or as the argv of a new Zellij pane (`run`). On this device a Herdr
+//! plan runs the same argv directly, never through a shell.
 use crate::app_lock::AccessLease;
+#[cfg(desktop)]
+use crate::host::Cmd;
+use crate::local::LocalState;
 use crate::multiplexer::{tmux_word, Entry, MultiplexerKind};
 use crate::ssh::{quote, AppState, Result, Session, SshError};
 use crate::tmux_server::TmuxServer;
@@ -423,11 +427,13 @@ fn plan_steps(host: &Host, request: &CreateRequest, pane: &str) -> Result<Vec<St
     Ok(steps)
 }
 
-/// One completed remote step: combined output and exit status.
+/// One completed step: combined output and exit status.
 pub(crate) struct Output {
     status: i32,
     text: String,
 }
+/// Where steps run. `OnHost` is the one implementation the commands use; the tests put a
+/// scripted or lossy host behind the same seam.
 pub(crate) trait Remote {
     async fn run(&mut self, argv: &[String], timeout: Duration) -> Result<Output>;
 }
@@ -794,32 +800,60 @@ pub(crate) async fn repository(remote: &mut impl Remote, directory: &str) -> Res
     })
 }
 
-struct Ssh<'a> {
-    session: &'a crate::ssh::Session,
+/// The steps of one command on the host of a session.
+struct OnHost<'a> {
+    host: &'a crate::host::Host,
     access: &'a AccessLease,
 }
-impl Remote for Ssh<'_> {
+impl Remote for OnHost<'_> {
     async fn run(&mut self, argv: &[String], timeout: Duration) -> Result<Output> {
-        // Every step of the plan runs as the connection's Herdr, so an unusable managed one fails the first step, before any worktree exists.
-        let backend = crate::herdr_backend::captured(&self.session.handle);
-        let prelude = if backend.is_system() {
-            String::new()
-        } else {
-            prelude(
-                backend,
-                crate::herdr_path::admit(self.session, self.access).await?,
-            )?
-        };
-        let raw = crate::ssh::exec_bounded(
-            self.session,
-            script(&prelude, argv),
-            self.access,
-            timeout,
-            OUTPUT_LIMIT,
-            None,
-        )
-        .await?;
-        parse_status(&raw)
+        match self.host {
+            crate::host::Host::Remote(session) => {
+                // Every step of the plan runs as the connection's Herdr, so an unusable managed one fails the first step, before any worktree exists.
+                let backend = crate::herdr_backend::captured(&session.handle);
+                let prelude = if backend.is_system() {
+                    String::new()
+                } else {
+                    prelude(
+                        backend,
+                        crate::herdr_path::admit(session, self.access).await?,
+                    )?
+                };
+                let raw = crate::ssh::exec_bounded(
+                    session,
+                    script(&prelude, argv),
+                    self.access,
+                    timeout,
+                    OUTPUT_LIMIT,
+                    None,
+                )
+                .await?;
+                parse_status(&raw)
+            }
+            #[cfg(desktop)]
+            crate::host::Host::Local(local) => {
+                // `command` is a shell builtin: it runs in `sh` as the remote wrapper runs every step.
+                let mut words: Vec<&str> = Vec::new();
+                if argv.first().is_some_and(|first| first == "command") {
+                    words.extend(["sh", "-c", r#""$@""#, "sh"]);
+                }
+                words.extend(argv.iter().map(String::as_str));
+                let cmd = Cmd::new(&[], &words);
+                let cmd = if argv.first().is_some_and(|first| first == "herdr") {
+                    cmd.herdr()
+                } else {
+                    cmd
+                };
+                let done = local
+                    .exec_status(self.access, &cmd, timeout, OUTPUT_LIMIT)
+                    .await?;
+                Ok(Output {
+                    status: done.status.map_or(-1, |code| code as i32),
+                    text: String::from_utf8_lossy(&done.stdout).into_owned()
+                        + &String::from_utf8_lossy(&done.stderr),
+                })
+            }
+        }
     }
 }
 
@@ -837,16 +871,25 @@ pub fn multiplexer_launch_plan(multiplexer: Entry, request: CreateRequest) -> Re
     })
 }
 async fn run_plan(
-    session: &Session,
+    device: &crate::host::Host,
     access: &AccessLease,
     host: &Host<'_>,
     request: &CreateRequest,
 ) -> Result<Outcome> {
-    execute(&mut Ssh { session, access }, host, request).await
+    execute(
+        &mut OnHost {
+            host: device,
+            access,
+        },
+        host,
+        request,
+    )
+    .await
 }
 #[tauri::command]
 pub async fn herdr_workspace_create(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     name: String,
     request: CreateRequest,
@@ -854,8 +897,8 @@ pub async fn herdr_workspace_create(
 ) -> crate::ssh::AccessResult<Outcome> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            run_plan(&session, &access, &Host::Herdr(&name), &request).await
+            let device = crate::host::Host::resolve(&state, &local, &session_id, &access).await?;
+            run_plan(&device, &access, &Host::Herdr(&name), &request).await
         })
         .await
 }
@@ -873,21 +916,23 @@ pub async fn multiplexer_launch(
         .run(async {
             let session = state.session(&session_id).await?;
             let host = Host::of(&multiplexer, Some(&session))?;
-            run_plan(&session, &access, &host, &request).await
+            let device = crate::host::Host::Remote(session);
+            run_plan(&device, &access, &host, &request).await
         })
         .await
 }
 #[tauri::command]
 pub async fn herdr_agent_kinds(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     access: AccessLease,
 ) -> crate::ssh::AccessResult<Vec<AgentKind>> {
     access
         .run(async {
-            let session = state.session(&session_id).await?;
-            agent_kinds(&mut Ssh {
-                session: &session,
+            let host = crate::host::Host::resolve(&state, &local, &session_id, &access).await?;
+            agent_kinds(&mut OnHost {
+                host: &host,
                 access: &access,
             })
             .await
@@ -897,6 +942,7 @@ pub async fn herdr_agent_kinds(
 #[tauri::command]
 pub async fn herdr_repository(
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     session_id: String,
     directory: String,
     access: AccessLease,
@@ -904,10 +950,10 @@ pub async fn herdr_repository(
     access
         .run(async {
             absolute_path(&directory)?;
-            let session = state.session(&session_id).await?;
+            let host = crate::host::Host::resolve(&state, &local, &session_id, &access).await?;
             repository(
-                &mut Ssh {
-                    session: &session,
+                &mut OnHost {
+                    host: &host,
                     access: &access,
                 },
                 &directory,

@@ -24,12 +24,14 @@ env:
   MOON_BASE: HEAD
   MOON_HEAD: HEAD
 
-# A newer pull request push supersedes its older checks. A running main run is never cancelled,
-# but GitHub keeps one pending run per group and cancels older pending ones, so a busy trunk does
-# not get a complete run per commit here: main-verdict.yml gives every main commit a verdict.
+# A newer push supersedes the older checks of its ref, pull request or main. The native matrix of
+# main is evidence for the newest commit only: main-verdict.yml gives every main commit its own
+# verdict, so an older main matrix that is still queued or running is cancelled instead of keeping
+# the group (and a hosted runner queue slot) while later pushes wait behind it. Only the nightly
+# run has its own group and is cancelled by nothing but the next nightly.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   # On a pull request, `changes` selects the native job groups its paths can affect and then
@@ -1414,14 +1416,22 @@ jobs:
             cargo test --locked -p tauri-plugin-lazysh-vault --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --locked -p tauri-plugin-lazysh-vault --lib "$case_name" -- --ignored --exact
           done
+      # The desktop packages carry a companion beside the app (a Tauri `externalBin` entry that only the overlay
+      # config names), so the app and installer packaged below are the ones a release builds. The companion is
+      # built here, not downloaded: the release stages its receipt-verified build instead.
+      - name: Build the companion the packaged app carries and stage it as the app's sidecar
+        shell: bash
+        run: |
+          cargo build --release --locked --package lazysh-agent --bin lazysh-agent
+          bun .changeset/release-bundle.ts stage-built
       - name: Package and validate native macOS permission localizations
         if: runner.os == 'macOS'
         run: |
-          bun run --cwd apps/client tauri build --bundles app
+          bun run --cwd apps/client tauri build --config src-tauri/tauri.bundled-agent.conf.json --bundles app
           plutil -lint target/release/bundle/macos/lazysh.app/Contents/Resources/{en,pt-BR,es}.lproj/{InfoPlist,NativeUI}.strings
       - name: Package the actual Windows NSIS installer
         if: runner.os == 'Windows'
-        run: bun run --cwd apps/client tauri build --bundles nsis -- --locked
+        run: bun run --cwd apps/client tauri build --config src-tauri/tauri.bundled-agent.conf.json --bundles nsis -- --locked
       - name: Exercise actual Windows install, same-version repair and uninstall
         id: windows-installer
         if: runner.os == 'Windows'
@@ -1524,6 +1534,31 @@ jobs:
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
             cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
           done
+      # The same case runs the companion inside the packaged app, which the local arm resolves beside the app executable.
+      - name: Exercise the companion in the built macOS app through real local sessions
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          LAZYSH_TEST_BUNDLE_DIR: ${{ github.workspace }}/target/release/bundle/macos/lazysh.app/Contents/MacOS
+        run: |
+          case_name=companion::local::tests::real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell
+          test -x "$LAZYSH_TEST_BUNDLE_DIR/lazysh-agent"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --list --ignored --exact | grep -Fx -- "$case_name: test"
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact
+          # An app folder without the companion must fail the same case.
+          if LAZYSH_TEST_BUNDLE_DIR="$(mktemp -d)" cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$case_name" -- --ignored --exact; then
+            echo "the case passed without a bundled companion"
+            exit 1
+          fi
+      # Installs the packaged NSIS app and runs the Windows cases against its install directory. Non-blocking until
+      # its first hosted pass on main is recorded on #1853; then remove continue-on-error.
+      - name: Exercise the companion in the installed Windows app through real local sessions
+        if: runner.os == 'Windows' && !cancelled() && steps.windows-installer.outcome == 'success'
+        timeout-minutes: 25
+        continue-on-error: true
+        env:
+          LAZYSH_TEST_WINDOWS_INSTALLED_COMPANION: '1'
+        run: bun test tests/release-artifacts.test.ts --test-name-pattern 'actual installed Windows bundle'
       - name: Verify uploaded paths through the owned Mac host clipboard
         if: runner.os == 'macOS'
         env:
@@ -2411,7 +2446,7 @@ jobs:
           # A renamed case must not turn the local attach cases into a zero-test pass.
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored local::attach_tests::runtime::real_ | grep -c ': test$' | grep -Fx 4
           # A renamed case must not turn the local-session cases into a zero-test pass.
-          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored multiplexer::tests::real_local_ zellij::tests::real_local_ | grep -c ': test$' | grep -Fx 2
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib -- --list --ignored multiplexer::tests::real_local_ zellij::tests::real_local_ herdr::tests::real_local_ | grep -c ': test$' | grep -Fx 3
           LAZYSH_TEST_AGENT_BIN="$GITHUB_WORKSPACE/target/debug/lazysh-agent" bun run test:multiplexers
       # Pinned tmux (apt 3.4), Zellij 0.45.1 and the same-run stock Herdr drive a browser against lazysh's real terminal pane.
       - *playwright-chromium
@@ -2460,6 +2495,13 @@ jobs:
           test "$(/usr/bin/tmux -V)" = 'tmux 3.4'
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --list --ignored --exact | grep -c ': test$' | grep -Fx 1
           cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      - name: Report a supported Herdr version as limited when its API schema is not 1, through product discovery on the stock binary
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CASE_NAME: multiplexer::tests::real_herdr_api_schema_gates_discovery_support
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: *exact-ignored-case
       - name: Report the newest pinned tmux as supported through product discovery over owned OpenSSH
         if: ${{ !cancelled() }}
         shell: bash
@@ -2525,6 +2567,24 @@ jobs:
           unzip -q "$gotify_root/gotify.zip" gotify-linux-amd64 -d "$gotify_root"
           chmod 0500 "$gotify_root/gotify-linux-amd64"
           export LAZYSH_GOTIFY_SERVER="$gotify_root/gotify-linux-amd64"
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --list --ignored --exact | grep -Fx -- "$CASE_NAME: test"
+          cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --ignored --exact --nocapture
+      # Official ntfy 2.38.0 Linux release; the archive is pinned by its release asset digest
+      # (https://api.github.com/repos/binwiederhier/ntfy/releases/tags/v2.38.0) and the case itself
+      # rechecks the extracted binary. It serves only the case's owned TLS loopback listener.
+      - name: Read ntfy events with a topic-scoped token from the pinned official ntfy server over verified TLS
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        env:
+          CASE_NAME: tests::ntfy_server::real_ntfy_server_serves_the_desktop_receiver_a_scoped_token_over_verified_tls
+        run: |
+          ntfy_root=$(mktemp -d "$RUNNER_TEMP/lazysh-ntfy-2.38.0-XXXXXX")
+          sh .github/scripts/pinned-download.sh b1ff7cae482a6b802c28cddd83b63c7e146bf96a5ff97894278ab478b3a0436c "$ntfy_root/ntfy.tar.gz" --fail --silent --show-error --location --proto '=https' --tlsv1.2 --connect-timeout 20 --max-time 180 --max-filesize 32840524 https://github.com/binwiederhier/ntfy/releases/download/v2.38.0/ntfy_2.38.0_linux_amd64.tar.gz
+          printf '%s  %s\n' 'b1ff7cae482a6b802c28cddd83b63c7e146bf96a5ff97894278ab478b3a0436c' "$ntfy_root/ntfy.tar.gz" | sha256sum --check --strict
+          tar -xzf "$ntfy_root/ntfy.tar.gz" --strip-components=1 -C "$ntfy_root" ntfy_2.38.0_linux_amd64/ntfy
+          chmod 0500 "$ntfy_root/ntfy"
+          export LAZYSH_NTFY_SERVER="$ntfy_root/ntfy"
           # A renamed case must not turn this step into a zero-test pass.
           cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --list --ignored --exact | grep -Fx -- "$CASE_NAME: test"
           cargo test --locked -p lazysh-notifications --lib "$CASE_NAME" -- --ignored --exact --nocapture

@@ -245,7 +245,7 @@ export function activitySummary(turn: Turn): string {
 const NO_HISTORY = {paging: false, older: false, newer: false};
 
 /** A conversation the Agent view found for its pane from hook reports. */
-export type BoundConversation = Readonly<{agent: ConversationAgent; path: string; /** OpenCode keeps every session in one database: the id picks the session. */transcriptSessionId?: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
+export type BoundConversation = Readonly<{agent: ConversationAgent; path: string; /** `path` is the companion's opaque reference to the reported conversation, not a host path. */reference?: true; /** OpenCode keeps every session in one database: the id picks the session. */transcriptSessionId?: string; herdr?: {herdrSession:string;paneId:string;terminalId:string};report?: {sessionId:string;agent:string;paneId?:string}}>;
 /** The records of a records-only adapter for the session a hook reported: read-only, never a conversation the view takes input for. */
 export type BoundRecords = Readonly<Omit<BoundConversation, 'agent'> & {agent: RecordsAgent}>;
 
@@ -441,7 +441,7 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
   // A bound conversation streams over one channel while it can; polling only fills in when it cannot.
   // OpenCode's source is its database and the session in it, with no previews to ask for.
   const watchTarget = useMemo<WatchTarget | undefined>(() => bound && conversation && sourceMatches && ['claude','codex','opencode'].includes(bound.agent) && (bound.agent!=='opencode' || (!!bound.transcriptSessionId && !bound.herdr))
-    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : {kind:'path',agent:bound.agent,path:bound.path,...(bound.agent==='opencode'?{transcriptSessionId:bound.transcriptSessionId}:inlineImages?{inlineImages:true}:{}),...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
+    ? bound.herdr ? {kind:'herdr',agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : bound.reference ? {kind:'reference',agent:bound.agent,reference:bound.path,...(inlineImages?{inlineImages:true}:{}),...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : {kind:'path',agent:bound.agent,path:bound.path,...(bound.agent==='opencode'?{transcriptSessionId:bound.transcriptSessionId}:inlineImages?{inlineImages:true}:{}),...(bound.agent==='codex'?{allowLargeHistory:true}:{})} : undefined, [bound,conversation,sourceMatches,inlineImages]);
   const watch = useTranscriptWatch<Message>({enabled:!!watchTarget && following && visible && shown && !!access.current(),sessionId,
     target:watchTarget ?? {kind:'path',agent:'',path:''},lease:access,invoke,parsePage:parseWatchPage,onOp:op=>{
       // The window is away from the newest messages: they are read back by Jump to latest, not patched in.
@@ -594,7 +594,12 @@ export default function ChatPanel({ sessionId, onOpenTerminal,reportedHistory,te
         if (!currentRequest(current)) return;
       }
       const page = parseTranscript(
-        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,target:{agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(bound.agent==='codex'?{allowLargeHistory:true}:{}),...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {})}}) : invoke("agent_transcript", {
+        await (bound?.herdr ? invoke("agent_herdr_conversation", {sessionId,target:{agent:bound.agent,agentSessionId:bound.path,...bound.herdr,...(bound.agent==='codex'?{allowLargeHistory:true}:{}),...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {})}}) : bound?.reference ? invoke("agent_reported_conversation", {
+          sessionId, agent:bound.agent, reference:bound.path,
+          ...(source.inlineImages ? {inlineImages:true} : {}),
+          ...(source.agent==='codex' && source.view==='conversation'?{allowLargeHistory:true}:{}),
+          ...(slice && windowArguments(slice) ? {window: windowArguments(slice)} : {}),
+        }) : invoke("agent_transcript", {
           sessionId,
           ...source,
           ...(source.agent==='codex' && source.view==='conversation'?{allowLargeHistory:true}:{}),

@@ -51,8 +51,9 @@ like `account_usage` does today. The `Local` arm takes its cancel receiver from 
 local registry (`local::usage_session`: adopted, not cancelled, renderer alive), so a
 closed local session cancels its tools exactly as a dropped SSH session does. Tauri
 commands move from `state.session()` to `Host::resolve()` one at a time; each
-`Remote` arm calls today's function unchanged. `herdr_create.rs`'s `trait Remote` is
-folded into this enum rather than kept as a second abstraction.
+`Remote` arm calls today's function unchanged. `herdr_create.rs` runs its steps on this
+enum (`OnHost`), which replaced its SSH-only implementation of `trait Remote`; the trait
+stays only as the seam its scripted-host tests put a fake behind.
 
 `Host` offers five operations, each a `match` whose remote arm is the existing code:
 
@@ -120,7 +121,9 @@ detected natively; the renderer chooses an id, never a path or command.
 `local_connect` accepts a launch spec `{ target, cwd?, attach? }`. `attach` is the
 existing typed `multiplexer::Entry` (tmux, tmux server, Herdr, Zellij;
 `deny_unknown_fields`), validated natively and turned into argv by the existing
-`attach_command` builders. The PTY is started with `CommandBuilder` from that argv.
+`attach_command` builders. The PTY is started with `CommandBuilder` from that argv, after the
+same preflight as over SSH (`Entry::prepare`) has run on this device through the host context:
+the tool answers its version command and, without `createIfMissing`, the named session exists.
 For WSL the PTY runs `wsl.exe -d <distro> --cd <dir> -e <argv>` and the host context
 runs every tool the same way, so all POSIX features (tmux included) work inside the
 distribution with no shell string.
@@ -244,7 +247,10 @@ Tests assert observable behaviour (repository testing policy). Each slice ships 
   files, `git.exe`, pwsh/PowerShell/cmd targets, native Zellij and Herdr fixtures with
   pinned binaries, `.cmd` shim refusal. Hosted runners are expected to lack a WSL
   distribution; WSL cases are written as ignored tests, and the matrix records WSL as
-  unverified until a runner with WSL runs them.
+  unverified until a runner with WSL runs them. The companion cases also run from the
+  packaged desktop app: macOS against the built app's `Contents/MacOS`, Windows against
+  the installed NSIS directory (`LAZYSH_TEST_BUNDLE_DIR`; see
+  [bundled companion](release-artifacts.md#bundled-companion)).
 - **Playwright** phone and desktop with the mocked bridge: local sessions show exactly
   the views their target reports, Agent view and terminal switch over a local session.
 - **Linux native GUI** (`apps/client/native-e2e`): a local session opens Files and

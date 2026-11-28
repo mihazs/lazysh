@@ -16,12 +16,11 @@ const answers:Record<string,unknown>={
   multiplexer_tree:{tmuxAvailable:true,herdrAvailable:false,zellijAvailable:false,tools:[{kind:'tmux',version:'3.4',support:'full',missing:[]}],sessions:[]},
 };
 
-const transcript='/home/owner/.codex/sessions/swipe.jsonl';
 /** What the Agent view shows when a Codex conversation is tied to the pane: one prompt and an answer with a code block. */
 const conversation={
   agent_snapshot:{schemaVersion:1,sessions:[{sessionId:'codex-thread',agent:'Codex',project:'/work',state:'working',updatedAt:new Date().toISOString(),summary:'Working',paneId:'%3',eventCount:4}]},
-  agent_reported_history:{schemaVersion:1,sessionId:'codex-thread',status:'available',path:transcript,reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'},
-  agent_transcript:{schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,messages:[
+  agent_reported_history_reference:{schemaVersion:1,sessionId:'codex-thread',status:'available',reference:'4e0da3cb-f6d1-468c-89fb-52d2602bd310',reportedAt:'2026-11-09T10:00:00Z',paneId:'%3'},
+  agent_reported_conversation:{schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,messages:[
     {id:'p0',role:'user',blocks:[{type:'text',text:'Explain the build'}]},
     {id:'a0',role:'assistant',blocks:[{type:'text',text:'The build uses Vite.\n\n```sh\nbun run build --mode production --sourcemap --minify terser --outDir dist/release --base /\n```'}]},
   ]},

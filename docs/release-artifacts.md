@@ -238,6 +238,28 @@ replaces them.
 Because the desktop builds wait for the companion artifacts, a release's critical path
 has three runner-queue entries (companion, desktop, publication) instead of two.
 
+Every `native-desktop` run (a push to `main`, or a pull request that touches the desktop paths) also runs the companion from the packaged app, not only from beside
+the test executable. `native-desktop` builds `lazysh-agent` in release mode (`cargo build
+--release`), stages it with `bun .changeset/release-bundle.ts stage-built` (the same sidecar
+path the release stages; this build has no receipt, since only the release's companion job
+is verified), and packages the app with the overlay config. The `companion::local` real-runtime
+cases then run with `LAZYSH_TEST_BUNDLE_DIR` naming the directory that holds the packaged
+companion, and the local arm must resolve to that file:
+
+* macOS: the cases run against `target/release/bundle/macos/lazysh.app/Contents/MacOS` of the built app
+  (`companion::local::tests::real_local_companion_serves_the_board_transcripts_and_settings_without_a_shell`),
+  and the same case must fail against a folder that holds no companion.
+* Windows: `tests/release-artifacts.test.ts` ("actual installed Windows bundle") installs the NSIS
+  installer, repairs it, runs the Windows cases (the board, transcripts and settings case, and
+  `real_local_hook_setup_on_windows_is_template_only`) against the install directory, and uninstalls.
+  `agent_snapshot` and `agent_transcripts` return parsed JSON for a transcript recorded under
+  a temporary `%USERPROFILE%`, and hook setup reports the template-only state. The same cases fail
+  against a directory without the companion, and a case that runs no test fails the step.
+
+The Windows step is non-blocking until its first hosted run on `main` passes
+([#1853](https://github.com/mihazs/lazysh/issues/1853)); the macOS step blocks. No Windows or
+macOS machine is available locally, so the hosted runners are the only place either step runs.
+
 ## Runner layout
 
 The release uses as few hosted runners as its acceptance checks allow:

@@ -6,6 +6,7 @@ import type {WatchEvent} from './transcriptWatch';
 /** What the host companion's watch channel streams: a conversation, or one Herdr server's agent-status changes. */
 export type WatchTarget =
   | {kind: 'path'; agent: string; path: string; inlineImages?: boolean; allowLargeHistory?: boolean}
+  | {kind: 'reference'; agent: string; reference: string; inlineImages?: boolean; allowLargeHistory?: boolean}
   | {kind: 'herdr'; agent: string; agentSessionId: string; herdrSession: string; paneId: string; terminalId: string; allowLargeHistory?: boolean}
   | {kind: 'herdrEvents'; herdrSession: string};
 /** `off` and `connecting` show nothing; `live` is the quiet normal state; `delayed` polls because no stream

@@ -133,7 +133,7 @@ pull request once those jobs pass, and the manual-merge rule in [AGENTS.md](AGEN
 Two pull requests can each pass `checks` and still break `main` together (the v1.49.0 release failed
 `source-build` when both added the same i18n keys). `checks` and `version` share one concurrency group
 per ref, and GitHub keeps one running and one pending run per group, so on a busy trunk the run of an
-older merge commit is cancelled while pending and never reports. The `main-verdict` workflow closes
+older merge commit never reports (`checks` cancels it when a newer push arrives; `version` cancels it only while pending). The `main-verdict` workflow closes
 that gap: every push to `main` gets its own run (group `main-verdict-<sha>`, never cancelled) of three
 parallel jobs, `verdict-client` (`moon run client:build client:check`: the Bun build, then the `tsc -b` type check),
 `verdict-agent` (`moon run '#companion:check-rust'`) and `verdict-release-tools` (`bun run test:release`).
