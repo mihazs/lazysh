@@ -33,7 +33,8 @@ const CANDIDATES: [&str; 5] = [
     "chromium-browser",
     "chrome",
 ];
-// A cold browser on a loaded CI runner needs well over the 1 s a developer machine takes.
+// A cold browser on a loaded CI runner needs well over the 1 s a developer machine takes; the Firefox adapter waits
+// as long for its port, and a Firefox that took 30 s there failed a required check.
 const START_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub struct Launch<'a> {

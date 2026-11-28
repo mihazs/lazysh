@@ -472,6 +472,21 @@ fn a_leaked_session_is_recovered_by_restarting_the_browser() {
     pids.iter().for_each(|pid| wait_gone(*pid));
 }
 
+/// A cold Firefox on a loaded CI runner can need longer than the 30 s the relay once allowed before its port
+/// appeared (a required check failed with `BrowserStartTimeout`); the relay waits as long as it does for Chrome.
+#[test]
+fn a_firefox_that_is_slow_to_start_still_streams() {
+    let fixture = fixture();
+    let relay = serve(&fixture, "slow-start", "160.0");
+    assert_eq!(
+        relay.next_during("state", WAIT * 4).json("state").unwrap()["state"],
+        "running"
+    );
+    relay.next("frame");
+    relay.stop();
+    fixture.nothing_is_left();
+}
+
 #[test]
 fn a_browser_that_always_holds_a_session_ends_the_relay_with_a_reason_after_one_replacement() {
     let fixture = fixture();
@@ -755,8 +770,9 @@ fn a_real_firefox_holding_a_leaked_session_is_replaced_and_then_streams() {
         &["--binary", fixture.fake.to_str().unwrap(), "--no-sandbox"],
     );
     relay.open_as("firefox", &format!("http://127.0.0.1:{port}/"));
+    // Two cold starts, each of which the relay allows up to its start timeout on a loaded runner.
     assert_eq!(
-        relay.next_during("state", WAIT * 4).json("state").unwrap()["state"],
+        relay.next_during("state", WAIT * 10).json("state").unwrap()["state"],
         "running"
     );
     wait_for_fixture(&mut relay, port);
