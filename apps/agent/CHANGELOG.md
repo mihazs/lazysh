@@ -1,5 +1,24 @@
 # @lazysh/agent
 
+## 1.108.0
+
+### Minor Changes
+
+- feat(browser): fit the host Firefox relay's polling and encoding to the link with the quality ladder ([#2842](https://github.com/mihazs/lazysh/pull/2842))
+
+  <details><summary>Details</summary>
+
+  The host browser relay (`lazysh-agent host-browser serve`, hidden, off until the host browser switch is on) now drives a managed Firefox from the same four-rung quality ladder as Chrome: the rung sets the capture's JPEG quality, how often Firefox is asked for a screenshot (every 50 ms at most, every 100 ms at the lowest rung) and the frame size (the page's device pixel ratio). It steps down within a second when the device acknowledges too few frames and up after ten stable seconds, and `quality {rung}` and Data saver hold a rung. A frame that repeats the last one does not count as produced. The two-second boost after input and the sharp still for a page that stopped changing are not done yet. The measured CPU cost per rung is in the feasibility document.
+
+  </details>
+- feat(agents): show Claude Code records lazysh does not map as a "Not shown natively" line in the Agent view ([#2815](https://github.com/mihazs/lazysh/pull/2815))
+
+  <details><summary>Details</summary>
+
+  A record of an unknown type, or a `system` record of an unmapped subtype, now appears as one muted line labelled with its type that opens to the agent's own text, instead of being dropped. Known housekeeping records and unmapped attachments stay hidden. No defaults changed.
+
+  </details>
+
 ## 1.107.1
 
 No changes in this release.
