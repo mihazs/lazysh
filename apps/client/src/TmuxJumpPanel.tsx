@@ -8,8 +8,8 @@ import {t,useUi,formatNumber} from './i18n/core';
 import {readMuxLayout,writeMuxLayout,type MuxLayout} from './muxLayout';
 
 /** Jump To for the tmux display `sessionId`, or, with `zellij`, for the tabs of that named Zellij session. */
-export default function TmuxJumpPanel({ sessionId, zellij, onClose, onJump, onBusyChange }: {
-  sessionId: string; zellij?: string; onClose: () => void; onJump?: (snapshot: TmuxJumpSnapshot) => void; onBusyChange?:(busy:boolean)=>void;
+export default function TmuxJumpPanel({ sessionId, zellij, paneServer, onClose, onJump, onBusyChange }: {
+  sessionId: string; zellij?: string; /** `tmux:<label>` of the attached server: a report of another server names none of these panes. */paneServer?: string; onClose: () => void; onJump?: (snapshot: TmuxJumpSnapshot) => void; onBusyChange?:(busy:boolean)=>void;
 }) {
   useUi();
   const api = useProtectedApi(nativeApi);
@@ -83,7 +83,7 @@ export default function TmuxJumpPanel({ sessionId, zellij, onClose, onJump, onBu
           {formatNumber(window.index)}: {window.name}{current ? ` · ${t('jumpCurrent')}` : ''}
         </button></div>
         {window.panes?.map(pane => {
-          const agent = paneAgent(reports, pane.id);
+          const agent = paneAgent(reports, pane.id, paneServer);
           return <div className="mux-row mux-pane-row" key={pane.id}><button className="subtle-button" disabled={busy} aria-current={pane === shown ? 'location' : undefined} onClick={() => void jump(session.id, window.id, pane.id)}>
             {t('jumpPane')} {formatNumber(pane.index)}: {pane.title || pane.command || pane.id}{agent ? ` · ${agent}` : ''}{window.zoomed && pane.active ? ` · ${t('jumpZoomed')}` : ''}{pane === shown ? ` · ${t('jumpCurrent')}` : ''}
           </button></div>;

@@ -117,9 +117,8 @@ Shipped so far: the companion records `paneServer` (`tmux:<label>` or `rmux:<lab
 socket path in `TMUX` or `RMUX`) next to `paneId`, and the Agents panel's report details show
 it. A pane is rmux only when `RMUX_PANE` and `RMUX` equal `TMUX_PANE` and `TMUX`, so a tmux started
 inside an rmux pane stays tmux. Zellij and Herdr panes already carry their session in `paneId`.
-A `-S` socket has no label and records none. Using the label to focus the pane and to keep two
-servers' `%7` apart in the Agent view, tmux and rmux Jump To pane rows, and Herdr
-`events.subscribe` are still open.
+A `-S` socket has no label and records none. Lifecycle hooks run inside Herdr record `herdr:<session>:<pane id>`
+(a tmux or Zellij pane started inside it keeps its own identity).
 
 Shipped for the tap focus (#1690): a notification tap, an inbox row and **Open session** focus
 the pane of an event whose pane is `zellij:<session>:<pane>`, only when the terminal is
@@ -128,9 +127,13 @@ line it moves the focus of the command's own client, not the attached terminal's
 0.46.0), so the app reads the pane's tab (`list-panes --json`), goes to it (`go-to-tab`) and
 steps `focus-next-pane` until `list-clients` reports the pane. A pane of another session, or of
 another multiplexer, is left alone rather than guessed, and a pane that has gone still opens
-the session. Still open in #1690: tmux and rmux on the server the event names (needs the
-`paneServer` field of #1146), the Agent view ignoring a report of another server, and the
-Herdr pane identity (needs #1571).
+the session. The same tap focuses a tmux or rmux `%N` only when the terminal is attached to the
+server the event's `paneServer` names (a pane of another attached server is refused; a report
+with no `paneServer` is looked up on the attached server, as before), and a `herdr:<session>:<pane id>`
+pane through `herdr_tree` and `herdr_action` when the terminal is attached to that Herdr server.
+The Agent view, the status bar's current-pane agent, the Agent view's reported-state guard and Jump To pane
+rows ignore a report whose `paneServer` is another server than the attached one. A Herdr pane on
+a server the terminal is not attached to is left alone rather than attached on a tap.
 
 ## Capability table: remote hosts
 

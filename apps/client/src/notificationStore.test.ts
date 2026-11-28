@@ -99,3 +99,44 @@ it('selects the pane that raised an event only in the tmux terminal it is attach
   invoke.mockRejectedValueOnce(new Error("can't find pane: %12"));
   await expect(focusInboxPane(invoke, tmux, '%12')).resolves.toBeUndefined();
 });
+
+it('focuses a tmux or rmux pane only on the server the event names, and refuses another attached server', async () => {
+  const invoke = vi.fn().mockResolvedValue(undefined);
+  const on = (kind: string, tmuxServer?: string) => ({ id: 'ssh1', attached: { kind, name: 'work', ...(tmuxServer === undefined ? {} : { tmuxServer }) } });
+  await focusInboxPane(invoke, on('tmux', 'agents'), '%3', 'tmux:agents');
+  expect(invoke).toHaveBeenLastCalledWith('tmux_action', { sessionId: 'ssh1', action: { type: 'selectPane', target: '%3' }, tmuxServer: 'agents' });
+  await focusInboxPane(invoke, on('tmux'), '%3', 'tmux:default');
+  expect(invoke).toHaveBeenLastCalledWith('tmux_action', { sessionId: 'ssh1', action: { type: 'selectPane', target: '%3' } });
+  await focusInboxPane(invoke, on('rmux', 'agents'), '%3', 'rmux:agents');
+  expect(invoke).toHaveBeenLastCalledWith('tmux_action', { sessionId: 'ssh1', action: { type: 'selectPane', target: '%3' }, tmuxServer: 'agents', kind: 'rmux' });
+  invoke.mockClear();
+  // Another server's %3, the same label under the other multiplexer and a default-server pane on a named server select nothing.
+  for (const [session, server] of [[on('tmux', 'agents'), 'tmux:work'], [on('tmux'), 'tmux:work'], [on('tmux', 'agents'), 'rmux:agents'], [on('rmux'), 'tmux:default']] as const) await focusInboxPane(invoke, session, '%3', server);
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+it('focuses a Herdr pane only on the attached server and only while the pane exists', async () => {
+  const tree = { panes: [{ pane_id: 'w3V:p1' }] };
+  const invoke = vi.fn(async (command: string) => command === 'herdr_tree' ? tree : undefined);
+  const herdr = { id: 'ssh1', attached: { kind: 'herdr', name: 'work' } };
+  await focusInboxPane(invoke, herdr, 'herdr:work:w3V:p1');
+  expect(invoke).toHaveBeenLastCalledWith('herdr_action', { sessionId: 'ssh1', name: 'work', action: { type: 'focusPane', target: 'w3V:p1' } });
+  invoke.mockClear();
+  await focusInboxPane(invoke, herdr, 'herdr:work:w3V:p2');
+  expect(invoke).not.toHaveBeenCalledWith('herdr_action', expect.anything());
+  invoke.mockClear();
+  for (const [session, pane] of [[herdr, 'herdr:default:w3V:p1'], [{ ...herdr, attached: { kind: 'tmux', name: 'work' } }, 'herdr:work:w3V:p1'], [{ id: 'ssh1' }, 'herdr:work:w3V:p1']] as const) await focusInboxPane(invoke, session, pane);
+  expect(invoke).not.toHaveBeenCalled();
+  invoke.mockRejectedValueOnce(new Error('herdr stopped'));
+  await expect(focusInboxPane(invoke, herdr, 'herdr:work:w3V:p1')).resolves.toBeUndefined();
+});
+
+it('carries the server a report names from the inbox row to the tap', async () => {
+  await collectInbox(session, snapshot([{ ...row, paneServer: 'tmux:agents' } as typeof row]), true);
+  expect(parseInbox(JSON.parse(JSON.stringify(getInbox()))).rows[0].paneServer).toBe('tmux:agents');
+  const navigate = vi.fn();
+  window.addEventListener('lazysh-inbox-open', navigate);
+  expect(openInboxEvent(getInbox().rows[0].eventId, [session])).toBe(true);
+  expect((navigate.mock.calls[0][0] as CustomEvent).detail).toMatchObject({ paneId: '%1', paneServer: 'tmux:agents' });
+  window.removeEventListener('lazysh-inbox-open', navigate);
+});
