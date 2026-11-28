@@ -244,7 +244,10 @@ Tests assert observable behaviour (repository testing policy). Each slice ships 
   files, `git.exe`, pwsh/PowerShell/cmd targets, native Zellij and Herdr fixtures with
   pinned binaries, `.cmd` shim refusal. Hosted runners are expected to lack a WSL
   distribution; WSL cases are written as ignored tests, and the matrix records WSL as
-  unverified until a runner with WSL runs them.
+  unverified until a runner with WSL runs them. The companion cases also run from the
+  packaged desktop app: macOS against the built app's `Contents/MacOS`, Windows against
+  the installed NSIS directory (`LAZYSH_TEST_BUNDLE_DIR`; see
+  [bundled companion](release-artifacts.md#bundled-companion)).
 - **Playwright** phone and desktop with the mocked bridge: local sessions show exactly
   the views their target reports, Agent view and terminal switch over a local session.
 - **Linux native GUI** (`apps/client/native-e2e`): a local session opens Files and
