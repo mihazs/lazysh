@@ -15,9 +15,21 @@ export type AgentSession = {
   /** What a needs-attention report waits for, and since when; from a companion that records it. */
   waiting?: 'approval' | 'question' | 'plan' | 'menu' | 'unknown';
   waitingSince?: string;
+  /** What the session is about (its first prompt, or the agent's own title), from a companion that reports it; or the name the user gave it. */
+  title?: string;
 };
+export const maxTitle = 80;
+/** One line without control characters, at most `maxTitle` characters; `undefined` when nothing is left. */
+export function cleanTitle(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const line = value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim().replace(/\s+/g, ' ');
+  const characters = [...line];
+  return characters.length === 0 ? undefined : characters.length > maxTitle ? `${characters.slice(0, maxTitle - 1).join('')}\u2026` : line;
+}
+/** How a session is named for a screen reader: its name, then its agent. */
+export const reportLabel = (row: Pick<AgentSession, 'agent' | 'title'>) => row.title ? `${row.title} (${row.agent})` : row.agent;
 export const states: AgentState[] = ['needs_attention', 'working', 'done'];
-export function reportKey(row:AgentSession) {return JSON.stringify([row.agent,row.sessionId]);}
+export function reportKey(row:Pick<AgentSession,'agent'|'sessionId'>) {return JSON.stringify([row.agent,row.sessionId]);}
 export const reportedStateNames = {needs_attention:'agentsNeedsYou',working:'agentsWorking',done:'agentsDone'} as const;
 /** Groups reports by project, most recently reported project first. */
 export function projectGroups(rows:AgentSession[]) {
@@ -42,7 +54,10 @@ export function parseSnapshot(value: unknown): AgentSession[] {
     if ((row.paneServer !== undefined && (typeof row.paneServer !== 'string' || row.paneServer.length > 256))
       || (row.waiting !== undefined && !['approval', 'question', 'plan', 'menu', 'unknown'].includes(row.waiting as string))
       || (row.waitingSince !== undefined && (typeof row.waitingSince !== 'string' || !Number.isFinite(Date.parse(row.waitingSince))))) throw new LocalUiError('agentsInvalidSession');
-    return row as AgentSession;
+    // A title is a convenience: an unusable one is dropped, never a reason to reject the report.
+    const {title, ...report} = row;
+    const clean = cleanTitle(title);
+    return (clean === undefined ? report : {...report, title: clean}) as AgentSession;
   });
 }
 
