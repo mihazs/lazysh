@@ -290,6 +290,7 @@ fn main() {
         "check_companion_update",
         "install_managed_herdr",
         "remove_managed_herdr",
+        "companion_version",
         "companion_hooks",
         "companion_hook_discovery",
         "get_companion_settings",
