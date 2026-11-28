@@ -219,13 +219,54 @@ What it does not detect, which therefore notifies as before:
 
 ## Auto-update policy
 
-`lazysh-agent auto-update status` prints the policy and the last app-driven update; `auto-update set --expected-revision R --policy off|notify|install` changes it (a stale revision returns `SettingsConflict`, a concurrent writer `SettingsBusy`). A host with no file behaves as `install` and reading it creates nothing. The file `auto-update.json` in the [state directory](companion-events.md#state-directory-and-retention) is separate from `settings.json`, so companions that predate it keep reading `settings.json`:
+`lazysh-agent auto-update status` prints the settings, the last scheduled check, when the next one may use the network (`nextCheckAt`, `null` under `off`) and the last app-driven update. `auto-update set --expected-revision R --policy off|notify|install` changes them (a stale revision returns `SettingsConflict`, a concurrent writer `SettingsBusy`); the settings are:
+
+| Setting | Flag of `set` | Values | Default |
+| --- | --- | --- | --- |
+| `policy` | `--policy` (required) | `off`: no check, no network. `notify`: checks and records, never changes the executable. `install`: also installs. | `install` |
+| `channel` | `--channel` | `stable` (the release GitHub marks latest) or `prerelease` (the highest version that is not a draft) | `stable` |
+| `intervalHours` | `--interval-hours` | 1 to 720: how often a check may use the network | 24 |
+| `window` | `--window` | `HH:MM-HH:MM` in the host's local time, or `none`: when an install may start. An end earlier than the start runs over midnight (`22:00-06:00`). | none |
+
+A setting `set` does not name keeps its value. A host with no file behaves as the defaults and reading it creates nothing. The file `auto-update.json` in the [state directory](companion-events.md#state-directory-and-retention) is separate from `settings.json`, so companions that predate it keep reading `settings.json`. A field is written only when it differs from its default, so a file that only turns updates off is still read by a companion that does not know the other fields:
 
 ```json
-{ "schemaVersion": 1, "revision": 1, "policy": "install" }
+{ "schemaVersion": 1, "revision": 2, "policy": "notify", "channel": "prerelease", "intervalHours": 6, "window": "22:00-06:00" }
 ```
 
-The schema is strict like `settings.json`: another schema version, an unknown field or policy, and a file above 4 KiB are refused, and a policy that cannot be read blocks app-driven updates (`reason: "policyUnreadable"`); it is never replaced by the default. `status` also prints `appUpdate`, the record in `app-update.json` (`state`, `from`, `to`, `reason`, `failures`, `notBefore`, `blocked`), which the runner owns.
+The schema is strict like `settings.json`: another schema version, an unknown field or policy, an interval outside 1 to 720, a window that is not two clock times, and a file above 4 KiB are refused, and settings that cannot be read block updates (`reason: "policyUnreadable"`); they are never replaced by the defaults. `status` also prints `appUpdate`, the record in `app-update.json` (`state`, `from`, `to`, `reason`, `failures`, `notBefore`, `blocked`), which the runner owns. `lazysh-agent update --status` carries the same settings as `autoUpdate`.
+
+### The scheduled check
+
+`lazysh-agent auto-update run` is one scheduled check, started by the companion itself (see [the companion checks by itself](../companion.md#the-companion-checks-for-updates-by-itself)) or by hand. Under `off` it does nothing. Otherwise, when a check is due, it runs `update --check` on the channel and records the answer as `lastCheck` in `update-state.json`:
+
+```json
+{ "at": "2026-11-13T10:00:00Z", "latest": "1.56.0", "available": true, "error": null }
+```
+
+`available` is true while `latest` is newer than the installed companion; it is cleared when an update installs `latest` (or an older release), and a reader that wants to be certain compares `latest` with the version `update --status` reports. A check that failed keeps what was known about `latest`, sets `error` to `{"kind": ...}` (the `error.kind` words of [`update`](companion-update.md)), and counts `failures`; the next check waits until `notBefore`: one hour, doubling to a day. A host that is offline is therefore a recorded skip and exit 0, not an error. The check is noted as failed (`interrupted`) before the network is used, so a run that dies halfway, or a state directory that cannot be written (the run then exits 1), cannot make the host ask again at once.
+
+Under `install` a newer release is then installed through the same guarded install a newer app starts (`update --yes --version <latest> --channel <channel>`): the release must be strictly newer than a version the installed companion can name (a development build is never replaced), the host's clock must be inside the window (otherwise `skipped`, `outsideWindow`; a newer app that connects is held by the same window), the release must not be one the user rolled back from, and not one that failed verification, self-test or restore (`blocked`, until a newer release exists) or is waiting out its backoff, and no session may have reported `working` in the last ten minutes (`skipped`, `activeTurn`). While a newer release waits like this it is looked at again every 30 minutes instead of every interval. The reply is `{"schemaVersion":1,"state":"checked|updated|skipped|failed","reason":"...","latest":"..."}`, always exit 0 unless the settings or state cannot be read or written.
+
+### The operating system timer
+
+Where nothing reads a snapshot for days (a host nobody opens the app on) the companion cannot start its own check, so an operating system timer can wake it. It is optional and off until you ask, and it is the user's own, never a system service: nothing here uses `sudo` or needs elevation.
+
+| Command | What it does |
+| --- | --- |
+| `lazysh-agent auto-update enable` | Writes the timer files and turns the timer on. Exit 40 while the policy is `off`, 41 when this account cannot have one, 42 when the system refused (the files are put back as they were), 27 when there is no managed companion to run. |
+| `lazysh-agent auto-update disable` | Turns it off and removes the files that carry the lazysh marker. Does nothing when nothing is installed. |
+| `lazysh-agent auto-update status` | Adds `timer`: `{"kind","supported","installed","enabled","drift"}`, read from the system each time. `drift` is true when what is there is not what `enable` would write now (the companion moved, a file was edited, the timer was disabled behind our back, or only part is there). |
+
+| Platform | Timer | Needs |
+| --- | --- | --- |
+| Linux | a systemd user timer and service, `~/.config/systemd/user/lazysh-agent-update.{timer,service}`, enabled with `systemctl --user enable --now` | A running user manager (a login session, or lingering). A bare SSH login without one is exit 41 and nothing is written. |
+| macOS | a launchd agent, `~/Library/LaunchAgents/app.lazysh.agent-update.plist`, loaded with `launchctl bootstrap gui/<uid>` | A login session of the user (the `gui/<uid>` domain). Without one, exit 41. |
+| Windows | a Scheduled Task `lazysh-agent-update` of the current user, at logon and every hour, created with `schtasks /Create /XML` | Task Scheduler, without elevation. |
+
+The timer wakes `lazysh-agent auto-update run` of the **managed** companion (by its absolute path) every hour, with a few minutes of spread on Linux, and `run` decides from the settings whether a check is due, so changing the interval, channel, window or policy never touches the timer. A path that systemd cannot carry (a quote or a backslash in it) is refused (27) rather than escaped. A file or task of that name that does not carry the lazysh marker is somebody else's: `enable` refuses (42) and `disable` leaves it.
+
+Verification: on Linux the written units are checked with `systemd-analyze verify` in the tests, against a stand-in `systemctl` (a test never touches a real user manager). The launchd property list and the Windows task definition are rendered and checked as well-formed documents and read back with an XML parser (and with `plutil -lint` where that exists), but nothing here ran `launchctl` or `schtasks` on a macOS or Windows host: those two drivers are compiled and type-checked everywhere, and their commands follow the tools' documented syntax. A Windows task starts a console program, so a console window may appear briefly each hour.
 
 ## The first-time question
 

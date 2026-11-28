@@ -43,11 +43,11 @@ For this source/PATH installation, make `lazysh-agent` available on the noninter
   ```
 
   Exit codes, JSON output and every flag are in the [CLI contract](../architecture/adr-0003-host-side-companion-update.md#cli-contract) and the [companion update reference](../reference/companion-update.md). A lower version is installed only with `--version X.Y.Z --allow-downgrade`.
-- **Automatic updates.** A companion older than the lazysh app that connects updates itself to the app's version unless you turn it off; see [Keep the companion current](#keep-the-companion-current). Scheduled checks, a channel, interval and window setting, a timer and the update-available badge are planned and not released yet ([#1446](https://github.com/mihazs/lazysh/issues/1446)).
+- **Automatic updates.** A companion older than the lazysh app that connects updates itself to the app's version unless you turn it off; see [Keep the companion current](#keep-the-companion-current). It also checks for a newer release by itself (channel, interval and window are settings, and `auto-update enable` adds a timer for hosts nobody opens the app on); the update-available badge in the app is planned and not released yet ([#1446](https://github.com/mihazs/lazysh/issues/1446)).
 
 ## Keep the companion current
 
-A companion older than the app that talks to it updates itself to the app's version (policy `install`, the default). Nothing needs doing, and nothing is downloaded on the phone: the host fetches the release itself. To stop it, run `lazysh-agent auto-update status` on the host, then `lazysh-agent auto-update set --expected-revision <revision> --policy off` (or `notify` to keep it from changing the executable). To undo an update, use `lazysh-agent update --rollback`; the rolled-back version is not installed again behind your back. See [Companion updates](../companion-settings.md#companion-updates).
+A companion older than the app that talks to it updates itself to the app's version (policy `install`, the default). Nothing needs doing, and nothing is downloaded on the phone: the host fetches the release itself. It also looks for a newer release by itself, at most once a day, and installs it when the host is idle (never during an agent turn; you can restrict it to a time window). To stop it, run `lazysh-agent auto-update status` on the host, then `lazysh-agent auto-update set --expected-revision <revision> --policy off` (or `notify` to keep it from changing the executable). To undo an update, use `lazysh-agent update --rollback`; the rolled-back version is not installed again behind your back. See [Companion updates](../companion-settings.md#companion-updates).
 
 ## Open host links on your device (optional)
 

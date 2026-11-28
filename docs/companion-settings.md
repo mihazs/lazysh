@@ -126,19 +126,17 @@ A companion that is older than the lazysh app talking to it updates itself to th
 lazysh-agent auto-update set --expected-revision 0 --policy off
 ```
 
-`off` never updates and uses no network, `notify` never changes the executable, `install` updates when a newer app connects, never during an agent turn and never to a version older than the installed one. Details: [the update flow](companion.md#the-companion-updates-itself-when-a-newer-app-connects) and the [reference](reference/companion-settings.md#auto-update-policy).
+`off` never updates and uses no network, `notify` never changes the executable and only records what it found, `install` updates when a newer app connects and when its own check finds a newer release, never during an agent turn and never to a version older than the installed one. Three more settings shape the checks the companion makes by itself: how often it may ask GitHub (24 hours by default, 1 to 720), which releases it looks at (`stable`, or `prerelease`) and when an install may start (a window in the host's local time):
+
+```sh
+lazysh-agent auto-update set --expected-revision 1 --policy install --interval-hours 12 --channel stable --window 22:00-06:00
+```
+
+A setting you leave out keeps its value, and `--window none` removes the window. On a host nobody opens the app on, `lazysh-agent auto-update enable` adds a timer of your own account (never `sudo`) that wakes the check every hour, and `auto-update disable` removes it; see [the timer](reference/companion-settings.md#the-operating-system-timer). `lazysh-agent auto-update status` shows the settings, `lastCheck` (what the last check found) and `nextCheckAt`. Details: [the update flow](companion.md#the-companion-updates-itself-when-a-newer-app-connects) and the [reference](reference/companion-settings.md#auto-update-policy).
 
 ### Still planned
 
-These parts of [#1446](https://github.com/mihazs/lazysh/issues/1446) (design in [ADR 0003](architecture/adr-0003-host-side-companion-update.md#auto-update)) are **not released yet**; the policy above is. Until they ship the companion never asks GitHub on its own: it updates only when a newer app connects.
-
-| Setting | Values | Default |
-| --- | --- | --- |
-| Channel | `stable`, `prerelease` | `stable` |
-| Check interval | 1 to 720 hours | 24 |
-| Update window | `HH:MM-HH:MM` in the host's local time, or none | none |
-
-A scheduled check will also install a newer release when every guard passes (newer, inside the window, no session reported a working state in the last 10 minutes, that version has not already failed on this host), will send no host identifier and will ask once per interval. `notify` will then record what it found, and the Agent view and this panel will show the version and an update-available badge. `lazysh-agent auto-update enable` will install a user-level timer (systemd user timer, launchd agent or Scheduled Task) and `disable` will remove it; `status` will show whether it is present or has drifted. If the host has no user service manager, `enable` will report that and change nothing.
+The app does not show any of this yet ([#1446](https://github.com/mihazs/lazysh/issues/1446), design in [ADR 0003](architecture/adr-0003-host-side-companion-update.md#auto-update)): the companion version and an update-available badge in the Agent view, and a **Companion updates** group in Host settings with the policy, channel, interval, window and the timer switch. Until then the settings above are changed on the host.
 
 See the [settings reference](reference/companion-settings.md) for defaults, gated commands, strict response schema, filesystem protections and verification limits. See [documentation](README.md) for other tasks.
 

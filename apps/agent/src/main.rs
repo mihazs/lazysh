@@ -1062,6 +1062,17 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             store.settle_rejected_dialogs(chrono::Utc::now(), admission)?;
             let mut snapshot = store.snapshot(limit, chrono::Utc::now())?;
             snapshot.live_agents = Some(lazysh_agent::live_agents::discover());
+            // A check that is due starts after the reply is built, detached, so it never delays it;
+            // an update a newer app just started already holds the host.
+            if !update.as_ref().is_some_and(|update| {
+                matches!(
+                    update.state,
+                    lazysh_agent::auto_update::State::Started
+                        | lazysh_agent::auto_update::State::Running
+                )
+            }) {
+                lazysh_agent::auto_update::opportunistic();
+            }
             snapshot.update = update;
             wake_sender = true;
             Some(serde_json::to_value(snapshot).map_err(|_| Error::InvalidEvent)?)
@@ -1130,7 +1141,7 @@ fn main() -> std::process::ExitCode {
             } else {
                 eprintln!("lazysh-agent: {}: operation failed", error.class());
             }
-            std::process::ExitCode::FAILURE
+            std::process::ExitCode::from(error.exit_code())
         }
     }
 }
