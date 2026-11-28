@@ -664,6 +664,7 @@ async fn real_guarded_herdr_ssh_binding_keeps_original_connection_source_and_lea
     let view_binding = confirm(&app, &lease, &child, &source_a).await;
     crate::herdr::herdr_action(
         app.state(),
+        app.state(),
         child.session_id.clone(),
         "guard-left".into(),
         crate::herdr::HerdrAction::FocusWorkspace {
