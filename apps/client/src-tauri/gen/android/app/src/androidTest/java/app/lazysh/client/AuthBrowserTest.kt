@@ -16,6 +16,8 @@ import androidx.test.uiautomator.Until
 import androidx.test.uiautomator.By
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.concurrent.CopyOnWriteArrayList
@@ -60,8 +62,17 @@ class AuthBrowserTest {
     private fun bringLazyshBack() {
         if (scenario.state != Lifecycle.State.RESUMED) {
             context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+            val deadline = SystemClock.uptimeMillis() + 10_000
+            var resumed = false
+            while (!resumed && SystemClock.uptimeMillis() < deadline) {
+                instrumentation.runOnMainSync {
+                    resumed = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).any { it is MainActivity }
+                }
+                if (!resumed) Thread.sleep(50)
+            }
+            assertTrue("Lazysh did not resume within 10 seconds", resumed)
         }
-        scenario.moveToState(Lifecycle.State.RESUMED)
+        assertEquals(Lifecycle.State.RESUMED, scenario.state)
     }
 
     /** Counts the web pages the app starts and lets none of them open a browser. */
@@ -97,6 +108,14 @@ class AuthBrowserTest {
     private fun stopped() {
         scenario.moveToState(Lifecycle.State.CREATED)
         assertEquals(Lifecycle.State.CREATED, scenario.state)
+    }
+
+    @Test fun stoppedActivityReturnsToResumed() {
+        repeat(4) {
+            stopped()
+            bringLazyshBack()
+            assertEquals(Lifecycle.State.RESUMED, scenario.state)
+        }
     }
 
     @Test fun aTabOpensWhileLazyshIsInFrontAndNothingIsNotified() {
