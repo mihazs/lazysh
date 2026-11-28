@@ -33,6 +33,10 @@ fn thread_cpu_time() -> Duration {
 }
 
 pub(super) fn open_database(path: &Path) -> Result<Connection> {
+    open_database_with_length(path, (MAX_LINE * 2) as i32)
+}
+/// `length` bounds the longest string or blob the connection reads: a conversation reads a whole tool output as one value.
+pub(super) fn open_database_with_length(path: &Path, length: i32) -> Result<Connection> {
     let _file = open_transcript(path)?;
     let mut connection = Connection::open_with_flags(
         path,
@@ -41,7 +45,7 @@ pub(super) fn open_database(path: &Path) -> Result<Connection> {
             | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )?;
     connection.busy_timeout(Duration::from_secs(2))?;
-    connection.set_limit(Limit::SQLITE_LIMIT_LENGTH, (MAX_LINE * 2) as i32)?;
+    connection.set_limit(Limit::SQLITE_LIMIT_LENGTH, length)?;
     connection.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 65536)?;
     connection.set_limit(Limit::SQLITE_LIMIT_COLUMN, 128)?;
     let started = thread_cpu_time();

@@ -1,5 +1,5 @@
 //! Read-only bounded rollout prefixes. JSON supplies IDs and cutoffs, never paths.
-use super::{conversation, open_transcript, Error, Result, SourceSnapshot};
+use super::{conversation, open_transcript, Error, Result, SourceSnapshot, MAX_RECORD};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -10,9 +10,6 @@ use std::{
 };
 
 const MAX_BYTES: usize = 16 * 1024 * 1024;
-/// One record may be as long as the file: Codex writes a whole command, its output or a compaction's replaced history in one line,
-/// and a record the reader cannot take in would hide every turn after it.
-const MAX_RECORD: u64 = MAX_BYTES as u64;
 const MAX_RECORDS: usize = 100_000;
 const MAX_SOURCES: usize = 16;
 /// Projection tracks turns linearly; cap the opt-in suffix to bound worst-case work.
