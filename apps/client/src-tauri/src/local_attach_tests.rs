@@ -126,6 +126,55 @@ fn a_windows_attach_runs_the_found_program_and_never_tmux() {
     );
 }
 
+/// Discovery, one-shot actions and attach resolve one program the same way: the same file, in the
+/// same PATH and PATHEXT order, and a batch shim or a bare name is none of them.
+#[test]
+fn discovery_actions_and_attach_find_the_same_native_program() {
+    use super::desktop::attach_program;
+    use crate::native_program::{on_path, start};
+    use std::ffi::OsStr;
+
+    let (first, second) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    for (directory, file) in [
+        (&first, "herdr.com"),
+        (&second, "herdr.exe"),
+        (&first, "zellij.cmd"),
+        (&second, "zellij.bat"),
+        (&second, "zellij"),
+    ] {
+        std::fs::write(directory.path().join(file), b"").unwrap();
+    }
+    let path = std::env::join_paths([first.path(), second.path()]).unwrap();
+    for pathext in [
+        None,
+        Some(".EXE;.COM"),
+        Some(".COM;.EXE"),
+        Some(".BAT;.CMD"),
+    ] {
+        let pathext = pathext.map(OsStr::new);
+        for program in ["herdr", "zellij", "missing"] {
+            let found = attach_program(program, true, &path, pathext);
+            assert_eq!(on_path(true, &path, pathext, program), found.is_ok());
+            // An action starts the file attach starts; a program not found keeps its name.
+            assert_eq!(
+                start(true, &path, pathext, program),
+                found.unwrap_or_else(|_| program.into()),
+                "{program} {pathext:?}"
+            );
+        }
+    }
+    assert!(on_path(true, &path, Some(OsStr::new(".EXE;.COM")), "herdr"));
+    assert_eq!(
+        start(true, &path, Some(OsStr::new(".EXE;.COM")), "herdr"),
+        // The first PATH directory wins over a better extension further on.
+        first.path().join("herdr.com").into_os_string()
+    );
+    assert!(!on_path(true, &path, None, "zellij"));
+    // Elsewhere the name itself is looked up and started.
+    assert!(!on_path(false, &path, None, "herdr"));
+    assert_eq!(start(false, &path, None, "herdr"), OsStr::new("herdr"));
+}
+
 #[cfg(unix)]
 mod runtime {
     use super::{
