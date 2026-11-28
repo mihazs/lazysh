@@ -304,11 +304,13 @@ does not enter the release set. Official F-Droid inclusion remains separate.
 
 ## Companion assets are an updater contract
 
-Every release publishes 14 assets (v1.50.0): five companion executables
+Every release publishes 18 assets (14 on v1.50.0, before the managed Herdr): five companion executables
 `lazysh-<version>-linux-agent-x64.bin`, `-linux-agent-arm64.bin`,
 `-macos-agent-x64.bin`, `-macos-agent-arm64.bin` and `-windows-agent-x64.exe`;
 the desktop and Android packages `-linux-x64.deb`, `-linux-x64.AppImage`,
-`-windows-x64.exe` and two `-android-*-arm64.apk`; and `release.json`,
+`-windows-x64.exe` and two `-android-*-arm64.apk`; the managed Herdr
+`-linux-herdr-x64.bin` and its bundle `-linux-herdr-notices-x64.json`, `.txt` and
+`.receipt.json` (see below); and `release.json`,
 `SHA256SUMS`, `release-notes.md` and `INSTALL-AND-UPDATE.md`. GitHub reports a
 `sha256:` digest for each asset. `release.json` (schema 1) names the tag's commit,
 the version and, per target, `files[{name, bytes, sha256}]`.
@@ -320,6 +322,33 @@ the 64 MiB companion cap, or publishing a release whose asset digests differ fro
 `release.json`, therefore breaks every installed companion that updates itself.
 Such a change needs a new `schemaVersion` and a release that older updaters can
 still read. Releases publish no detached signature or build attestation.
+
+## Managed Herdr assets
+
+The release builds the managed Herdr ([#1758](https://github.com/mihazs/lazysh/issues/1758), under
+[#1522](https://github.com/mihazs/lazysh/issues/1522)) in the `herdr` job of `release-artifacts.yml`: the
+release profile with `--features lazysh-managed`, on Ubuntu 22.04 (the glibc 2.35 floor), compiled from source with no
+restored `target/`. `.changeset/release-herdr.ts stage` then generates the notice inventory, measures the libc floor
+with `herdr-release-receipt.sh`, and refuses to stage unless the build receipt, the inventory and the release identity
+agree on the exact source commit, the pinned upstream commit and manifest digest, the target and the feature set and
+the receipt names the executable's SHA-256. It also checks the ELF header and runs `--version` in a cleared environment.
+
+Two receipts carry the result, so the receipt the companion updater selects stays one file:
+
+* `linux-herdr-x64` lists exactly `lazysh-<version>-linux-herdr-x64.bin` (at most 64 MiB, the cap the host's fetch
+  already enforces; no release has measured it yet). `lazysh-companion-release` knows the four closed Herdr targets
+  `linux-herdr-x64`, `linux-herdr-arm64`, `macos-herdr-x64` and `macos-herdr-arm64`, but only `linux-herdr-x64` is
+  built and listed in `release.json`, so the others stay unavailable.
+* `linux-herdr-notices-x64` lists `lazysh-<version>-linux-herdr-notices-x64.json` (the inventory),
+  `.txt` (the notices, whose source links name the tag's commit) and `.receipt.json` (the build receipt with the
+  executable's SHA-256, source, toolchains and libc floor).
+
+Both enter aggregation, `release.json` and `SHA256SUMS` like every other target. After publication the `publish` job
+runs `release-herdr.ts verify-published`: the release must be public, its tag must point at the published commit, and
+the downloaded executable and bundle must match `release.json`, GitHub's digests and each other. A failed check fails
+the run after the release is public; it never retracts it. The owned acceptance of the executable (#1761) is a
+separate step on the released asset; no platform support is claimed by publishing it. The hosted `herdr` job and the
+public check run only on a real release; locally both are exercised against fixture executables and a fake release API.
 
 ## Official references
 

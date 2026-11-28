@@ -170,3 +170,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           LAZYSH_RELEASE_BUILD_RESULT: success
         run: bun .changeset/release-publish.ts "$RUNNER_TEMP/verified-release"
+      # Public bytes, not this run's files: the release, its tag and release.json must agree with what GitHub now serves.
+      - name: Verify the published managed Herdr assets against the tag
+        run: bun .changeset/release-herdr.ts verify-published "v$(bun -p "require('./package.json').version")" "$GITHUB_SHA"

@@ -9,12 +9,16 @@ pub(crate) const MAX_RELEASE: u64 = 262_144;
 pub(crate) const MAX_RELEASES: u64 = 1_048_576;
 pub(crate) const MAX_MANIFEST: u64 = 65_536;
 pub(crate) const MAX_REFERENCE: u64 = 16_384;
-pub const TARGETS: [&str; 5] = [
+pub const TARGETS: [&str; 9] = [
     "linux-agent-x64",
     "linux-agent-arm64",
     "macos-agent-x64",
     "macos-agent-arm64",
     "windows-agent-x64",
+    "linux-herdr-x64",
+    "linux-herdr-arm64",
+    "macos-herdr-x64",
+    "macos-herdr-arm64",
 ];
 
 #[derive(Clone, Deserialize)]
@@ -101,7 +105,8 @@ pub fn sha(bytes: &[u8]) -> String {
 /// File extension of the published companion for a target, or `None` for anything else.
 pub fn extension(target: &str) -> Option<&'static str> {
     match target {
-        "linux-agent-x64" | "linux-agent-arm64" | "macos-agent-x64" | "macos-agent-arm64" => {
+        "linux-agent-x64" | "linux-agent-arm64" | "macos-agent-x64" | "macos-agent-arm64"
+        | "linux-herdr-x64" | "linux-herdr-arm64" | "macos-herdr-x64" | "macos-herdr-arm64" => {
             Some("bin")
         }
         "windows-agent-x64" => Some("exe"),

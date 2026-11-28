@@ -18,18 +18,19 @@ async function steps(entry: RunnerJob, row: Context, engine = 'on') {
 }
 
 // The desktop builds wait for the verified companions they bundle, so the critical path has three entries.
-test('a release push queues three runner entries on its critical path and eleven runner slots', () => {
+test('a release push queues three runner entries on its critical path and twelve runner slots', () => {
   const slots = release.map(entry => [`${entry.file.split('/').pop()}#${entry.id}`, entry.rows.length, entry.queueEntry]);
   expect(slots.sort()).toEqual([
     ['companion-artifacts.yml#binary', 5, 1],
     ['release-artifacts.yml#android', 1, 1],
     ['release-artifacts.yml#desktop', 2, 2],
+    ['release-artifacts.yml#herdr', 1, 1],
     ['release-tag.yml#publish', 1, 3],
     ['release-tag.yml#reserve', 1, 1],
     ['release-tag.yml#source-build', 1, 1],
   ]);
   expect(Math.max(...release.map(entry => entry.queueEntry))).toBe(3);
-  expect(release.reduce((total, entry) => total + entry.rows.length, 0)).toBe(11);
+  expect(release.reduce((total, entry) => total + entry.rows.length, 0)).toBe(12);
 });
 
 test('publication waits for the admitted source build and every verified platform installation', async () => {
@@ -97,6 +98,20 @@ test('each desktop build stages the verified companion its own platform uploaded
   }
 });
 
+test('the Herdr job compiles the release profile on the glibc-floor runner before it stages and uploads both receipts', async () => {
+  const herdr = named('herdr');
+  expect(herdr.job['runs-on']).toBe('ubuntu-22.04');
+  const executed = (await steps(herdr, {})).map(({ step }) => step);
+  const at = (matches: (step: any) => boolean) => executed.findIndex(matches);
+  const zig = at(step => step.uses === './.github/actions/ghostty-zig');
+  const build = at(step => step.run?.includes('cargo +1.96.1 build --locked --release --features lazysh-managed --bin herdr'));
+  const stage = at(step => step.run?.includes('release-herdr.ts stage'));
+  const upload = executed.flatMap((step, index) => step.uses === 'actions/upload-artifact@v4' ? [index] : []);
+  expect([zig, build, stage].every(index => index >= 0) && zig < build && build < stage && upload.every(index => index > stage)).toBe(true);
+  expect(executed[zig].with).toEqual({ 'link-source': 'true', 'restore-only': 'true' });
+  expect(upload.map(index => executed[index].with.name)).toEqual(['release-linux-herdr-x64', 'release-linux-herdr-notices-x64']);
+});
+
 test('desktop rollback builds without the terminal feature or its toolchain', async () => {
   const desktop = named('desktop');
   for (const row of desktop.rows) {
@@ -135,7 +150,8 @@ test('only the reservation and publication jobs can write, and only their ref an
   expect(aggregate).toBeGreaterThan(-1);
   expect(aggregate).toBeLessThan(tagged);
   expect(publish.slice(tagged).map(step => step.run)).toEqual(['bun .changeset/release-tag.ts tag',
-    'bun .changeset/release-publish.ts "$RUNNER_TEMP/verified-release"']);
+    'bun .changeset/release-publish.ts "$RUNNER_TEMP/verified-release"',
+    'bun .changeset/release-herdr.ts verify-published "v$(bun -p "require(\'./package.json\').version")" "$GITHUB_SHA"']);
   // The reservation job runs no build or third-party step: checkout, Bun and the one token step.
   expect((await steps(named('reserve'), {})).map(({ step }) => step.run ?? step.uses))
     .toEqual(['actions/checkout@v4', 'oven-sh/setup-bun@v2', 'bun .changeset/release-tag.ts reserve']);
