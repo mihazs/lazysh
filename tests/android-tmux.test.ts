@@ -1,7 +1,7 @@
 import {expect,test} from 'bun:test';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
-import {TmuxFixture,muxVariable,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCount,tmuxCopyModeVerified,tmuxCommandFailure,tmuxDefaultAttachVerified,tmuxDefaultDirectory,tmuxDefaultName,tmuxDefaultSession,tmuxDisplayClients,tmuxGesturesVerified,tmuxPaneRows,tmuxPassthroughSupported,tmuxServerStatus,tmuxSessionRows,tmuxSplitRows,tmuxTeardownObservation,tmuxViewHistory,tmuxWindowLifecycle,tmuxWindowRows,type TmuxView} from './support/androidTmux';
+import {TmuxFixture,muxVariable,tmuxAttachHistoryVerified,tmuxChatDeliveredOnce,tmuxClientCount,tmuxCopyModeVerified,tmuxCommandFailure,tmuxDefaultAttachVerified,tmuxDefaultDirectory,tmuxDefaultName,tmuxDefaultSession,tmuxDisplayClients,tmuxGesturesVerified,tmuxPaneRows,tmuxPanelName,tmuxPanelSession,tmuxPassthroughSupported,tmuxServerStatus,tmuxSessionRows,tmuxSplitRows,tmuxTeardownObservation,tmuxViewHistory,tmuxWindowLifecycle,tmuxWindowRows,type TmuxView} from './support/androidTmux';
 import {listening,OwnedProcess,SshFixture} from './support/androidSsh';
 import {androidLostConnectionAcceptance,lostConnectionCase,lostConnectionControl,validateLostConnectionReport} from './support/androidLostConnection';
 import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
@@ -129,6 +129,23 @@ test('tmux session readback admits the original and at most one default session,
   for(const history of [[],[0],[0,1],[0,1,0],[0,1,0,1],[0,1,0,1,0,1,0],[1,0,1],[0,0,1,0,1,0]])expect(tmuxDefaultAttachVerified(history)).toBe(false);
   expect(()=>tmuxDefaultDirectory('/tmp/owned\n','/tmp/owned')).not.toThrow();
   for(const text of ['','/tmp/other\n','/tmp/owned\n/tmp/owned\n','/tmp/owned/extra\n'])expect(()=>tmuxDefaultDirectory(text,'/tmp/owned')).toThrow('Owned tmux default session directory changed');
+});
+
+test('tmux session readback follows the panel session from its creation to its close and refuses a second or a reappearing one',()=>{
+  const original={sessionId:'$0',name:'owned-tmux'},base='$0|owned-tmux|2',made=`${base}\n$1|${tmuxPanelName}|1`;
+  const fold=(text:string,seen?:Parameters<typeof tmuxPanelSession>[1])=>tmuxPanelSession(tmuxSessionRows(text),seen);
+  expect(fold(base)).toBeUndefined();
+  let seen=fold(made);
+  expect(seen).toEqual({sessionId:'$1',closed:false});
+  expect(fold(made,seen)).toEqual(seen);
+  seen=fold(base,seen);
+  expect(seen).toEqual({sessionId:'$1',closed:true});
+  // A second creation, a recreated one after the close, or one with more than its window is not the app's one session.
+  for(const [text,before] of [[`${made}\n$2|${tmuxPanelName}|1`,undefined],[made.replace('|1','|2'),undefined],[made.replace('$1','$2'),{sessionId:'$1',closed:false}],[made,seen]] as const)
+    expect(()=>fold(text,before)).toThrow('Owned tmux panel session topology changed');
+  // The default session fold leaves the panel session alone, and still refuses any other extra session.
+  expect(tmuxDefaultSession(tmuxSessionRows(made),original)).toBeUndefined();
+  expect(()=>tmuxDefaultSession(tmuxSessionRows(`${made}\n$2|other|1`),original)).toThrow('Owned tmux default session topology changed');
 });
 
 test('tmux teardown evidence keeps only fixed fixture messages, counts and supervisor status',()=>{
@@ -360,6 +377,31 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
     await owned.verifyWindowLifecycle();
     // The original windows and panes were never touched.
     expect(owned.diagnostic().windows).toBe(2);
+  } finally {
+    await owned.stop();
+  }
+},60_000);
+
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned tmux host readback requires the app-style close of the split pane and of one created session',async()=>{
+  const owned=await TmuxFixture.start();
+  try {
+    const [,beta]=owned.metadata().windows;
+    const tmux=hostTmux(owned);
+    await tmux(`split-window -d -v -t '${beta.paneId}' -c '${owned.ssh.directory}'`);
+    // The new pane reports its directory once its process started.
+    await wait(()=>owned.verifySplitAndZoom().then(()=>true,()=>false));
+    // Neither the session nor the pane close happened yet.
+    await expect(owned.verifyPaneAndSessionClose()).rejects.toThrow('Owned tmux session create and close were not observed');
+    // The exact commands the app sends for New session and Close session (Workspaces panel).
+    await tmux(`new-session -d -s '${tmuxPanelName}' -c '${owned.ssh.directory}'`);
+    await owned.observe();
+    await expect(owned.verifyPaneAndSessionClose()).rejects.toThrow('Owned tmux session create and close were not observed');
+    await tmux(`kill-session -t '=${tmuxPanelName}'`);
+    // The session is gone but the split pane is still open.
+    await expect(owned.verifyPaneAndSessionClose()).rejects.toThrow('Owned tmux pane close was not observed');
+    const added=(await tmux(`list-panes -t '${beta.paneId}' -F '#{pane_id}'`)).split('\n').find(id=>id && id!==beta.paneId)!;
+    await tmux(`kill-pane -t '${added}'`);
+    await owned.verifyPaneAndSessionClose();
   } finally {
     await owned.stop();
   }

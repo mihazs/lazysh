@@ -105,6 +105,8 @@ export function tmuxChatDeliveredOnce(captures:readonly {paneId:string;text:stri
   const holders=captures.filter(item=>item.text.includes(draft));
   if(holders.length!==1 || holders[0].paneId!==expected || holders[0].text.split(draft).length!==2)throw new Error('Owned tmux Chat input did not reach exactly the original pane once');
 }
+/** The name the app gives the session it creates and closes from the Workspaces panel; it is not the saved default's session. */
+export const tmuxPanelName='panel-session';
 /** The session the host's saved Default multiplexer must create, absent on the owned server; tmux refuses `:` and `.` in a name. */
 export const tmuxDefaultName='my-work';
 const sessionRow=/^(\$[0-9]{1,9})\|([A-Za-z0-9_-]{1,32})\|([0-9]{1,3})$/;
@@ -128,10 +130,20 @@ export type TmuxDefaultSession={sessionId:string};
 export function tmuxDefaultSession(rows:ReturnType<typeof tmuxSessionRows>,original:{sessionId:string;name:string},seen?:TmuxDefaultSession):TmuxDefaultSession|undefined {
   const kept=rows.filter(row=>row.sessionId===original.sessionId);
   if(kept.length!==1 || kept[0].name!==original.name)throw new Error('Owned tmux original session changed');
-  const extra=rows.filter(row=>row.sessionId!==original.sessionId);
+  const extra=rows.filter(row=>row.sessionId!==original.sessionId && row.name!==tmuxPanelName);
   if(extra.length>1 || extra.some(row=>row.name!==tmuxDefaultName || row.windows!==1) || (seen && seen.sessionId!==extra[0]?.sessionId))
     throw new Error('Owned tmux default session topology changed');
   return extra[0] && {sessionId:extra[0].sessionId};
+}
+/** The panel's session by tmux's own id, and whether it is gone again. */
+export type TmuxPanelSession={sessionId:string;closed:boolean};
+/** Folds one session readback into the panel session's lifecycle: at most one such session with its one window, never a second creation, never back once closed. */
+export function tmuxPanelSession(rows:ReturnType<typeof tmuxSessionRows>,seen?:TmuxPanelSession):TmuxPanelSession|undefined {
+  const found=rows.filter(row=>row.name===tmuxPanelName);
+  if(found.length>1 || found.some(row=>row.windows!==1) || (found[0] && seen && (seen.closed || seen.sessionId!==found[0].sessionId)))
+    throw new Error('Owned tmux panel session topology changed');
+  if(!found.length)return seen && {...seen,closed:true};
+  return seen??{sessionId:found[0].sessionId,closed:false};
 }
 /** The default session's attach history from its first sighting (the app creates it a moment before it attaches): attach, detach, reattach and final detach. */
 export function tmuxDefaultAttachVerified(history:readonly number[]) {
@@ -223,6 +235,7 @@ export class TmuxFixture {
   private sessionId='';
   private defaultSession:TmuxDefaultSession|undefined;
   private defaultHistory:number[]=[];
+  private panelSession:TmuxPanelSession|undefined;
   private modes:number[]=[];
   private constructor(readonly ssh:SshFixture,readonly binary:MuxBinary) {this.name=flavours[binary].session;}
   /** `binary` is the explicit pinned executable of that multiplexer (rmux: the `bin/rmux` of its install tree), by default from `LAZYSH_TEST_TMUX` or `LAZYSH_TEST_RMUX`. */
@@ -326,7 +339,9 @@ export class TmuxFixture {
       if(this.history.length>=8)throw new Error('Owned tmux attach history exceeded');
       this.history.push(count);
     }
-    this.defaultSession=tmuxDefaultSession(tmuxSessionRows(await this.sessions()),{sessionId:this.sessionId,name:this.name},this.defaultSession);
+    const sessions=tmuxSessionRows(await this.sessions());
+    this.defaultSession=tmuxDefaultSession(sessions,{sessionId:this.sessionId,name:this.name},this.defaultSession);
+    this.panelSession=tmuxPanelSession(sessions,this.panelSession);
     if(this.defaultSession) {
       const clients=tmuxDisplayClients(await this.run(['list-clients','-t',`=${tmuxDefaultName}`,'-F','#{client_control_mode}']));
       if(this.defaultHistory.at(-1)!==clients) {
@@ -372,6 +387,15 @@ export class TmuxFixture {
   async verifyWindowLifecycle() {
     await this.observe();
     if(!this.lifecycle?.closed || this.lifecycle.names.join()!==tmuxLifecycleNames.join())throw new Error('Owned tmux window create, rename and close were not observed');
+  }
+  /** The app closed the split pane and created and closed one session from the Workspaces panel: the monitor saw that session and no pane or session beyond the originals now. */
+  async verifyPaneAndSessionClose() {
+    await this.observe();
+    if(!this.panelSession?.closed)throw new Error('Owned tmux session create and close were not observed');
+    let rows;
+    try {rows=tmuxPaneRows(await this.panes());} catch {throw new Error('Owned tmux pane close was not observed');}
+    for(const window of this.windows)if(!rows.some(row=>row.paneId===window.paneId))throw new Error('Owned tmux original pane was closed');
+    this.extraPanes=0;
   }
   /**
    * The app split beta's original pane top/bottom and zoomed the new pane twice, so the window ends
@@ -428,7 +452,7 @@ export class TmuxFixture {
     await this.verifyCopied();
     const deadline=performance.now()+5000;
     while(await this.observe()!==0 && performance.now()<deadline)await delay(25);
-    if(this.history.join(',')!=='0,1,0' || this.lifecycle || this.defaultSession ||
+    if(this.history.join(',')!=='0,1,0' || this.lifecycle || this.defaultSession || this.panelSession ||
       this.views.some(view=>view.zoomed) || this.views.map(view=>view.window).join(',')!=='alpha,beta,alpha,beta')
       throw new Error('Owned tmux native controls did not preserve the original display and windows');
   }
@@ -439,7 +463,7 @@ export class TmuxFixture {
   }
   metadata() {
     if(this.windows.length!==2)throw new Error('Owned tmux topology required');
-    return {binary:this.binary,version:this.version,name:this.name,windows:this.windows.map(({index,name,marker,paneId})=>({index,name,marker,paneId})),lifecycle:[...tmuxLifecycleNames],defaultName:tmuxDefaultName,...(this.chat?{chat:this.chat}:{})};
+    return {binary:this.binary,version:this.version,name:this.name,windows:this.windows.map(({index,name,marker,paneId})=>({index,name,marker,paneId})),lifecycle:[...tmuxLifecycleNames],panelSession:tmuxPanelName,defaultName:tmuxDefaultName,...(this.chat?{chat:this.chat}:{})};
   }
   private stopping:Promise<void>|undefined;
   /** Idempotent: every caller observes the one teardown's result. */

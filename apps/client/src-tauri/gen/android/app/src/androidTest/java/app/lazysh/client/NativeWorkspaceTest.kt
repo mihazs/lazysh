@@ -3684,6 +3684,17 @@ class NativeWorkspaceTest {
                 return [pane?.style.display, !!document.querySelector('section.agent-view:not([hidden])'), document.querySelector("[aria-label='Session view'] button[aria-pressed=true]")?.getAttribute('aria-label'),
                   pane?.querySelector('.xterm-scroll-area')?.style.height, $before].join('|');})()""", ms) }
         }
+        // The Workspaces panel's name form: open it from `open`, type `name` and save.
+        fun nameWindow(open: String, name: String, stage: String) {
+            click("//section[contains(@class,'multiplexer-panel')]$open")
+            val field = "form[aria-label='Workspace details'] input[maxlength='200']"
+            awaitDocument(scenario, "$stage form open", present(field)) { ms ->
+                evaluate(scenario, "JSON.stringify({forms:Array.from(document.querySelectorAll('form')).map(x=>x.getAttribute('aria-label')),panel:document.querySelector('.multiplexer-panel')?.innerText?.slice(0,400)})", ms)
+            }
+            replaceNativeText(scenario, field, name)
+            closeSoftKeyboard()
+            click("//form[@aria-label='Workspace details']//button[normalize-space(.)='Save workspace']")
+        }
         // One more window through the real UI, named by the host fixture: New window and Rename window in the Workspaces panel, then a held finger on its tab-strip
         // chip, Close and the confirmation. The host reads each state from its own tmux tree; the original windows stay listed.
         fun windowLifecycle(created: String, renamed: String) {
@@ -3696,16 +3707,6 @@ class NativeWorkspaceTest {
             fun stripShows(name: String, shown: Boolean, stage: String) {
                 sessionView(scenario, "Terminal")
                 awaitDocument(scenario, stage, if (shown) present(chip(name)) else "!${present(chip(name))}")
-            }
-            fun nameWindow(open: String, name: String, stage: String) {
-                click("//section[contains(@class,'multiplexer-panel')]$open")
-                val field = "form[aria-label='Workspace details'] input[maxlength='200']"
-                awaitDocument(scenario, "$stage form open", present(field)) { ms ->
-                    evaluate(scenario, "JSON.stringify({forms:Array.from(document.querySelectorAll('form')).map(x=>x.getAttribute('aria-label')),panel:document.querySelector('.multiplexer-panel')?.innerText?.slice(0,400)})", ms)
-                }
-                replaceNativeText(scenario, field, name)
-                closeSoftKeyboard()
-                click("//form[@aria-label='Workspace details']//button[normalize-space(.)='Save workspace']")
             }
             listed(stage = "two windows listed before the extra one")
             // The prefix shortcuts also have a New window key; the session's own button is in the list.
@@ -3726,6 +3727,28 @@ class NativeWorkspaceTest {
             click("//div[@role='alertdialog']//button[normalize-space(.)='Close']")
             stripShows(renamed, false, "tab strip no longer shows the closed window")
             listed(stage = "Workspaces panel lists only the original windows again")
+        }
+        // A second session and the split pane close from the Workspaces panel, each behind the panel's confirmation. The host reads the session and the pane from its own tmux tree.
+        fun paneAndSessionClose(extra: String, pane: String) {
+            val panel = "//section[contains(@class,'multiplexer-panel')]"
+            val extraSession = "Array.from(document.querySelectorAll('.tool-panel.multiplexer-panel .mux-list > details')).filter(x=>(x.querySelector(':scope > summary')?.textContent??'').trim().startsWith(${JSONObject.quote(extra)}))"
+            fun confirm(stage: String, named: String) {
+                awaitDocument(scenario, stage, "document.querySelector('.multiplexer-panel [role=alertdialog]')?.textContent.includes(${JSONObject.quote(named)})===true")
+                click("//div[@role='alertdialog']//button[normalize-space(.)='Close it']")
+            }
+            sessionView(scenario, "Sessions")
+            val original = beta.getString("paneId")
+            awaitDocument(scenario, "tmux ${title(beta)} lists its original pane and the split pane", "(()=>{const ids=$betaPanes;return ids.length===2 && ids.includes(${JSONObject.quote(original)}) && ids.includes(${JSONObject.quote(pane)});})()")
+            clickPaneButton("Close $pane")
+            confirm("tmux pane close confirmation names $pane", pane)
+            awaitDocument(scenario, "tmux ${title(beta)} lists only its original pane again", "JSON.stringify($betaPanes)===${JSONObject.quote("[\"$original\"]")}")
+            nameWindow("//div[contains(@class,'tool-bar')]//button[normalize-space(.)='New session']", extra, "New session")
+            awaitDocument(scenario, "Workspaces panel lists the new session", "$extraSession.length===1 && !document.querySelector('.multiplexer-panel .loading,.multiplexer-panel [role=alert]')")
+            // The host samples about every 100 ms: the session must exist long enough for it to be seen.
+            Thread.sleep(1_000)
+            click("$panel//details[summary[starts-with(normalize-space(.),'$extra')]]//button[normalize-space(.)='Close session']")
+            confirm("tmux session close confirmation names $extra", extra)
+            awaitDocument(scenario, "Workspaces panel lists only the original session again", "$extraSession.length===0 && document.querySelectorAll('.tool-panel.multiplexer-panel .mux-list > details').length===1 && !document.querySelector('.multiplexer-panel .loading,.multiplexer-panel [role=alert]')")
         }
         // Two real fingers on the attached display run the default gestures against the real tmux client behind it. The split's pane is beta's active pane (the
         // Sessions panel's zoom made it so), so a pinch zooms it and hides beta's original marker, a second pinch returns it, then a two-finger swipe left selects
@@ -3789,8 +3812,9 @@ class NativeWorkspaceTest {
             windowLifecycle(lifecycle.getString(0), lifecycle.getString(1))
             visible(beta, alpha, "the created, renamed and closed window leaves the original window shown")
             gestures()
+            paneAndSessionClose(tmux.getString("panelSession"), added)
             detach("after reattach")
-            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, split, zoom, a pinch zoom and unzoom, two-finger window swipes, tab-close detach and reattach completed")
+            println("lazysh tmux: live discovery, Jump To current marker, numbered window, copy mode and a copied line, a created, renamed and closed window, a closed pane and a created and closed session, split, zoom, a pinch zoom and unzoom, two-finger window swipes, tab-close detach and reattach completed")
         } catch (failure: Throwable) {
             primaryFailure = failure
             throw failure
