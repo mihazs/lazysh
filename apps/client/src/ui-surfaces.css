@@ -214,6 +214,7 @@ input[type="search"] {
 .row-tags > .row-tag:first-child { flex: 0 1 auto; min-width: 2ch; }
 .row-tag { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 1px 7px; border-radius: 6px; font-size: 12px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-tag[data-tone="project"] { color: var(--status-done); background: color-mix(in srgb, var(--status-done) 14%, transparent); }
+.agent-row-background { display: block; margin-top: 2px; font-size: 12px; color: var(--status-working); }
 .row-tag[data-agent-kind] { padding: 0; background: transparent; color: var(--kind-other); }
 .row-tag[data-agent-kind="claude"] { color: var(--kind-claude); }
 .row-tag[data-agent-kind="codex"] { color: var(--kind-codex); }

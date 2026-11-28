@@ -31,6 +31,7 @@ import {AgentHeaderPills, AgentSessionDetails} from './AgentHeaderPills';
 import AgentInfoSheet from './AgentInfoSheet';
 import type {AgentSessionInfo} from './agentSession';
 import type {LiveState} from './AgentWorkingRow';
+import {backgroundLine, outranksPane} from './agentBackground';
 import {noReading, type Reading} from './AgentReading';
 import {bindProtectedInvoke, captureAccess, useAccessSnapshot, type AccessLease} from './access';
 import type {HerdrNavigationTarget} from './bridge';
@@ -252,16 +253,19 @@ export default function AgentView({sessionId, hostKey, shown, full, onToggleFull
   const waiting = row && !selected?.status ? waitingKind(row) : herdrReport ? waitingKind(herdrReport) : undefined;
   // Herdr says an agent is blocked; the companion's report of the same session says on what, and since when.
   const waited = row && !selected?.status ? row : herdrReport;
-  const state = selected?.status ? {tone: herdrTones[selected.status], name: t(selected.status === 'blocked' && waiting ? waitingKeys[waiting] : herdrStatusKeys[selected.status])}
+  // A turn that ended is not a finished session: the report says what still runs, and Herdr's idle or done does not outrank it.
+  const background = outranksPane(row, selected?.status);
+  const state = background ? {tone: reportedTones.working, name: t('agentsWorkingBackground')}
+    : selected?.status ? {tone: herdrTones[selected.status], name: t(selected.status === 'blocked' && waiting ? waitingKeys[waiting] : herdrStatusKeys[selected.status])}
     : row ? {tone: reportedTones[row.state], name: t(waiting ? waitingKeys[waiting] : reportedStateNames[row.state])} : undefined;
   const queue = waitingFirst(sessions);
   const waitingCount = queue.filter(session=>waitingKind(session)).length;
   const now = useNow(30000, shown && (waitingCount>0 || !!waiting));
   // Best source first: the live Herdr status, then a recent hook report. Otherwise the chat falls back to the recorded turn state.
   const hookFresh = !!row && Date.now() - Date.parse(row.updatedAt) < 10 * 60_000;
-  const workState = selected?.status ? ({working: 'working', blocked: 'waiting', done: 'idle', idle: 'idle', unknown: undefined} as const)[selected.status]
+  const workState = background ? 'working' : selected?.status ? ({working: 'working', blocked: 'waiting', done: 'idle', idle: 'idle', unknown: undefined} as const)[selected.status]
     : row && hookFresh ? ({working: 'working', needs_attention: 'waiting', done: 'idle'} as const)[row.state] : undefined;
-  const liveState: LiveState = {state: workState, label: workState === 'waiting' && waiting ? t(waitingKeys[waiting]) : undefined};
+  const liveState: LiveState = {state: workState, label: workState === 'waiting' && waiting ? t(waitingKeys[waiting]) : undefined, background: backgroundLine(background)};
   const counts = usage && ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens'].some(key=>usage[key]!==undefined) ? (key:string)=>formatNumber(Number(usage[key] ?? 0)) : undefined;
   // The pane a hook report names, or the pane Herdr reports as focused, is the evidence the composer binds on. A conversation the person
   // picked has none, so its destination stays an explicit confirmation (tmux) or is not offered (Herdr).

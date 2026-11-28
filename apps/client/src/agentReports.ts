@@ -1,4 +1,5 @@
 import {LocalUiError} from './i18n/localError';
+import {validBackground, type Background} from './agentBackground';
 
 export type AgentState = 'working' | 'needs_attention' | 'done';
 export type AgentSession = {
@@ -17,6 +18,8 @@ export type AgentSession = {
   waitingSince?: string;
   /** What the session is about (its first prompt, or the agent's own title), from a companion that reports it; or the name the user gave it. */
   title?: string;
+  /** What the session still runs after its turn ended (the row then reads working); from a companion that records it. */
+  background?: Background;
 };
 export const maxTitle = 80;
 /** One line without control characters, at most `maxTitle` characters; `undefined` when nothing is left. */
@@ -53,7 +56,8 @@ export function parseSnapshot(value: unknown): AgentSession[] {
     }
     if ((row.paneServer !== undefined && (typeof row.paneServer !== 'string' || row.paneServer.length > 256))
       || (row.waiting !== undefined && !['approval', 'question', 'plan', 'menu', 'unknown'].includes(row.waiting as string))
-      || (row.waitingSince !== undefined && (typeof row.waitingSince !== 'string' || !Number.isFinite(Date.parse(row.waitingSince))))) throw new LocalUiError('agentsInvalidSession');
+      || (row.waitingSince !== undefined && (typeof row.waitingSince !== 'string' || !Number.isFinite(Date.parse(row.waitingSince))))
+      || (row.background !== undefined && !validBackground(row.background))) throw new LocalUiError('agentsInvalidSession');
     // A title is a convenience: an unusable one is dropped, never a reason to reject the report.
     const {title, ...report} = row;
     const clean = cleanTitle(title);
