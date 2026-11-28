@@ -1,5 +1,9 @@
 # @lazysh/companion-release
 
+## 1.109.0
+
+No changes in this release.
+
 ## 1.108.0
 
 No changes in this release.

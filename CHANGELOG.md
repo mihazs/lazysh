@@ -10,6 +10,21 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.109.0] - 2026-11-28
+
+### New
+
+- **multiplexers:** open the exact tmux, rmux or Herdr pane that raised an agent notification ([#2859](https://github.com/mihazs/lazysh/pull/2859))
+- **client:** ask once per host before updating a companion that cannot update itself ([#2833](https://github.com/mihazs/lazysh/pull/2833))
+
+### Fixed
+
+- **agent:** keep hook events the busy store refuses and record them on the next report ([#2967](https://github.com/mihazs/lazysh/pull/2967))
+
+### Under the hood
+
+- **android:** create a Herdr tab through the real Sessions panel in the shared navigation case ([#2819](https://github.com/mihazs/lazysh/pull/2819))
+
 ## [1.108.0] - 2026-11-28
 
 ### New
