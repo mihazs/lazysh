@@ -320,6 +320,18 @@ Not covered: names for the notification inbox rows (they come from their own jou
   until you send it there; no multiplexer window or pane is created, so this starts the agent in the
   pane you are in.
 
+  The dialog also takes **Arguments** (optional) and offers **YOLO**. Spaces separate arguments, quotes
+  group one that holds spaces and a backslash escapes the next character; at most 32 arguments of 512
+  bytes, without line breaks or control characters. Every argument is quoted again in the staged
+  command, so `;`, `&&`, `$(…)` and `*` reach the agent as text and never run. **YOLO** is off every time
+  and is not remembered; ticking it adds the agent's own flag that turns its approval prompts off, in
+  front of your arguments, and the review step shows it in the command and says what it does. It is
+  offered only for an agent whose flag was read from that agent's `--help`:
+
+  - Claude Code: `--dangerously-skip-permissions` (Claude Code 2.1.326).
+  - Codex: `--dangerously-bypass-approvals-and-sandbox`, which also turns off Codex's sandbox
+    (codex-cli 0.172.0, which has no `--yolo` alias).
+
 ## Per-agent capabilities
 
 Target capability once the slices ship. "Keys" means a send through the guarded
