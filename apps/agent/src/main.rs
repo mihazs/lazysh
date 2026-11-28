@@ -1061,6 +1061,7 @@ fn execute(cli: Cli) -> lazysh_agent::Result<()> {
             )?;
             store.settle_rejected_dialogs(chrono::Utc::now(), admission)?;
             let mut snapshot = store.snapshot(limit, chrono::Utc::now())?;
+            lazysh_agent::background::annotate(&mut snapshot, chrono::Utc::now());
             snapshot.live_agents = Some(lazysh_agent::live_agents::discover());
             snapshot.update = update;
             wake_sender = true;
