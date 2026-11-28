@@ -7,6 +7,9 @@ import userEvent from "@testing-library/user-event";
 import App from "./App";
 import {applyAccessStatus} from './access';
 import {onAuthHint, type AuthHint} from './authHints';
+import {signIn} from './authSignIn';
+import {authPolicyKey} from './authPolicy';
+import {topBarKey} from './sideMenuMode';
 
 const authHint:AuthHint={id:'hint-1',source:'url',host:'localhost',port:8085,path:'/',idpHost:'accounts.google.com',pkce:true,sensitive:false,firstSeenAt:'2026-11-13T10:00:00Z'};
 
@@ -331,6 +334,28 @@ it('announces a sign-in hint with its session and keeps the connection open (a n
   expect(heard.map(detail=>[detail.sessionId,detail.hint.id])).toEqual([['hinted-mosh','early'],['hinted-mosh',authHint.id]]);
   expect(session.connected).toBe(true);expect(mocks.api.disconnect).not.toHaveBeenCalledWith('hinted-mosh');
   expect(heard[1].hint).not.toHaveProperty('query');
+});
+
+it('asks about a sign-in the host started, for the host the session belongs to, and forgets it when that session ends',async()=>{
+  let receive!:(event:import('./bridge').SshEvent)=>void;
+  mocks.api.connect.mockImplementation(async(_id,_credentials,onEvent)=>{receive=onEvent;return {sessionId:'signin-ssh'};});
+  mocks.invoke.mockImplementation(async(command:string)=>command==='check_auth_listener'?{state:'absent'}:undefined);
+  const user=await openConnection();await user.click(screen.getByRole('button',{name:'Connect'}));await screen.findByText('Live SSH terminal');
+  await act(async()=>{receive({type:'authHint',hint:authHint});});
+  expect(signIn.snapshot().map(request=>[request.sessionId,request.hostId,request.hostName,request.hint.port,request.phase])).toEqual([['signin-ssh','home','Home',8085,'asking']]);
+  expect(mocks.invoke).not.toHaveBeenCalledWith('start_auth_tunnel',expect.anything(),expect.anything());
+  await act(async()=>{receive({type:'closed',message:'Connection closed'});});
+  await waitFor(()=>expect(signIn.snapshot()).toEqual([]));
+});
+
+it('forgets what a deleted host was allowed to tunnel, and keeps the other hosts\' choices',async()=>{
+  vi.mocked(localStorage.getItem).mockImplementation(key=>key===topBarKey?'true':key===authPolicyKey?JSON.stringify({defaults:{},hosts:{home:{tunnel:'always'},elsewhere:{tunnel:'never'}}}):null);
+  mocks.api.deleteHost.mockResolvedValue(undefined);
+  const user=userEvent.setup();render(<App />);
+  await user.click(await screen.findByRole('button',{name:'Delete Home'}));
+  await user.click(screen.getByRole('button',{name:'Delete host'}));
+  await waitFor(()=>expect(mocks.api.deleteHost).toHaveBeenCalledWith('home'));
+  expect(localStorage.setItem).toHaveBeenCalledWith(authPolicyKey,'{"defaults":{},"hosts":{"elsewhere":{"tunnel":"never"}}}');
 });
 
 it('rejects unsupported canonical rendering before starting forced Mosh',async()=>{

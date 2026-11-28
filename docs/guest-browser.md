@@ -1,6 +1,6 @@
 # Open a sign-in page on your device
 
-When a command on a host starts a browser sign-in (`aws sso login`, `codex login`, `gh auth login --web`), the page has to open on the device that runs lazysh, not on the host. This page describes the device half: `open_auth_url` and `inspect_auth_url`. They are part of the sign-in tunnel work ([epic #1504](https://github.com/mihazs/lazysh/issues/1504), issue [#1513](https://github.com/mihazs/lazysh/issues/1513)). Nothing in the app calls them yet: detecting the sign-in, tunnelling its `localhost` callback and asking you first arrive in the sibling issues, so there is no visible change today.
+When a command on a host starts a browser sign-in (`aws sso login`, `codex login`, `gh auth login --web`), the page has to open on the device that runs lazysh, not on the host. This page describes the device half: `open_auth_url` and `inspect_auth_url`. They are part of the sign-in tunnel work ([epic #1504](https://github.com/mihazs/lazysh/issues/1504), issue [#1513](https://github.com/mihazs/lazysh/issues/1513)). The app calls them when you tap a sign-in link in the terminal whose redirect needs a tunnel, after you allowed the tunnel in the banner ([Sign in on a host from your device](how-to/sign-in-on-a-host-from-your-device.md), issue [#1514](https://github.com/mihazs/lazysh/issues/1514)).
 
 ## What opens where
 

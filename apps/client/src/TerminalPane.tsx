@@ -36,6 +36,8 @@ import ToolbarPages, { type ToolbarPage } from "./ToolbarPages";
 import "./ToolbarRows.css";
 import "./TerminalGestures.css";
 import {webUrl as terminalWebUrl} from "./webPage";
+import { AuthSignInBanner } from "./AuthSignInBanner";
+import { signIn } from "./authSignIn";
 import {rgbOf, trackSurfaceAnchor} from "./terminalSurfaceAnchor";
 import {mountScreenReaderMirror, needsScreenReaderMirror} from "./terminalScreenReader";
 import "./TerminalNativeSurface.css";
@@ -1018,7 +1020,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     if (!link || openingLink) return;
     const selected = link;
     setOpeningLink(true);
-    try { await api.openWebUrl(selected); setLink(current => current === selected ? null : current); }
+    try { await signIn.openLink(session.id, selected); setLink(current => current === selected ? null : current); }
     catch (error) { reportError(typeof error === 'string' ? error : new LocalUiError('terminalBrowserUnavailable')); }
     finally { setOpeningLink(false); }
   }
@@ -1310,6 +1312,7 @@ export default function TerminalPane({ session, active, swiping = false, typingA
     {tabStripShown && tabStrip.strip && <MultiplexerTabStrip strip={tabStrip.strip} onSelect={tabStrip.select} onEdit={tabStrip.edit} />}
     {(fonts.selection.primary || fonts.selection.cjk) && fonts.warnings.map(warning => <div className="session-notice" role="note" key={fontWarningKey(warning)}>{fontWarningText(warning)}</div>)}
     {notice ?? (!session.connected && <div className="session-notice" role="status">{t("terminalEnded",{details:session.message ? ` · ${session.message}` : ""})}</div>)}
+    {!session.local && <AuthSignInBanner sessionId={session.id} />}
     <div className="sr-only" role="status">{unappliedEdit ? t('terminalEditAnnouncement') : ""}</div>
     {unappliedEdit && <details ref={editReview} className="terminal-edit-review">
       <summary>{t('terminalEditNotSent')}</summary>
