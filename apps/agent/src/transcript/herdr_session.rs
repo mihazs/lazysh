@@ -403,7 +403,13 @@ mod tests {
             json!({"type":"user","uuid":"last","sessionId":ID,"message":{"content":"hello"}})
         ));
         fs::write(&path, input).unwrap();
-        assert!(super::super::conversation(&path, TranscriptAgent::Claude, 50).is_err());
+        // A record may be as long as the snapshot, in the ordinary read as in the selected one.
+        assert_eq!(
+            super::super::conversation(&path, TranscriptAgent::Claude, 50)
+                .unwrap()
+                .messages[0]["blocks"][0]["text"],
+            "hello"
+        );
         assert_eq!(
             read_in(&claude, TranscriptAgent::Claude, ID, 50, &Window::Tail)
                 .unwrap()
