@@ -2512,6 +2512,7 @@ const translations = {
   agentAnswerFailed: ["A resposta não foi enviada. Confira o terminal.", "La respuesta no se envió. Revisa el terminal."],
   agentPickerTitle: ["Diálogo no terminal", "Diálogo en el terminal"],
   agentPickerTerminalOnly: ["Responda a este no terminal.", "Responde a este en el terminal."],
+  agentPickerMore: ["Há mais opções no terminal.", "Hay más opciones en el terminal."],
   agentPickerCancel: ["Cancelar o diálogo", "Cancelar el diálogo"],
   agentPickerRememberTitle: ["Confirme uma escolha que fica guardada", "Confirma una elección que se guarda"],
   agentPickerRemember: ["Esta escolha fica guardada: o agente não vai perguntar de novo. Será escolhido:", "Esta elección se guarda: el agente no volverá a preguntar. Se elegirá:"],

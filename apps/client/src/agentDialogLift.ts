@@ -15,6 +15,8 @@ export type LiftedDialog = Readonly<{
   hint: readonly string[];
   /** Esc interrupts the agent's turn instead of closing the dialog (a Codex question), so the card offers no Cancel. */
   interrupts?: true;
+  /** More rows exist than the list shows (Codex draws `↑` and `↓` rows around a window of its list): the card says the rest are in the terminal. */
+  more?: true;
   /** Same title, body, options and footer: the dialog a person saw is the dialog an answer is sent to. */
   signature: string;
   /** The dialog's own rows, from its text down to its footer, as the screen drew them: what the host compares the pane with before a key. */

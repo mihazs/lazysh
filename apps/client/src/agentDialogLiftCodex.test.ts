@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {liftCodexDialog} from './agentDialogLiftCodex';
-import {dialogScreen, onTmux, runsOn} from './test/agentDialogScreens';
+import {codexModelWindow, dialogScreen, onTmux, runsOn} from './test/agentDialogScreens';
 
 /** Screens captured from Codex 0.167.0 in a real 100x40 tmux pane, cut to the rows from the history above the dialog to its footer. */
 const lift = (name: string, rows = dialogScreen(name)) => liftCodexDialog(rows);
@@ -154,5 +154,44 @@ describe('liftCodexDialog on recorded Codex screens', () => {
       expect(lift('x', rows.map(row => row.replace('Question 1/1 (1 unanswered)', 'Something else'))).kind).toBe('unliftable');
       expect(lift('x', rows.filter(row => !row.includes('Which color?'))).kind).toBe('unliftable');
     });
+  });
+});
+
+/** Codex 0.172.0 has more than eight models. It shows a window of eight rows, a `↑` or `↓` row where rows are hidden above or below it, and numbers
+ * only the first nine rows. `codex-0.172.0-model-scrolled` is the real screen of the last window; the other windows move over the same ten rows. */
+describe('liftCodexDialog on the scrolling /model list of Codex 0.172.0', () => {
+  const recorded = dialogScreen('codex-0.172.0-model-scrolled');
+  const windowAt = codexModelWindow;
+
+  it('draws the recorded window exactly as the windows built from it, so those stand for what Codex draws', () => {
+    expect(windowAt(3, 10)).toEqual(recorded.slice(0, 14));
+  });
+
+  it.each([[1, 1, 0], [1, 8, 7], [2, 9, 7], [3, 9, 6], [3, 10, 7]])('reads the window from row %i with row %i highlighted, whose hidden rows stay in the terminal', (first, at, highlighted) => {
+    const found = dialog('window', windowAt(first, at));
+    expect(found.title).toBe('Select Model and Effort');
+    expect(found.options.map(option => option.label)).toEqual(['GPT-6.2-Sol (current)', 'GPT-6.2-Astra', 'GPT-6.1 Terra', 'GPT-6.1-Sol', 'GPT-6-Astra', 'GPT-6-Sol', 'GPT-6-Luna',
+      'GPT-5.6-Sol', 'GPT-5.6-Terra', 'GPT-5.6-Luna'].slice(first - 1, first + 7));
+    expect(found.highlighted).toBe(highlighted);
+    expect(found.more).toBe(true);
+    expect(found.hint).toEqual(['enter select · esc back']);
+    // The rows the host compares the pane with include the arrow rows, so a window that scrolled is another dialog.
+    expect(runsOn(windowAt(first, at), found.rows)).toBe(1);
+    expect(runsOn(windowAt(first, at === 1 ? 2 : 1), found.rows)).toBe(0);
+  });
+
+  it('reads the row without a number as the row after the ninth, and reads the same list under tmux', () => {
+    const found = dialog('recorded', recorded);
+    expect(found.options.at(-1)).toEqual({label: 'GPT-5.6-Luna', detail: 'Legacy fast model for simpler tasks.'});
+    expect(found.options[0].detail).toBe('Efficient model that excels at visual understanding and computer use.');
+    expect(liftCodexDialog(onTmux(recorded.slice(0, 14)))).toEqual(lift('recorded', recorded));
+  });
+
+  it('refuses a list whose numbers do not follow each other, and rows without a number before the ninth', () => {
+    expect(lift('skips', windowAt(1, 1).map(row => row.replace('  4. GPT-6.1-Sol  ', '  5. GPT-6.1-Sol  '))).kind).toBe('unliftable');
+    expect(lift('no number', windowAt(1, 1).map(row => row.replace('  3. GPT-6.1 Terra', '     GPT-6.1 Terra'))).kind).toBe('unliftable');
+    // Hidden rows above the list but a first row that says it is the first, or a window that starts at 3 with no arrow, is not this dialog.
+    expect(lift('no arrow', windowAt(3, 4).map(row => row === '↑' ? '' : row)).kind).toBe('unliftable');
+    expect(lift('two highlights', windowAt(3, 4).map(row => row.replace(/^ {2}5\./, '› 5.'))).kind).toBe('unliftable');
   });
 });
