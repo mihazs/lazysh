@@ -4,12 +4,14 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {OwnedProcess,androidSshCleanup,ownedDeviceCleanup,ownedEmulator,prepareOwnedDevice,type OwnedDeviceState} from './androidSsh';
 import {TmuxFixture} from './androidTmux';
 import {HerdrFixture,herdrTools} from './androidHerdr';
+import {ZellijFixture} from './androidZellij';
 import {close,listen,nonceControl,type Control} from './androidSshParity';
 
 /** The two halves of the owned restore-after-force-stop cases (#1639, #1827); each runs in its own instrumentation process. */
 export const restoreCases={
   tmux:{before:'ownedTmuxRestoreBeforeForceStop',after:'ownedTmuxRestoreAfterForceStop'},
   herdr:{before:'ownedHerdrRestoreBeforeForceStop',after:'ownedHerdrRestoreAfterForceStop'},
+  zellij:{before:'ownedZellijRestoreBeforeForceStop',after:'ownedZellijRestoreAfterForceStop'},
 } as const;
 export type RestoreKind=keyof typeof restoreCases;
 const nativeClass='app.lazysh.client.NativeWorkspaceTest';
@@ -51,11 +53,16 @@ const restoreHosts:Record<RestoreKind,()=>Promise<RestoreHost>>={
     const owned=await HerdrFixture.start(herdrTools(),undefined,true),token=restoreToken(owned.ssh);
     return {ssh:owned.ssh,token,fixture:{herdr:owned.metadata()},observe:()=>owned.observeRestore(token),survives:()=>owned.restoreBytesHold(token),stop:()=>owned.stop()};
   },
+  // The saved host names its default session before the fixture exists, so the session has a fixed name. The case jumps to the second tab and types there.
+  async zellij() {
+    const owned=await ZellijFixture.start(undefined,'owned-zellij'),token=restoreToken(owned.ssh);
+    return {ssh:owned.ssh,token,fixture:{zellij:owned.metadata()},observe:()=>owned.observeRestore(),survives:()=>owned.paneHolds(token),stop:()=>owned.stop()};
+  },
 };
 
 /**
  * Owned emulator only. Installs both APKs once, runs `before` in one instrumentation process, force-stops the app from the
- * host, checks that the pinned tmux or stock Herdr server, its panes or receivers and the typed bytes survived with no client
+ * host, checks that the pinned tmux, Zellij or stock Herdr server, its panes or receivers and the typed bytes survived with no client
  * attached, then runs `after` in a fresh process. The app's own data (hosts, saved credential, WebView storage) is what carries between them.
  */
 export async function androidForceStopRestoreAcceptance(kind:RestoreKind='tmux',root=resolve(import.meta.dir,'../..')) {
@@ -107,7 +114,7 @@ export async function androidForceStopRestoreAcceptance(kind:RestoreKind='tmux',
         ['app-package',()=>device(['uninstall',appPackage])] as const,
       ]:[]),
       ['control',()=>control?close(control):Promise.resolve()],
-      [kind==='tmux'?'tmux':'Herdr',()=>owned?.stop()??Promise.resolve()],
+      [kind==='tmux'?'tmux':kind==='zellij'?'Zellij':'Herdr',()=>owned?.stop()??Promise.resolve()],
     ]);
   }
 }

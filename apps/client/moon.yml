@@ -190,7 +190,7 @@ tasks:
   test-android-zellij:
     type: test
     command: bun test ../../tests/android-zellij.test.ts ../../tests/android-ssh-host.test.ts --test-name-pattern
-    args: ['^(owned Zellij session follows a real attach, tab switches and detaches and is gone with its fixture|actual Android Zellij discovery, session list, attach, numbered tabs and detach keep the original session and panes)$']
+    args: ['^(owned Zellij session follows a real attach, tab switches and detaches and is gone with its fixture|actual Android Zellij discovery, session list, attach, numbered tabs and detach keep the original session and panes|actual Android app restores the same Zellij session on its jumped-to tab only on click after a force-stop and relaunch)$']
     env: {LAZYSH_ANDROID_UI_ZELLIJ: '1'}
     deps: [~:build-android-emulator]
     options: *envLocal

@@ -22,9 +22,15 @@ export async function zellijActiveTabSettled(read:()=>Promise<string>,attempts=1
     catch(error){if(attempt>=attempts)throw error;await Bun.sleep(25);}
   }
 }
-/** Attach, numbered Tab 2, tab-close detach, reattach on the remembered tab, numbered Tab 1 and the final detach. */
+/** The attached clients of one `list-clients` readback: a header row, then one row per client. */
+export function zellijClientCount(text:string) {
+  const rows=text.trim().split('\n');
+  if(text.length>16384 || !/^CLIENT_ID\s+ZELLIJ_PANE_ID/.test(rows[0]))throw new Error(`Owned Zellij client list unreadable (${text.length} bytes)`);
+  return rows.length-1;
+}
+/** Attach, numbered Tab 2, tab-close detach, reattach on the remembered tab, numbered Tab 1, Jump To tab 2 and the final detach. */
 export function zellijTabHistoryVerified(history:readonly ActiveTab[]) {
-  const expected:ActiveTab[]=[null,0,1,null,1,0,null];
+  const expected:ActiveTab[]=[null,0,1,null,1,0,1,null];
   return history.length===expected.length && expected.every((tab,index)=>history[index]===tab);
 }
 
@@ -33,12 +39,13 @@ export function zellijTabHistoryVerified(history:readonly ActiveTab[]) {
 export class ZellijFixture {
   readonly name:string;
   private history:ActiveTab[]=[];
-  private constructor(readonly ssh:SshFixture,private readonly markers:Record<(typeof tabNames)[number],string>) {this.name=`owned-zellij-${ssh.nonce.slice(0,12)}`;}
-  static async start(binary=process.env.LAZYSH_TEST_ZELLIJ) {
+  private constructor(readonly ssh:SshFixture,private readonly markers:Record<(typeof tabNames)[number],string>,name?:string) {this.name=name??`owned-zellij-${ssh.nonce.slice(0,12)}`;}
+  /** `name` fixes the session's name for a saved host that must name it before the fixture exists. */
+  static async start(binary=process.env.LAZYSH_TEST_ZELLIJ,name?:string) {
     if(!binary || !binary.startsWith('/'))throw new Error('Explicit pinned Zellij binary required');
     const ssh=await SshFixture.start(undefined,{privateTtyGroup:true,zellijBinary:binary,shellSeconds:companionFixtureBudget/1000});
     const markers={alpha:`ZELLIJ_ALPHA_${ssh.nonce}`,beta:`ZELLIJ_BETA_${ssh.nonce}`};
-    const owned=new ZellijFixture(ssh,markers);
+    const owned=new ZellijFixture(ssh,markers,name);
     try {
       const version=(await ssh.zellij(['--version'])).trim();
       if(version!=='zellij 0.45.1')throw new Error('Owned Zellij version unavailable');
@@ -86,10 +93,22 @@ export class ZellijFixture {
       await Bun.sleep(25);
     }
     if(!zellijTabHistoryVerified(this.history))throw new Error('Owned Zellij attach, numbered tabs and detach were not observed');
-    if((await this.ssh.zellij(['list-sessions','--short','--no-formatting'])).trim()!==this.name)throw new Error('Owned Zellij sessions changed');
     // The original command panes ran exactly once: no detach, reattach or tab switch restarted them.
+    await this.checkOriginal();
+  }
+  private async checkOriginal() {
+    if((await this.ssh.zellij(['list-sessions','--short','--no-formatting'])).trim()!==this.name)throw new Error('Owned Zellij sessions changed');
+    // Each command pane started exactly once: its shell is the original process, not a restarted one.
     for(const name of tabNames)if(await readFile(this.starts(name),'utf8')!=='started\n')throw new Error('Owned Zellij pane restarted');
   }
+  /** One restore sample: the original session and panes are intact; returns the attached display clients. */
+  async observeRestore() {
+    await this.read();
+    await this.checkOriginal();
+    return {clients:zellijClientCount(await this.ssh.zellij(['--session',this.name,'action','list-clients']))};
+  }
+  /** Whether the second tab's pane (`terminal_1`, the one the restore cases type into) still shows `text`. */
+  async paneHolds(text:string) {return (await this.ssh.zellij(['--session',this.name,'action','dump-screen','--pane-id','terminal_1'])).includes(text);}
   metadata() {return {name:this.name,tabs:tabNames.map((name,position)=>({position,name,marker:this.markers[name]}))};}
   private stopping:Promise<void>|undefined;
   /** Idempotent: every caller observes the one teardown's result. */

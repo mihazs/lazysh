@@ -509,6 +509,11 @@ for(const [flag,title] of [
   },610_000);
 }
 
+// The same Zellij job: one saved-credential host, Jump To to the second tab, and two instrumentation processes with a host force-stop between them.
+test.skipIf(process.platform!=='linux' || process.env.LAZYSH_ANDROID_UI_ZELLIJ!=='1')('actual Android app restores the same Zellij session on its jumped-to tab only on click after a force-stop and relaunch',async()=>{
+  await androidForceStopRestoreAcceptance('zellij');
+},1_200_000);
+
 test.skipIf(!process.env.LAZYSH_TEST_HERDR || !process.env.LAZYSH_TEST_AGENT_BIN || !process.env.LAZYSH_TEST_RECEIVER_BIN)('owned shared-navigation fixture binds three distinct zero-byte receiver identities',async()=>{
   const owned=await HerdrFixture.start(herdrTools(),undefined,true);
   try {
