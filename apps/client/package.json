@@ -9,7 +9,7 @@
     "test": "vitest run && bun test ./build",
     "test:e2e": "playwright test",
     "test:e2e:kill-switch": "playwright test -c playwright.kill-switch.config.ts",
-    "test:e2e:terminal": "playwright test e2e/terminal-ime.spec.ts e2e/terminal-swiftkey.spec.ts e2e/terminal-selection.spec.ts e2e/terminal-clipboard.spec.ts e2e/herdr-switch-tap.spec.ts e2e/mosh-resize.spec.ts",
+    "test:e2e:terminal": "playwright test e2e/terminal-browser-registry.spec.ts e2e/terminal-ime.spec.ts e2e/terminal-swiftkey.spec.ts e2e/terminal-selection.spec.ts e2e/terminal-clipboard.spec.ts e2e/herdr-switch-tap.spec.ts e2e/mosh-resize.spec.ts e2e/mosh-keyboard.spec.ts",
     "test:e2e:multiplexers": "playwright test --project=desktop e2e/tmux-clipboard.spec.ts e2e/multiplexer-clipboard.spec.ts",
     "test:osc52": "vitest run src/preferences.test.ts src/xtermTerminalAdapter.test.ts src/TerminalPane.test.tsx -t \"OSC ?52|remote clipboard write|OSC copy\"",
     "bench:terminal": "playwright test -c playwright.bench.config.ts",

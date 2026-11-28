@@ -3,25 +3,25 @@ import {api as nativeApi} from './bridge';
 import {formatDateTime,t,useUi} from './i18n/core';
 import {captureUiError,LocalUiError,uiErrorText,type UiErrorCause} from './i18n/localError';
 import {useEffect,useRef,useState} from 'react';
-type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp'|'kimi-code';
-const providers={claude:'Claude Code',codex:'Codex',droid:'Droid',gemini:'Gemini CLI',cursor:'Cursor CLI',opencode:'OpenCode',cline:'Cline',kimi:'Kimi',copilot:'GitHub Copilot',amp:'Amp',aider:'Aider'} as const;
+type Agent='claude'|'codex'|'droid'|'gemini'|'cursor'|'opencode'|'cline'|'copilot'|'amp'|'kimi-code'|'grok';
+const providers={claude:'Claude Code',codex:'Codex',droid:'Droid',gemini:'Gemini CLI',cursor:'Cursor CLI',opencode:'OpenCode',cline:'Cline',kimi:'Kimi',copilot:'GitHub Copilot',amp:'Amp',grok:'Grok Build',aider:'Aider'} as const;
 type DetectedAgent=keyof typeof providers;
 type Profile={path:string|null;source:string;state:'directory'|'missing'|'unavailable'|'invalid'};
-type Discovery={schemaVersion:1|2|3|4;supported:boolean;managedSetupSupported:boolean;agents:{agent:DetectedAgent;setup:'managed'|'manual'|'healthOnly';executable:{path:string;source:'path'|'codexStandalone'}|null;profiles:Profile[]}[];truncated:boolean};
+type Discovery={schemaVersion:1|2|3|4|5;supported:boolean;managedSetupSupported:boolean;agents:{agent:DetectedAgent;setup:'managed'|'manual'|'healthOnly';executable:{path:string;source:'path'|'codexStandalone'}|null;profiles:Profile[]}[];truncated:boolean};
 function managedAgent(agent:DetectedAgent):Agent{return(agent==='kimi'?'kimi-code':agent) as Agent;}
 const managed=new Set<string>(['claude','codex','droid','gemini','cursor','opencode','cline']);
 function object(value:unknown):Record<string,unknown>{if(!value||typeof value!=='object'||Array.isArray(value))throw new LocalUiError('hooksInvalid');return value as Record<string,unknown>;}
 function closed(value:Record<string,unknown>,keys:string[]){if(Object.keys(value).some(key=>!keys.includes(key)))throw new LocalUiError('hooksInvalid');}
 function boundedText(value:unknown,maximum=4096):value is string{return typeof value==='string'&&value.length>0&&value.length<=maximum&&!/[\x00-\x1f\x7f]/.test(value);}
 function absoluteProfile(value:string){return boundedText(value)&&value.startsWith('/')&&!value.split('/').some(part=>part==='.'||part==='..');}
-export function parseHookDiscovery(value:unknown,expectedVersion:1|2|3|4=1):Discovery {
-  if(![1,2,3,4].includes(expectedVersion))throw new LocalUiError('hooksInvalid');
+export function parseHookDiscovery(value:unknown,expectedVersion:1|2|3|4|5=1):Discovery {
+  if(![1,2,3,4,5].includes(expectedVersion))throw new LocalUiError('hooksInvalid');
   const v=object(value);closed(v,['schemaVersion','supported','managedSetupSupported','agents','truncated']);
-  if(v.schemaVersion!==expectedVersion||typeof v.supported!=='boolean'||typeof v.managedSetupSupported!=='boolean'||typeof v.truncated!=='boolean'||!Array.isArray(v.agents)||v.agents.length>11||(!v.supported&&(v.managedSetupSupported||v.agents.length)))throw new LocalUiError('hooksInvalid');
+  if(v.schemaVersion!==expectedVersion||typeof v.supported!=='boolean'||typeof v.managedSetupSupported!=='boolean'||typeof v.truncated!=='boolean'||!Array.isArray(v.agents)||v.agents.length>12||(!v.supported&&(v.managedSetupSupported||v.agents.length)))throw new LocalUiError('hooksInvalid');
   const seen=new Set<string>();
   const agents=v.agents.map(raw=>{
     const a=object(raw),id=a.agent;closed(a,['agent','setup','executable','profiles']);
-    if(typeof id!=='string'||!Object.hasOwn(providers,id)||seen.has(id)||a.setup!==((managed.has(id)||(expectedVersion>=2&&id==='copilot')||(expectedVersion>=3&&id==='amp')||(expectedVersion>=4&&id==='kimi'))?'managed':id==='aider'?'healthOnly':'manual')||!Array.isArray(a.profiles)||a.profiles.length>8)throw new LocalUiError('hooksInvalid');
+    if(typeof id!=='string'||!Object.hasOwn(providers,id)||seen.has(id)||(id==='grok'&&expectedVersion<5)||a.setup!==((managed.has(id)||(expectedVersion>=2&&id==='copilot')||(expectedVersion>=3&&id==='amp')||(expectedVersion>=4&&id==='kimi')||(expectedVersion>=5&&id==='grok'))?'managed':id==='aider'?'healthOnly':'manual')||!Array.isArray(a.profiles)||a.profiles.length>8)throw new LocalUiError('hooksInvalid');
     seen.add(id);
     let executable:Discovery['agents'][number]['executable']=null;
     if(a.executable!==null){const e=object(a.executable);closed(e,['path','source']);if(!boundedText(e.path)||!absoluteProfile(e.path)||!['path','codexStandalone'].includes(e.source as string)||(e.source==='codexStandalone'&&id!=='codex'))throw new LocalUiError('hooksInvalid');executable={path:e.path,source:e.source as 'path'|'codexStandalone'};}
@@ -92,7 +92,7 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     setDetecting(true);
     void (async()=>{
       // Newest first; only a companion that rejects the schema falls back, never a malformed or failed answer.
-      for(const version of [4,3,2] as const){
+      for(const version of [5,4,3,2] as const){
         try {
           const value=await api.companionHookDiscovery(sessionId,version);
           if(owns())setDiscovery(parseHookDiscovery(value,version));
@@ -115,8 +115,9 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
   }
   const copilotSupported=!!discovery&&discovery.schemaVersion>=2&&discovery.supported&&discovery.managedSetupSupported;
   const ampSupported=!!discovery&&discovery.schemaVersion>=3&&discovery.supported&&discovery.managedSetupSupported;
-  const kimiSupported=discovery?.schemaVersion===4&&discovery.supported&&discovery.managedSetupSupported;
-  const providerAllowed=agent==='amp'?ampSupported:agent==='kimi-code'?kimiSupported:agent!=='copilot'||copilotSupported;
+  const kimiSupported=!!discovery&&discovery.schemaVersion>=4&&discovery.supported&&discovery.managedSetupSupported;
+  const grokSupported=discovery?.schemaVersion===5&&discovery.supported&&discovery.managedSetupSupported;
+  const providerAllowed=agent==='grok'?grokSupported:agent==='amp'?ampSupported:agent==='kimi-code'?kimiSupported:agent!=='copilot'||copilotSupported;
   async function run(action:'status'|'install'|'remove') {
     if(!providerAllowed || flight.current!==null || !visible || !access.current() || !agent || !absoluteProfile(profile) || discovery?.managedSetupSupported===false)return;
     const expectedPlan=action==='install'?status?.installPlan:status?.removePlan;
@@ -162,13 +163,14 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     </section>
     <p className="agent-note">{t('hooksManualPath')}</p>
     <div className="tool-bar">
-      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent|'')}><option value="">{t('hooksChooseProvider')}</option><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option><option value="cline">Cline CLI</option><option value="copilot" disabled={!copilotSupported}>GitHub Copilot CLI</option><option value="amp" disabled={!ampSupported}>Amp</option><option value="kimi-code" disabled={!kimiSupported}>Kimi Code</option></select></label>
-      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={!agent?t('hooksProfilePlaceholder'):agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':agent==='cline'?'/home/user/.cline':agent==='copilot'?'/home/user/.copilot':agent==='amp'?'/home/user/.config/amp':agent==='kimi-code'?'/home/user/.kimi-code':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
+      <label>{t('hooksProvider')}<select value={agent} disabled={busy} onChange={e=>setAgent(e.target.value as Agent|'')}><option value="">{t('hooksChooseProvider')}</option><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="droid">Droid</option><option value="gemini">Gemini CLI</option><option value="cursor">Cursor CLI</option><option value="opencode">OpenCode</option><option value="cline">Cline CLI</option><option value="copilot" disabled={!copilotSupported}>GitHub Copilot CLI</option><option value="amp" disabled={!ampSupported}>Amp</option><option value="kimi-code" disabled={!kimiSupported}>Kimi Code</option><option value="grok" disabled={!grokSupported}>Grok Build</option></select></label>
+      <label>{t('hooksProfile')}<input value={profile} disabled={busy} autoCapitalize="none" autoCorrect="off" placeholder={!agent?t('hooksProfilePlaceholder'):agent==='codex'?'/home/user/.codex':agent==='claude'?'/home/user/.claude':agent==='droid'?'/home/user/.factory':agent==='gemini'?'/home/user/.gemini':agent==='cursor'?'/home/user/.cursor':agent==='cline'?'/home/user/.cline':agent==='copilot'?'/home/user/.copilot':agent==='amp'?'/home/user/.config/amp':agent==='kimi-code'?'/home/user/.kimi-code':agent==='grok'?'/home/user/.grok':'/home/user/.config/opencode'} onChange={e=>setProfile(e.target.value)}/></label>
       <button ref={inspect} className="subtle-button" disabled={busy || !providerAllowed || !agent || !absoluteProfile(profile) || discovery?.managedSetupSupported===false} onClick={()=>void run('status')}>{t('hooksInspect')}</button>
     </div>
     {agent==='copilot'&&!copilotSupported&&<p className="agent-note" role="status">{t('hooksCopilotCapability')}</p>}
     {agent==='amp'&&!ampSupported&&<p className="agent-note" role="status">{t('hooksAmpCapability')}</p>}
     {agent==='kimi-code'&&!kimiSupported&&<p className="agent-note" role="status">{t('hooksKimiCodeCapability')}</p>}
+    {agent==='grok'&&!grokSupported&&<p className="agent-note" role="status">{t('hooksGrokCapability')}</p>}
     {status?.reason==='HooksAmpShadow'&&<p className="agent-note" role="status">{t('hooksAmpShadow')}</p>}
     {status && <p className="agent-note" role="status">{t(!status.supported?(status.reason==='HooksDroidStandaloneRequired'?'hooksDroidStandaloneRequired':status.reason==='HooksKimiConfigRequired'?'hooksKimiCodeConfigRequired':status.reason==='HooksForeignRecord'?'hooksForeignRecord':'hooksUnsupported'):status.state==='conflict'?'hooksConflict':status.state==='configured'?'hooksConfigured':'hooksNotConfigured')}</p>}
     {status?.supported && <ul className="agent-note" aria-label={t('hooksReadinessTitle')} style={{margin:0,paddingLeft:'1.2em'}}>
@@ -178,6 +180,6 @@ export default function CompanionHooksPanel({sessionId,visible,reveal}:{sessionI
     {status?.supported && providerAllowed && discovery?.managedSetupSupported!==false && status.state!=='conflict' && <div className="tool-bar"><button className="subtle-button" disabled={busy||!status.installPlan} onClick={()=>void run('install')}>{t('hooksInstall')}</button><button className="subtle-button" disabled={busy||!status.removePlan} onClick={()=>void run('remove')}>{t('hooksRemove')}</button></div>}
     {uncertain && <p className="agent-note" role="alert">{t('hooksUncertain')}</p>}
     {error && <p className="agent-note inline-error" role="alert">{uiErrorText(error)}</p>}
-    <p className="agent-note">{t(status?.supported && status.state==='configured' ? agent==='codex'?'hooksCodexGuide':agent==='claude'?'hooksClaudeGuide':agent==='opencode'?'hooksOpenCodeGuide':agent==='cline'?'hooksClineGuide':agent==='copilot'?'hooksCopilotGuide':agent==='amp'?'hooksAmpGuide':agent==='kimi-code'?'hooksKimiCodeGuide':'hooksTrust' : 'hooksTrust')}</p>
+    <p className="agent-note">{t(status?.supported && status.state==='configured' ? agent==='codex'?'hooksCodexGuide':agent==='claude'?'hooksClaudeGuide':agent==='opencode'?'hooksOpenCodeGuide':agent==='cline'?'hooksClineGuide':agent==='copilot'?'hooksCopilotGuide':agent==='amp'?'hooksAmpGuide':agent==='kimi-code'?'hooksKimiCodeGuide':agent==='grok'?'hooksGrokGuide':'hooksTrust' : 'hooksTrust')}</p>
   </details>;
 }

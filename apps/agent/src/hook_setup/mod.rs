@@ -38,6 +38,7 @@ pub enum AgentProfile {
     /// Kimi Code 2.4 `config.toml`; the legacy Kimi CLI 1.52 stays manual.
     #[serde(rename = "kimi-code")]
     KimiCode,
+    Grok,
 }
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 impl AgentProfile {
@@ -53,6 +54,7 @@ impl AgentProfile {
             Self::Cline => "Cline CLI",
             Self::Copilot => "GitHub Copilot CLI",
             Self::Amp => "Amp",
+            Self::Grok => "Grok Build",
             Self::KimiCode => crate::kimi_code::AGENT,
         }
     }
@@ -68,6 +70,7 @@ impl AgentProfile {
             Self::Copilot => record::Agent::Copilot,
             Self::Amp => record::Agent::Amp,
             Self::KimiCode => record::Agent::KimiCode,
+            Self::Grok => record::Agent::Grok,
         }
     }
 }
@@ -84,7 +87,7 @@ pub enum Command {
     /// Discover known installed executables and profile directories without reading configuration.
     Discover {
         /// Explicitly opt into newer managed-provider metadata; default v1 stays compatible.
-        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=4))]
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=5))]
         schema_version: u8,
     },
     /// Preview a hook asset without accessing a provider profile; output labels its dialect and binding.
@@ -144,11 +147,15 @@ fn preview(agent: AgentProfile) -> Result<Value> {
         let text =
             kimi_toml::suffix(&entries).map_err(|_| Error::Installation("HooksInvalidTemplate"))?;
         (Value::String(text), "kimi-code-toml-suffix")
-    } else if agent == record::Agent::Copilot {
+    } else if matches!(agent, record::Agent::Copilot | record::Agent::Grok) {
         let text = render::owned_file(agent, &source).map_err(Error::Installation)?;
         (
             serde_json::from_str(&text).map_err(|_| Error::Installation("HooksInvalidTemplate"))?,
-            "shell-free-exec",
+            if agent == record::Agent::Grok {
+                "posix-shell"
+            } else {
+                "shell-free-exec"
+            },
         )
     } else if agent.is_whole_file() {
         (
@@ -195,6 +202,7 @@ fn unbound_preview(agent: AgentProfile) -> Value {
         AgentProfile::Gemini => (crate::hooks::gemini_config(), "posix-shell"),
         AgentProfile::Cursor => (crate::hooks::cursor_config(), "posix-shell"),
         AgentProfile::Copilot => (crate::hooks::copilot_config(), "shell-free-exec"),
+        AgentProfile::Grok => (crate::reported_history::grok_config(), "posix-shell"),
         AgentProfile::Cline => (
             crate::hooks::cline_plugin()["content"].clone(),
             "cline-javascript",

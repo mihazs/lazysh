@@ -1,8 +1,10 @@
 import {expect,type Page} from '@playwright/test';
 import {test} from './fixtures/terminalBackend';
+import {requestedBackend} from '../src/e2eTerminalBackend';
+import {mountNativeSurface,nativeInput} from './fixtures/nativeSurfacePage';
 import {fingerDrag,rowHeight} from './fixtures/terminalHistory';
 import {onAdapter,terminalBounds} from './fixtures/terminalState';
-import {esc,keyboard,line,open,state,typeWord,type Ime} from './fixtures/swiftkeyKeyboard';
+import {esc,keyboard,line,open,state,swiftkeyUserAgent,typeWord,type Ime} from './fixtures/swiftkeyKeyboard';
 import {recordedTraces,type RecordedEvent} from './fixtures/swiftkeyTraces';
 
 /**
@@ -12,9 +14,33 @@ import {recordedTraces,type RecordedEvent} from './fixtures/swiftkeyTraces';
  * word is reopened with setComposingRegion + setComposingText. Chromium turns these into the DOM events
  * below; CDP drives the same Blink input-method controller (it is not SwiftKey itself).
  */
-test.use({userAgent:'Mozilla/5.0 (Linux; Android 14; SwiftKey-shaped IME fixture) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'});
+const native=requestedBackend()==='native';
+test.use({syntheticBackend:native,userAgent:native?undefined:swiftkeyUserAgent});
 test.skip(({isMobile})=>!isMobile,'The soft keyboard exists on the phone project only.');
-test.afterEach(async({page})=>{await page.evaluate(()=>window.ownedHistory?.dispose());});
+test.beforeEach(({},info)=>{
+  test.skip(native!==info.tags.includes('@native-swiftkey'),'WebView edit history and native composition use different editors.');
+});
+test.afterEach(async({page})=>{await page.evaluate(()=>{
+  window.ownedHistory?.dispose();
+  window.nativeSurface?.dispose();
+});});
+
+test('native SwiftKey-shaped word edits send only committed text and clear on Enter',{tag:'@native-swiftkey'},async({page})=>{
+  await mountNativeSurface(page,'native');
+  await onAdapter(page,adapter=>adapter.focus());
+  const ime=await keyboard(page);
+  await typeWord(ime,'owned');
+  await ime.commit('swipe ');
+  for(const text of ['t','te','tex','te','ten'])await ime.compose(text);
+  await expect.poll(()=>nativeInput(page)).toEqual({text:['owned ','swipe '],keys:[],editor:'ten'});
+  await ime.commit('ten ');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.press('Enter');
+  await typeWord(ime,'owned');
+  await page.keyboard.press('Enter');
+  await ime.done();
+  await expect.poll(()=>nativeInput(page)).toEqual({text:['owned ','swipe ','ten ','owned '],keys:['Backspace','Enter','Enter'],editor:''});
+});
 
 
 /** The same fixed transactions as OwnedImeService (predictWord ... eraseOne), so the emulator case has a Chromium twin. */

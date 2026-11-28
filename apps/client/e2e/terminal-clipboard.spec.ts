@@ -1,8 +1,13 @@
 import {expect,type Page,type TestInfo} from '@playwright/test';
 import {test} from './fixtures/terminalBackend';
+import {requestedBackend} from '../src/e2eTerminalBackend';
 import {openClipboardTerminal} from './fixtures/localTerminal';
 import {pressMore} from './fixtures/toolbarMore';
 import {onAdapter,screenText,terminalCell,terminalSize,terminalViewport} from './fixtures/terminalState';
+
+const nativeBinary=requestedBackend()==='native'?process.env.LAZYSH_CONTROL_STDIO:undefined;
+test.use({syntheticBackend:!!nativeBinary});
+const open=(page:Page)=>openClipboardTerminal(page,nativeBinary);
 
 const output=(page:Page,text:string)=>page.evaluate(text=>window.simpleShortcutOutput(text),text);
 const readClipboard=(page:Page)=>page.evaluate(()=>navigator.clipboard.readText());
@@ -17,7 +22,7 @@ test.describe('remote clipboard (OSC 52)',()=>{
     ['screen passthrough',text=>`\x1bP\x1b]52;c;${encode(text)}\x07\x1b\\`],
   ];
   for(const [name,wrap] of requests)test(`${name} asks first and Allow writes the real clipboard`,async({page})=>{
-    await openClipboardTerminal(page);
+    await open(page);
     const text=`OSC52 ${name} · 世界`;
     const sequence=wrap(text);
     // Chunk boundaries inside the escape sequence must not matter.
@@ -33,7 +38,7 @@ test.describe('remote clipboard (OSC 52)',()=>{
   });
 
   test('Deny, queries and oversized requests never touch the clipboard',async({page})=>{
-    await openClipboardTerminal(page);
+    await open(page);
     const region=page.getByRole('region',{name:'Remote clipboard request',exact:true});
     await output(page,`\x1bPtmux;\x1b\x1b]52;c;${encode('DENIED')}\x07\x1b\\`);
     await region.getByRole('button',{name:'Deny',exact:true}).click();
@@ -61,7 +66,7 @@ async function tapLink(page:Page,projectName:string,row:number,column:number) {
 }
 
 test('a terminal link offers Open in browser and Copy URL',async({page},testInfo)=>{
-  await openClipboardTerminal(page);
+  await open(page);
   const url='https://example.invalid/owned/path?q=1';
   await output(page,`\x1b[2J\x1b[Hsee ${url} here\r\n`);
   await expect.poll(()=>screenText(page)).toContain(url);
@@ -80,7 +85,7 @@ test.describe('URLs that fill more than one row',()=>{
     ['soft-wrapped by the terminal',(url:string)=>url],
     ['broken at the last column by a program or multiplexer',(url:string,columns:number)=>url.match(new RegExp(`.{1,${columns}}`,'g'))!.join('\r\n')],
   ] as const)test(`tapping the second row of a URL ${name} opens the whole URL`,async({page},testInfo)=>{
-    await openClipboardTerminal(page);
+    await open(page);
     const {columns}=await terminalSize(page);
     const url=`https://example.invalid/${'long-path-segment/'.repeat(Math.ceil(columns/18)+1)}end?q=1&r=two`;
     await output(page,`\x1b[2J\x1b[H${wrap(url,columns)}\r\nnext line\r\n`);
@@ -91,7 +96,7 @@ test.describe('URLs that fill more than one row',()=>{
     expect(await page.evaluate(()=>window.simpleShortcutOpened)).toEqual([url]);
   });
   test('an application hyperlink (OSC 8) wins over the URL its own text looks like',async({page},testInfo)=>{
-    await openClipboardTerminal(page);
+    await open(page);
     await output(page,'\x1b[2J\x1b[H\x1b]8;;https://owned.invalid/target?a=1\x1b\\https://shown.invalid/label\x1b]8;;\x1b\\ https://other.invalid/plain\r\n');
     const region=await tapLink(page,testInfo.project.name,0,2);
     await expect(region).toContainText('https://owned.invalid/target?a=1');
@@ -101,7 +106,7 @@ test.describe('URLs that fill more than one row',()=>{
 });
 
 test('toolbar Paste sends the real clipboard text to the terminal',async({page})=>{
-  await openClipboardTerminal(page);
+  await open(page);
   await page.evaluate(()=>navigator.clipboard.writeText('pasted from clipboard'));
   const paste=page.locator('.terminal-keys').getByRole('button',{name:'paste',exact:true});
   await paste.click();
@@ -124,7 +129,7 @@ test.describe('touch selection',()=>{
   const selected=(page:Page)=>onAdapter(page,adapter=>adapter.hasSelection());
 
   test('long-press selects the word, Copy writes it and a second long-press extends raw rows',async({page})=>{
-    await openClipboardTerminal(page);
+    await open(page);
     await output(page,`\x1b[2J\x1b[H${rows.join('\r\n')}`);
     await expect.poll(()=>screenText(page)).toContain('LAST_WORD');
     const copy={click:()=>pressMore(page,'Copy')};
@@ -143,7 +148,7 @@ test.describe('touch selection',()=>{
   });
 
   for(const order of ['move then hold','hold then move'])test(`a finger that moves (${order}) scrolls history and selects nothing`,async({page})=>{
-    await openClipboardTerminal(page);
+    await open(page);
     await output(page,Array.from({length:200},(_,i)=>`history ${i}`).join('\r\n'));
     // The reader follows the 200 lines to the end of the history.
     await expect.poll(async()=>{const {following,length}=await terminalViewport(page);return following&&length>=200;}).toBe(true);
@@ -170,7 +175,7 @@ test.describe('host file paths in the output',()=>{
   }
   test('an existing path offers View, Download and Copy path; prose and missing files stay plain',async({page},testInfo)=>{
     await page.addInitScript(([log,home])=>{window.simpleShortcutFiles={[log]:'first line\nsecond line',[home]:'# todo'};},[log,home]);
-    await openClipboardTerminal(page);
+    await open(page);
     await output(page,`\x1b[2J\x1b[Hwrote ${log}:2 now\r\nsee ~/notes/todo.md\r\nmissing /no/such/file.txt\r\n`);
     await expect.poll(()=>screenText(page)).toContain('missing /no/such/file.txt');
     const region=page.getByRole('region',{name:'Host file',exact:true});
@@ -195,7 +200,7 @@ test.describe('host file paths in the output',()=>{
   });
   test('~/ resolves against the host home and a relative path against the OSC 7 directory',async({page},testInfo)=>{
     await page.addInitScript(([home])=>{window.simpleShortcutFiles={[home]:'# todo','/work/app/src/main.rs':'fn main() {}'};},[home]);
-    await openClipboardTerminal(page);
+    await open(page);
     const region=page.getByRole('region',{name:'Host file',exact:true});
     await output(page,`\x1b[2J\x1b[Hsee ~/notes/todo.md\r\n`);
     await expect(async()=>{await tap(page,testInfo,0,8);await expect(region).toBeVisible({timeout:1000});}).toPass();

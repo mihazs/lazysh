@@ -1,10 +1,8 @@
+import type {NativeCoreBridge} from '../../src/nativeCoreBridge';
+import {createBrowserTerminal} from './browserTerminalRegistry';
 import {createRoot} from 'react-dom/client';
 import {flushSync} from 'react-dom';
 import TerminalPane from '../../src/TerminalPane';
-import {createTerminal} from '../../src/xterm/terminal';
-import {createHeadlessCore} from '../../src/xterm/nativeCoreHeadless';
-import {openNativeTerminalAdapter} from '../../src/nativeTerminalAdapter';
-import {XtermTerminalAdapter} from '../../src/xtermTerminalAdapter';
 import type {LiveSession} from '../../src/terminal';
 import type {SurfaceAnchor} from '../../src/terminalSurfaceAnchor';
 import {accessSnapshot,applyAccessStatus} from '../../src/access';
@@ -19,7 +17,7 @@ declare global {interface Window {nativeSurface:Awaited<ReturnType<typeof mountN
  * stand-in core or on xterm.js. The shell's surface commands are recorded in `calls`; `refuse` makes `place` answer as a release build does.
  * No host, transport or private terminal content: the output is synthetic.
  */
-export async function mountNativeSurfaceHarness({engine,refuse=false}:{engine:'native'|'xterm';refuse?:boolean}) {
+export async function mountNativeSurfaceHarness({engine,refuse=false,bridge}:{engine:'native'|'xterm';refuse?:boolean;bridge?:NativeCoreBridge}) {
   applyAccessStatus({initialized:true,supported:true,reason:'Synthetic native surface access fixture.',enabled:true,locked:false,
     generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'c'.repeat(64)});
   // The workspace beneath stays mounted but unseen, so what the page paints here is only this pane's chain.
@@ -31,9 +29,7 @@ export async function mountNativeSurfaceHarness({engine,refuse=false}:{engine:'n
     element.className=className;parent.append(element);return element;
   },host);
   document.body.append(host);
-  const core=engine==='native'?createHeadlessCore({columns:40,rows:10}):undefined;
-  const terminal=engine==='xterm'?createTerminal():undefined;
-  const adapter=core?await openNativeTerminalAdapter(core,{refreshMs:1}):new XtermTerminalAdapter(terminal!);
+  const {adapter,core}=await createBrowserTerminal(engine,{columns:40,rows:10},bridge);
   const session:LiveSession={id:'native-surface-fixture',hostId:'fixture',name:'Native surface fixture',destination:'fixture',adapter,connected:true};
   const calls:SurfaceCall[]=[],errors:string[]=[];
   const app=window.nativeFixtureInvoke;
@@ -61,6 +57,6 @@ export async function mountNativeSurfaceHarness({engine,refuse=false}:{engine:'n
     /** Ends the pane while the adapter lives on, as closing its session does. */
     unmount:()=>root.unmount(),
     /** Output from the program, as the transport would deliver it. */
-    output:(text:string)=>core?core.output(new TextEncoder().encode(text)):new Promise<void>(resolve=>terminal!.write(text,resolve)),
-    dispose(){try{root.unmount();}catch{/* already unmounted */}void adapter.dispose();terminal?.dispose();host.remove();document.getElementById('root')!.style.display='';}};
+    output:(text:string)=>core?core.output(new TextEncoder().encode(text)):adapter.write!(new TextEncoder().encode(text)),
+    dispose(){try{root.unmount();}catch{/* already unmounted */}void adapter.dispose();host.remove();document.getElementById('root')!.style.display='';}};
 }

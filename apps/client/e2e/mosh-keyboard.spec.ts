@@ -1,9 +1,16 @@
-import {expect,test,type Page} from '@playwright/test';
+import {expect,type Page} from '@playwright/test';
+import {requestedBackend} from '../src/e2eTerminalBackend';
+import {test} from './fixtures/terminalBackend';
 import {historyLines,historyView,mountHistory,settle} from './fixtures/terminalHistory';
 import {openMoshApp} from './fixtures/moshApp';
+import {onAdapter,screenText,terminalDrawn} from './fixtures/terminalState';
 import {shrinkVisualViewport} from './fixtures/visualViewport';
 
 const output=(page:Page,lines:string[])=>page.evaluate(lines=>window.ownedHistory.output(lines),lines);
+test.use({syntheticBackend:true});
+test.beforeEach(({},info)=>{
+  test.skip(requestedBackend()==='native'&&!info.tags.includes('@mosh-app'),'Exercises the xterm buffer and DOM clipping.');
+});
 test.afterEach(async({page})=>{await page.evaluate(()=>window.ownedHistory?.dispose());});
 
 /** Whether a rendered row shows `text` inside the clipped terminal pane. */
@@ -104,7 +111,7 @@ for(const mosh of [false,true])test(`${mosh?'Mosh':'SSH'}: a soft keyboard keeps
 });
 
 /** The agent screenshot: a prompt box whose bottom border is the last row, in the real workspace with its toolbar and, where shown, its status bar. */
-test('the actual workspace keeps an agent prompt box and its bottom border above the toolbar and inside the visible viewport',async({page},testInfo)=>{
+test('the actual workspace keeps an agent prompt box and its bottom border above the toolbar and inside the visible viewport',{tag:'@mosh-app'},async({page},testInfo)=>{
   test.skip(testInfo.project.name!=='phone','Only a touch device opens a soft keyboard.');
   // A responsive agent: transcript on top, then its prompt box ending on the last row.
   let frame=0;
@@ -113,14 +120,25 @@ test('the actual workspace keeps an agent prompt box and its bottom border above
     const lines=Array.from({length:rows-tail.length},(_,row)=>`TRANSCRIPT_${row}`).concat(tail);
     return Array.from(Buffer.from(`\x1b]7777;lazysh-mosh;1;begin;${id};${cols};${rows}\x1b\\\x1b[r\x1b[0m\x1b[H\x1b[2J${lines.map(line=>line+'\x1b[K').join('\r\n')}\x1b[${rows-1};12H\x1b]7777;lazysh-mosh;1;end;${id}\x1b\\`));
   };
-  await openMoshApp(page,'Mosh keyboard fixture',screen(40,12),screen);
-  await expect(page.locator('.terminal-canvas .xterm-screen')).toContainText('BOX_BOTTOM');
-  const view=()=>page.evaluate(()=>{
-    const rows=[...document.querySelectorAll('.terminal-canvas .xterm-rows > div')],bottom=(text:string)=>rows.find(row=>row.textContent?.includes(text))?.getBoundingClientRect().bottom??null;
+  const engine=requestedBackend()??'xterm';
+  await openMoshApp(page,'Mosh keyboard fixture',screen(40,12),screen,engine);
+  await terminalDrawn(page);
+  await expect.poll(()=>screenText(page)).toContain('BOX_BOTTOM');
+  const view=()=>onAdapter(page,(adapter,native)=>{
+    const {top,rows}=adapter.viewport();
+    const screenRows=adapter.readRows!(top,rows);
+    const bounds=adapter.screenBounds()!;
+    const cellHeight=adapter.metrics().cellHeight;
+    const domRows=[...document.querySelectorAll('.terminal-canvas .xterm-rows > div')];
+    const bottom=(text:string)=>{
+      if(!native)return domRows.find(row=>row.textContent?.includes(text))?.getBoundingClientRect().bottom??null;
+      const index=screenRows.findIndex(row=>row.includes(text));
+      return index<0?null:bounds.top+(index+1)*cellHeight;
+    };
     const viewport=window.visualViewport!,sent=window.nativeMoshApp.resizes;
-    return {rows:rows.length,sent:sent.at(-1)?.rows,box:bottom('BOX_BOTTOM'),prompt:bottom('PROMPT_LINE'),
+    return {rows:native?rows:domRows.length,sent:sent.at(-1)?.rows,box:bottom('BOX_BOTTOM'),prompt:bottom('PROMPT_LINE'),
       below:document.querySelector('.terminal-keys')?.getBoundingClientRect().top??viewport.offsetTop+viewport.height,footer:document.querySelector('.workspace-footer')!.getBoundingClientRect().bottom,visible:viewport.offsetTop+viewport.height};
-  });
+  },engine==='native');
   const fits=(state:Awaited<ReturnType<typeof view>>)=>state.box!==null&&state.prompt!==null&&state.box<=state.below+0.5&&state.footer<=state.visible+0.5&&state.sent===state.rows;
   await expect.poll(async()=>fits(await view())).toBe(true);
   const before=await view(),size=page.viewportSize()!;
@@ -128,6 +146,12 @@ test('the actual workspace keeps an agent prompt box and its bottom border above
   await page.setViewportSize({width:size.width,height:size.height-330});
   await expect.poll(async()=>(await view()).rows).toBeLessThan(before.rows);
   await expect.poll(async()=>fits(await view())).toBe(true);
+  await onAdapter(page,adapter=>adapter.focus());
+  await page.keyboard.press('y');
+  await expect.poll(()=>page.evaluate(native=>{
+    const state=window.nativeMoshApp;
+    return native?state.nativeKeys.filter(key=>!key.release).map(key=>key.key):state.writes;
+  },engine==='native')).toEqual(['y']);
   // Hiding the toolbar gives its rows to the terminal, and the remote is told.
   const covered=await view();
   await page.getByRole('button',{name:'Hide terminal keys',exact:true}).click();

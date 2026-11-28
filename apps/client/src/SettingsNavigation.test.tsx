@@ -103,3 +103,11 @@ it('reveals each result chosen on the page already open, refocuses it on Back an
   const close=new Event('lazysh-workspace-back',{cancelable:true});fireEvent(window,close);
   expect(close.defaultPrevented).toBe(false);
 });
+it('opens an explicitly requested settings page with normal Back navigation',()=>{
+  render(<div role="dialog" aria-modal="true"><SettingsNavigation initialPage="agents" pages={[
+    {id:'agents',title:'Agents',content:<p>Agent settings</p>},
+  ]}/></div>);
+  expect(screen.getByText('Agent settings')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Back'}));
+  expect(screen.getByRole('button',{name:'Agents'})).toBeTruthy();
+});
