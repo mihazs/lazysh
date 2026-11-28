@@ -1221,6 +1221,15 @@ jobs:
         env:
           LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
         run: LAZYSH_TEST_SSH_USER_NAMESPACE=1 bwrap --unshare-user --unshare-net --dev-bind / / -- bun test tests/android-ssh-host.test.ts --test-name-pattern 'owned namespaced SSH preflights the Android waiting hooks'
+      - name: Drive the app's pane input over owned OpenSSH against the unchanged stock Herdr
+        shell: bash
+        env:
+          LAZYSH_TEST_HERDR_STOCK: ${{ runner.temp }}/lazysh-stock-herdr/herdr
+        run: |
+          test -x "$LAZYSH_TEST_AGENT_BIN"
+          # A renamed case must not turn this step into a zero-test pass.
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_pane_input:: -- --list --ignored | grep -c ': test$' | grep -Fx 3
+          cargo test --manifest-path apps/client/src-tauri/Cargo.toml --locked --lib ssh::tmux_jump_fixture::herdr_pane_input:: -- --ignored --test-threads=1
       - name: Exercise ordinary Mosh Herdr entries from PATH and the default user installation
         shell: bash
         env:

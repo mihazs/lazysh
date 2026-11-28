@@ -28,6 +28,8 @@ use retirement::retire_transport;
 
 #[path = "herdr_guard_fixture.rs"]
 mod herdr_guard;
+#[path = "herdr_pane_input_fixture.rs"]
+mod herdr_pane_input;
 
 fn fixture_key() -> russh::keys::PrivateKey {
     russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()

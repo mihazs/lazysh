@@ -1446,7 +1446,7 @@ bounded and never falls back to terminal input or another pane after a failure.
 The companion's `herdr-pane-input` command is the separate transport for typing into
 one named pane of a stock Herdr, pinned to one server process
 ([details](multiplexers.md#pane-input-on-a-stock-herdr-pinned-to-one-server-process)).
-The app does not call it yet, and navigation never does.
+The app calls it only through its explicit pane input command, and navigation never does.
 
 ### Recorded Codex Conversation
 
