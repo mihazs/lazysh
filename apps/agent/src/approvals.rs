@@ -398,6 +398,7 @@ fn waiting_event(request: &Request, agent: ApprovalAgent) -> Result<Option<crate
         summary: request.tool_name.clone(),
         pane_id: board_pane.map(str::to_owned),
         pane_server: None,
+        title: None,
         waiting: Some(crate::Waiting::for_tool(Some(&request.tool_name))),
     }))
 }

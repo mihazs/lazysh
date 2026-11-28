@@ -89,7 +89,7 @@ fn a_turn_is_reported_with_its_pane_and_its_session_file() {
     ingest(
         directory.path(),
         "grok",
-        &with_file("UserPromptSubmit", json!({"prompt": "never stored"})),
+        &with_file("UserPromptSubmit", json!({"response": "never stored"})),
     );
     let row = session(directory.path(), "grok-1").unwrap();
     assert_eq!(

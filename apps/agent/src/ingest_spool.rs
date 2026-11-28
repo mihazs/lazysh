@@ -3,7 +3,7 @@
 //! The hook still fails with the unchanged storage error, because the provider's hook deadline leaves no room
 //! to wait longer; what changes is that the event is no longer lost. Only plain events are kept: a reported
 //! history source and a Kimi observation still fail as before.
-use crate::{notification_policy, storage_namespace, Agent, Error, Event, Result, Store};
+use crate::{notification_policy, storage_namespace, Agent, Error, Event, Result, Store, Title};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -23,6 +23,9 @@ const MAX_FILE: u64 = 64 * 1024;
 struct Pending {
     reported_at_micros: i64,
     event: Event,
+    /// A title serializes as plain text, so the replay needs to know whether the agent named the session itself.
+    #[serde(default)]
+    vendor_title: bool,
 }
 
 fn busy(error: &Error) -> bool {
@@ -60,6 +63,7 @@ fn defer(state: &Path, event: &Event, at: DateTime<Utc>) -> io::Result<()> {
     let bytes = serde_json::to_vec(&Pending {
         reported_at_micros: at.timestamp_micros(),
         event: event.clone(),
+        vendor_title: event.title.as_ref().is_some_and(Title::is_vendor),
     })
     .map_err(io::Error::other)?;
     let unique = format!("{:020}-{}", at.timestamp_micros(), std::process::id());
@@ -112,8 +116,16 @@ fn drain(
             .filter(|pending| pending.event.validate().is_ok())
             .and_then(|pending| {
                 let at = DateTime::from_timestamp_micros(pending.reported_at_micros)?;
-                (now.signed_duration_since(at).num_seconds() <= MAX_AGE_SECONDS)
-                    .then_some((pending.event, at))
+                (now.signed_duration_since(at).num_seconds() <= MAX_AGE_SECONDS).then_some((
+                    Event {
+                        title: pending
+                            .event
+                            .title
+                            .map(|title| title.with_source(pending.vendor_title)),
+                        ..pending.event
+                    },
+                    at,
+                ))
             });
         if let Some((event, at)) = fresh {
             store.ingest_with_reported_history(Some(&event), None, at, admission)?;
@@ -156,6 +168,7 @@ mod tests {
             pane_id: None,
             pane_server: None,
             waiting: None,
+            title: None,
         }
     }
     fn ingest_done(state: &Path) {
@@ -174,6 +187,17 @@ mod tests {
             .unwrap();
         let session = snapshot.sessions.first().expect("one session");
         (session.event.state, session.event_count)
+    }
+    fn title_of(state: &Path) -> Option<String> {
+        let snapshot = Store::open(state)
+            .unwrap()
+            .snapshot(10, Utc::now())
+            .unwrap();
+        snapshot.sessions[0]
+            .event
+            .title
+            .as_ref()
+            .map(|title| title.as_str().to_owned())
     }
     fn pending(state: &Path) -> usize {
         names(&directory(state).unwrap()).unwrap().len()
@@ -194,6 +218,49 @@ mod tests {
         ingest_done(state.path());
         assert_eq!(recorded(state.path()), (SessionState::Done, 3));
         assert_eq!(pending(state.path()), 0);
+    }
+
+    #[test]
+    fn a_kept_title_is_replayed_with_the_source_that_chose_it() {
+        let titled = |title: Title| Event {
+            title: Some(title),
+            ..event(SessionState::Working)
+        };
+        let state = tempfile::tempdir().unwrap();
+        let at = Utc::now() - chrono::Duration::seconds(30);
+        Store::open(state.path())
+            .unwrap()
+            .ingest(&titled(Title::prompt("First prompt").unwrap()), at)
+            .unwrap();
+        defer(
+            state.path(),
+            &titled(Title::prompt("Second prompt").unwrap()),
+            at + chrono::Duration::seconds(1),
+        )
+        .unwrap();
+        ingest_done(state.path());
+        assert_eq!(
+            title_of(state.path()).as_deref(),
+            Some("First prompt"),
+            "a kept prompt title still never replaces one"
+        );
+        defer(
+            state.path(),
+            &titled(Title::vendor("Chosen by the agent").unwrap()),
+            at + chrono::Duration::seconds(2),
+        )
+        .unwrap();
+        defer(
+            state.path(),
+            &titled(Title::prompt("Third prompt").unwrap()),
+            at + chrono::Duration::seconds(3),
+        )
+        .unwrap();
+        ingest_done(state.path());
+        assert_eq!(
+            title_of(state.path()).as_deref(),
+            Some("Chosen by the agent")
+        );
     }
 
     #[test]

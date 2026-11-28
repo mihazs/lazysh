@@ -785,7 +785,7 @@ fn additional_native_agents_report_only_their_actual_lifecycle_contracts() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         for (index, (kind, state)) in events.iter().enumerate() {
-            let mut payload = json!({"hook_event_name":kind,"session_id":"owned-main","cwd":"/owned/project","notification_type":attention_type,"prompt":"PRIVATE-PROMPT","prompt_response":"PRIVATE-PROMPT","body":"PRIVATE-PROMPT","tool_input":{"token":"SECRET-TOKEN"},"error_message":"SECRET-TOKEN"});
+            let mut payload = json!({"hook_event_name":kind,"session_id":"owned-main","cwd":"/owned/project","notification_type":attention_type,"response":"PRIVATE-PROMPT","prompt_response":"PRIVATE-PROMPT","body":"PRIVATE-PROMPT","tool_input":{"token":"SECRET-TOKEN"},"error_message":"SECRET-TOKEN"});
             if agent == "copilot" && *kind == "Notification" {
                 payload.as_object_mut().unwrap().remove("session_id");
                 payload["sessionId"] = json!("owned-main");
@@ -1361,7 +1361,7 @@ fn refuses_state_symlinks_and_database_links_without_changing_the_target() {
 #[test]
 fn cursor_observers_keep_conversation_identity_and_ignore_permission_and_child_hooks() {
     let dir = tempfile::tempdir().unwrap();
-    let mut payload = json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv-owned","generation_id":"turn-one","workspace_roots":["/project/one","/project/two"],"prompt":"PRIVATE_CURSOR","tool_input":{"secret":"PRIVATE_CURSOR"}});
+    let mut payload = json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"conv-owned","generation_id":"turn-one","workspace_roots":["/project/one","/project/two"],"response":"PRIVATE_CURSOR","tool_input":{"secret":"PRIVATE_CURSOR"}});
     for (kind, status, state) in [
         ("beforeSubmitPrompt", "", "working"),
         ("postToolUseFailure", "", "working"),

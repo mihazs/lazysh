@@ -404,7 +404,7 @@ async fn verify_reported_history(
 ) {
     let opaque = "Claude' --opaque 世界";
     let path = directory.join("unwritten history' 世界$(literal).jsonl ");
-    let mut payload = json!({"hook_event_name":"UserPromptSubmit","session_id":opaque,"transcript_path":path,"cwd":directory,"prompt":"never store prompt bytes"});
+    let mut payload = json!({"hook_event_name":"UserPromptSubmit","session_id":opaque,"transcript_path":path,"cwd":directory,"response":"never store prompt bytes"});
     let session = app.state::<AppState>().session(id).await.unwrap();
     for opted in [false, true] {
         let command = format!(
