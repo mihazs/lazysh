@@ -1,0 +1,6 @@
+- add custom arguments and a YOLO toggle when starting an agent in a folder
+- open a sign-in page only for the live tunnel of its own session
+- show each session's name first in the Agent view and let you rename it
+- say what still runs in the background and never show idle or done while it does
+- add New agent to the Agent view to start an agent in a folder, a new folder or a new worktree
+Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.110.0

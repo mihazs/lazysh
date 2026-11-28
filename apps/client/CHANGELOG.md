@@ -1,5 +1,93 @@
 # @lazysh/client
 
+## 1.110.0
+
+### Minor Changes
+
+- feat(agents): add custom arguments and a YOLO toggle when starting an agent in a folder ([#2955](https://github.com/mihazs/lazysh/pull/2955))
+
+  <details><summary>Details</summary>
+
+  Start in a folder now takes optional arguments for Claude Code or Codex, each passed to the agent as plain text (quotes group words, nothing is expanded or run), and a YOLO toggle that adds the agent's own flag to skip its approval prompts: `--dangerously-skip-permissions` for Claude Code and `--dangerously-bypass-approvals-and-sandbox` for Codex, which also turns its sandbox off. YOLO is off every time and is never remembered, the review step shows the exact command and says what the flag does. With no arguments and YOLO off the command is unchanged.
+
+  </details>
+- feat(auth): open a sign-in page only for the live tunnel of its own session ([#2858](https://github.com/mihazs/lazysh/pull/2858))
+
+  <details><summary>Details</summary>
+
+  `open_auth_url` now takes the `sessionId` and the `tunnelId` that `start_auth_tunnel` returned, and refuses a `localhost` redirect unless that flow is live on exactly that port, so another program that took the port first no longer passes. A local session keeps the listener check. No visible change yet: nothing in the app calls the command (#1520).
+
+  </details>
+- feat(agents): show each session's name first in the Agent view and let you rename it ([#2965](https://github.com/mihazs/lazysh/pull/2965))
+
+  <details><summary>Details</summary>
+
+  A session the companion has named, from its first prompt, now shows that name first on the Agents board, the all-hosts board, the selected report and the Agent view header, with its summary, folder and agent as secondary detail. Search matches the name. **Rename** in the selected report gives a session your own name, kept on this device under the saved host: it wins over any reported title, survives restarts and new reports, and saving it empty brings the reported title back. A host companion that reports no title, or an unusable one, shows the row as before. The name is one line of at most 80 characters with control characters removed.
+
+  Changed default: a named session's row leads with its name instead of its latest summary, and a screen reader announces the name and the agent.
+
+  </details>
+- feat(agents): say what still runs in the background and never show idle or done while it does ([#2970](https://github.com/mihazs/lazysh/pull/2970))
+
+  <details><summary>Details</summary>
+
+  A session whose turn ended while it still runs background sub-agents, workflows, shell commands or monitors now reads "Working in the background" in the Agent view header and the row above the composer, with what runs ("2 sub-agents · 1 shell or monitor"), and the Agents board row lists the same under its summary. A Herdr pane status of idle or done no longer outranks it. This needs a companion that reports the background work (#2958); against an older companion nothing changes. Strings in English, Portuguese and Spanish.
+
+  </details>
+- feat(agents): add New agent to the Agent view to start an agent in a folder, a new folder or a new worktree ([#2898](https://github.com/mihazs/lazysh/pull/2898))
+
+  <details><summary>Details</summary>
+
+  Start Claude Code, Codex or another supported agent in an existing folder, a new folder (created with `mkdir -p`) or a new Git worktree without typing a command, in a new tmux window, Zellij pane or Herdr workspace of the attached session. The exact commands are shown and nothing runs until you confirm; agents missing from the host are listed as not installed.
+
+  </details>
+
+### Patch Changes
+
+- test(windows): reach an owned SSH server from the installed GUI and refuse a rejected or changed key ([#2871](https://github.com/mihazs/lazysh/pull/2871))
+
+  <details><summary>Details</summary>
+
+  Drive an authenticated SSH terminal through the installed Windows GUI check: it adds a host for the owned Windows OpenSSH server through the real Add host editor, pastes the throwaway private key without saving it, requires the host-verification dialog to show the server's own fingerprint, trusts it, and requires the remote `cmd.exe` shell to compute an answer for a command typed with real key presses, with the server's log recording the accepted key. A second case refuses a connection twice: the owned server rejects a throwaway key it does not authorize after the user trusted its fingerprint (the dialog reports the rejection and no terminal opens), and a replacement server on the same loopback port with another host key is refused with the right credential before it sees one (no trust prompt, no terminal, no accepted login in its log). Test-only; the application, its defaults and the release artifacts are unchanged.
+
+  </details>
+- test(android): answer Claude hooks running in real Zellij and Herdr panes from the device ([#2883](https://github.com/mihazs/lazysh/pull/2883))
+
+  <details><summary>Details</summary>
+
+  The Android companion case now starts two waiting approval hooks in a pane of a private Zellij 0.45.1 server and a private stock Herdr server on the owned host, lists each with its exact pane on the device, allows one and denies the other by tapping, and checks each decision reached its hook. `native-android-runtime` installs the pinned Zellij and the same-run stock Herdr for it. No default or behaviour changes.
+
+  </details>
+- fix(agents): show the rows of a dialog the Agent view cannot answer, instead of a one-line banner or nothing ([#2985](https://github.com/mihazs/lazysh/pull/2985))
+
+  <details><summary>Details</summary>
+
+  When an agent opens a dialog the dialog card cannot read exactly (tabs, a search box, a full-screen table such as Claude Code's /permissions and /login or Codex's /resume), the Agent view now shows the dialog's own rows as read-only text above "Show terminal", so you can see what the agent asks. Claude Code's /config, which showed nothing, now shows the same, and the message box is held while it is open. Nothing is sent from those rows. No defaults changed.
+
+  </details>
+- fix(agents): show the /model, /theme and /rewind dialogs of Claude Code 2.1.326 as native menus in the Agent view ([#2983](https://github.com/mihazs/lazysh/pull/2983))
+
+  <details><summary>Details</summary>
+
+  Claude Code 2.1.326 redrew its dialogs, so the Agent view showed only "The agent is waiting for you in the terminal" for them. The dialog card now reads the new drawing (the row of `▔` above a dialog, digits followed by two spaces, the "More models" row and footers wrapped over two rows) as well as the previous one, and a choice sends the same arrow keys and Enter as before. A dialog the card still cannot read exactly (tabs, a search box, a list of one item) shows the same banner. No defaults changed.
+
+  </details>
+- test(appearance): verify the theme clipboard import in the Linux GUI ([#2818](https://github.com/mihazs/lazysh/pull/2818))
+
+  <details><summary>Details</summary>
+
+  No user-visible behaviour changes.
+
+  </details>
+- fix(agents): show the /model list of Codex 0.172.0 as a native menu in the Agent view ([#2984](https://github.com/mihazs/lazysh/pull/2984))
+
+  <details><summary>Details</summary>
+
+  Codex 0.172.0 lists ten models as a window of eight rows with an arrow row where rows are hidden, and numbers only the first nine rows, so the Agent view showed only "The agent is waiting for you in the terminal". The dialog card now reads that window, offers the rows it shows (a choice sends the same arrow keys and Enter as before) and says "More options are in the terminal." for the rest. The shorter lists of earlier versions read as before. No defaults changed.
+
+  </details>
+- test(terminal): verify live Mosh resize on the Android native engine ([#2709](https://github.com/mihazs/lazysh/pull/2709))
+
 ## 1.109.0
 
 ### Minor Changes

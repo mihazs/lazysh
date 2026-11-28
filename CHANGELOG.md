@@ -10,6 +10,37 @@ details collapsed beneath it. How to write an entry: [CONTRIBUTING.md](CONTRIBUT
 Pending changes are the `.changeset/*.md` fragments that have not been released yet. Run `bun run changelog:preview` to
 print them grouped the way the release notes will show them.
 
+## [1.110.0] - 2026-11-28
+
+### New
+
+- **agents:** add custom arguments and a YOLO toggle when starting an agent in a folder ([#2955](https://github.com/mihazs/lazysh/pull/2955))
+- **auth:** open a sign-in page only for the live tunnel of its own session ([#2858](https://github.com/mihazs/lazysh/pull/2858))
+- **agents:** show each session's name first in the Agent view and let you rename it ([#2965](https://github.com/mihazs/lazysh/pull/2965))
+- **agents:** say what still runs in the background and never show idle or done while it does ([#2970](https://github.com/mihazs/lazysh/pull/2970))
+- **agents:** add New agent to the Agent view to start an agent in a folder, a new folder or a new worktree ([#2898](https://github.com/mihazs/lazysh/pull/2898))
+- **agent:** keep a Claude Code session working while it runs background shells, monitors, sub-agents or workflows ([#2969](https://github.com/mihazs/lazysh/pull/2969))
+- **agent:** add an optional operating system timer for the companion update check ([#2841](https://github.com/mihazs/lazysh/pull/2841))
+- **agent:** check for a newer companion release on a schedule, with channel, interval and window ([#2841](https://github.com/mihazs/lazysh/pull/2841))
+- **agent:** hold a Claude Code done push while the session still runs background work ([#3006](https://github.com/mihazs/lazysh/pull/3006))
+- **agents:** name each reported session from its first prompt so sessions in one folder are easy to tell apart ([#2954](https://github.com/mihazs/lazysh/pull/2954))
+
+### Fixed
+
+- **agents:** show the rows of a dialog the Agent view cannot answer, instead of a one-line banner or nothing ([#2985](https://github.com/mihazs/lazysh/pull/2985))
+- **agents:** show the /model, /theme and /rewind dialogs of Claude Code 2.1.326 as native menus in the Agent view ([#2983](https://github.com/mihazs/lazysh/pull/2983))
+- **agents:** show the /model list of Codex 0.172.0 as a native menu in the Agent view ([#2984](https://github.com/mihazs/lazysh/pull/2984))
+- **agent:** report and retire a legacy lazysh hook that runs beside the managed one ([#2968](https://github.com/mihazs/lazysh/pull/2968))
+- **agent:** give a cold Firefox as long to start as Chrome before the host browser relay gives up ([#2964](https://github.com/mihazs/lazysh/pull/2964))
+
+### Under the hood
+
+- **windows:** reach an owned SSH server from the installed GUI and refuse a rejected or changed key ([#2871](https://github.com/mihazs/lazysh/pull/2871))
+- **android:** answer Claude hooks running in real Zellij and Herdr panes from the device ([#2883](https://github.com/mihazs/lazysh/pull/2883))
+- **appearance:** verify the theme clipboard import in the Linux GUI ([#2818](https://github.com/mihazs/lazysh/pull/2818))
+- **terminal:** verify live Mosh resize on the Android native engine ([#2709](https://github.com/mihazs/lazysh/pull/2709))
+- **agent:** hold the storage gate in every test that flushes, so the slow-flush case stops flaking ([#2982](https://github.com/mihazs/lazysh/pull/2982))
+
 ## [1.109.0] - 2026-11-28
 
 ### New
