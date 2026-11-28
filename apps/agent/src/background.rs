@@ -11,7 +11,7 @@
 //!
 //! The stored hook state is never rewritten: when the evidence is gone the row is what the hooks said.
 use crate::{
-    rejected_dialog::{claude_config_dir, conversation, read_tail},
+    rejected_dialog::{claude_config_dir, conversation_in, read_tail},
     SessionState, Snapshot,
 };
 use chrono::{DateTime, Duration, Utc};
@@ -131,8 +131,13 @@ fn alive(_pid: u32, _start: &Value, _status_at: Option<DateTime<Utc>>) -> bool {
 
 /// The counts of the last `turn_duration` of a conversation, when it is its newest main-thread record: a later record
 /// means a turn runs again and the count says nothing, and an unreadable newest line makes the state unknown.
-fn pending(session_id: &str, now: DateTime<Utc>, bound: Duration) -> Option<Background> {
-    let bytes = read_tail(&conversation(session_id)?, TAIL)?;
+fn pending(
+    root: &Path,
+    session_id: &str,
+    now: DateTime<Utc>,
+    bound: Duration,
+) -> Option<Background> {
+    let bytes = read_tail(&conversation_in(root, session_id)?, TAIL)?;
     for line in String::from_utf8_lossy(&bytes).lines().rev() {
         let record: Value = serde_json::from_str(line).ok()?;
         if record["isSidechain"] == true {
@@ -156,6 +161,44 @@ fn pending(session_id: &str, now: DateTime<Utc>, bound: Duration) -> Option<Back
     None
 }
 
+/// What a session whose turn the hooks last reported ended at `reported` still does.
+enum Open {
+    Background(Background),
+    /// A finished task woke the agent and no hook said so yet.
+    Resumed,
+}
+
+/// The agent's own records about a session, or `None` when they show nothing open or cannot be confirmed.
+fn open_work(
+    root: &Path,
+    registry: Option<&[Entry]>,
+    session_id: &str,
+    reported: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<Open> {
+    let Some(entries) = registry else {
+        return pending(root, session_id, now, UNPROVEN_BOUND)
+            .filter(Background::is_open)
+            .map(Open::Background);
+    };
+    let entry = entries
+        .iter()
+        .filter(|entry| entry.session_id == session_id)
+        .max_by_key(|entry| entry.status_at)?;
+    match entry.status.as_str() {
+        "busy" => {
+            matches!((entry.status_at, reported), (Some(at), Some(reported)) if at > reported)
+                .then_some(Open::Resumed)
+        }
+        status @ ("idle" | "shell") => {
+            let mut open = pending(root, session_id, now, PENDING_BOUND).unwrap_or_default();
+            open.shells = u32::from(status == "shell");
+            open.is_open().then_some(Open::Background(open))
+        }
+        _ => None,
+    }
+}
+
 /// Overlays `working` on every Claude Code row the hooks left `done` while its agent still has work in the background,
 /// or has started a turn no hook reported yet (a finished task wakes the agent, and its hooks come only at the first
 /// tool call or `Stop`). A row it cannot confirm keeps the state the hooks gave it.
@@ -173,44 +216,39 @@ pub fn annotate(snapshot: &mut Snapshot, now: DateTime<Utc>) {
         {
             continue;
         }
-        let reported =
-            DateTime::parse_from_rfc3339(&row.updated_at).map(|at| at.with_timezone(&Utc));
-        let (background, resumed) = match &registry {
-            None => (pending(&event.session_id, now, UNPROVEN_BOUND), false),
-            Some(entries) => {
-                let Some(entry) = entries
-                    .iter()
-                    .filter(|entry| entry.session_id == event.session_id)
-                    .max_by_key(|entry| entry.status_at)
-                else {
-                    continue;
-                };
-                match entry.status.as_str() {
-                    "busy" => (
-                        None,
-                        matches!((entry.status_at, reported), (Some(at), Ok(reported)) if at > reported),
-                    ),
-                    status @ ("idle" | "shell") => {
-                        let mut open =
-                            pending(&event.session_id, now, PENDING_BOUND).unwrap_or_default();
-                        open.shells = u32::from(status == "shell");
-                        (Some(open), false)
-                    }
-                    _ => (None, false),
-                }
-            }
-        };
-        match background.filter(Background::is_open) {
-            Some(background) => {
+        let reported = DateTime::parse_from_rfc3339(&row.updated_at)
+            .ok()
+            .map(|at| at.with_timezone(&Utc));
+        match open_work(&root, registry.as_deref(), &event.session_id, reported, now) {
+            Some(Open::Background(background)) => {
                 event.state = SessionState::Working;
                 event.summary = "Working in the background".into();
                 row.background = Some(background);
             }
-            None if resumed => {
+            Some(Open::Resumed) => {
                 event.state = SessionState::Working;
                 event.summary = "Turn resumed".into();
             }
             None => {}
         }
     }
+}
+
+/// Whether a Claude Code session whose turn the hooks reported ended at `reported` still has background work or a turn
+/// the hooks have not reported: its `done` push is not true yet, so the relay holds it. `root` is Claude Code's
+/// configuration directory.
+pub fn holds_done(
+    root: &Path,
+    session_id: &str,
+    reported: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> bool {
+    open_work(
+        root,
+        registry(root).as_deref(),
+        session_id,
+        Some(reported),
+        now,
+    )
+    .is_some()
 }

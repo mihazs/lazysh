@@ -678,3 +678,140 @@ fn older_database_adds_owner_table_without_inventing_owners_for_old_events() {
         .unwrap()
         .is_none());
 }
+
+fn claude(state: SessionState) -> Event {
+    Event {
+        agent: "Claude Code".into(),
+        ..event(state)
+    }
+}
+fn outbox_state(store: &Store, kind: &str) -> Vec<String> {
+    let mut statement = store
+        .connection
+        .prepare("SELECT state FROM relay_outbox WHERE kind=?1 ORDER BY rowid")
+        .unwrap();
+    statement
+        .query_map([kind], |r| r.get::<_, String>(0))
+        .unwrap()
+        .map(|state| state.unwrap())
+        .collect()
+}
+/// A relay whose Claude Code session just reported `done`: the push is queued, and `created` is when.
+fn done() -> (tempfile::TempDir, Store, chrono::DateTime<Utc>) {
+    let (directory, mut store) = enabled();
+    let created = Utc::now();
+    store.ingest(&claude(SessionState::Done), created).unwrap();
+    (directory, store, created)
+}
+/// The sender's claim at `now`, with the session's background work `open` or not.
+fn claim_at(store: &mut Store, now: i64, open: bool) -> Option<Job> {
+    store::claim_with(&mut store.connection, 1, now, &|_, _, _, _| open).unwrap()
+}
+fn recorded(store: &mut Store, job: &Job, now: i64) {
+    store::finish(
+        &mut store.connection,
+        job,
+        store::Completion::Recorded("receipt"),
+        now,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_done_push_waits_while_its_session_runs_background_work_and_goes_once_it_ended() {
+    let (_directory, mut store, created) = done();
+    let now = created.timestamp();
+    // Held: nothing is sent, and the push is not tried again before the recheck, whatever the evidence says then.
+    assert!(claim_at(&mut store, now, true).is_none());
+    assert!(claim_at(&mut store, now + 5, false).is_none());
+    assert_eq!(outbox_state(&store, "done"), ["queued"]);
+    // Looked at again: still open, still held; ended, sent.
+    assert!(claim_at(&mut store, now + 20, true).is_none());
+    let job = claim_at(&mut store, now + 40, false).unwrap();
+    assert!(matches!(job.kind, Kind::Done));
+    assert_eq!(job.attempts, 1);
+}
+
+#[test]
+fn a_held_done_push_is_released_after_the_hold_limit_and_a_retry_is_never_held() {
+    let (_directory, mut store, created) = done();
+    let now = created.timestamp();
+    assert!(claim_at(&mut store, now, true).is_none());
+    // A monitor can run for days: the person is told after an hour.
+    let job = claim_at(&mut store, now + 3600, true).unwrap();
+    store::finish(
+        &mut store.connection,
+        &job,
+        store::Completion::Retry,
+        now + 3600,
+    )
+    .unwrap();
+    assert_eq!(claim_at(&mut store, now + 3602, true).unwrap().attempts, 2);
+}
+
+#[test]
+fn only_a_done_push_is_held_and_the_evidence_names_the_session_it_holds_for() {
+    let (_directory, mut store) = enabled();
+    let created = Utc::now();
+    store
+        .ingest(&claude(SessionState::Working), created)
+        .unwrap();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let open = |agent: &str, session: &str, at: i64, _: i64| {
+        seen.borrow_mut()
+            .push((agent.to_owned(), session.to_owned(), at));
+        true
+    };
+    let now = created.timestamp();
+    let job = store::claim_with(&mut store.connection, 1, now, &open)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(job.kind, Kind::Working));
+    recorded(&mut store, &job, now);
+    assert!(seen.borrow().is_empty(), "a working push asks nothing");
+    store.ingest(&claude(SessionState::Done), created).unwrap();
+    assert!(store::claim_with(&mut store.connection, 1, now, &open)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        *seen.borrow(),
+        [(
+            "Claude Code".to_owned(),
+            "private-session-id".to_owned(),
+            now
+        )]
+    );
+}
+
+#[test]
+fn a_session_that_moved_on_cancels_the_done_push_held_for_it() {
+    let (_directory, mut store, created) = done();
+    let now = created.timestamp();
+    assert!(claim_at(&mut store, now, true).is_none());
+    // The finished task woke the agent: its first hook says working, and the held `done` is no longer true.
+    store
+        .ingest(&claude(SessionState::Working), created)
+        .unwrap();
+    assert_eq!(outbox_state(&store, "done"), ["cancelled"]);
+    let job = claim_at(&mut store, now + 20, true).unwrap();
+    assert!(matches!(job.kind, Kind::Working));
+    recorded(&mut store, &job, now + 20);
+    // The turn ends for good: a fresh `done`, with nothing open, is sent.
+    store.ingest(&claude(SessionState::Done), created).unwrap();
+    assert!(matches!(
+        claim_at(&mut store, now + 40, false).unwrap().kind,
+        Kind::Done
+    ));
+    assert_eq!(outbox_state(&store, "done"), ["cancelled", "sending"]);
+}
+
+#[test]
+fn a_done_push_that_was_never_held_is_not_cancelled_by_the_next_report() {
+    let (_directory, mut store) = enabled();
+    let created = Utc::now();
+    store.ingest(&claude(SessionState::Done), created).unwrap();
+    store
+        .ingest(&claude(SessionState::Working), created)
+        .unwrap();
+    assert_eq!(outbox_state(&store, "done"), ["queued"]);
+}
