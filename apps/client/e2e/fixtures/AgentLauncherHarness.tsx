@@ -6,7 +6,7 @@ import {tmuxChatBound,tmuxChatReply,tmuxChatSnapshot} from '../../src/test/tmuxC
 import {herdrNavigationTree} from '../../src/test/herdrNavigation';
 
 export type Kind='tmux'|'zellij'|'herdr';
-type Request={target:Record<string,unknown>;agent?:{kind:string;name:string;prompt?:string}};
+type Request={target:Record<string,unknown>;agent?:{kind:string;name:string;prompt?:string;args?:string[]}};
 const quote=(value:string)=>`'${value.replaceAll("'","'\\''")}'`;
 const step=(stage:string,argv:string[])=>({stage,argv,command:argv.map(quote).join(' ')});
 const session={tmux:'work',zellij:'main',herdr:'default'} as const;
@@ -18,10 +18,11 @@ function plan(kind:Kind,{target,agent}:Request) {
   if(target.create)steps.push(step('folder',['mkdir','-p','--',directory]));
   else if(!worktree && kind!=='herdr')steps.push(step('folderCheck',['test','-d',directory]));
   if(worktree)steps.push(step('worktree',['git','-C',String(target.repository),'worktree','add','-b',String(target.branch),'--',directory,String(target.base)]));
-  const launch=[agent!.kind,...(agent!.prompt?[agent.prompt]:[])];
+  const trailing=[...(agent!.args??[]),...(agent!.prompt?[agent.prompt]:[])];
+  const launch=[agent!.kind,...trailing];
   if(kind==='tmux')steps.push(step('window',['tmux','-u','-L','default','new-window','-P','-F','#{pane_id}','-t','=work:','-n',label,'-c',directory,'--',...launch]));
   else if(kind==='zellij')steps.push(step('pane',['zellij','--session=main','run',`--cwd=${directory}`,`--name=${label}`,'--',...launch]));
-  else steps.push(step('workspace',['herdr','--session','default','workspace','create','--no-focus','--label',label,'--cwd',directory]),step('agent',['herdr','--session','default','agent','start',agent!.name,'--kind',agent!.kind,'--pane','<new-workspace-pane>','--timeout','60000',...(agent!.prompt?['--',agent.prompt]:[])]));
+  else steps.push(step('workspace',['herdr','--session','default','workspace','create','--no-focus','--label',label,'--cwd',directory]),step('agent',['herdr','--session','default','agent','start',agent!.name,'--kind',agent!.kind,'--pane','<new-workspace-pane>','--timeout','60000',...(trailing.length?['--',...trailing]:[])]));
   return {steps};
 }
 const page={schemaVersion:1,agent:'codex',view:'active_branch',nextOffset:0,hasMore:false,messages:[

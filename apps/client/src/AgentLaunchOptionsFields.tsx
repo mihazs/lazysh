@@ -15,7 +15,7 @@ export default function AgentLaunchOptions({agent,name,value,problem,onChange}:{
   return <>
     <label>{t('agentLaunchArguments')}<input value={value.text} spellCheck={false} autoCapitalize="none" autoCorrect="off" aria-describedby="agent-launch-arguments-hint" aria-invalid={!!problem} onChange={event=>onChange({...value,text:event.target.value})}/></label>
     <p id="agent-launch-arguments-hint">{t('agentLaunchArgumentsHint')}</p>
-    {problem && <p className="inline-error" role="alert">{problem==='quote' ? t('agentLaunchArgumentsQuote') : t('agentLaunchArgumentsLimit',{count:argumentLimits.count,length:argumentLimits.bytes})}</p>}
+    {problem && <p className="inline-error" role="alert">{problem==='limit' ? t('agentLaunchArgumentsLimit',{count:argumentLimits.count,length:argumentLimits.bytes}) : t(problem==='quote' ? 'agentLaunchArgumentsQuote' : 'agentLaunchArgumentsPlain')}</p>}
     {flag && <label><input type="checkbox" checked={value.yolo} onChange={event=>onChange({...value,yolo:event.target.checked})}/>{t('agentLaunchYolo',{flag})}</label>}
     {flag && value.yolo && <YoloNote agent={agent} name={name}/>}
   </>;

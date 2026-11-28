@@ -112,3 +112,43 @@ for(const kind of ['tmux','zellij','herdr'] as const) {
     expect(await page.evaluate(()=>window.agentLauncher.terminal.shown)).toBe(1);
   });
 }
+
+for(const kind of ['tmux','zellij','herdr'] as const) {
+  test(`${kind}: arguments and the YOLO flag are reviewed as separate words and sent in the request`,async({page})=>{
+    await mount(page,kind);
+    await page.getByRole('button',{name:'New agent',exact:true}).first().click();
+    const dialog=page.getByRole('dialog',{name:'New agent'});
+    await dialog.getByRole('combobox',{name:'Agent'}).selectOption('codex');
+    await dialog.getByRole('textbox',{name:'Host folder'}).fill('/srv/api');
+    await dialog.getByRole('textbox',{name:'Arguments (optional)'}).fill(`--model "two words" '$(id);'`);
+    // YOLO is off until it is ticked; the note says what it turns off.
+    const flag='--dangerously-bypass-approvals-and-sandbox';
+    const yolo=dialog.getByRole('checkbox',{name:`YOLO: skip approval prompts (${flag})`});
+    await expect(yolo).not.toBeChecked();
+    await expect(dialog.getByRole('note')).toHaveCount(0);
+    await fitsWidth(page);
+    await yolo.check();
+    await expect(dialog.getByRole('note')).toContainText("YOLO turns off Codex's approval prompts");
+    await fitsWidth(page);
+    const words=[flag,'--model','two words','$(id);'];
+    const review=async()=>{
+      await dialog.getByRole('button',{name:'Review commands'}).click();
+      await expect(dialog.locator('ol code').first()).toBeVisible();
+      const plan=(await calls(page,kind==='herdr'?'herdr_workspace_plan':'multiplexer_launch_plan')).at(-1)!;
+      const request=(plan.request as {agent:{args?:string[]}}).agent;
+      return {request,last:(await commands(dialog)).at(-1)};
+    };
+    const on=await review();
+    expect(on.request.args).toEqual(words);
+    expect(on.last).toContain(words.map(word=>`'${word}'`).join(' '));
+    await expect(dialog.getByRole('note')).toContainText('runs commands and changes files without asking');
+    await fitsWidth(page);
+    // Back, YOLO off: the flag leaves the reviewed command and the request.
+    await dialog.getByRole('button',{name:'Back'}).click();
+    await yolo.uncheck();
+    const off=await review();
+    expect(off.request.args).toEqual(words.slice(1));
+    expect(off.last).not.toContain(flag);
+    await expect(dialog.getByRole('note')).toHaveCount(0);
+  });
+}

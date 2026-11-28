@@ -331,6 +331,8 @@ Not covered: names for the notification inbox rows (they come from their own jou
   - Claude Code: `--dangerously-skip-permissions` (Claude Code 2.1.326).
   - Codex: `--dangerously-bypass-approvals-and-sandbox`, which also turns off Codex's sandbox
     (codex-cli 0.172.0, which has no `--yolo` alias).
+  - OpenCode: `--auto`, "Auto-approve permissions that are not explicitly denied" (OpenCode 2.3.2; the
+    1.x releases do not list it). Offered in [New agent](#new-agent) only.
 
 ### New agent
 
@@ -356,6 +358,15 @@ The dialog asks for, in this order:
    (a folder inside the repository, read with **Read the repository**; the branch, base revision
    and worktree path are suggested the way the Herdr dialog suggests them and stay editable).
 3. **Label (optional)** for a folder: the window, pane or workspace name; the folder's name by default.
+
+The agent step also takes **Arguments** (optional) and offers **YOLO**, the same field and toggle as
+**Start in a folder** (same splitting, quoting and limits, and the same YOLO flags, listed there).
+The words reach the host as separate argv entries after the agent's name and before the prompt,
+never through a shell, and a word that is empty or holds a backslash is refused before anything
+is planned (the launcher counts the YOLO flag among the 32 words). OpenCode 2.x also has a YOLO
+flag here, `--auto`. **YOLO** is off every time, is not remembered and resets when you pick another
+agent; the review step shows the exact words and says what it turns off. An older client sends no
+arguments, so its launches are unchanged.
 
 **Review commands** then shows the exact commands, in order, as the host will run them, and nothing
 runs until **Create and start agent** is confirmed. Every path, label and prompt reaches the host as

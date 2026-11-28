@@ -1,6 +1,6 @@
 import {execFileSync} from 'node:child_process';
 import {describe,expect,it} from 'vitest';
-import {agentCommand,argumentLimits,splitArguments,yoloFlags} from './agentLaunchOptions';
+import {agentArgv,agentCommand,argumentLimits,launchArguments,splitArguments,yoloFlags} from './agentLaunchOptions';
 
 describe('agent launch arguments',()=>{
   it('splits like a shell without expanding anything',()=>{
@@ -31,7 +31,9 @@ describe('agent command line',()=>{
     expect(agentCommand('claude',true,['--model','opus'])).toBe('claude --dangerously-skip-permissions --model opus');
     expect(agentCommand('codex',true,[])).toBe('codex --dangerously-bypass-approvals-and-sandbox');
     expect(agentCommand('gemini',true,['-m','x'])).toBe('gemini -m x');
-    expect(Object.keys(yoloFlags).sort()).toEqual(['claude','codex']);
+    expect(Object.keys(yoloFlags).sort()).toEqual(['claude','codex','opencode']);
+    expect(agentArgv('opencode',true,['--continue'])).toEqual(['--auto','--continue']);
+    expect(agentArgv('opencode',false,['--continue'])).toEqual(['--continue']);
   });
   it('quotes every word a shell would read, so metacharacters stay text',()=>{
     expect(agentCommand('claude',false,['two words','it\'s','$(touch x)',';','&&','*','','~/a','--k=v']))
@@ -44,5 +46,21 @@ describe('agent command line',()=>{
     expect(split.args).toEqual(['--model','a b',"it's",'$(touch /nonexistent/x)',';','&&','*','~','$HOME','','"q"','é']);
     const printed=execFileSync('sh',['-c',`set -- ${agentCommand('claude',true,split.args)}; shift; printf '%s\\0' "$@"`],{encoding:'utf8'});
     expect(printed.split('\0').slice(0,-1)).toEqual([yoloFlags.claude,...split.args]);
+  });
+});
+
+describe('arguments for a launcher',()=>{
+  it('are the YOLO flag, when chosen and offered, then the typed words',()=>{
+    expect(launchArguments('claude',{yolo:true,text:'--model opus "two words"'})).toEqual({args:['--dangerously-skip-permissions','--model','opus','two words']});
+    expect(launchArguments('claude',{yolo:false,text:''})).toEqual({args:[]});
+    expect(launchArguments('gemini',{yolo:true,text:'-m x'})).toEqual({args:['-m','x']});
+  });
+  it('refuse what the native launcher would: an empty or blank word, a backslash, and more than 32 words counting the flag',()=>{
+    for(const text of ["''",'" "',String.raw`'a\b'`,String.raw`a\\b`])expect(launchArguments('codex',{yolo:false,text}),text).toEqual({problem:'plain'});
+    expect(launchArguments('codex',{yolo:false,text:'"open'})).toEqual({problem:'quote'});
+    const most=Array(argumentLimits.count).fill('x').join(' ');
+    expect(launchArguments('codex',{yolo:false,text:most})).toHaveProperty('args');
+    expect(launchArguments('codex',{yolo:true,text:most})).toEqual({problem:'limit'});
+    expect(launchArguments('gemini',{yolo:true,text:most})).toHaveProperty('args');
   });
 });

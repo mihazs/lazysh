@@ -2,6 +2,8 @@ import {Ellipsis,FolderPlus,GitBranchPlus,SquarePlus,X} from 'lucide-react';
 import {useEffect,useMemo,useRef,useState,type FormEvent,type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
 import {bindProtectedInvoke,type AccessLease} from './access';
+import AgentLaunchOptionsFields,{YoloNote} from './AgentLaunchOptionsFields';
+import {launchArguments,noOptions,yoloFlags,type ArgumentProblem} from './agentLaunchOptions';
 import DirectoryPicker,{type Load} from './DirectoryPicker';
 import type {ReportedSessionSource} from './HerdrSessionDetails';
 import {agentName,branchFromLabel,knownDirectories,suggestWorktreePath,validAbsolutePath,validBase,validBranch,validLabel,validPrompt,workspaceDirectory,worktreeSource} from './herdrCreate';
@@ -17,7 +19,7 @@ type Stage='folder'|'folderCheck'|'worktree'|'workspace'|'window'|'pane'|'agentC
 type Step={stage:Stage;argv:string[];command:string};
 type Outcome={folder?:string;worktree?:string;workspaceId?:string;paneId?:string;agent?:string;failure?:{stage:Stage;message:string}};
 type Target={type:'directory';label:string;directory:string;create?:boolean}|{type:'worktree';repository:string;branch:string;base:string;path:string};
-type Request={target:Target;agent?:{kind:string;name:string;prompt?:string}};
+type Request={target:Target;agent?:{kind:string;name:string;prompt?:string;args?:string[]}};
 /** The session's tmux or Zellij, which the launcher starts the agent in; Herdr is addressed by `server`. */
 type Multiplexer={kind:'tmux'|'zellij';name:string};
 type Location='folder'|'new'|'worktree';
@@ -141,6 +143,8 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
   const [kinds,setKinds]=useState<Load<AgentKind[]>>();
   const [kind,setKind]=useState('');
   const [prompt,setPrompt]=useState('');
+  const [options,setOptions]=useState(noOptions);
+  const [argumentProblem,setArgumentProblem]=useState<ArgumentProblem>();
   const [review,setReview]=useState<{request:Request;steps:Step[]}>();
   const [outcome,setOutcome]=useState<Outcome>();
   // One Herdr agent name per kind, so reviewing again shows the same command.
@@ -196,8 +200,12 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     // The launcher asks for the agent first, the workspace dialogs for the location first.
     const check=launcher?choice??(typeof value==='string'?value:undefined):typeof value==='string'?value:choice;
     setInvalid(check);
-    if(check || typeof value==='string')return;
-    const request:Request={target:value,...(startAgent && selected?{agent:{kind:selected.kind,name:nameFor(selected.kind),...(selected.prompt && prompt.trim()?{prompt}:{})}}:{})};
+    const launch=startAgent && selected ? launchArguments(selected.kind,options) : undefined;
+    setArgumentProblem(launch && 'problem' in launch ? launch.problem : undefined);
+    if(check || typeof value==='string' || (launch && 'problem' in launch))return;
+    // An old request has no `args`: they are sent only when there are some.
+    const args=launch && 'args' in launch && launch.args.length>0 ? {args:launch.args} : {};
+    const request:Request={target:value,...(startAgent && selected?{agent:{kind:selected.kind,name:nameFor(selected.kind),...(selected.prompt && prompt.trim()?{prompt}:{}),...args}}:{})};
     setProblem('');
     try {
       const plan=await invoke<{steps:Step[]}>(multiplexer?'multiplexer_launch_plan':'herdr_workspace_plan',multiplexer?{multiplexer,request}:{name:server,request});
@@ -222,8 +230,9 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     {kinds?.state==='loading' && <p role="status">{t('herdrCreateDetecting')}</p>}
     {kinds?.state==='failed' && <p className="inline-error" role="alert">{uiErrorText(kinds.cause)}</p>}
     {kinds?.state==='ready' && (!kinds.value.some(item=>item.installed)?<p role="status">{t('herdrCreateNoAgents')}</p>:<>
-      <label>{t('herdrCreateAgent')}<select required value={kind} onChange={event=>{setKind(event.target.value);setInvalid(undefined);}}><option value="">{t('herdrCreateChooseAgent')}</option>{kinds.value.filter(item=>launcher || item.installed).map(item=><option key={item.kind} value={item.kind} disabled={!item.installed}>{item.label} ({item.executable}){item.installed?'':` · ${t('agentLaunchNotInstalled')}`}</option>)}</select></label>
+      <label>{t('herdrCreateAgent')}<select required value={kind} onChange={event=>{setKind(event.target.value);setInvalid(undefined);setOptions(value=>({...value,yolo:false}));}}><option value="">{t('herdrCreateChooseAgent')}</option>{kinds.value.filter(item=>launcher || item.installed).map(item=><option key={item.kind} value={item.kind} disabled={!item.installed}>{item.label} ({item.executable}){item.installed?'':` · ${t('agentLaunchNotInstalled')}`}</option>)}</select></label>
       {selected?.prompt && <label>{t('herdrCreatePrompt')}{multiline?<textarea rows={3} value={prompt} maxLength={2000} onChange={event=>setPrompt(event.target.value)}/>:<input value={prompt} maxLength={2000} onChange={event=>setPrompt(event.target.value)}/>}</label>}
+      {selected && <AgentLaunchOptionsFields agent={selected.kind} name={selected.label} value={options} problem={argumentProblem} onChange={setOptions}/>}
     </>)}
   </>;
   const radios=<fieldset className="herdr-create-agent" disabled={phase!=='form'}>
@@ -270,6 +279,7 @@ function CreateFlow({sessionId,server,lease,tree,reports,projects:known,source,o
     {(phase==='review' || phase==='running') && review && <div className="form-stack herdr-create-review">
       <p>{t('herdrCreateConfirmIntro')}</p>
       <ol>{review.steps.map((step,index)=><li key={index}><strong>{t(stageKeys[step.stage])}</strong><pre className="herdr-create-output"><code>{step.command}</code></pre></li>)}</ol>
+      {options.yolo && review.request.agent && yoloFlags[review.request.agent.kind] && <YoloNote agent={review.request.agent.kind} name={selected?.label ?? review.request.agent.kind}/>}
       {review.request.agent?<p className="muted">{stepNote}</p>:<p><strong>{t('herdrCreateNoAgentNote')}</strong></p>}
       {phase==='running' && <p role="status">{t('herdrCreateRunning')}</p>}
       {problem && <div role="alert"><p>{t('herdrCreateFailedNothing')}</p><pre className="herdr-create-output">{uiErrorText(problem)}</pre></div>}
