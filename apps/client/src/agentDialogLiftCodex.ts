@@ -13,7 +13,7 @@ import {clip, limits, none, unliftable, type Lift} from './agentDialogLift';
 /** Each captured footer says Enter takes the highlighted row and Esc leaves; another footer (a question with notes, a full-screen table) is not read. */
 const footers = [/^ {2}enter select · esc back$/, /^ {2}enter default · s session · esc back$/, /^ {2}Press enter to confirm or esc to cancel$/];
 /** Any row that offers Enter and Esc, so that a dialog this profile does not know shows the banner instead of nothing. */
-const keyRow = /^ {1,2}(?:Press )?enter\b.*\besc\b/i;
+export const keyRow = /^ {1,2}(?:Press )?enter\b.*\besc\b/i;
 const numbered = /^( {0,2})([› ]) (\d{1,2})\. (\S.*)$/;
 /** Codex 0.172 numbers only the first nine rows of a long list and leaves the number of the others blank (`›     GPT-5.6-Luna`). */
 const option = /^( {0,2})([› ]) (?:(\d{1,2})\. | {4})(\S.*)$/;
