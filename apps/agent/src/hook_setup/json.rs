@@ -224,24 +224,31 @@ fn rewrite_map(
         }) {
             return Err(Fault::Conflict);
         }
+        // Installing also retires lazysh's own groups for another companion path; foreign groups stay as they are.
+        let mut removed = new.map_or_else(Vec::new, |new| legacy_twins(&values, new, index));
+        if let (Some(index), None) = (index, new) {
+            removed.push(index);
+        }
+        removed.sort_unstable();
+        changes.extend(
+            removals(input, &groups, &removed)?
+                .into_iter()
+                .map(|range| (range, String::new())),
+        );
         match (index, new) {
             (Some(index), Some(new)) if Some(new) != old => {
                 changes.push((span(input, groups[index])?, encoded(new)?));
             }
-            (Some(index), None) => {
-                let current = span(input, groups[index])?;
-                let range = if index + 1 < groups.len() {
-                    current.start..span(input, groups[index + 1])?.start
-                } else if index > 0 {
-                    span(input, groups[index - 1])?.end..current.end
-                } else {
-                    current
-                };
-                changes.push((range, String::new()));
-            }
             (None, Some(new)) => {
                 let (point, separator) = match groups.last() {
-                    Some(last) => (span(input, last)?.end, ","),
+                    Some(last) => (
+                        span(input, last)?.end,
+                        if removed.len() == groups.len() {
+                            ""
+                        } else {
+                            ","
+                        },
+                    ),
                     None => (span(input, array)?.end - 1, ""),
                 };
                 changes.push((point..point, format!("{separator}{}", encoded(new)?)));
@@ -259,6 +266,100 @@ fn rewrite_map(
     }
     document(&output)?;
     Ok(output)
+}
+
+/// The spans that delete the groups at `removed` (ascending) together with one separator each, so the array stays valid.
+fn removals(input: &str, groups: &[&RawValue], removed: &[usize]) -> Result<Vec<Range<usize>>> {
+    let mut ranges = Vec::new();
+    let mut at = 0;
+    while at < removed.len() {
+        let first = removed[at];
+        let mut last = first;
+        while removed.get(at + 1) == Some(&(last + 1)) {
+            at += 1;
+            last += 1;
+        }
+        at += 1;
+        ranges.push(if last + 1 < groups.len() {
+            span(input, groups[first])?.start..span(input, groups[last + 1])?.start
+        } else if first > 0 {
+            span(input, groups[first - 1])?.end..span(input, groups[last])?.end
+        } else {
+            span(input, groups[first])?.start..span(input, groups[last])?.end
+        });
+    }
+    Ok(ranges)
+}
+fn command_pointer(group: &Value) -> Option<&'static str> {
+    ["/hooks/0/command", "/command"]
+        .into_iter()
+        .find(|pointer| group.pointer(pointer).is_some_and(Value::is_string))
+}
+/// Whether `group` is `new` with a different lazysh executable: the printed fragment's bare `lazysh-agent` or any
+/// other path of it. Every other field must be equal, so a hook that merely mentions lazysh is never claimed.
+fn is_legacy_twin(group: &Value, new: &Value) -> bool {
+    let Some(pointer) = command_pointer(new) else {
+        return false;
+    };
+    let (Some(theirs), Some(ours)) = (
+        group.pointer(pointer).and_then(Value::as_str),
+        new.pointer(pointer).and_then(Value::as_str),
+    ) else {
+        return false;
+    };
+    let Some((_, agent)) = ours.rsplit_once(" ingest --agent ") else {
+        return false;
+    };
+    let Some(executable) = theirs.strip_suffix(&format!(" ingest --agent {agent}")) else {
+        return false;
+    };
+    let executable = executable.trim_matches('\'');
+    let mut twin = group.clone();
+    if let Some(command) = twin.pointer_mut(pointer) {
+        *command = ours.into();
+    }
+    theirs != ours
+        && !executable.contains('\'')
+        && (executable == "lazysh-agent" || executable.ends_with("/lazysh-agent"))
+        && twin == *new
+}
+fn legacy_twins(values: &[Value], new: &Value, owned: Option<usize>) -> Vec<usize> {
+    (0..values.len())
+        .filter(|index| Some(*index) != owned && is_legacy_twin(&values[*index], new))
+        .collect()
+}
+/// The commands of lazysh's own groups for another companion path that installing would retire, by event.
+pub(super) fn legacy(
+    input: &str,
+    entries: &[Entry],
+    standalone: bool,
+) -> Result<Vec<(String, String)>> {
+    let root = document(input)?;
+    let Some(hooks) = event_map(root, standalone)? else {
+        return Ok(Vec::new());
+    };
+    let hooks: Object<'_> = decode(hooks.get())?;
+    let mut found = Vec::new();
+    for entry in entries {
+        let Some((_, groups)) = hooks.0.iter().find(|(key, _)| key == &entry.event) else {
+            continue;
+        };
+        let values = decode::<Vec<&RawValue>>(groups.get())?
+            .into_iter()
+            .map(|group| decode::<Value>(group.get()))
+            .collect::<Result<Vec<_>>>()?;
+        for index in legacy_twins(&values, &entry.group, None) {
+            if let Some(command) =
+                command_pointer(&values[index]).and_then(|p| values[index].pointer(p))
+            {
+                found.push((
+                    entry.event.clone(),
+                    command.as_str().unwrap_or_default().to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(found)
 }
 
 pub(super) fn counts(input: &str, entries: &[Entry], standalone: bool) -> Result<Vec<usize>> {
