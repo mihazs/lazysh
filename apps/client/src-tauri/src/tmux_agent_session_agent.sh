@@ -3,7 +3,8 @@
 # the pane it runs in, reads raw keys, appends Claude Code format records to a transcript and logs every submitted
 # prompt, answered question, interrupt and mode change to a second file. No provider, network or account is used.
 # With a fifth argument it also acts as a reporting agent: it shows each prompt in its pane, logs every key it reads to
-# `$log.keys`, and a `hold ...` prompt keeps its turn running until `$log.release` exists. The value `report` also runs the
+# `$log.keys`, and a `hold ...` prompt keeps its turn running until `$log.release` exists or the next prompt is submitted, as a real agent
+# finishes or abandons its work when told something new. The value `report` also runs the
 # companion's `ingest --reported-history` hook the way Claude Code's hooks do (a tmux pane names itself through TMUX_PANE);
 # any other value (`keys`) leaves the report to the multiplexer that hosts the pane, as Herdr's own session report does.
 # The value `opencode` makes it OpenCode 2.2 instead: `$transcript` is then the SQLite database that agent keeps every session in
@@ -137,6 +138,7 @@ while true; do
   if ((pasting)); then buf+=${key//$'\r'/$'\n'}; continue; fi
   # Enter reaches a bash read as CR or LF depending on the tty settings in force, so either byte submits.
   if [[ $key == $'\r' || $key == $'\n' ]]; then
+    if ((held)); then held=0; note HOLD_ENDED; text 'Finished the held work.'; hint '? for shortcuts'; hook Stop ''; fi
     note "SUBMIT $(escape "$buf")"
     user "$buf"
     shown "$buf"

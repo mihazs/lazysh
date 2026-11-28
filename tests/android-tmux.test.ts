@@ -8,6 +8,7 @@ import {OwnedSshRelay} from '../apps/client/native-e2e/sshRelay';
 import {androidForceStopRestoreAcceptance,restoreCases,restoreControl,validateInstrumentationRun} from './support/androidForceStopRestore';
 import {close,listen} from './support/androidSshParity';
 import {connect,createServer} from 'node:net';
+import {reportingAgentDeliveredOnce,reportingAgentKeysAre,reportingAgentPrompts} from './support/androidTmuxAgent';
 
 /** Runs one tmux command against the owned fixture's server over its SSH, as the app's own action does. */
 const hostTmux=(owned:TmuxFixture)=>async(command:string)=>(await owned.ssh.client(true,`tmux -u -L default ${command}`)).finish('owned tmux window action',5000);
@@ -594,3 +595,67 @@ test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX)('owned 
 test.skipIf(process.platform!=='linux' || process.env.LAZYSH_ANDROID_UI_TMUX!=='1')('actual Android app restores the same tmux pane only on click after a force-stop and relaunch',async()=>{
   await androidForceStopRestoreAcceptance();
 },1_200_000);
+
+const codes=(text:string)=>Array.from(text,character=>String(character.codePointAt(0)));
+test('the reporting agent key log admits each prompt once, typed or pasted, and no other key',()=>{
+  const prompts=['hold ab12','send ab12','type ab12'];
+  const typed=(prompt:string,enter='13')=>[...codes(prompt),enter],pasted=(prompt:string)=>['27',...codes(prompt),'27','13'];
+  expect(reportingAgentKeysAre([...pasted(prompts[0]),...typed(prompts[1],'10'),...typed(prompts[2])],prompts)).toBe(true);
+  const stray=[...pasted(prompts[0]),...typed(prompts[1]),...typed(prompts[2])];
+  for(const keys of [stray.slice(0,-1),[...stray,'13'],[...stray,'27'],['27',...stray],[...typed(prompts[1]),...typed(prompts[0]),...typed(prompts[2])],[...typed(prompts[0]),...typed(prompts[0]),...typed(prompts[1]),...typed(prompts[2])]])
+    expect(reportingAgentKeysAre(keys,prompts)).toBe(false);
+  expect(reportingAgentKeysAre([],prompts)).toBe(false);
+});
+
+test('the reporting agent readback requires one logged, held, ended and shown delivery of each prompt',()=>{
+  const {hold,sent,typed}=reportingAgentPrompts('ab12cd34ef56');
+  expect([hold,sent,typed]).toEqual(['hold ab12cd34','send ab12cd34','type ab12cd34']);
+  const prompts=[hold,sent,typed],log=['READY','SUBMIT '+hold,'HOLD','HOLD_ENDED','SUBMIT '+sent,'SUBMIT '+typed].join('\n'),keys=prompts.flatMap(prompt=>[...codes(prompt),'13']).join('\n');
+  const pane=prompts.map(prompt=>`> ${prompt}`).join('\n');
+  reportingAgentDeliveredOnce(log,keys,pane,prompts);
+  expect(()=>reportingAgentDeliveredOnce(log.replace('HOLD_ENDED\n',''),keys,pane,prompts)).toThrow('did not log the prompts once, in order');
+  expect(()=>reportingAgentDeliveredOnce(log+'\nSUBMIT '+sent,keys,pane,prompts)).toThrow('did not log the prompts once, in order');
+  expect(()=>reportingAgentDeliveredOnce(log,keys+'\n13',pane,prompts)).toThrow('received a key other than its prompts');
+  expect(()=>reportingAgentDeliveredOnce(log,keys,pane.replace(`> ${sent}`,''),prompts)).toThrow('does not show each prompt once');
+  expect(()=>reportingAgentDeliveredOnce(log,keys,pane+`\n> ${sent}`,prompts)).toThrow('does not show each prompt once');
+});
+
+// The real stand-in agent reports to the real companion from a real tmux pane, as it will for the packaged app.
+test.skipIf(process.platform!=='linux' || !process.env.LAZYSH_TEST_TMUX || !process.env.LAZYSH_TEST_AGENT_BIN)('owned tmux reporting agent readback accepts the three deliveries once and refuses a stray key',async()=>{
+  const owned=await TmuxFixture.start(undefined,process.env.LAZYSH_TEST_AGENT_BIN,'tmux',true);
+  let client:OwnedProcess|undefined;
+  try {
+    const {agent,windows}=owned.metadata();
+    expect(agent).toBeDefined();
+    expect(windows.map(({name})=>name)).toEqual(['alpha','beta']);
+    const keys=async(command:string)=>(await owned.ssh.client(true,command)).finish('owned tmux agent keys',5000);
+    const target="-t '=owned-tmux:0'",tmux="tmux -L default";
+    const log=()=>Bun.file(join(owned.ssh.directory,'agent.log')).text().catch(()=>'');
+    // One display client, as the app's attached tab is.
+    const shell=client=await owned.ssh.client();
+    await wait(()=>shell.stdout.includes(owned.ssh.prompt));
+    shell.child.stdin!.write("exec tmux -u -L default attach-session -t '=owned-tmux'\n");
+    await wait(async()=>{await owned.observe();return owned.diagnostic().history.at(-1)===1;});
+    // The first prompt typed, the second pasted (the app's Compose), the third typed again; the first holds its turn until the next prompt.
+    await keys(`${tmux} send-keys -l ${target} '${agent!.hold}' && ${tmux} send-keys ${target} Enter`);
+    await wait(async()=>(await log()).includes('\nHOLD\n'));
+    await keys(`${tmux} set-buffer '${agent!.sent}' && ${tmux} paste-buffer -p ${target} && ${tmux} send-keys ${target} Enter`);
+    await wait(async()=>(await log()).includes('HOLD_ENDED'));
+    await keys(`${tmux} send-keys -l ${target} '${agent!.typed}' && ${tmux} send-keys ${target} Enter`);
+    await wait(async()=>(await log()).includes('SUBMIT '+agent!.typed));
+    // The companion's own state holds the report of this pane, readable by the app's companion over SSH.
+    const reported=await keys('lazysh-agent --help >/dev/null && ls "$XDG_STATE_HOME/lazysh"');
+    expect(reported).toContain('events.sqlite3');
+    shell.child.stdin!.write('\x02d');
+    await shell.finish('owned tmux prefix detach',5000);client=undefined;
+    await owned.verifyReportingAgent();
+    expect(owned.diagnostic().history).toEqual([0,1,0]);
+    // A key from any other source, such as a view switch writing to the pane, is refused.
+    await keys(`${tmux} send-keys ${target} x`);
+    await wait(async()=>(await Bun.file(join(owned.ssh.directory,'agent.log.keys')).text()).endsWith('120\n'));
+    await expect(owned.verifyReportingAgent()).rejects.toThrow('received a key other than its prompts');
+  } finally {
+    await client?.stop().catch(()=>{});
+    await owned.stop();
+  }
+},90_000);

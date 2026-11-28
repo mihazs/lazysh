@@ -10,7 +10,7 @@ import {NativeGui} from './fixture';
 import {prepareRecordedConversation,recordedCompanionBytes} from '../../../tests/support/recordedConversation';
 import {SshFixture,listening,sshCommand,reportOwnedSshPromptFailure} from '../../../tests/support/sshFixture';
 import {HerdrFixture,herdrTools} from '../../../tests/support/androidHerdr';
-import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedRememberedMosh,openOwnedSshWith,typeText,workspaceAction,startOwnedReceiver} from './sshUi';
+import {openOwnedSsh,challengeOwnedSsh,disconnectOwnedSsh,finishOwnedHerdr,ownedSshGui,enterOwnedKey,openOwnedRememberedSsh,openOwnedRememberedMosh,openOwnedSshWith,typeText,workspaceAction,startOwnedReceiver} from './sshUi';
 
 const fixture=ownedSshGui();
 
@@ -585,10 +585,7 @@ it('shows the real Herdr agent states and a current marker that follows the real
   await focus(agent.paneId,agent.tabId);
   await open('workspaces');
   await marked([workspace,agentTab,'codex']);
-  expect(await browser.$$('[role="tab"]')).toHaveLength(1);
-  expect(await gui.appOwner()).toEqual(owner);expect(gui.connections).toBe(0);
-  await herdr.expectBytes(Buffer.alloc(0));
-  await disconnectOwnedSsh(gui,terminal,`Owned SSH GUI host / ${herdr.name}`);
+  await finishOwnedHerdr(gui,browser,terminal,owner,herdr);
 });
 
 it.each(['client','server'] as const)('keeps the owned Mosh UDP daemon alive after %s-attributed SSH closure and retires the entire namespace',async attribution=>{
