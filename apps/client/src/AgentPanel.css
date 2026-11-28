@@ -89,3 +89,10 @@
 .agent-panel .agent-host-error { margin: 8px 0 0; overflow-wrap: anywhere; }
 .agent-panel .agent-host-group > .agent-project-heading { font-size: 13px; }
 .agent-panel .agent-host-group > .agent-project-group { margin-inline-start: 8px; }
+
+/* A named session shows its name first; its summary, folder and agent are secondary. */
+.agent-row-detail { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.agent-report-vendor { display: block; color: var(--muted); }
+.agent-rename { display: grid; gap: 8px; margin-block: 8px; }
+.agent-rename label { display: grid; gap: 4px; }
+.agent-rename input { min-height: 44px; width: 100%; box-sizing: border-box; }

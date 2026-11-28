@@ -18,6 +18,8 @@ import AgentHistory from './AgentHistory';
 import {publishAnswerGuard, publishTaskGuard, useComposerControl} from './agentDialogAnswer';
 import {hostScreen, herdrStillRuns, herdrStillWaits, screenRows, type HerdrAgentTarget} from './agentHerdrAnswer';
 import {parseSnapshot, reportedStateNames, type AgentSession} from './AgentPanel';
+import {useNames} from './agentSessionNames';
+import {reportKey} from './agentReports';
 import {conversationAgents, conversationSource, recordsAgents} from './agentConversationSource';
 import {parseTerminalSnapshot, type TerminalInputLabels, type ZellijTarget} from './ChatTerminalInput';
 import {onServer,zellijPane} from './agentPaneIdentity';
@@ -56,8 +58,8 @@ const sameSource = (left: BoundConversation | BoundRecords | undefined, right: B
 
 /** Another view of the same live session: the agent conversation that hook reports tie to this terminal's pane.
  * It never writes to the terminal; input goes through the confirmed input or Stage like Chat. */
-export default function AgentView({sessionId, shown, full, onToggleFull, tmux, paneServer, tmuxSession, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, images: imagePreferences, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
-  sessionId: string; shown: boolean; /** The Agent view has the whole window: the app bars around it are hidden. */full?: boolean; onToggleFull?: () => void; tmux: boolean; /** `tmux:<label>` of the attached server: a report of another server is not this terminal's. */paneServer?: string; /** The tmux session the terminal is attached to: the New agent flow opens its windows there. */tmuxSession?: string; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
+export default function AgentView({sessionId, hostKey, shown, full, onToggleFull, tmux, paneServer, tmuxSession, zellijSession, herdrSession, herdrLaunch, terminalInput, terminal, images: imagePreferences, onShowTerminal, onEnterHerdr, onOpenCompanion}: {
+  sessionId: string; /** The saved host, whose names for sessions apply; the session itself when absent. */hostKey?: string; shown: boolean; /** The Agent view has the whole window: the app bars around it are hidden. */full?: boolean; onToggleFull?: () => void; tmux: boolean; /** `tmux:<label>` of the attached server: a report of another server is not this terminal's. */paneServer?: string; /** The tmux session the terminal is attached to: the New agent flow opens its windows there. */tmuxSession?: string; /** The Zellij session the terminal is attached to: an agent report that names one of its panes ties the conversation to it. */zellijSession?: string; herdrSession?: string; herdrLaunch?: boolean; terminalInput?: TerminalInputLabels; /** The session's terminal, whose screen shows a dialog no hook or transcript describes. */ terminal?: ScreenSource; onShowTerminal: () => void;
   images?: ReturnType<typeof storedImages>;
   onEnterHerdr?:(name:string,target:HerdrNavigationTarget,owner:AccessLease,current:()=>boolean)=>Promise<void>;onOpenCompanion?:()=>void;
 }) {
@@ -242,7 +244,10 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, p
   // A reader that goes unknown for a moment (view hidden, Herdr unreachable) keeps its position and draft but stays hidden.
   const held=manual ?? linkedKept;
   const kept=held?.conversation ?? retained.current?.conversation;
-  const title = selected?.title ?? (row ? [row.agent, row.project && pathBasename(row.project)].filter(Boolean).join(' · ') : t('agentViewTitle'));
+  const names = useNames(hostKey ?? sessionId);
+  const named = row ? names[reportKey(row)] ?? row.title : undefined;
+  const place = row ? [row.agent, row.project && pathBasename(row.project)].filter(Boolean).join(' · ') : undefined;
+  const title = selected?.title ?? named ?? place ?? t('agentViewTitle');
   // A report that waits for the user says what for; Herdr's blocked status is the same wait with no known kind.
   const waiting = row && !selected?.status ? waitingKind(row) : herdrReport ? waitingKind(herdrReport) : undefined;
   // Herdr says an agent is blocked; the companion's report of the same session says on what, and since when.
@@ -328,6 +333,7 @@ export default function AgentView({sessionId, shown, full, onToggleFull, tmux, p
       <div className="agent-view-heading">
         <strong title={selected?.place ? `${title} · ${selected.place}` : title}>{title}</strong>
         <div className="agent-view-facts">
+          {named && !selected?.title && <span className="agent-view-where">{place}</span>}
           {state && <span className="agent-view-state" data-tone={state.tone} title={row && !selected?.status ? t('agentViewLastReportedState', {state: state.name}) : undefined}>{state.name}{waiting && waited && <> · <time dateTime={waited.waitingSince ?? waited.updatedAt}>{formatRelativeTime(waited.waitingSince ?? waited.updatedAt, now)}</time></>}</span>}
           {unlinked && <span className="agent-view-other">{t('agentViewOtherPane')}</span>}
           {reader && <AgentHeaderPills session={info}/>}

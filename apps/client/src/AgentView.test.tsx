@@ -12,6 +12,7 @@ import {dialogScreen,fakeTerminal,modelScreen,onTmux} from './test/agentDialogSc
 import {opencodeDatabase,opencodeDiscovery,opencodePage,opencodeSession,opencodeToolPage,opencodeToolSession} from './test/opencodeRecorded';
 import {copilotRecords,droidRecords,kimiRecords} from './test/recordsOnlyRecorded';
 import {openFolds} from './test/openFolds';
+import {saveName} from './agentSessionNames';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
 
 const row=(agent:string,paneId:string|null,state='working')=>({sessionId:`${agent}-session`,agent,project:'/work',state,updatedAt:new Date().toISOString(),summary:'Working',paneId,eventCount:3});
@@ -1778,4 +1779,15 @@ describe('the New agent entry',()=>{
     expect(calls('herdr_workspace_create')).toHaveLength(1);expect(calls('multiplexer_launch')).toEqual([]);
     expect(calls('herdr_action')).toEqual([{sessionId:'ssh',name:'owned',action:{type:'focusWorkspace',target:'wNEW'}}]);
   });
+});
+
+it('names the header after the reported title, then after the user\'s own name, with the agent and folder beside it',async()=>{
+  host('claude',[{...row('Claude Code','%3'),title:'Migrate the billing tables'}],'available',[turn('First prompt','First answer')]);
+  render(<AgentView sessionId="ssh" hostKey="host-1" shown tmux terminalInput={{backend:'tmux',hostLabel:'host',terminalLabel:'work'}} onShowTerminal={()=>{}}/>);await advance(0);
+  const header=()=>screen.getByRole('region',{name:'Agent view'}).querySelector('header')!;
+  expect(within(header()).getByText('Migrate the billing tables')).toBeTruthy();
+  expect(within(header()).getByText('Claude Code · work')).toBeTruthy();
+  act(()=>saveName('host-1',{agent:'Claude Code',sessionId:'Claude Code-session'},'My own name'));
+  expect(within(header()).getByText('My own name')).toBeTruthy();
+  expect(within(header()).queryByText('Migrate the billing tables')).toBeNull();
 });
