@@ -1,5 +1,5 @@
 import {spawn, type ChildProcess} from 'node:child_process';
-import {readFile} from 'node:fs/promises';
+import {readdir,readFile} from 'node:fs/promises';
 
 export const OUTPUT_LIMIT=16*1024;
 const teardownFlag=(value:unknown)=>typeof value==='boolean'?value:null;
@@ -12,6 +12,7 @@ export class OwnedProcess {
   readonly done:Promise<number>;
   private readonly original:Promise<OwnedPid|undefined>;
   private closeObserved=false;
+  private holders:{pid:number;comm:string}[]=[];
   private launchFailure:'missing-launcher'|'launch-denied'|'launch-failed'|undefined;
   stdout=''; stderr='';
   constructor(program:string,args:string[],cwd?:string,env=process.env,captureOutput=true) {
@@ -19,6 +20,10 @@ export class OwnedProcess {
     this.original=(this.child.pid?identity(this.child.pid):Promise.resolve(undefined)).catch(()=>undefined);
     this.child.stdout!.on('data',data=>{if(captureOutput)this.stdout=(this.stdout+String(data)).slice(-OUTPUT_LIMIT);});
     this.child.stderr!.on('data',data=>{if(captureOutput)this.stderr=(this.stderr+String(data)).slice(-OUTPUT_LIMIT);});
+    // Bun can leave a dead leader's stdout unread (peer closed, bytes queued, no 'close') for seconds with no
+    // process holding it. After a grace, name any live session member that still could hold the pipe; with none,
+    // release the leftover buffer so 'close' fires.
+    this.child.once('exit',()=>{setTimeout(()=>{void this.releaseStdout();},500);});
     this.done=new Promise((resolve,reject)=>{
       this.child.once('error',(error:NodeJS.ErrnoException)=>{
         this.launchFailure=error.code==='ENOENT'?'missing-launcher':['EACCES','EPERM'].includes(error.code??'')?'launch-denied':'launch-failed';
@@ -26,6 +31,11 @@ export class OwnedProcess {
       });
       this.child.once('close',code=>{this.closeObserved=true;resolve(code??1);});
     });
+  }
+  private async releaseStdout() {
+    if(this.closeObserved)return;
+    this.holders=await sessionMembers(this.child.pid!).catch(()=>[]);
+    if(!this.holders.length){this.child.stdin?.destroy();this.child.stdout?.destroy();this.child.stderr?.destroy();}
   }
   async startupDiagnostic() {
     // Spawn errors arrive after the first missing-identity observation. Yield
@@ -76,7 +86,7 @@ export class OwnedProcess {
           // Sample synchronously before cleanup changes the streams; never log process data.
           try {console.error('Owned teardown deadline observation '+JSON.stringify({scope:'at-deadline',
             leaderExitObserved:teardownFlag(this.child.exitCode!==null || this.child.signalCode!==null),closeObserved:teardownFlag(this.closeObserved),
-            streams:{stdin:teardownStream(this.child.stdin),stdout:teardownStream(this.child.stdout),stderr:teardownStream(this.child.stderr)}}));}
+            holders:this.holders,streams:{stdin:teardownStream(this.child.stdin),stdout:teardownStream(this.child.stdout),stderr:teardownStream(this.child.stderr)}}));}
           catch {/* Diagnostics cannot prevent the original deadline failure. */}
           reject(new Error('Owned fixture process teardown deadline'));
         },2000);
@@ -116,6 +126,20 @@ export async function reportOwnedTeardownFailure(owned:OwnedProcess,stage:'attac
     catch {observation={scope:'post-stop-sample',state:'unavailable'};}
     console.error('Owned teardown observation '+JSON.stringify({stage,observation}));
   } catch {/* Observation and reporting must never replace the original failure. */}
+}
+// shortcut: only the leader's session (it is detached) is searched, so a descendant that called setsid is not named;
+// add a cgroup or subreaper facility before supervising daemonizing tools.
+async function sessionMembers(leader:number) {
+  const members:{pid:number;comm:string}[]=[];
+  for(const entry of await readdir('/proc')) {
+    if(!/^[0-9]+$/.test(entry) || Number(entry)===leader)continue;
+    try {
+      const text=await readFile(`/proc/${entry}/stat`,'utf8');
+      const fields=text.slice(text.lastIndexOf(')')+2).trim().split(/\s+/);
+      if(Number(fields[3])===leader && !['Z','X'].includes(fields[0]))members.push({pid:Number(entry),comm:text.slice(text.indexOf('(')+1,text.lastIndexOf(')')).slice(0,15)});
+    } catch {/* The process vanished between the listing and the read. */}
+  }
+  return members.slice(0,8);
 }
 export type OwnedPid={pid:number,parent:number,start:string,state:string};
 export async function identity(pid:number):Promise<OwnedPid|undefined> {
