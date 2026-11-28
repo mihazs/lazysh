@@ -52,18 +52,3 @@ export function parseReports(value: unknown): AgentSession[] {
   if (new Set(rows.map(reportKey)).size !== rows.length) throw new LocalUiError('agentsInvalidSession');
   return rows;
 }
-
-
-export type LiveProcess = {agent:string;pid:number;startTime:number};
-export type LiveAgents = {status:'available'|'truncated'|'unavailable'|'unsupported';processes:LiveProcess[]};
-export function parseLiveAgents(value:unknown):LiveAgents|undefined {
-  if (!value || typeof value !== 'object' || !('liveAgents' in value) || value.liveAgents === undefined) return undefined;
-  const data=value.liveAgents;
-  if (!data || typeof data !== 'object' || !('status' in data) || !['available','truncated','unavailable','unsupported'].includes(String(data.status))
-    || !('processes' in data) || !Array.isArray(data.processes) || data.processes.length>100) throw new LocalUiError('agentsUnsupportedSnapshot');
-  for (const row of data.processes) {
-    if (!row || typeof row !== 'object' || typeof row.agent !== 'string' || !row.agent || row.agent.length>80
-      || !Number.isSafeInteger(row.pid) || row.pid<1 || !Number.isSafeInteger(row.startTime) || row.startTime<0) throw new LocalUiError('agentsInvalidSession');
-  }
-  return data as LiveAgents;
-}
