@@ -1114,18 +1114,15 @@ fn rungs(controls: &[(Duration, Value)]) -> Vec<(Duration, String)> {
         .collect()
 }
 
-/// A page that changes 60 times a second, seen over a link: the rung the stream settles on, and how soon.
-fn settles_on(mbps: f64, round_trip_ms: u64, rung: &str, first_step: bool) {
-    let fixture = Fixture::enabled();
-    let mut relay = fixture.serve("animate", "Chrome/120.0.0.0");
-    relay.open("about:blank");
-    relay.next("state");
-    let controls = over_link(
-        &mut relay,
-        mbps,
-        Duration::from_millis(round_trip_ms),
-        Duration::from_secs(6),
-    );
+/// Run `relay` over a shaped link for `wait` and assert the rung it settles on, within five seconds, and, with
+/// `first_step`, that the first step down came within a second and a half.
+fn assert_settles_on(
+    relay: &mut Relay,
+    (mbps, round_trip): (f64, Duration),
+    wait: Duration,
+    (rung, first_step): (&str, bool),
+) {
+    let controls = over_link(relay, mbps, round_trip, wait);
     let rungs = rungs(&controls);
     let (settled, last) = rungs.last().unwrap();
     assert_eq!(last, rung, "{rungs:?}");
@@ -1134,6 +1131,20 @@ fn settles_on(mbps: f64, round_trip_ms: u64, rung: &str, first_step: bool) {
         // A problem is answered within a second.
         assert!(rungs[1].0 <= Duration::from_millis(1500), "{rungs:?}");
     }
+}
+
+/// A page that changes 60 times a second, seen over a link: the rung the stream settles on, and how soon.
+fn settles_on(mbps: f64, round_trip_ms: u64, rung: &str, first_step: bool) {
+    let fixture = Fixture::enabled();
+    let mut relay = fixture.serve("animate", "Chrome/120.0.0.0");
+    relay.open("about:blank");
+    relay.next("state");
+    assert_settles_on(
+        &mut relay,
+        (mbps, Duration::from_millis(round_trip_ms)),
+        Duration::from_secs(6),
+        (rung, first_step),
+    );
     relay.stop();
 }
 
