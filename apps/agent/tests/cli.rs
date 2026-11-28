@@ -241,14 +241,17 @@ fn snapshot_caps_rows_and_uses_private_local_storage() {
 #[test]
 fn snapshot_expires_old_rows_even_without_new_events() {
     let dir = tempfile::tempdir().unwrap();
-    let mut store = Store::open(dir.path()).unwrap();
-    let normalized = lazysh_agent::normalize(&event("old", "done"), Agent::Generic, None)
-        .unwrap()
-        .unwrap();
-    store
-        .ingest(&normalized, chrono::Utc::now() - chrono::TimeDelta::days(8))
-        .unwrap();
-    drop(store);
+    {
+        // A cold open and a commit are durable flushes like a companion run's.
+        let _writes = contention::shared_run();
+        let mut store = Store::open(dir.path()).unwrap();
+        let normalized = lazysh_agent::normalize(&event("old", "done"), Agent::Generic, None)
+            .unwrap()
+            .unwrap();
+        store
+            .ingest(&normalized, chrono::Utc::now() - chrono::TimeDelta::days(8))
+            .unwrap();
+    }
     assert!(snapshot(dir.path(), "100")["sessions"]
         .as_array()
         .unwrap()
@@ -948,12 +951,16 @@ fn concurrent_hooks_preserve_every_event() {
 #[test]
 fn opening_another_store_preserves_an_existing_sqlite_writer_lock() {
     let dir = tempfile::tempdir().unwrap();
-    drop(Store::open(dir.path()).unwrap());
+    let open = || {
+        let _writes = contention::shared_run();
+        drop(Store::open(dir.path()).unwrap());
+    };
+    open();
     let writer = rusqlite::Connection::open(dir.path().join("events.sqlite3")).unwrap();
     // A RESERVED writer permits schema reads from another connection, but no
     // other process may start a write until this transaction ends.
     writer.execute_batch("BEGIN IMMEDIATE").unwrap();
-    drop(Store::open(dir.path()).unwrap());
+    open();
     let output = ingest(dir.path(), "generic", &event("blocked", "working"));
     writer.execute_batch("ROLLBACK").unwrap();
     assert!(
@@ -1248,13 +1255,20 @@ fn contention_cases_keep_their_budget_beside_slow_shared_flushes() {
             .lines()
             .filter(|line| line.ends_with("FAILED") || line.starts_with("test result:"))
             .collect::<Vec<_>>();
-        assert!(output.status.success(), "{summary:#?}");
+        // The inner panic messages say which writer failed and why; the summary alone does not.
+        let failures = report
+            .split_once("\nfailures:\n")
+            .map_or("", |(_, details)| details.get(..4000).unwrap_or(details));
+        assert!(output.status.success(), "{summary:#?}\n{failures}");
     }
 }
 
 #[test]
 fn sustained_storage_contention_is_bounded_and_reports_only_the_sqlite_code() {
-    let (dir, blocker) = exclusive_store();
+    let (dir, blocker) = {
+        let _open = contention::shared_run();
+        exclusive_store()
+    };
     let started = std::time::Instant::now();
     let output = ingest(
         dir.path(),
@@ -1477,6 +1491,7 @@ fn aider_native_callback_records_only_health_without_reading_stdin_or_changing_s
     assert_eq!(read_health()["lastObservedAt"], Value::Null);
     // Aider v0.86.0 io.py invokes the configured command through a shell with
     // capture_output=True, no arguments, stdin payload or identity environment.
+    let writes = contention::shared_run();
     let output = Command::new("sh")
         .args([
             "-c",
@@ -1512,6 +1527,7 @@ fn aider_native_callback_records_only_health_without_reading_stdin_or_changing_s
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     drop(held_stdin);
+    drop(writes);
     let health = read_health();
     assert_eq!(health["callbackCount"], 2);
     assert_eq!(health["sessionAttribution"], "unavailable");
