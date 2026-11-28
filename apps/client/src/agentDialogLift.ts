@@ -29,9 +29,12 @@ const escape = /\bEsc to (?:cancel|close|go back|dismiss)\b|\bctrl\+g to edit in
 const enterTakesRow = [/\bEnter to (?:select|confirm|continue|set as default)\b/, /\bType to search\b/, /\bctrl\+g to edit in\b/];
 // These belong to a question dialog, which has its own card.
 const questionRows = /Type something|Chat about this/;
-const rule = /^─{20,}$/;
+// Claude Code 2.1.326 draws the top of a dialog as a row of ▔ (older versions: ─), and a tip drawn over it leaves one ▔ at the end.
+const rule = /^(?:[─▔]{20,}|.*\S ▔)$/;
 const marker = /^ {0,3}❯ \S/;
-const numberedMark = /^ {0,3}❯ \d\. \S/;
+// A number may be followed by more than one space (`4.  Sonnet`); the row's own number and a `▸` (More models) are not part of its label.
+const numberedMark = /^ {0,3}❯ \d\.\s+\S/;
+const rowPrefix = /^(?:\d\.|▸)\s+/;
 const checkbox = /^(?:\[.?\]|[☐☑☒])/;
 export const limits = {options: 12, body: 12, hint: 4, text: 300};
 const indent = (line: string) => line.length - line.trimStart().length;
@@ -41,13 +44,16 @@ export const clip = (text: string) => text.length > limits.text ? `${text.slice(
 export function liftDialog(screen: readonly string[]): Lift {
   const lines = screen.map(line => line.trimEnd());
   // The row that tells how to leave is the last of the screen except for a status row a multiplexer draws below it (and a wrapped footer).
-  const found = lastWhere(lines, line => escape.test(line));
-  const esc = found >= 0 && lines.slice(found + 1).filter(Boolean).length <= 2 ? found : undefined;
+  // A footer wrapped at the pane width (`... Esc to` / `cancel`) is one footer: it ends on the row that completes it.
+  const wraps = (index: number) => !escape.test(lines[index]) && escape.test(`${lines[index]} ${lines[index + 1]?.trim() ?? ''}`);
+  const found = lastWhere(lines, (line, index) => escape.test(line) || wraps(index));
+  const last = found >= 0 && wraps(found) ? found + 1 : found;
+  const esc = found >= 0 && lines.slice(last + 1).filter(Boolean).length <= 2 ? last : undefined;
   // A screen that ends in a numbered list with a highlighted row and has no footer is still a dialog (the page after a choice, such as
   // /rewind's confirmation): the terminal has it. A numbered prompt echoed in the history is followed by other output.
   const at = lastWhere(lines, line => numberedMark.test(line));
   const below = at < 0 ? [] : lines.slice(at + 1).filter(Boolean);
-  if (esc === undefined) return at >= 0 && below.slice(0, -1).every(line => /^ {2,4}\d\. \S/.test(line)) && !rule.test(below.at(-1)?.trim() ?? '') ? unliftable : none;
+  if (esc === undefined) return at >= 0 && below.slice(0, -1).every(line => /^ {2,4}\d\.\s+\S/.test(line)) && !rule.test(below.at(-1)?.trim() ?? '') ? unliftable : none;
   // The dialog opens under the nearest full-width rule that has a highlighted row below it, and that is its only rule.
   const rules = lines.map((line, index) => rule.test(line.trim()) && index < esc ? index : -1).filter(index => index >= 0);
   const marks = (from: number) => lines.map((line, index) => index > from && index < esc && marker.test(line) ? index : -1).filter(index => index >= 0);
@@ -82,14 +88,15 @@ export function liftDialog(screen: readonly string[]): Lift {
   const body = lines.slice(titleRow + 1, start).map(line => line.replace(/^[\s╭╰│]+|[\s╮╯│─]+$/g, '')).filter(Boolean);
   let highlighted = items.findIndex(item => item.marked);
   // A list that groups its items under a heading (one line, where every other item takes two or more) keeps the heading out of the options.
-  if (grouped && items.length >= 3 && highlighted > 0 && items[0].rows.length === 1 && items.slice(1, -1).every(item => item.rows.length >= 2)) {
+  // The last item is not checked (a long list can be cut by the screen), except in a list of one item under its heading.
+  if (grouped && items.length >= 2 && highlighted > 0 && items[0].rows.length === 1 && items.slice(1, items.length === 2 ? undefined : -1).every(item => item.rows.length >= 2)) {
     body.push(items.shift()!.rows[0]);
     highlighted--;
   }
   const options = items.map(({rows}) => {
-    const [label, ...columns] = grouped ? [rows[0]] : rows[0].split(/ {2,}/);
+    const [label, ...columns] = grouped ? [rows[0].replace(rowPrefix, '')] : rows[0].replace(rowPrefix, '').split(/ {2,}/);
     const detail = [...columns, ...rows.slice(1)].join(' ');
-    return {label: clip(label.replace(/^\d\.\s+/, '')), ...(detail ? {detail: clip(detail)} : {})};
+    return {label: clip(label), ...(detail ? {detail: clip(detail)} : {})};
   });
   const hint = lines.slice(footer, esc + 1).map(line => line.trim()).filter(Boolean);
   if (options.length < 2 || options.length > limits.options || options.some(option => checkbox.test(option.label)) || body.length > limits.body

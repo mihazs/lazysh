@@ -6,6 +6,9 @@ import {dialogScreen, onTmux, runsOn} from './test/agentDialogScreens';
 const screen = dialogScreen;
 const lift = (name: string) => liftDialog(screen(name));
 const dialog = (name: string) => {const result = lift(name); if (result.kind !== 'dialog') throw new Error(`${name}: ${result.kind}`); return result.dialog;};
+const recorded = ['model', 'trust', 'theme', 'plan', 'resume', 'rewind-list'];
+/** Screens recorded from Claude Code 2.1.326 (see the describe below). */
+const claude326 = ['claude-2.1.326-model', 'claude-2.1.326-rewind', 'claude-2.1.326-resume-list'];
 
 describe('liftDialog on recorded Claude Code screens', () => {
   it('treats a changed option description as a different dialog', () => {
@@ -95,12 +98,12 @@ describe('liftDialog on recorded Claude Code screens', () => {
     expect(liftDialog([rule, '  Pick', '', '  ❯ A', '  ❯ B', '', '  Enter to select · Esc to cancel']).kind).toBe('unliftable');
   });
 
-  it.each(['model', 'trust', 'theme', 'plan', 'resume', 'rewind-list'])('reads the %s dialog the same under tmux, with blank rows and a status row below its footer', name => {
+  it.each([...recorded, ...claude326])('reads the %s dialog the same under tmux, with blank rows and a status row below its footer', name => {
     expect(liftDialog(onTmux(screen(name)))).toEqual(lift(name));
     expect(liftDialog(onTmux(screen('rewind-confirm'))).kind).toBe('unliftable');
   });
 
-  it.each(['model', 'trust', 'theme', 'plan', 'resume', 'rewind-list'])('names the rows of the %s dialog, from its text to its footer, once on the screen', name => {
+  it.each([...recorded, ...claude326])('names the rows of the %s dialog, from its text to its footer, once on the screen', name => {
     const found = dialog(name);
     expect(found.rows.length).toBeGreaterThanOrEqual(4);
     expect(found.rows[0].trim()).not.toBe('');
@@ -120,5 +123,61 @@ describe('liftDialog on recorded Claude Code screens', () => {
     expect(found.kind === 'dialog' && found.dialog.signature).toBe(dialog('model').signature);
     const renamed = liftDialog(rows.map(row => row.replace('Sonnet', 'Sonnet 4')));
     expect(renamed.kind === 'dialog' && renamed.dialog.signature).not.toBe(dialog('model').signature);
+  });
+});
+
+/** Claude Code 2.1.326 draws the top of a dialog as a row of ▔ (with a tip drawn over it the first time), pads digits with two spaces, indents the
+ * dialog one more column and wraps footers at the pane width. `claude-2.1.326-*.txt` are tmux panes of 100x40 recorded from the real CLI. */
+describe('liftDialog on screens recorded from Claude Code 2.1.326', () => {
+  const frame = '▔'.repeat(100);
+  /** The same screen without the tip Claude draws over the frame (as a Herdr pane read with `agent read --source visible` shows it). */
+  const withoutTip = (name: string) => screen(name).map(row => / ▔$/.test(row) ? frame : row);
+  /** The 2.1.318 dialog of `name` drawn the way 2.1.326 draws the same list: a ▔ frame and one more column of indent. */
+  const redrawn = (name: string) => screen(name).map(row => /^─+$/.test(row) ? frame : row && ` ${row}`);
+
+  it.each([['with the tip over the frame', screen('claude-2.1.326-model')], ['with a plain frame', withoutTip('claude-2.1.326-model')]])('reads the /model picker %s, its More models row and the footer that says what Enter does', (_, rows) => {
+    const found = liftDialog(rows);
+    if (found.kind !== 'dialog') throw new Error(`/model: ${found.kind}`);
+    expect(found.dialog.title).toBe('Select model');
+    expect(found.dialog.options.map(option => option.label)).toEqual(['Default (recommended)', 'Opus 5.5', 'Fable 5.2', 'Sonnet 5.5 ✔', 'Haiku 5.5', 'More models']);
+    expect(found.dialog.options[0].detail).toBe('Opus 5.5 · Best for everyday, complex tasks');
+    expect(found.dialog.highlighted).toBe(3);
+    expect(found.dialog.hint.at(-1)).toBe('Enter to set as default · s to use this session only · Esc to cancel');
+  });
+
+  it('reads /rewind and the /resume list, whose project heading is not an option', () => {
+    const rewind = dialog('claude-2.1.326-rewind');
+    expect([rewind.title, rewind.options, rewind.highlighted]).toEqual(['Rewind', [{label: 'Reply with only the word ok', detail: 'No code changes'}, {label: '(current)'}], 1]);
+    const resume = dialog('claude-2.1.326-resume-list');
+    expect([resume.title, resume.body, resume.highlighted]).toEqual(['Resume session', ['⌕ Search…', 'work'], 0]);
+    expect(resume.options).toEqual([{label: 'Two', detail: '11 seconds ago · HEAD · 535.9KB'}, {label: '(session)', detail: '1 minute ago · HEAD · 18.6KB'}, {label: 'Ok', detail: '2 minutes ago · HEAD · 530.5KB'}]);
+    expect(resume.hint.join(' ')).toContain('Esc to cancel');
+  });
+
+  it.each(['theme', 'rewind-list'])('reads the %s list drawn under the ▔ frame as it reads the older drawing', name => {
+    const found = liftDialog(redrawn(name));
+    if (found.kind !== 'dialog') throw new Error(`${name}: ${found.kind}`);
+    expect(found.dialog.options).toEqual(dialog(name).options);
+    expect(found.dialog.highlighted).toBe(dialog(name).highlighted);
+  });
+
+  it('follows the highlight as it moves and tells another dialog by its options', () => {
+    const moved = liftDialog(screen('claude-2.1.326-model').map(row => row.replace(/^ {3}❯ 4\.  /, '     4.  ').replace(/^ {5}2\.  /, '   ❯ 2.  ')));
+    expect(moved.kind === 'dialog' && moved.dialog.highlighted).toBe(1);
+    expect(moved.kind === 'dialog' && moved.dialog.signature).toBe(dialog('claude-2.1.326-model').signature);
+    const renamed = liftDialog(screen('claude-2.1.326-model').map(row => row.replace('Fable 5.2', 'Fable 5.3')));
+    expect(renamed.kind === 'dialog' && renamed.dialog.signature).not.toBe(dialog('claude-2.1.326-model').signature);
+  });
+
+  it('still refuses what it cannot read exactly, and never answers none for a dialog with a footer', () => {
+    // Tabs and a search box, a list of one session under its heading, and an empty list: unliftable, so the banner shows.
+    expect(liftDialog(redrawn('permissions-tabs')).kind).toBe('unliftable');
+    const [first, ...rest] = screen('claude-2.1.326-resume-list');
+    const second = rest.findIndex(row => /^ {5}\(session\)$/.test(row)), footer = rest.findIndex(row => /Ctrl\+A to show all projects/.test(row));
+    expect(liftDialog([first, ...rest.slice(0, second), ...rest.slice(footer)]).kind).toBe('unliftable');
+    // A footer wrapped at the pane width is one footer, however it breaks.
+    const wrapped = [frame, '   Pick one', '', '   ❯ A', '     B', '', '   Enter to select · Esc to', '   cancel'];
+    expect(liftDialog(wrapped).kind).toBe('dialog');
+    expect(liftDialog(onTmux(wrapped)).kind).toBe('dialog');
   });
 });
