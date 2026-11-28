@@ -13,18 +13,23 @@ export async function recordedCompanionBytes(path:string|undefined) {
   if(bytes.length!==before.size || before.dev!==after.dev || before.ino!==after.ino || before.mtimeMs!==after.mtimeMs || before.size!==after.size)throw new Error('Recorded companion source changed');
   return bytes;
 }
+type RecordedMessage={id:string;role:string;text:string};
+/** The Codex records of a paginated session: its header, then one completed item per message. */
+export const codexRecords=(threadId:string,messages:RecordedMessage[],header=true):Record<string,unknown>[]=>[
+  ...(header?[{type:'session_meta',payload:{id:threadId,history_mode:'paginated'}},{type:'event_msg',payload:{type:'task_started',turn_id:'owned'}}]:[]),
+  ...messages.map(message=>({type:'event_msg',payload:{type:'item_completed',thread_id:threadId,turn_id:'owned',item:{type:message.role==='user'?'UserMessage':'AgentMessage',id:message.id,content:[{type:message.role==='user'?'text':'Text',text:message.text}]}}}))];
+/** One JSON line per record, numbered from `first` so appended lines continue a file's ordinals. */
+export const codexLines=(records:Record<string,unknown>[],first=0)=>records.map((record,index)=>JSON.stringify({timestamp:'2026-01-02T03:04:05Z',ordinal:first+index,...record})).join('\n')+'\n';
 export async function prepareRecordedConversation(fixture:SshFixture,root:string,companion:Buffer) {
   const specification=JSON.parse(await readFile(join(root,'apps/agent/tests/fixtures/recorded-conversations.json'),'utf8'));
-  const messages=(kind:'codex'|'v1'|'v2'):{id:string;role:string;text:string}[]=>specification.messages.map((message:{id:string;role:string;text:string})=>({...message,text:`${specification.labels[kind]}: ${message.text}`}));
+  const messages=(kind:'codex'|'v1'|'v2'):RecordedMessage[]=>specification.messages.map((message:{id:string;role:string;text:string})=>({...message,text:`${specification.labels[kind]}: ${message.text}`}));
   const directory=join(fixture.directory,'recorded-conversations'),image=join(fixture.directory,'data/lazysh/companion/lazysh-agent');
   await mkdir(directory,{mode:0o700});await mkdir(join(fixture.directory,'data/lazysh/companion'),{recursive:true,mode:0o700});
   await writeFile(image,companion,{flag:'wx',mode:0o700});
   const version=JSON.parse(await readFile(join(root,'apps/client/package.json'),'utf8')).version as string;
   const check=await fixture.client(true,`'${image}' --version`);
   if((await check.finish('source-built recorded companion version',5000)).trim()!==`lazysh-agent ${version}`)throw new Error('Recorded companion version mismatch');
-  const records:Record<string,unknown>[]=[{type:'session_meta',payload:{id:specification.codexThreadId,history_mode:'paginated'}},{type:'event_msg',payload:{type:'task_started',turn_id:'owned'}}];
-  for(const message of messages('codex'))records.push({type:'event_msg',payload:{type:'item_completed',thread_id:specification.codexThreadId,turn_id:'owned',item:{type:message.role==='user'?'UserMessage':'AgentMessage',id:message.id,content:[{type:message.role==='user'?'text':'Text',text:message.text}]}}});
-  const codex=join(directory,'recorded.jsonl');await writeFile(codex,records.map((record,ordinal)=>JSON.stringify({timestamp:'2026-01-02T03:04:05Z',ordinal,...record})).join('\n')+'\n',{flag:'wx',mode:0o400});
+  const codex=join(directory,'recorded.jsonl');await writeFile(codex,codexLines(codexRecords(specification.codexThreadId,messages('codex'))),{flag:'wx',mode:0o400});
   const sources=[{agent:'codex',sessionId:specification.codexThreadId,path:codex,messages:messages('codex')}];
   for(const format of ['v1','v2'] as const) {
     const path=join(directory,`opencode-${format}.db`);await writeFile(path,'',{flag:'wx',mode:0o600});
