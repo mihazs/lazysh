@@ -3,6 +3,8 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 #[path = "support/binary.rs"]
 mod binary;
+#[path = "support/executable_retry.rs"]
+mod executable_retry;
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
@@ -12,10 +14,14 @@ use std::{
     os::unix::{
         fs::{symlink, MetadataExt, PermissionsExt},
         net::UnixListener,
+        process::CommandExt,
     },
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
-    sync::{mpsc, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -23,6 +29,15 @@ const URL: &str =
     "https://login.example.com/authorize?client_id=a&redirect_uri=http%3A%2F%2Flocalhost%3A8085%2F";
 const BEGIN: &str = "# >>> lazysh browser shim >>>";
 const ANSWER: &str = "LAZYSH_BROWSER_ANSWER_MS";
+const PROBE: &str = "LAZYSH_RECORDER_PROBE";
+
+/// Returns once the kernel runs `script`, which must exit 0 when `PROBE` is set (see `with_executable_retry`).
+fn wait_until_runnable(script: &Path) {
+    let probe = || Command::new(script).env_clear().env(PROBE, "1").status();
+    assert!(executable_retry::with_executable_retry(probe)
+        .unwrap()
+        .success());
+}
 
 struct Host {
     _guard: tempfile::TempDir,
@@ -100,13 +115,14 @@ impl Host {
     /// An opener on `PATH` that appends "name|arguments|BROWSER|shims-on-PATH" to a log.
     fn recorder(&self, name: &str) {
         let script = format!(
-            "#!/bin/sh\ncase \":$PATH:\" in *\":{}:\"*) s=yes;; *) s=no;; esac\nprintf '%s|%s|BROWSER=%s|SHIMS=%s\\n' \"${{0##*/}}\" \"$*\" \"${{BROWSER-unset}}\" \"$s\" >> '{}'\n",
+            "#!/bin/sh\n[ -z \"${PROBE}\" ] || exit 0\ncase \":$PATH:\" in *\":{}:\"*) s=yes;; *) s=no;; esac\nprintf '%s|%s|BROWSER=%s|SHIMS=%s\\n' \"${{0##*/}}\" \"$*\" \"${{BROWSER-unset}}\" \"$s\" >> '{}'\n",
             self.shims().display(),
             self.root.join("opened.log").display()
         );
         let path = self.root.join("real").join(name);
         fs::write(&path, script).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        wait_until_runnable(&path);
     }
     fn opened(&self) -> Vec<String> {
         let log = fs::read_to_string(self.root.join("opened.log")).unwrap_or_default();
@@ -670,15 +686,55 @@ fn a_wrapper_whose_binary_is_gone_is_skipped_by_the_shell_in_favour_of_the_next_
         dangling.display(),
         host.root.join("real").display()
     );
-    let status = host
+    let output = host
         .command("/bin/sh")
         .args(["-c", "xdg-open \"$0\""])
         .arg(URL)
         .env("PATH", path)
-        .status()
+        .output()
         .unwrap();
-    assert!(status.success());
+    assert!(output.status.success(), "{output:?}");
     assert_eq!(host.opened(), [host.recorded("xdg-open", URL)]);
+}
+
+#[test]
+fn a_recorder_runs_the_moment_it_is_written_while_other_threads_keep_forking() {
+    // Four threads fork children that linger before exec, as the other tests of this binary do beside
+    // each write: a child that inherited the script open for writing makes it "text file busy".
+    let host = Host::new();
+    let stop = Arc::new(AtomicBool::new(false));
+    let forkers: Vec<_> = (0..4)
+        .map(|_| {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let mut child = Command::new("true");
+                    // SAFETY: the closure only sleeps, which is async-signal-safe.
+                    unsafe {
+                        child.pre_exec(|| {
+                            std::thread::sleep(Duration::from_millis(3));
+                            Ok(())
+                        })
+                    };
+                    child.status().unwrap();
+                }
+            })
+        })
+        .collect();
+    for _ in 0..200 {
+        host.recorder("xdg-open");
+        let output = host
+            .command("/bin/sh")
+            .args(["-c", "xdg-open \"$0\""])
+            .arg(URL)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    stop.store(true, Ordering::Relaxed);
+    for forker in forkers {
+        forker.join().unwrap();
+    }
 }
 
 #[test]
