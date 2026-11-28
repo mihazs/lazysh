@@ -697,6 +697,136 @@ fn a_launch_needs_an_agent_an_existing_session_and_a_valid_prompt() {
     assert!(herdr_workspace_plan("default".into(), multiline).is_err());
 }
 
+/// A directory launch whose agent takes the person's own arguments, then a prompt.
+fn argument_launch(arguments: serde_json::Value) -> CreateRequest {
+    request(serde_json::json!({
+        "target":{"type":"directory","label":"x","directory":"/x"},
+        "agent":{"kind":"claude","name":"claude-1a2b","prompt":"go","args":arguments},
+    }))
+}
+
+#[test]
+fn agent_arguments_are_separate_argv_words_between_the_executable_and_the_prompt() {
+    let words = [
+        "--dangerously-skip-permissions",
+        "--model",
+        "two words",
+        "it's $(id) #{x}",
+        "tail;",
+    ];
+    let tmux = plan_of(
+        serde_json::json!({"kind":"tmux","name":"w"}),
+        argument_launch(serde_json::json!(words)),
+    )
+    .unwrap();
+    // tmux parses a trailing semicolon again, so it is escaped like the prompt's.
+    assert_eq!(
+        tmux[2].1[14..],
+        args(&[
+            "--",
+            "claude",
+            "--dangerously-skip-permissions",
+            "--model",
+            "two words",
+            "it's $(id) #{x}",
+            "tail\\;",
+            "go"
+        ])
+    );
+    let zellij = plan_of(
+        serde_json::json!({"kind":"zellij","name":"w"}),
+        argument_launch(serde_json::json!(words)),
+    )
+    .unwrap();
+    assert_eq!(
+        zellij[2].1[5..],
+        args(&[
+            "--",
+            "claude",
+            "--dangerously-skip-permissions",
+            "--model",
+            "two words",
+            "it's $(id) #{x}",
+            "tail;",
+            "go"
+        ])
+    );
+    let herdr =
+        herdr_workspace_plan("default".into(), argument_launch(serde_json::json!(words))).unwrap();
+    let agent = &herdr.steps.last().unwrap();
+    assert_eq!(agent.stage, "agent");
+    assert_eq!(
+        agent.argv[12..],
+        args(&[
+            "--",
+            "--dangerously-skip-permissions",
+            "--model",
+            "two words",
+            "it's $(id) #{x}",
+            "tail;",
+            "go"
+        ])
+    );
+}
+
+#[test]
+fn a_launch_without_arguments_plans_the_same_steps_as_one_with_an_empty_list() {
+    for multiplexer in [
+        serde_json::json!({"kind":"tmux","name":"w"}),
+        serde_json::json!({"kind":"zellij","name":"w"}),
+    ] {
+        assert_eq!(
+            plan_of(multiplexer.clone(), argument_launch(serde_json::json!([]))).unwrap(),
+            plan_of(
+                multiplexer,
+                request(serde_json::json!({
+                    "target":{"type":"directory","label":"x","directory":"/x"},
+                    "agent":{"kind":"claude","name":"claude-1a2b","prompt":"go"},
+                }))
+            )
+            .unwrap()
+        );
+    }
+}
+
+#[test]
+fn agent_arguments_are_bounded_and_refused_when_they_could_not_run_as_one_literal_word() {
+    let many: Vec<String> = (0..33).map(|n| format!("--a{n}")).collect();
+    let refused = [
+        serde_json::json!(many),
+        serde_json::json!(["x".repeat(513)]),
+        serde_json::json!(["é".repeat(257)]),
+        serde_json::json!(["a\nb"]),
+        serde_json::json!(["bell\u{7}"]),
+        serde_json::json!(["nul\u{0}"]),
+        serde_json::json!(["back\\slash"]),
+        serde_json::json!([""]),
+        serde_json::json!(["  "]),
+    ];
+    for arguments in refused {
+        for multiplexer in [
+            serde_json::json!({"kind":"tmux","name":"w"}),
+            serde_json::json!({"kind":"zellij","name":"w"}),
+        ] {
+            assert!(
+                plan_of(multiplexer, argument_launch(arguments.clone())).is_err(),
+                "{arguments}"
+            );
+        }
+        assert!(
+            herdr_workspace_plan("default".into(), argument_launch(arguments.clone())).is_err(),
+            "{arguments}"
+        );
+    }
+    // The limits themselves are allowed.
+    let most: Vec<String> = (0..32).map(|_| "x".repeat(512)).collect();
+    assert!(plan_of(
+        serde_json::json!({"kind":"tmux","name":"w"}),
+        argument_launch(serde_json::json!(most))
+    )
+    .is_ok());
+}
+
 /// A directory launch with `create` set or not, for the folder-step tests.
 fn folder_launch(create: bool) -> CreateRequest {
     request(serde_json::json!({
@@ -1300,18 +1430,27 @@ fn assert_agent_launches<R: Remote>(
     std::fs::create_dir(&directory).unwrap();
     let directory = directory.to_str().unwrap().to_owned();
     let prompt = "review 'this' $(touch pwned) `id`\nsecond line;";
+    let arguments = ["--model", "two words", "it's $(touch NO3) #{x};"];
     let started = panes(remote);
     let outcome = now(execute(
         remote,
         host,
         &request(serde_json::json!({
             "target":{"type":"directory","label":"lbl 'q #{x};","directory":directory},
-            "agent":{"kind":"codex","name":"codex-lazysh1","prompt":prompt},
+            "agent":{"kind":"codex","name":"codex-lazysh1","prompt":prompt,"args":arguments},
         })),
     ))
     .unwrap();
     assert_eq!(outcome.failure, None, "{outcome:?}");
-    assert_eq!(root.recorded(&directory), [prompt]);
+    // The stub receives each argument as one word, in order, before the prompt.
+    assert_eq!(
+        root.recorded(&directory),
+        arguments
+            .iter()
+            .copied()
+            .chain([prompt])
+            .collect::<Vec<_>>()
+    );
     let after = panes(remote);
     assert_eq!(after.len(), started.len() + 1, "{after:?}");
     let pane = outcome.pane_id.unwrap();

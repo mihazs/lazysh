@@ -32,6 +32,13 @@ const folder=(dialog:HTMLElement,value:string,field='Host folder')=>typing(withi
 const inRepository=(dialog:HTMLElement,value:string)=>folder(dialog,value,'A folder inside the Git repository');
 const review=async(dialog:HTMLElement)=>{fireEvent.click(within(dialog).getByRole('button',{name:'Review commands'}));await within(dialog).findByText(/Only these exact commands/);};
 const name=expect.stringMatching(/^[a-z]+-[0-9a-f]{8}$/);
+/** Nothing has run while the commands were reviewed; confirming runs exactly the reviewed request in the tmux session. */
+const confirmed=async(dialog:HTMLElement,request:unknown)=>{
+  expect(calls('multiplexer_launch')).toEqual([]);
+  fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));
+  await waitFor(()=>expect(created).toHaveBeenCalledWith('%7'));
+  expect(calls('multiplexer_launch')).toEqual([{sessionId:'ssh',multiplexer:{kind:'tmux',name:'work'},request}]);
+};
 
 beforeEach(()=>{
   localStorage.clear();created.mockReset();vi.mocked(invoke).mockReset();access();
@@ -65,10 +72,7 @@ describe('the New agent launcher',()=>{
     expect(calls('multiplexer_launch_plan')).toEqual([{multiplexer:{kind:'tmux',name:'work'},request}]);
     expect(within(dialog).getAllByRole('code').map(code=>code.textContent)).toEqual(plan.steps.map(step=>step.command));
     expect(within(dialog).getByText(/becomes the current one/)).toBeTruthy();
-    expect(calls('multiplexer_launch')).toEqual([]);
-    fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));
-    await waitFor(()=>expect(created).toHaveBeenCalledWith('%7'));
-    expect(calls('multiplexer_launch')).toEqual([{sessionId:'ssh',multiplexer:{kind:'tmux',name:'work'},request}]);
+    await confirmed(dialog,request);
     expect(calls('herdr_workspace_plan')).toEqual([]);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
@@ -160,5 +164,59 @@ describe('the New agent launcher',()=>{
     fireEvent.click(within(dialog).getByRole('button',{name:'Create and start agent'}));
     await waitFor(()=>expect(created).toHaveBeenCalledWith('w9'));
     expect(calls('herdr_workspace_create')).toEqual([{sessionId:'ssh',name:'default',request}]);
+  });
+
+  describe('with the agent own arguments and its YOLO flag',()=>{
+    const argumentsField=(dialog:HTMLElement)=>within(dialog).getByRole('textbox',{name:'Arguments (optional)'});
+    const yoloBox=(dialog:HTMLElement,flag:string)=>within(dialog).getByRole('checkbox',{name:new RegExp(`YOLO: skip approval prompts \\(${flag}\\)`)}) as HTMLInputElement;
+
+    it('sends the YOLO flag and the typed words as separate argv entries before the prompt, only after the reviewed commands are confirmed',async()=>{
+      const dialog=await open();
+      choose(dialog);folder(dialog,'/srv/api');
+      const flag='--dangerously-bypass-approvals-and-sandbox';
+      expect(yoloBox(dialog,flag).checked).toBe(false);
+      typing(argumentsField(dialog),`--model "two words" '$(id);' *`);
+      fireEvent.click(yoloBox(dialog,flag));
+      expect(within(dialog).getByRole('note').textContent).toMatch(/YOLO turns off Codex's approval prompts/);
+      typing(within(dialog).getByRole('textbox',{name:'Initial prompt (optional)'}),'go');
+      await review(dialog);
+      const request={target:{type:'directory',label:'api',directory:'/srv/api'},agent:{kind:'codex',name,prompt:'go',args:[flag,'--model','two words','$(id);','*']}};
+      expect(calls('multiplexer_launch_plan')).toEqual([{multiplexer:{kind:'tmux',name:'work'},request}]);
+      expect(within(dialog).getByRole('note').textContent).toMatch(/runs commands and changes files without asking/);
+      await confirmed(dialog,request);
+    });
+
+    it('offers YOLO per agent with its own flag, off for each, and sends only the arguments when it is not ticked',async()=>{
+      const dialog=await open();
+      choose(dialog);folder(dialog,'/srv/api');
+      fireEvent.click(yoloBox(dialog,'--dangerously-bypass-approvals-and-sandbox'));
+      choose(dialog,'opencode');
+      expect(yoloBox(dialog,'--auto').checked).toBe(false);
+      choose(dialog);
+      expect(yoloBox(dialog,'--dangerously-bypass-approvals-and-sandbox').checked).toBe(false);
+      choose(dialog,'opencode');
+      typing(argumentsField(dialog),'--continue');
+      await review(dialog);
+      expect(calls('multiplexer_launch_plan')).toEqual([{multiplexer:{kind:'tmux',name:'work'},request:{target:{type:'directory',label:'api',directory:'/srv/api'},agent:{kind:'opencode',name,args:['--continue']}}}]);
+      expect(within(dialog).queryByRole('note')).toBeNull();
+    });
+
+    it('refuses arguments the host would not run as one word before any plan is asked for',async()=>{
+      const dialog=await open();
+      choose(dialog);folder(dialog,'/srv/api');
+      const refuse=async(text:string,message:RegExp)=>{
+        typing(argumentsField(dialog),text);
+        fireEvent.click(within(dialog).getByRole('button',{name:'Review commands'}));
+        await waitFor(()=>expect(within(dialog).getByText(message)).toBeTruthy());
+        expect(calls('multiplexer_launch_plan')).toEqual([]);
+      };
+      await refuse('--append "open',/Close every quote/);
+      await refuse(String.raw`'back\slash'`,/cannot be empty or hold a backslash/);
+      await refuse("''",/cannot be empty or hold a backslash/);
+      await refuse(Array(33).fill('x').join(' '),/at most 32 arguments of 512 bytes/);
+      // The YOLO flag is one of the 32 words.
+      fireEvent.click(yoloBox(dialog,'--dangerously-bypass-approvals-and-sandbox'));
+      await refuse(Array(32).fill('x').join(' '),/at most 32 arguments of 512 bytes/);
+    });
   });
 });

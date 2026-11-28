@@ -362,7 +362,7 @@ runs until you confirm. In order, the host runs:
 command -v -- <agent executable>                                      # agent only
 git -C <repository> worktree add -b <branch> -- <path> <base>        # worktree only
 herdr --session <server> workspace create --no-focus --label <label> --cwd <directory>
-herdr --session <server> agent start <name> --kind <kind> --pane <new root pane> --timeout 60000 [-- <prompt>]
+herdr --session <server> agent start <name> --kind <kind> --pane <new root pane> --timeout 60000 [-- [<arguments>] [<prompt>]]
 ```
 
 The shown commands are POSIX `sh` syntax, and each one runs under `sh` with
@@ -458,17 +458,22 @@ command -v -- <agent>                                                    # missi
 mkdir -p -- <directory>                                                  # a new folder only
 test -d <directory>                                                      # an existing folder, tmux and Zellij only
 git -C <repository> worktree add -b <branch> -- <path> <base>            # worktree only
-tmux -u -L <server> new-window -P -F '#{pane_id}' -t =<session>: -n <label> -c <directory> -- <agent> [<prompt>]
-zellij --session=<session> run --cwd=<directory> --name=<label> -- <agent> [<prompt>]
+tmux -u -L <server> new-window -P -F '#{pane_id}' -t =<session>: -n <label> -c <directory> -- <agent> [<arguments>] [<prompt>]
+zellij --session=<session> run --cwd=<directory> --name=<label> -- <agent> [<arguments>] [<prompt>]
 ```
 
-The agent is the executable's own argv, `<agent> [<prompt>]`, so nothing is parsed by a shell:
+The agent is the executable's own argv, `<agent> [<arguments>] [<prompt>]`, so nothing is parsed by a shell:
 tmux and Zellij both `exec` it directly. A prompt may hold quotes, `$(…)`, backticks, tabs and
 line breaks and reaches the agent byte for byte. Only the codex and claude entries of the table take
 an initial prompt; the prompt cannot start with `-`, contain a backslash or other control
 characters, or exceed 2000 bytes. (Herdr's `agent start` still takes one line.) tmux parses an
 argument that ends in `;` as a command separator and expands formats in window names and
 directories, so those layers are escaped separately from the shell's (`\;`, `##`).
+`<arguments>` are the optional `agent.args` of the request, one argv word each and placed between the
+executable and the prompt (Herdr: after `--`, in the same order). The native side refuses more than 32
+words, a word over 512 bytes, and an empty or blank word, a control character or a backslash in one, like a
+prompt; a request without `args` plans exactly what it did before. The Agent view's **Arguments** field and
+**YOLO** toggle build the list (see [New agent](agent-view.md#new-agent)).
 The new pane's ID (tmux `%<n>`, Zellij `terminal_<n>`) is read back from the command's output and
 returned as `paneId`; a reply that is not exactly that ID is a failure, never trusted. tmux
 makes the new window the session's current one (no `-d`), so a client attached to the session
@@ -625,7 +630,7 @@ and a private background Zellij session, with a stub `codex` on the server's `PA
 its directory and argv. They launch into a directory whose name holds `'`, `$(…)`, `#{…}` and a
 trailing `;`, into a new folder (with missing parents and a hostile name) and into a new worktree
 with a hostile branch name, and assert that the pane exists in the directory (or worktree)
-`list-panes` reports, that the stub's argv is the prompt byte for byte (quotes, `$(…)`, a line
+`list-panes` reports, that the stub's argv is the arguments and then the prompt, byte for byte (quotes, `$(…)`, a line
 break and a trailing `;`), that `git worktree list` shows the worktree, that a folder that does not
 exist stops the launch (tmux would start in another directory), that the new tmux window is the
 session's current one, and that a missing agent or a missing session creates no pane, worktree or
