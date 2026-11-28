@@ -3,20 +3,25 @@ import { Archive, ChevronDown, ChevronRight, Inbox, RefreshCw, Settings2, Trash2
 import { formatRelativeTime, pathBasename, useNow } from './relativeTime';
 import { StatusRing, reportedTones } from './AgentStatus';
 import './NotificationPanel.css';
-import { useProtectedInvoke } from './access';
-import { useEffect, useRef, useState } from 'react';
+import { bindProtectedInvoke, captureAccess, useProtectedInvoke } from './access';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { isAndroidApp } from './isAndroidApp';
 import { isPermissionGranted, onAction, registerActionTypes, requestPermission } from '@tauri-apps/plugin-notification';
 import { collectInbox, getInbox, openInboxEvent, updateInbox, useInbox, type InboxRow, type InboxSession } from './notificationStore';
 import { herdrTransitionEvent, type HerdrTransition } from './herdrEvents';
-import { collectHerdrTransition, reportedByHerdr } from './herdrInbox';
+import { collectHerdrTransition, reportedByHerdr, withAgentSession } from './herdrInbox';
+import { followHerdrServer, herdrMonitorStreams } from './herdrMonitor';
 
 const inboxGroups = [['needs_attention', 'inboxNeedsYou'], ['working', 'inboxWorking'], ['done', 'inboxDone']] as const;
 import { errorMessage } from './SessionTools';
 
 export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) {
-  const invoke = useProtectedInvoke();
+  const [lease] = useState(captureAccess);
+  const invoke = useMemo(() => bindProtectedInvoke(lease), [lease]);
+  // The Herdr event streams outlive a poll: a host that connects must not reopen the stream of every other host.
+  const streams = useMemo(() => herdrMonitorStreams(lease, invoke), [lease, invoke]);
+  useEffect(() => () => streams.close(), [streams]);
   const state = useInbox();
   const currentSessions = useRef(sessions);
   currentSessions.current = sessions;
@@ -24,7 +29,7 @@ export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) 
   const connected = sessions.filter(session => session.connected);
   const sessionKey = connected.map(session => session.id).sort().join(':');
   useEffect(() => {
-    if (!state.monitoring || !isTauri()) { baselineHosts.current.clear(); return; }
+    if (!state.monitoring || !isTauri()) { baselineHosts.current.clear(); streams.close(); return; }
     let active = true;
     let running = false;
     async function poll() {
@@ -51,10 +56,12 @@ export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) 
                 await invoke('notify_agent_attention', { sessionId: session.id, agent: event.agent, project: event.project, eventId: event.eventId });
               }
             }
+            // The host's Herdr tells a blocked or finished agent at once, whatever page is shown; this poll stays the fallback.
+            await followHerdrServer(streams, invoke, session, valid);
           } catch (e) { failures.push(`${session.name.slice(0, 80)}: ${errorMessage(e).slice(0, 300)}`); }
         }
       }));
-      if (active) updateInbox({ error: failures.join('\n').slice(0, 2000) });
+      if (active) { streams.keep(new Set(hosts.map(host => host.id))); updateInbox({ error: failures.join('\n').slice(0, 2000) }); }
       running = false;
     }
     void poll();
@@ -63,15 +70,17 @@ export function NotificationMonitor({ sessions }: { sessions: InboxSession[] }) 
     window.addEventListener('lazysh-inbox-refresh', refresh);
     return () => { active = false; window.clearInterval(timer); window.removeEventListener('lazysh-inbox-refresh', refresh); };
   }, [state.monitoring, sessionKey]);
-  // A pane the open Herdr view follows that became blocked or done: the stream tells at once, without the next poll.
+  // A pane a followed Herdr server reports blocked or done, from the monitor's own stream or a Herdr view's: the stream tells at once, without the next poll.
   useEffect(() => {
     if (!state.monitoring || !isTauri()) return;
     let active = true;
     const changed = (event: Event) => void (async () => {
-      const transition = (event as CustomEvent<HerdrTransition>).detail;
-      const session = currentSessions.current.find(item => item.id === transition.sessionId && item.connected);
+      const detail = (event as CustomEvent<HerdrTransition>).detail;
+      const session = currentSessions.current.find(item => item.id === detail.sessionId && item.connected);
       if (!session || !active || !getInbox().monitoring) return;
       const valid = () => active && getInbox().monitoring && currentSessions.current.some(item => item.id === session.id && item.hostId === session.hostId && item.connected);
+      const transition = await withAgentSession(invoke, detail);
+      if (!valid()) return;
       const alert = await collectHerdrTransition(session, transition, valid);
       if (alert && valid() && getInbox().notifications && await isPermissionGranted() && valid() && getInbox().notifications) {
         await invoke('notify_agent_attention', { sessionId: session.id, agent: alert.agent, project: alert.project, eventId: alert.eventId });

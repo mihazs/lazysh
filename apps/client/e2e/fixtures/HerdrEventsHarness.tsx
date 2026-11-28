@@ -15,7 +15,7 @@ export const treeWith=(status:string)=>({
 
 /** The real Herdr view, notification monitor and inbox over one recorded synthetic bridge whose event stream the test drives.
  * `watch` is how the host answers `agent_watch_start`: a live stream, a companion that cannot stream, or a channel that cannot open. */
-export function mountHerdrEvents(options:{watch:'live'|'old'|'off';status:string}) {
+export function mountHerdrEvents(options:{watch:'live'|'old'|'off';status:string;view?:boolean}) {
   const calls:{command:string;args:Record<string,unknown>}[]=[];
   let tree=treeWith(options.status),channel:Channel|undefined;
   applyAccessStatus({initialized:true,supported:true,enabled:true,locked:false,reason:'Synthetic Herdr events authority',generation:String(BigInt(accessSnapshot().status?.generation??'0')+1n),nonce:'e'.repeat(64)});acknowledgeAccessReady(accessSnapshot().epoch);
@@ -42,8 +42,8 @@ export function mountHerdrEvents(options:{watch:'live'|'old'|'off';status:string
   const root=createRoot(host);
   root.render(<>
     <NotificationMonitor sessions={sessions}/>
-    <HerdrNavigation sessionId="herdr-events-host" hostLabel="builder" herdrSession="default" visible mode="spaces"
-      onNavigate={async()=>{}} onAttach={async()=>{throw new Error('No attach');}} onClose={()=>{}}/>
+    {options.view!==false && <HerdrNavigation sessionId="herdr-events-host" hostLabel="builder" herdrSession="default" visible mode="spaces"
+      onNavigate={async()=>{}} onAttach={async()=>{throw new Error('No attach');}} onClose={()=>{}}/>}
     <NotificationPanel sessions={sessions}/>
   </>);
   return {
