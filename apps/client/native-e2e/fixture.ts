@@ -57,6 +57,8 @@ export class NativeGui {
   private driverFile='';
   private nativeDriverFile='';
   private resolverFile:string|undefined;
+  private companionFile='';
+  private readonly hooks:OwnedProcess[]=[];
   private readonly home=userInfo().homedir;
   private members:OwnedPid[]=[];
   private readonly ports:OwnedPorts={target:0,driver:0,native:0};
@@ -81,22 +83,29 @@ export class NativeGui {
   static async startWithReducedMotion() {return this.startOwned(false,true);}
   /** A real IBus daemon and Pinyin engine on the owned display; the application's GTK input-method module talks to it. */
   static async startWithInputMethod() {return this.startOwned(false,false,true);}
-  private static async startOwned(disposableVault:boolean,reducedMotion=false,inputMethod=false) {
+  /** `companion` becomes the managed copy in the private data directory, so this device's companion resolves before the application starts. */
+  static async startWithCompanion(companion:Buffer) {return this.startOwned(false,false,false,companion);}
+  private static async startOwned(disposableVault:boolean,reducedMotion=false,inputMethod=false,companion?:Buffer) {
     if(process.platform!=='linux'||!process.getuid||process.getuid()===0)throw new Error('Native GUI acceptance requires an unprivileged Linux account');
     assertDirectDriverEnvironment(process.env);
     const binary=await executable(join(ROOT,'target/release/lazysh'),'fresh bundled application','lazysh');
     const testWorker=await identity(process.pid);if(!testWorker)throw new Error('Native GUI test worker identity unavailable');
     const directory=await mkdtemp('/tmp/lazysh-native-gui-');
     const fixture=new NativeGui(directory,binary,testWorker,disposableVault,inputMethod);
-    try {await fixture.setup(reducedMotion);return fixture;}
+    try {await fixture.setup(reducedMotion,companion);return fixture;}
     catch(error) {try{await fixture.stop();}catch(cleanup){throw new AggregateError([error,cleanup],'Native GUI startup and cleanup failed');}throw error;}
   }
   private async command(stage:string,program:string,args:string[]) {
     return new OwnedProcess(program,args,this.directory,this.env).finish(stage,5000);
   }
-  private async setup(reducedMotion:boolean) {
+  private async setup(reducedMotion:boolean,companion?:Buffer) {
     await chmod(this.directory,0o700);
     for(const name of ['home','config','data','cache','runtime','services'])await mkdir(join(this.directory,name),{mode:0o700});
+    if(companion) {
+      this.companionFile=join(this.directory,'data/lazysh/companion/lazysh-agent');
+      await mkdir(dirname(this.companionFile),{recursive:true,mode:0o700});
+      await writeFile(this.companionFile,companion,{flag:'wx',mode:0o700});
+    }
     if(reducedMotion) {
       const gtk=join(this.directory,'config','gtk-3.0');await mkdir(gtk,{mode:0o700});
       // GTK3 reads this private OS setting before the driver/app initializes GTK.
@@ -372,6 +381,14 @@ export class NativeGui {
     if(JSON.stringify(current)!==JSON.stringify(original))throw new Error('Secondary CLI replaced the original GUI owner');
     if((await this.browser!.getWindowHandles()).length!==1)throw new Error('Secondary CLI created another native window');
   }
+  /** Runs the managed companion the way an agent's hook does, with the event on stdin and in the application's own environment, so it reports to the state this device's companion reads. */
+  hook(args:string[],event:Record<string,unknown>) {
+    if(!this.companionFile)throw new Error('Native GUI was not started with a companion');
+    const hook=new OwnedProcess(this.companionFile,args,this.directory,{...this.env,TMUX_PANE:'%7'});
+    hook.child.stdin!.end(JSON.stringify(event));
+    this.hooks.push(hook);
+    return hook;
+  }
   /** Start an owned Python helper that prints `{"event":"ready"}` once it is serving. */
   private async helper(script:string,args:string[]) {
     if(this.servers.has(script))throw new Error(`Owned ${script} already started`);
@@ -414,6 +431,7 @@ export class NativeGui {
     const failures:unknown[]=[];
     for(const cleanup of [
       async()=>{await Promise.all(this.probes);},
+      async()=>{await Promise.all(this.hooks.map(hook=>hook.stop()));},
       async()=>{if(this.browser)await this.browser.deleteSession();},
       async()=>{if(this.driver){if(await this.driver.liveIdentity())await this.processes();await this.driver.stop();}},
       async()=>{await until('owned namespace retirement',async()=>{

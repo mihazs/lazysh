@@ -338,8 +338,8 @@ test('the client job gates exactly its browser suites on its own classification 
   const steps = checks.jobs.client.steps as any[];
   const select = steps.find(step => step.id === 'e2e');
   expect(select.env).toEqual({ EVENT: '${{ github.event_name }}', BASE: '${{ github.event.pull_request.base.sha }}', HEAD: '${{ github.event.pull_request.head.sha }}' });
-  const gated = steps.filter(step => step.if === "steps.e2e.outputs.client == 'true'").map(step => step.run);
-  expect(gated).toEqual(['bunx moon run client:test-e2e', 'bun run test:e2e:terminal', 'bun run test:e2e:kill-switch']);
+  const gated = steps.filter(step => step.if === "steps.e2e.outputs.client == 'true'").map(step => step.run ?? step.uses);
+  expect(gated).toEqual(['dtolnay/rust-toolchain@stable', 'Swatinem/rust-cache@v2', 'cargo build --locked -p lazysh-agent --bin lazysh-agent', 'bunx moon run client:test-e2e', 'bun run test:e2e:terminal', 'bun run test:e2e:kill-switch']);
 });
 
 test('renaming a source file into documentation still selects the source jobs', async () => {

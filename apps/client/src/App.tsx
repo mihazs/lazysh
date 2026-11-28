@@ -58,6 +58,7 @@ import {
   Ellipsis,
   Bell,
   Smartphone,
+  AppWindow,
   Pencil,
   Plus,
   Search,
@@ -90,6 +91,7 @@ import type { AppleUsageReport } from "./UsagePanel";
 import {useAccountUsage} from "./useAccountUsage";
 import {AccountUsageBar,AccountUsageDetails} from "./AccountUsage";
 import {useCurrentPaneAgent} from "./useCurrentPaneAgent";
+import {useHostBrowserOffered} from "./useHostBrowserOffered";
 import {usageTarget} from "./usageAgentProvider";
 import { FilesPanel, MuxPanel, errorMessage } from "./SessionTools";
 import HerdrNavigation,{type HerdrContentReceipt} from "./HerdrNavigation";
@@ -139,6 +141,7 @@ const GestureTour = lazy(() => import("./GestureTour"));
 const GestureTourHelp = lazy(() => import("./GestureTour").then(({GestureTourHelp}) => ({default: GestureTourHelp})));
 const AboutPanel = lazy(() => import("./AboutPanel"));
 const DevicePanel = lazy(() => import("./DevicePanel"));
+const HostBrowserPanel = lazy(() => import('./HostBrowserPanel'));
 const PushSettingsPanel = lazy(() => import('./PushSettingsPanel'));
 const RemoteNotificationsPanel = lazy(() => import('./RemoteNotificationsPanel'));
 const AppleStatusPanel = lazy(() => import('./AppleStatusPanel'));
@@ -345,6 +348,7 @@ type View =
   | "attachments"
   | "voice"
   | "devices"
+  | "hostBrowser"
   | "apple";
 type LocalTool='files'|'repository'|'attachments'|'previews'|'companion'|'devices';
 type LocalCapability={available:boolean;reason:string;targets?:{id:string;label?:string;tools?:Partial<Record<LocalTool,boolean>>&{companionSource?:string|null}}[]};
@@ -374,6 +378,7 @@ const views = () => [
   { id: "attachments" as const, label: t("appAttach"), Icon: Paperclip },
   { id: "voice" as const, label: t("appDictate"), Icon: Mic },
   { id: "devices" as const, label: t("appDevices"), Icon: Smartphone },
+  { id: "hostBrowser" as const, label: t("appHostBrowser"), Icon: AppWindow },
 ];
 
 /** Confirmed input is offered for native tmux and Herdr terminals, and for Zellij only to the Agent view, which names the pane. */
@@ -1525,7 +1530,12 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   const navigationEntry=navigation[activeId??'']??{mode:agentsFirst?'agents' as const:'connections' as const,agents:false};
   const pendingMuxRequest=view==='sessions' && muxLaunch?.sessionId===activeId;
   const compactTerminal=!!active && !wideSidebar && view==='terminal';
-  const sessionViews=active ? views().filter(({id})=>!active.local || localView(localCapability,id,active.target)) : [];
+  const hostBrowserOffered=useHostBrowserOffered(remoteActive ? active.id : undefined,active?.hostId);
+  const sessionViews=active ? views().filter(({id})=>(!active.local || localView(localCapability,id,active.target)) && (id!=='hostBrowser' || (remoteActive && hostBrowserOffered))) : [];
+  // Once opened, the Host browser keeps running, paused while another tool shows, until the session changes or the switch goes off.
+  const [hostBrowserKept,setHostBrowserKept]=useState<string>();
+  useEffect(()=>{setHostBrowserKept(kept=>view==='hostBrowser' && active ? active.id : kept===active?.id ? kept : undefined);},[view,active?.id]);
+  useEffect(()=>{if(view==='hostBrowser' && !(remoteActive && hostBrowserOffered))setView('terminal');},[view,remoteActive,hostBrowserOffered]);
   const voiceReady=sessionViews.some(tool=>tool.id==='voice');
   const primaryToolIds:View[]=['terminal','agents','files','sessions','usage','attachments'];
   const primaryTools=primaryToolIds.flatMap(id=>sessionViews.filter(tool=>tool.id===id));
@@ -1533,7 +1543,7 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
   /** A choice in a tools surface ends the visit: the sheet and the side menu page both close. */
   const closeTools=()=>{setMobileTools(false);setSidebar(false);};
   const toolButton=(className?:string)=>({id,label,Icon}:ReturnType<typeof views>[number])=>{
-    return <button type="button" key={id} className={className} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{closeTools();if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>;
+    return <button type="button" key={id} className={className} title={label} aria-current={(id==='agents'?agentsVisible:view===id)?'page':undefined} disabled={id==='agents'&&pendingMuxRequest} onClick={()=>{closeTools();if(id==='agents')showNavigation('agents');else visitView(id);}}><Icon size={16}/><span>{label}</span></button>;
   };
   const mobileToolButton=toolButton();
 
@@ -2427,7 +2437,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
           </>}
           {sideMenuMode && <>
             <div className="sidebar-heading"><span>{t('appWorkspaceTools')}</span></div>
-            {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && remoteActive)).map(toolButton('subtle-button'))}
+            <nav className="workspace-tools-grid" aria-label={t('appWorkspaceTools')}>
+              {[...primaryTools,...secondaryTools].filter(tool=>tool.id!=='agents' && !(tool.id==='sessions' && remoteActive)).map(toolButton('subtle-button'))}
+            </nav>
           </>}
           {pickerVisible && active && <Suspense fallback={<p role="status">{t(jumpKind==='zellij'?'appReadingZellijDestinations':'appReadingTmuxDestinations')}</p>}><TmuxJumpPanel key={active.id} sessionId={active.id} paneServer={attachedPaneServer(active.attached)} zellij={active.attached?.kind==='zellij'?active.attached.name:undefined} onClose={()=>{if(!wideSidebar)setSidebar(false);}} onJump={jumpKind==='tmux'?snapshot=>tmuxJumped(active.id,snapshot):undefined} onBusyChange={busy=>{
             if(mounted.current && pickerOwner.current===currentPickerOwner)setPickerState({owner:currentPickerOwner,busy});
@@ -2658,6 +2670,9 @@ function WorkspaceApp({ registry }: { registry: SessionRegistry }) {
                 )}
                 {active.connected && (!active.local || localView(localCapability,'devices',active.target)) && view === "devices" && (
                   <DevicePanel key={active.id} sessionId={active.id} />
+                )}
+                {remoteActive && hostBrowserOffered && hostBrowserKept === active.id && (
+                  <HostBrowserPanel key={active.id} sessionId={active.id} visible={view === "hostBrowser"} />
                 )}
                 {active.connected && (!active.local || localView(localCapability,'files',active.target)) && view === "files" && (
                   <FilesPanel key={active.id} sessionId={active.id} />

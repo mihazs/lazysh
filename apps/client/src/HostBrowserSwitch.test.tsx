@@ -5,7 +5,7 @@ import {invoke} from '@tauri-apps/api/core';
 import CompanionSettingsPanel from './CompanionSettingsPanel';
 import HostBrowserSwitch,{parseHostBrowserSettings} from './HostBrowserSwitch';
 import {parseCleared} from './HostBrowserProfile';
-import {isHostBrowserConfirmed,isHostBrowserKeepProfile} from './hostBrowserConfirmation';
+import {isHostBrowserConfirmed,isHostBrowserKeepProfile,onHostBrowserSwitch} from './hostBrowserConfirmation';
 import {getPreferences,syncablePreferences} from './preferences';
 import {answer,calls} from './test/routedInvoke';
 vi.mock('@tauri-apps/api/core',async original=>({...await original<typeof import('@tauri-apps/api/core')>(),invoke:vi.fn()}));
@@ -86,6 +86,16 @@ it('asks once per host on this device, offers the confirmation again for another
   await turnOn('host-b','s2');
   expect(screen.getByRole('group',{name:'Turn on the host browser for this host?'})).toBeTruthy();
   expect(calls('update_host_browser_settings')).toHaveLength(3);
+});
+it.each([['a save that succeeded',[on],1],['a save that conflicted',[()=>Promise.reject({message:'SettingsConflict'})],0]])('tells whatever offers the Host browser tool about %s',async(_name,updates,told)=>{
+  const saved=vi.fn(),stop=onHostBrowserSwitch(saved);
+  answer({get_companion_settings:[settings],get_host_browser_settings:[off],update_host_browser_settings:updates});
+  try {
+    await turnOn('host-a');allow();
+    await vi.waitFor(()=>expect(calls('update_host_browser_settings')).toHaveLength(1));
+    await screen.findByText(told?'Host browser setting saved for new browser sessions.':/SettingsConflict/);
+    expect(saved).toHaveBeenCalledTimes(told);
+  } finally {stop();}
 });
 it('shows a revision conflict, keeps the host unconfirmed and offers the confirmation again',async()=>{
   answer({get_companion_settings:[settings],get_host_browser_settings:[off],update_host_browser_settings:[()=>Promise.reject({message:'SettingsConflict'})]});

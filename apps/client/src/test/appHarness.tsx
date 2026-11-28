@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   unregisterBack: vi.fn(),
   appleProps: vi.fn(),
   voiceProps: vi.fn(),
+  hostBrowser: vi.fn(),
   realAgents:false,
   launchReceipt: null as string|null,
   hostLaunchReceipt: null as string|null,
@@ -119,6 +120,13 @@ vi.mock('../AppleStatusPanel',async()=>{
 
 vi.mock('../UsagePanel',()=>({default:({onShareAppleUsage}:{onShareAppleUsage?:(report:unknown)=>void})=><button onClick={()=>onShareAppleUsage?.({recordedAt:'2026-10-25T12:00:00Z',freshness:'fresh',inputTokens:11,outputTokens:9,cacheReadTokens:null,cacheWriteTokens:2,observedAt:'2026-10-25T12:01:00Z',receivedAt:1792929660000})}>Use latest report for Watch</button>}));
 
+vi.mock('../HostBrowserPanel',async()=>{
+  const {useEffect}=await import('react');
+  return {default:(props:{sessionId:string;visible?:boolean})=>{
+    useEffect(()=>{mocks.hostBrowser('mount',props.sessionId);return()=>mocks.hostBrowser('unmount',props.sessionId);},[props.sessionId]);
+    return <div hidden={!props.visible}>Host browser for {props.sessionId}</div>;
+  }};
+});
 vi.mock('../VoicePanel',()=>({default:(props:{sessionId:string;onDirectDictation:(request:import('../voiceDelivery').DirectDictation)=>Promise<void>})=>{mocks.voiceProps(props);return <div>Voice for {props.sessionId}</div>;}}));
 
 export const host: Host = {

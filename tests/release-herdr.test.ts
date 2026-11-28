@@ -104,3 +104,30 @@ test('a tag on another commit, a changed asset and a missing asset are refused',
   await expect(verifyPublishedHerdr(tag, identity.sha, transport)).rejects.toThrow('not published exactly once');
   await expect(verifyPublishedHerdr('v0.22', identity.sha, transport)).rejects.toThrow('invalid tag');
 }));
+
+// A just-published release can answer 403 or 404 for a moment (and a shared runner address can be rate limited); the publish job must not
+// end red for a release that is correct (#2995).
+test('a release that answers 403 for a moment after publication still verifies, and a persistent 403 still fails', () => fixture(async root => {
+  const { transport } = await publish(root);
+  const calls = new Map<string, number>();
+  const flaky = (async (input: string, init?: RequestInit) => {
+    const seen = (calls.get(input) ?? 0) + 1;
+    calls.set(input, seen);
+    return seen <= 2 ? new Response('forbidden', { status: 403 }) : (transport as any)(input, init);
+  }) as unknown as typeof fetch;
+  expect(await verifyPublishedHerdr(tag, identity.sha, flaky, [0, 0, 0, 0])).toEqual(identity);
+  expect([...calls.values()].every(count => count === 3)).toBe(true);
+  let attempts = 0;
+  const denied = (async () => { attempts += 1; return new Response('forbidden', { status: 403 }); }) as unknown as typeof fetch;
+  await expect(verifyPublishedHerdr(tag, identity.sha, denied, [0, 0, 0, 0])).rejects.toThrow('download failed (403)');
+  expect(attempts).toBe(5);
+}));
+test('a wrong digest is judged on the first answer without retries', () => fixture(async root => {
+  const { transport, served, url } = await publish(root);
+  const executable = url('lazysh-0.22.0-linux-herdr-x64.bin');
+  served.set(executable, Buffer.concat([served.get(executable) as Uint8Array, Buffer.from('x')]));
+  let requests = 0;
+  const counting = (async (input: string, init?: RequestInit) => { requests += 1; return (transport as any)(input, init); }) as unknown as typeof fetch;
+  await expect(verifyPublishedHerdr(tag, identity.sha, counting, [1_000_000])).rejects.toThrow('download');
+  expect(requests).toBeLessThan(20);
+}));
