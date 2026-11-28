@@ -207,8 +207,10 @@ jobs:
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: '2'
-      CARGO_TARGET_DIR: ${{ runner.temp }}/lazysh-herdr-native/target
     steps:
+      # The runner context does not exist at the job level, so the target directory is exported from a step.
+      - name: Put the Cargo target directory under the runner temp directory
+        run: echo "CARGO_TARGET_DIR=$RUNNER_TEMP/lazysh-herdr-native/target" >> "$GITHUB_ENV"
       - *checkout
       - *bun
       - uses: dtolnay/rust-toolchain@1.96.1
