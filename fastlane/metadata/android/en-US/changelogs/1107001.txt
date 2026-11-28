@@ -1,0 +1,2 @@
+- restore publishing by moving the managed Herdr target directory out of the job-level env
+Full notes: https://github.com/mihazs/lazysh/releases/tag/v1.107.1
