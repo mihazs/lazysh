@@ -2354,6 +2354,8 @@ class NativeWorkspaceTest {
             scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
             awaitFlag(true, "actual Activity foreground", 30)
             navigation("Connections")
+            // The open hosts drawer makes the workspace inert and covers its More button, which is how a phone reaches Preferences.
+            closeHostsDrawer(scenario, "hosts closed before Preferences")
             // Preferences edits the preference while the mounted board is hidden; the board itself stays released.
             openPreferences(scenario)
             preferencesCategory(scenario, "agents")
@@ -2365,7 +2367,7 @@ class NativeWorkspaceTest {
                 "localStorage.getItem('lazysh.agent-board.keep-awake.v1')==='true'"))
             awaitFlag(false, "persistent board hidden")
             closeSettings()
-            navigation("Agents")
+            sessionView(scenario, "Agents")
             awaitDocument(scenario, "persistent board revealed", "document.querySelector('.workspace-navigation-agents')?.hidden===false")
             awaitFlag(true, "persisted opt-in on board reveal", 30)
             toggle {
