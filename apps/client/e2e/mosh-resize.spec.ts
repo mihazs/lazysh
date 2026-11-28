@@ -1,7 +1,8 @@
 import {expect} from '@playwright/test';
 import {test} from './fixtures/terminalBackend';
 import {installNativeBridge} from './fixtures/nativeBridge';
-import {openMoshApp} from './fixtures/moshApp';
+import {openMoshApp,type MoshAppState} from './fixtures/moshApp';
+import {requestedBackend} from '../src/e2eTerminalBackend';
 import {onAdapter,screenText,terminalBounds,terminalDrawn,terminalRows,terminalSize} from './fixtures/terminalState';
 import type {Terminal} from '../src/xterm/terminal';
 import {readFileSync} from 'node:fs';
@@ -15,7 +16,11 @@ type Owned={terminal:Terminal;adapter:TerminalAdapter;writes:string[];hook?:Cano
 declare global {interface Window {ownedMoshResize:{primary:Owned;make(guarded:boolean):Owned;install(terminal:Terminal):CanonicalResize;dispose():void}}}
 const bytes=(value:string)=>Array.from(value.matchAll(/../g),part=>Number.parseInt(part[0],16));
 
-test.beforeEach(async({page})=>{
+test.use({syntheticBackend:true});
+
+test.beforeEach(async({page},info)=>{
+  if(info.tags.includes('@mosh-app'))return;
+  test.skip(requestedBackend()==='native','This case exercises the xterm Mosh implementation and private buffer ABI.');
   await page.goto('/');
   await page.evaluate(async()=>{
     const terminalModule='/src/xterm/terminal.ts',policyModule='/src/xterm/moshResize.ts',adapterModule='/src/xtermTerminalAdapter.ts';
@@ -215,12 +220,14 @@ test('a fresh protected Pane subscriber receives its first same-size measurement
 });
 
 
-test('actual App installs Mosh framing before early output and fits only remote intent across viewport and Compose changes',async({page})=>{
-  await openMoshApp(page,'Mosh frame fixture',bytes(captured.frames[0].bytesHex));
+test('actual App installs Mosh framing before early output and fits only remote intent across viewport and Compose changes',{tag:'@mosh-app'},async({page})=>{
+  const engine=requestedBackend()??'xterm';
+  await openMoshApp(page,'Mosh frame fixture',bytes(captured.frames[0].bytesHex),undefined,engine);
   await terminalDrawn(page);
   const rowCount=async()=>(await terminalSize(page)).rows,lastRow=async()=>(await terminalRows(page)).at(-1);
   await expect.poll(rowCount).toBe(12);await expect.poll(()=>screenText(page)).toContain('OWNED_ROW_11');
-  const state=()=>page.evaluate(()=>Reflect.get(window,'nativeMoshApp') as {resizes:{cols:number;rows:number}[];writes:string[];acknowledged:number});
+  const state=()=>page.evaluate(()=>{const {emit,closed,...state}=window.nativeMoshApp;return state;});
+  const reports=(value:Omit<MoshAppState,'emit'|'closed'>)=>engine==='native'?value.nativeMouse.length:value.writes.length;
   await expect.poll(async()=>(await state()).resizes.length).toBeGreaterThan(0);
   const firstSize=(await state()).resizes.at(-1)!;expect(firstSize).not.toEqual({cols:40,rows:12});
   if ((page.viewportSize()?.width??1280)<=600) {
@@ -231,15 +238,17 @@ test('actual App installs Mosh framing before early output and fits only remote 
     await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[origin]});
     try {
       await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+30}]});
-      await expect.poll(async()=>(await state()).writes.length).toBeGreaterThan(0);
-      const before=(await state()).writes.length;
+      await expect.poll(async()=>reports(await state())).toBeGreaterThan(0);
+      const before=reports(await state());
       await page.evaluate(data=>Reflect.get(window,'nativeMoshApp').emit([...data,...new TextEncoder().encode('\x1b[?1000h\x1b[?1006h')]),bytes(captured.frames[1].bytesHex));
       await expect.poll(rowCount).toBe(6);await expect.poll(lastRow).toContain('OWNED_ROW_05');
       await input.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:origin.x,y:origin.y+60}]});
-      await expect.poll(async()=>(await state()).writes.length).toBeGreaterThan(before);
+      await expect.poll(async()=>reports(await state())).toBeGreaterThan(before);
     } finally {await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await input.detach();}
-    expect((await state()).writes.every(value=>/^\x1b\[<6[45];\d+;\d+M$/.test(value))).toBe(true);
-    await page.evaluate(()=>{Reflect.get(window,'nativeMoshApp').writes=[];});
+    const inputState=await state();
+    if(engine==='native')expect(inputState.nativeMouse.every(({action,button,x,y})=>action==='press'&&(button==='wheelUp'||button==='wheelDown')&&x>=0&&y>=0)).toBe(true);
+    else expect(inputState.writes.every(value=>/^\x1b\[<6[45];\d+;\d+M$/.test(value))).toBe(true);
+    await page.evaluate(()=>{window.nativeMoshApp.writes=[];window.nativeMoshApp.nativeMouse=[];});
   } else {
     await page.evaluate(data=>Reflect.get(window,'nativeMoshApp').emit(data),bytes(captured.frames[1].bytesHex));
     await expect.poll(rowCount).toBe(6);await expect.poll(lastRow).toContain('OWNED_ROW_05');
@@ -255,7 +264,10 @@ test('actual App installs Mosh framing before early output and fits only remote 
   await page.evaluate(data=>{const s=Reflect.get(window,'nativeMoshApp');s.emit(data);s.closed();},bytes(captured.frames[3].bytesHex));
   await expect.poll(rowCount).toBe(12);await expect.poll(lastRow).toContain('OWNED_ROW_11');
   const final=await state();expect(final.writes).toEqual([]);expect(final.resizes.some(size=>size.cols===40&&size.rows===6)).toBe(false);
-  expect(final.acknowledged).toBeGreaterThanOrEqual(bytes(captured.frames[0].bytesHex).length+bytes(captured.frames[1].bytesHex).length);
+  expect(final.nativeMouse).toEqual([]);
+  const received=bytes(captured.frames[0].bytesHex).length+bytes(captured.frames[1].bytesHex).length;
+  if(engine==='native'){expect(final.acknowledged).toBe(0);expect(final.nativeBytes).toBeGreaterThanOrEqual(received);}
+  else expect(final.acknowledged).toBeGreaterThanOrEqual(received);
 });
 
 test('narrowing clears offscreen history selection endpoints without altering retained history cells',async({page})=>{
