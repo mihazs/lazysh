@@ -4305,7 +4305,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[path = "managed_herdr_fixture.rs"]
     mod managed_herdr_fixture;
-    #[cfg(unix)]
     #[path = "owned_sshd.rs"]
     mod owned_sshd;
     #[cfg(unix)]
@@ -4320,6 +4319,9 @@ mod tests {
     #[cfg(unix)]
     #[path = "transcript_watch_fixture.rs"]
     mod transcript_watch_fixture;
+    #[cfg(windows)]
+    #[path = "windows_openssh_fixture.rs"]
+    mod windows_openssh_fixture;
     use super::test_support::*;
     fn fixture_state() -> (tempfile::TempDir, AppState) {
         let directory = tempfile::tempdir().unwrap();
