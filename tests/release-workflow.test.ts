@@ -282,3 +282,23 @@ test('the version editor is compiled once on main and restored everywhere else',
   expect(await outcomes('refs/pull/9/merge', '')).toEqual(['restore', 'compile']);
   expect(await outcomes('refs/pull/9/merge', 'true')).toEqual(['restore']);
 });
+
+// GitHub rejects a whole workflow file when a job-level env value reads a context that does not exist there; the run then
+// fails with no jobs and nothing publishes (#2941). Job env may read these contexts only, never `runner` or `steps`.
+test('job-level env in the release workflows reads only the contexts GitHub provides at that position', async () => {
+  const available = new Set(['github', 'needs', 'strategy', 'matrix', 'vars', 'secrets', 'inputs']);
+  const misplaced: string[] = [];
+  for (const file of ['release-tag.yml', 'release-artifacts.yml', 'companion-artifacts.yml']) {
+    const workflow = await document(`.github/workflows/${file}`);
+    for (const [id, job] of Object.entries<any>(workflow.jobs ?? {})) {
+      for (const [name, value] of Object.entries(job.env ?? {})) {
+        for (const [, expression] of String(value).matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+          for (const [, context] of expression.matchAll(/(?<![\w.'"-])([a-z]+)\./g)) {
+            if (!available.has(context)) misplaced.push(`${file}#${id} env.${name} reads the ${context} context`);
+          }
+        }
+      }
+    }
+  }
+  expect(misplaced).toEqual([]);
+});
